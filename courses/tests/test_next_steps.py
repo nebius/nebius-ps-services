@@ -104,7 +104,7 @@ def test_next_steps_validator_checks_reference_destinations(course):
     section = re.search(r'<section id="next-steps">.*?</section>', page, re.S)[0]
     link = re.search(r'href="#(reference-\d+)"', section)
     assert link
-    reference = re.search(rf'<li id="{link[1]}"><a href="([^"]+)">', page)
+    reference = re.search(rf'<li id="{link[1]}"><a[^>]* href="([^"]+)">', page)
     assert reference
     wrong_anchor = page.replace(
         section, section.replace(link[0], 'href="#reference-1"', 1), 1

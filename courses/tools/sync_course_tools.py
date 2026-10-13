@@ -25,6 +25,8 @@ TOOLS = (
     "serving-lab-setup",
     "transformer-engine-lab-setup",
     "course_runtime",
+    "course_execution",
+    "course_job",
     "verify_monitoring",
     "readiness",
 )

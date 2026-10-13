@@ -1,55 +1,28 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=2
+#SBATCH --ntasks=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=32
+#SBATCH --time=01:01:30
 #SBATCH --exclusive
-#SBATCH --time=01:00:00
 #SBATCH --no-requeue
 #SBATCH --output=results/27_rdma_latency/logs/%j.out
 #SBATCH --error=results/27_rdma_latency/logs/%j.err
 
-set -euo pipefail
-
-# Workload size is independent of the profiler selected by this job file.
-if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  printf 'Usage: sbatch %s [--workload small|large] [lab options]\n' "$0"
-  exit 0
-fi
-workload=${COURSE_WORKLOAD:-small}
-lab_args=()
-while (($#)); do
-  case "$1" in
-    --workload) [[ $# -ge 2 ]] || { printf 'ERROR: --workload needs small or large.\n' >&2; exit 2; }; workload=$2; shift 2 ;;
-    --workload=*) workload=${1#*=}; shift ;;
-    --profile|--profile=*) printf 'ERROR: use --workload small|large.\n' >&2; exit 2 ;;
-    *) lab_args+=("$1"); shift ;;
-  esac
-done
-[[ $workload == small || $workload == large ]] || { printf 'ERROR: --workload must be small or large.\n' >&2; exit 2; }
-set -- "${lab_args[@]}"
-export COURSE_WORKLOAD=$workload
-[[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
-  printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
-}
-# Load this launcher's persistent installation inside the allocated job.
-source tools/course_env.sh 27_rdma_latency.sbatch
-umask 077
-for directory in results results/27_rdma_latency results/27_rdma_latency/logs results/27_rdma_latency/jobs; do
-  [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
-  }
-done
-export COURSE_JOB_DIR="$PWD/results/27_rdma_latency/jobs/$SLURM_JOB_ID"
-mkdir -m 700 -- "$COURSE_JOB_DIR"
-mkdir -m 700 -- "$COURSE_JOB_DIR/results" "$COURSE_JOB_DIR/profiles" "$COURSE_JOB_DIR/logs" "$COURSE_JOB_DIR/artifacts"
-export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
-export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
-export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
-export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
-printf 'Job results: %s\n' "$COURSE_JOB_DIR"
-source tools/course_job_cache.sh
-
+# Reserve the largest selectable allocation; every srun below limits its step.
+# Each stage runs in a fresh shell with separate original results and reports.
+course_stage() {
+  set -euo pipefail
+  umask 077
+  local selection=$1 workload=$2
+  shift 2
+  export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
+  case "$selection" in
+    default_none_cuda)
+      # Actual scope: 2 node(s), 2 task(s), 8 GPU(s) per task.
+      source tools/course_env.sh advanced-gpu-communication.27_rdma_latency --runtime
+      source tools/course_job_cache.sh
 set -euo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
@@ -59,6 +32,15 @@ if [[ ${1:-} == --help ]]; then
 fi
 : "${SLURM_JOB_ID:?submit through the course launcher}"
 : "${COURSE_PYTHON:?complete Lab 00}"
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "$COURSE_PYTHON" tools/fabric_guard.py
+srun --cpus-per-task=32 --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "$COURSE_PYTHON" tools/fabric_guard.py
 # The coordinator runs on the batch host; child steps stay inside this allocation.
 "$COURSE_PYTHON" labs/27_rdma_latency.py "$@"
+      ;;
+    *) printf 'ERROR: unknown stage selection.\n' >&2; return 2 ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
+  exec python3.12 -B tools/course_job.py --lab 27_rdma_latency --launcher "$0" -- "$@"
+fi

@@ -42,6 +42,7 @@ def pipeline_mechanics(torch: object, rank: int, width: int) -> dict[str, object
     reference_activation = reference_inputs @ reference_weight0
     reference_activation.retain_grad()
     reference_loss = (reference_activation @ reference_weight1).square().mean()
+    # Differentiate the loss to populate parameter gradients.
     reference_loss.backward()
 
     if rank == 0:
@@ -82,6 +83,7 @@ def pipeline_mechanics(torch: object, rank: int, width: int) -> dict[str, object
 
     torch.distributed.broadcast(loss_value, src=1)
     require_close(torch, loss_value, reference_loss.reshape(1), "pipeline loss")
+    # Create explicit input values on the selected device.
     gradient_ok = torch.tensor(1, device="cuda", dtype=torch.int32)
     torch.distributed.all_reduce(gradient_ok, op=torch.distributed.ReduceOp.MIN)
     if int(gradient_ok) != 1:
@@ -151,6 +153,7 @@ def context_mechanics(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -161,6 +164,7 @@ def main() -> None:
         pipeline = pipeline_mechanics(torch, rank, width)
         context = context_mechanics(torch, rank, world_size, width)
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="20_parallelism_mechanics",

@@ -3,8 +3,6 @@
 GPU Performance Tools introduces the native commands and evidence used by the
 practical GPU courses. Learn how to read Slurm jobs, select a profiler and
 interpret timelines, kernel counters, operator summaries and dashboard metrics.
-The Grafana lesson diagrams both metrics collection into VictoriaMetrics and
-the separate datasource query path that supplies panels.
 
 Read this course after Soperator, then continue with
 [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)

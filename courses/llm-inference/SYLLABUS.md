@@ -61,13 +61,6 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 After Lesson 5, freeze a model, sampling contract, KV estimate and workload matrix. After Lesson 7, distinguish client latency from model-forward timing and run the introductory AIPerf profile before policy A/B campaigns. After Lesson 12, compare scheduling/backend/quantization changes one at a time. Dynamo disaggregation is an optional advanced branch, never a core completion gate.
 
-Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
-worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
-failure analysis and review in their relevant sections. Before moving on,
-explain the new mechanism and its limitation in your own words; a completed
-command alone is not evidence of understanding.
-
 ## Completion
 
 Keep mechanics and serving evidence separate. The capstone requires at least three equivalent-work trials and an honest quality/latency/memory decision; advanced engines require their own target qualification.

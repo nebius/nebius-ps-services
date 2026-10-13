@@ -150,6 +150,7 @@ def main() -> None:
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--block-tokens", type=int, default=16)
     parser.add_argument("--total-blocks", type=int, default=128)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.block_tokens < 1 or args.total_blocks < 4:
@@ -161,6 +162,7 @@ def main() -> None:
     demonstration = lifecycle_demo(args.block_tokens, args.total_blocks)
     if not all(demonstration["checks"].values()):
         raise SystemExit("Paged-KV lifecycle correctness failed")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="27_paged_kv",

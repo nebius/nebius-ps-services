@@ -126,7 +126,6 @@ def native_submission(root, argv, name):
         "sbatch",
         "--parsable",
         "--job-name=" + name,
-        f"--chdir={root}",
         f"--output={logs}/%j.out",
         f"--error={logs}/%j.err",
         *argv[1:],

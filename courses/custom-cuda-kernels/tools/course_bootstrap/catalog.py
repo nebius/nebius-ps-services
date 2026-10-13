@@ -104,7 +104,7 @@ def bindings(course, catalog):
     regular(path)
     value = json.loads(path.read_text())
     if (
-        value.get("schema") != "course-runtime-bindings/v1"
+        value.get("schema") != "course-runtime-bindings/v2"
         or value.get("course") != course.name
     ):
         raise ValueError(f"Invalid runtime bindings for {course.name}")
@@ -123,6 +123,15 @@ def bindings(course, catalog):
     for runtime in [*declared.values(), *value["labs"].values()]:
         if runtime not in catalog["runtimes"]:
             raise ValueError(f"Unknown runtime binding: {runtime}")
+    from course_execution import capabilities
+
+    execution = capabilities(course)
+    if set(execution) != labs:
+        raise ValueError("Every lab needs execution capabilities")
+    for spec in execution.values():
+        for row in spec["variants"]:
+            if row["runtime"] not in catalog["runtimes"]:
+                raise ValueError("Unknown execution runtime")
     return value
 
 

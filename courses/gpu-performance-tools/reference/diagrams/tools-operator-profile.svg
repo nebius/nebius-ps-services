@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 590" style="max-width: 400px; margin-inline: auto" role="img" aria-labelledby="operator-profile-title operator-profile-desc">
+  <title id="operator-profile-title">Connect an operator to GPU work and two profiler views</title>
+  <desc id="operator-profile-desc">In this CUDA example, a CPU operator call submits GPU kernels. The profiler relates the call to that work. Read the capture as summary totals or as a timeline of events; a summary does not preserve event order. One operator may launch several kernels.</desc>
+  <defs>
+    <marker id="operator-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#45627a"/></marker>
+  </defs>
+  <g font-family="Arial, sans-serif" font-size="20" fill="#172b3a" text-anchor="middle">
+    <text x="160" y="30" font-weight="bold">A CUDA operator example</text>
+    <rect x="15" y="50" width="290" height="66" rx="10" fill="#edf3f7" stroke="#7c9eb5"/>
+    <text x="160" y="90">CPU operator call</text>
+    <path d="M160 121 V172" stroke="#45627a" stroke-width="2" marker-end="url(#operator-arrow)"/>
+    <rect x="180" y="131" width="129" height="30" fill="white"/>
+    <text x="242" y="153">submits work</text>
+    <rect x="15" y="184" width="290" height="94" rx="10" fill="#edf7ef" stroke="#6d9976"/>
+    <text x="160" y="221">GPU execution</text>
+    <text x="160" y="251">One or more kernels</text>
+    <text x="160" y="321" font-weight="bold">Two views of the capture</text>
+    <rect x="15" y="344" width="290" height="96" rx="10" fill="#edf3f7" stroke="#7c9eb5"/>
+    <text x="160" y="378" font-weight="bold">Summary</text>
+    <text x="160" y="409">Totals by operator</text>
+    <rect x="15" y="460" width="290" height="110" rx="10" fill="#edf3f7" stroke="#7c9eb5"/>
+    <text x="160" y="494" font-weight="bold">Timeline</text>
+    <text x="160" y="524">Event order, duration</text>
+    <text x="160" y="549">and overlap</text>
+  </g>
+</svg>

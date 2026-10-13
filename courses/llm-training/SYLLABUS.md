@@ -60,13 +60,6 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 After Lesson 4, explain every transition from labels to parameter updates and revisit the masking/packing checks. After Lesson 10, attribute single-GPU time and memory before adding ranks. After Lesson 13, draw state placement and the communication critical path. The earlier base-route SFT/LoRA and GRPO labs require no distributed infrastructure. Finish the advanced route by comparing fixed-global-work runs in Lesson 17.
 
-Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
-worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
-failure analysis and review in their relevant sections. Before moving on,
-explain the new mechanism and its limitation in your own words; a completed
-command alone is not evidence of understanding.
-
 ## Completion
 
 Local completion requires one-H100 correctness/performance evidence and a causal report over at least three independent trials. Extend that evidence with DDP and FSDP2 in Advanced Labs 15–16 on the separately qualified fabric cluster. Optional Transformer Engine qualification is separate.

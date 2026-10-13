@@ -65,7 +65,9 @@ int main(int argc, char** argv) {
   try {
     bool small = false, profile_seen = false;
     bool work_seen = false;
+    // Allocate host inputs and reference/output storage.
     std::vector<int> work_sweep{0, 8, 32, 128};
+    // Read workload and kernel controls before allocating buffers.
     for (int index = 1; index < argc; ++index) {
       const std::string argument(argv[index]);
       if (argument == "--workload") { small = parse_small_profile(argc, argv, index, profile_seen); }
@@ -86,7 +88,9 @@ int main(int argc, char** argv) {
     std::vector<float> input(count), expected(count), serial_observed(count), pipelined_observed(count);
     for (std::size_t index = 0; index < count; ++index)
       input[index] = 0.25F + static_cast<float>(index % 31) * 0.01F;
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), serial_output(count), pipelined_output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     constexpr int threads = 256;
     for (const int work_iterations : work_sweep) {
@@ -110,10 +114,13 @@ int main(int argc, char** argv) {
       CUDA_CHECK(cudaGetLastError());
       pipelined();
       CUDA_CHECK(cudaGetLastError());
+      // Copy completed device output back for validation outside kernel timing.
       CUDA_CHECK(cudaMemcpy(serial_observed.data(), serial_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
       CUDA_CHECK(cudaMemcpy(pipelined_observed.data(), pipelined_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
+      // Check the GPU output against the host reference before accepting timing.
       check_close(expected, serial_observed);
       check_close(expected, pipelined_observed);
+      // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
       const auto serial_timing = benchmark_cuda(serial);
       const auto pipelined_timing = benchmark_cuda(pipelined);
       std::cout << "sweep_point_begin\nwork_iterations=" << work_iterations
@@ -123,6 +130,7 @@ int main(int argc, char** argv) {
                 << "\nserial_shared_bytes=" << threads * sizeof(float)
                 << "\npipelined_shared_bytes=" << 2 * threads * sizeof(float)
                 << "\nsingle_block_mechanism=true\n";
+      // Emit the measured summary for the job’s CUDA result adapter.
       print_result("08_async_pipeline", pipelined_timing, count);
       print_timing("serial", serial_timing);
       print_timing("pipelined", pipelined_timing);

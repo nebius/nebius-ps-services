@@ -243,7 +243,7 @@
       "expected_output": "Resolve the complete recipe, identify the explicit serving launcher preparation for TensorRT-LLM, and stop dispatch until it is prepared and independently checked. Do not install inside the campaign or remove the comparison.",
       "files": [],
       "assertions": [
-        "Uses serving-lab-setup.py --launcher 30_engine_profile.trtllm.sbatch rather than assuming --all includes optional variants",
+        "Uses serving-lab-setup.py --launcher 30_engine_profile.sbatch --experiment trtllm rather than assuming --all includes optional variants",
         "Preserves both protocol trials and both workload profiles; no installation, receipt editing or GPU job before prerequisites",
         "Uses the shared Lab Guide and separates prepared runtime proof from hardware qualification"
       ]

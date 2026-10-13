@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--requests", type=int, default=8)
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument("--output", type=Path, default=None)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     begin_experiment(args)
     require_hf_commit_revision(args.revision)
@@ -134,6 +135,7 @@ def main() -> None:
         },
     }
     output = args.output or Path(f"results/15_streaming_client-run-{run_id}.json")
+    # Write this run’s evidence without overwriting an earlier result.
     write_json_exclusive(output, payload)
     print(f"Completed streaming benchmark: {output}")
 

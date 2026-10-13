@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slots", type=int, default=2)
     parser.add_argument("--batches", type=int, default=16)
     parser.add_argument("--work", type=int, default=4, help="Dense GEMMs per batch")
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     if not 1 <= args.slots <= 8 or not 2 <= args.batches <= 256:
         parser.error("--slots must be 1..8 and --batches must be 2..256")
@@ -45,6 +46,7 @@ def run_pipeline(torch: Any, args: argparse.Namespace) -> tuple[float, int]:
     ready = [torch.cuda.Event() for _ in hosts]
     done = [torch.cuda.Event() for _ in hosts]
     used = [False] * args.slots
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     started = time.perf_counter()
     with torch.cuda.nvtx.range("h2d_loop"):
@@ -87,6 +89,7 @@ def main() -> None:
         for _ in range(args.warmup):
             run_pipeline(torch, args)
         samples = [run_pipeline(torch, args) for _ in range(args.iterations)]
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="19_h2d_pipeline",

@@ -35,8 +35,11 @@ int main(int argc, char** argv) {
   try {
     const std::size_t count = problem_size(argc, argv, 1003, 1U << 24);
     require_course_gpu();
+    // Allocate host inputs and reference/output storage.
     std::vector<float> input(count, 1.0F);
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), atomic_output(1), block_output(1), cub_output(1);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemset(atomic_output.get(), 0, sizeof(float)));
     constexpr int threads = 256;
@@ -50,18 +53,22 @@ int main(int argc, char** argv) {
     std::size_t temporary_bytes = 0;
     cub::DeviceReduce::Sum(nullptr, temporary_bytes, device_input.get(), cub_output.get(), count);
     DeviceBuffer<unsigned char> temporary(temporary_bytes);
+    // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
     const auto cub_timing = benchmark_cuda([&] {
       CUDA_CHECK(cub::DeviceReduce::Sum(temporary.get(), temporary_bytes, device_input.get(), cub_output.get(), count));
     });
     float atomic_value = 0.0F;
     float block_value = 0.0F;
     float cub_value = 0.0F;
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(&atomic_value, atomic_output.get(), sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&block_value, block_output.get(), sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&cub_value, cub_output.get(), sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(
         {static_cast<float>(count), static_cast<float>(count), static_cast<float>(count)},
         {atomic_value, block_value, cub_value});
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("04_reduction", cub_timing, count);
     print_timing("per_element_atomic", atomic_timing);
     print_timing("warp_block_atomic", block_timing);

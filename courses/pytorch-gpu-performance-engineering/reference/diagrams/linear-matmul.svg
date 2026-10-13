@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 390" role="img" aria-labelledby="pt-linear-matmul-title pt-linear-matmul-desc" style="max-width: 520px; margin-inline: auto">
+  <title id="pt-linear-matmul-title">A linear layer calculates both neuron outputs together</title>
+  <desc id="pt-linear-matmul-desc">Each row of W holds one neuron's four weights. Multiplying W by the four-input column x and adding one bias per neuron produces the two-output column y.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="20" fill="#24343d" text-anchor="middle">
+    <text x="180" y="28"><tspan font-family="ui-monospace, monospace" font-weight="700">nn.Linear</tspan><tspan font-family="ui-monospace, monospace">(4, 2)</tspan></text>
+    <text x="180" y="58">4 inputs → 2 outputs</text>
+    <text x="95" y="94">W</text>
+    <text x="237" y="94">x</text>
+    <text x="317" y="94">b</text>
+    <rect x="18" y="138" width="155" height="31" rx="5" fill="#eef5fc" />
+    <rect x="18" y="172" width="155" height="31" rx="5" fill="#eef8f2" />
+    <g fill="none" stroke="#24343d" stroke-width="2">
+      <path d="M15 132 H7 V209 H15 M176 132 H184 V209 H176" />
+      <path d="M226 108 H218 V244 H226 M248 108 H256 V244 H248" />
+      <path d="M306 132 H298 V209 H306 M328 132 H336 V209 H328" />
+      <path d="M181 276 H173 V343 H181 M207 276 H215 V343 H207" />
+    </g>
+    <g fill="#245880">
+      <text x="32" y="160">w₁₁</text>
+      <text x="74" y="160">w₁₂</text>
+      <text x="116" y="160">w₁₃</text>
+      <text x="158" y="160">w₁₄</text>
+      <text x="317" y="160">b₁</text>
+      <text x="194" y="298">y₁</text>
+    </g>
+    <g fill="#206757">
+      <text x="32" y="194">w₂₁</text>
+      <text x="74" y="194">w₂₂</text>
+      <text x="116" y="194">w₂₃</text>
+      <text x="158" y="194">w₂₄</text>
+      <text x="317" y="194">b₂</text>
+      <text x="194" y="332">y₂</text>
+    </g>
+    <text x="201" y="179">×</text>
+    <text x="237" y="126">x₁</text>
+    <text x="237" y="160">x₂</text>
+    <text x="237" y="194">x₃</text>
+    <text x="237" y="228">x₄</text>
+    <text x="278" y="179">+</text>
+    <text x="136" y="315">= y =</text>
+    <text x="180" y="378">One output per neuron</text>
+  </g>
+</svg>

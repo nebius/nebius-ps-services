@@ -8,12 +8,15 @@ int main(int argc, char** argv) {
     return 0;
   }
   try {
+    // Validate controls and query the allocated GPU before accepting readiness.
     validate_simple_arguments(argc, argv);
     const auto properties = require_course_gpu();
     int runtime = 0;
     int driver = 0;
+    // Read installed runtime and driver API versions; this is not a timing test.
     CUDA_CHECK(cudaRuntimeGetVersion(&runtime));
     CUDA_CHECK(cudaDriverGetVersion(&driver));
+    // Emit observed properties for the job's CUDA result adapter.
     std::cout << "schema=gpu-course-result/v1\nlab_id=13_h100_preflight\n"
               << "compute_capability=" << properties.major << '.' << properties.minor << '\n'
               << "sm_count=" << properties.multiProcessorCount << "\nglobal_memory_bytes=" << properties.totalGlobalMem << '\n'

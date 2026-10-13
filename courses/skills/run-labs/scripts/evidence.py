@@ -256,13 +256,18 @@ def verify_host_copy(unit, stage, report):
     if (
         not isinstance(argv, list)
         or any(not isinstance(value, str) for value in argv)
-        or argv.count("labs/03_transfer_and_pinning.py") != 1
+        or argv[:2] != ["sbatch", "slurm/03_transfer_and_pinning.sbatch"]
+        or argv.count("slurm/03_transfer_and_pinning.sbatch") != 1
     ):
         raise ValueError("Native host-copy command differs")
     size_mib = {"baseline": 64, "candidate": 128}[stage["variant"]]
     # These are the reviewed recipe's explicit sizes and the frozen source's
     # defaults, independent of the small/large label.
-    expected = {"--size-mib": str(size_mib), "--workload": unit["profile"]}
+    expected = {
+        "--size-mib": str(size_mib),
+        "--workload": unit["profile"],
+        "--profiler": "nsys",
+    }
     for flag, value in {**expected, "--warmup": "5", "--iterations": "20"}.items():
         count = argv.count(flag)
         if (

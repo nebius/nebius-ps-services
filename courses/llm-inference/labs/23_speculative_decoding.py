@@ -24,6 +24,7 @@ def main() -> None:
     add_common_args(parser)
     parser.add_argument("--draft-length", type=int, default=4)
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if (
@@ -38,6 +39,7 @@ def main() -> None:
         )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
 
     vocab_size, hidden = (2_048, 512) if args.workload == "small" else (8_192, 2_048)
@@ -133,6 +135,7 @@ def main() -> None:
     def time_case(operation: Any) -> tuple[list[float], Any, float]:
         for _ in range(args.warmup):
             operation()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
         samples: list[float] = []
@@ -205,6 +208,7 @@ def main() -> None:
             },
         }
 
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="23_speculative_decoding",

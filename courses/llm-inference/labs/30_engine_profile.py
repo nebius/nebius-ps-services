@@ -54,6 +54,7 @@ def main() -> None:
         default=None,
         help="Declare the reviewed TensorRT-LLM repository schema.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.max_tokens < 1:
@@ -117,6 +118,7 @@ def main() -> None:
     if not response_valid:
         raise SystemExit(f"{args.protocol} response did not contain generated text.")
     usage = response.get("usage", {})
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="30_engine_profile",

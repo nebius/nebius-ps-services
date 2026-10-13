@@ -20,17 +20,21 @@ int main(int argc, char** argv) {
   try {
     const std::size_t count = problem_size(argc, argv, 4099, 1U << 25);
     require_course_gpu();
+    // Allocate host inputs and reference/output storage.
     std::vector<float> input(count), bias(count), expected(count), separate_observed(count), fused_observed(count);
     for (std::size_t index = 0; index < count; ++index) {
       input[index] = static_cast<float>(static_cast<int>(index % 101) - 50) / 25.0F;
       bias[index] = static_cast<float>(index % 7) / 10.0F;
       expected[index] = std::max(input[index] * 1.25F + bias[index], 0.0F);
     }
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), device_bias(count), temporary(count), separate_output(count), fused_output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(device_bias.get(), bias.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     constexpr int threads = 256;
     const int blocks = static_cast<int>((count + threads - 1) / threads);
+    // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
     const auto separate_timing = benchmark_cuda([&] {
       scale_bias<<<blocks, threads>>>(device_input.get(), device_bias.get(), temporary.get(), 1.25F, count);
       relu<<<blocks, threads>>>(temporary.get(), separate_output.get(), count);
@@ -38,10 +42,13 @@ int main(int argc, char** argv) {
     const auto fused_timing = benchmark_cuda([&] {
       fused_scale_bias_relu<<<blocks, threads>>>(device_input.get(), device_bias.get(), fused_output.get(), 1.25F, count);
     });
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(separate_observed.data(), separate_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(fused_observed.data(), fused_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(expected, separate_observed);
     check_close(expected, fused_observed);
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("02_fused_elementwise", fused_timing, count);
     print_timing("separate", separate_timing);
     print_timing("fused", fused_timing);

@@ -1,230 +1,71 @@
 # LLM Inference
 
-For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+[Read the course](index.html) · Estimated guided time: **52 hours**.
 
-## Hardware routes
+Follow a request from model artifacts and tokens to generation, cache use and
+serving. Take GPU Fundamentals and GPU Performance Optimization first. Use
+[GPU Performance Tools](../gpu-performance-tools/index.html) for profiling and
+[PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
+for a tensor-reading refresher.
 
-The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+## Learning route
 
-Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
+Audit artifacts, follow generation and sampling, estimate cache capacity,
+then define the workload. Learn engine readiness and client metrics before
+comparing scheduling, quantization or speculation.
 
-Lab preparation creates private log directories before any `sbatch` submission; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+- Begin with Lab 35's download-free CPU generation exercise:
+  `"$COURSE_PYTHON" labs/35_inference_basics.py --device cpu` in the mechanics runtime.
+- After Lesson 5, fix the model, sampling contract, cache estimate and workload.
+- After Lesson 7, distinguish client latency from model-forward time; try the
+  introductory AIPerf profile before a policy comparison.
+- Change scheduling, backend or precision one at a time. CPU cache models and
+  mechanics experiments do not establish live serving performance.
 
-The optional AIPerf campaign referenced by Lab 30 belongs to Lab 15; submit
-`slurm/15_streaming_client.aiperf.sbatch` using Lab 15's native submission block and private log
-directory so its logs and serving artifacts retain the same lab identity.
-AIPerf writes native benchmark exports; the Lab 15 dashboard and course
-publisher use the separate streaming client's JSON results.
-The streaming client uses finite closed-loop concurrency and reports median/p90
-latency and requests/s. Its results do not establish open-loop overload, token
-throughput or SLO goodput.
-Labs 33 and 34 publish paired greedy-equivalence evidence to their dashboards;
-read their latency and throughput measurements from the native AIPerf exports.
-Lab 34's launcher shares one run ID across its campaign directory, server
-processes and both policies' digest records.
-Lab 20 fixes batch-invariant execution and the `TRITON_ATTN` attention backend
-for both cache policies and all correctness and timing phases. Its exact
-greedy-output gate remains required before performance measurements.
+## Before the first lab
 
-Start with [Lab Guide](../lab-guide.html#lab-preparation-scripts) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
+Complete the [Lab Guide](../lab-guide.html#lab-preparation-scripts) and check
+[Versions and environment](VERSIONS.md). Use the approved runtime on one full
+H100; a qualified advanced cluster can also supply one-GPU allocations.
 
-Read [GPU Performance Tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Keep `small` and `large` as separate workload campaigns.
+Example mechanics run: after Lesson 2 and
+[Lab 16's artifact audit](reference/labs/16_model_artifact_audit.md), follow
+[Lab 09](reference/labs/09_hf_prefill_decode.md) from this course directory:
+
+```bash
+sbatch slurm/09_hf_prefill_decode.sbatch --workload small
+```
+
+Lab 16 needs online Hub metadata access even when artifacts are cached.
+Keep that exception separate from the other offline runs.
 
 ## Serving runtime preparation
 
-The mechanics labs and real serving labs use separate prepared environments.
-Native vLLM and AIPerf remain isolated from mechanics PyTorch and lightweight
-clients. Mechanics and clients use `requirements-mechanics.txt` and
-`requirements-serving.txt`; vLLM keeps its vendor-matched dependencies.
-Both groups share the pinned small-model snapshot; only Lab 33 adds the 1.5B
-model. Jobs restore their runtimes and private writable caches automatically.
-Use the course/lab-number lookup in the Lab Guide linked above for preparation,
-including the explicitly optional TensorRT-LLM and Dynamo container exercises.
+Mechanics uses `requirements-mechanics.txt`; lightweight clients use
+`requirements-serving.txt`. Native vLLM and AIPerf keep separate prepared
+environments and vendor-matched dependencies. Use the Lab Guide's course/lab
+lookup; only Lab 33 adds the larger target model. Jobs restore their saved
+runtime and private caches automatically.
 
-Lab 30's TensorRT-LLM route uses a prepared llmapi PyTorch model repository; setup
-does not build a GPU engine or start a server. Default model revisions and the
-speculative target/draft pair are recorded in the runtime catalog. Workload
-arguments can select a deliberately prepared alternative experiment.
-
-Installation is separate from qualification. Use each lab's small run to verify
-the runtime, model, driver, GPU and profiler behavior before performance claims.
-
-## Course guide
-
-[Read the complete course](index.html) ·
-[Glossary](GLOSSARY.md) ·
-[Versions and environment](VERSIONS.md) ·
-[Cluster small runbook](reference/cluster-smoke-test.md) ·
-[Benchmark worksheet](reference/benchmark-record.md) ·
-[Lab mechanisms and evidence](reference/lab-mechanisms.md)
-
-Estimated guided time: **52 hours**, for the conceptual and local practical route; provisioning and queue time are excluded.
-
-## Learning order
-
-Audit artifacts before loading them, follow generation and fix sampling semantics, then calculate cache capacity and define the workload. Learn basic engine lifecycle before client metrics or live policy experiments. Establish scheduling and an uncompressed attention baseline before quantization, speculation, parallelism and advanced serving.
-
-Use each lesson’s Objective and Practice for the current activity; the
-readiness checkpoints below help you decide when to continue. Lab numbers identify files; follow lesson order rather
-than running every lab numerically. Previews and optional branches are labeled.
-
-## Getting started
-
-The HTML course keeps diagrams beside the relevant explanation in a wide,
-responsive layout. Each diagram fits the page and retains a caption and
-accessible SVG description. Each lab starts with a concise purpose and explains the needed concepts,
-code structure, supported experiments, result checks, investigation,
-troubleshooting and takeaways locally. Use the side-panel contents to
-jump between topics.
-
-Take GPU Fundamentals and GPU Performance Optimization first. Use a small
-mechanics environment for PyTorch/Transformers labs and a separate lightweight
-serving-client/test environment. vLLM and AIPerf use native isolated environments. The optional TensorRT-LLM/Triton
-and Dynamo container exercises use immutable digests and the reviewed site runner.
-
-The lessons follow text and token mechanics through production serving,
-including phase-aware memory, queueing, caches, parallelism, and
-agentic-serving behavior.
-
-Prepare and restore the runtime using the [shared guide](../README.md#how-to-run-the-labs).
-
-Example mechanics run:
-
-Dependency installation alone does not establish target qualification.
-Before submitting any job, use the approved environment or engine image
-identity described in [Versions and environment](VERSIONS.md) and complete the
-relevant [cluster small gates](reference/cluster-smoke-test.md). Keep the
-mechanics and serving-client environments separate. Set the submitting shell's
-file mask before every submission session so early scheduler output stays private.
-
-After Lesson 2 and [Lab 16’s artifact audit](reference/labs/16_model_artifact_audit.md), follow [Lab 09’s phase-measurement guide](reference/labs/09_hf_prefill_decode.md). Run from this course root on shared storage. The native launcher loads its prepared mechanics runtime automatically.
-
-```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
-  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/09_hf_prefill_decode.sbatch --workload small
-```
-
-Pinned engine profiles remain pending until their native environments or optional images, model revisions,
-driver compatibility, readiness, and H100 behavior are verified.
-Lab 30 also requires a nonempty generated-text string in the declared response
-field; a healthy endpoint or a non-text value is insufficient.
-Its OpenAI and Triton launchers each own server startup, the bounded client
-probe, and cleanup inside one Slurm allocation. The OpenAI launcher uses the
-prepared native vLLM environment and cached pinned model; it does not download model assets.
-The Triton launcher initializes one MPI rank with the prepared image's
-`mpirun` before starting `tritonserver`, within the same allocated GPU task.
-MPI's `--oversubscribe` permits the backend's spawned worker within that existing
-allocation when the single launcher rank has occupied its advertised task slot.
-Both executables and the backend's Python dependencies must be available in
-that image; the launcher does not install them.
-The prepared runner must also provide writable, job-isolated module and compiler
-caches. The runner sets `HF_MODULES_CACHE` to a job-owned writable directory so
-TensorRT-LLM can acquire its configuration lock while model assets remain read-only.
-It disables configuration auto-completion, so the prepared repository must
-declare its complete batch and transaction-policy settings explicitly, matching
-the reviewed model YAML. See [Lab 30](reference/labs/30_engine_profile.md).
-
-After Lesson 6, follow [Lab 10’s offline generation guide](reference/labs/10_vllm_offline.md) and run through that same immutable boundary:
-
-```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/10_vllm_offline/logs/%j.out" \
-  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/10_vllm_offline.sbatch --workload small
-```
-
-After Lessons 6–9 and qualification of native vLLM and AIPerf, follow
-[Lab 34’s live-engine guide](reference/labs/34_policy_equivalence_client.md) for the core continuous-
-batching/chunked-prefill comparison with three fresh-server correctness probes
-and three fresh-server AIPerf trials per policy, each in counterbalanced order:
-
-The launcher holds batch-invariant execution, `TRITON_ATTN`, and eager mode
-fixed across both policies and phases. Keep the exact output gate; these
-controlled scheduling measurements do not qualify compiled serving performance.
-
-```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
-  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/34_policy_equivalence_client.sbatch
-```
-
-After Lesson 13, follow [Lab 33’s speculative-decoding guide](reference/labs/33_speculative_engine_client.md) and qualify a compatible target/draft pair before the profile;
-the launcher requires immutable model revisions and rejects paired greedy
-outputs whose private digests differ:
-
-```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
-  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.sbatch
-```
-
-Actual distributed serving practice is in the advanced course, where Dynamo experiments own their workers, discovery, model revision, client measurements and server captures.
-
-The final mechanics capstone uses `slurm/32_inference_capstone.trials.sbatch`. It
-launches three fresh processes, alternates variant order, validates correctness,
-and writes one scoped aggregate keep/reject record; it makes no serving claim.
-Aggregation retains the observed GPU family in its claim and rejects trials
-with different hardware or software environments.
-
-Capstone aggregation requires `experiment.instrumented` to be exactly `false`
-in every input and rejects explicit diagnostic timing. Missing or malformed
-provenance requires a fresh unprofiled trial; no aggregate is written from
-rejected inputs.
-
-For optional TensorRT-LLM and Dynamo container variants,
-`slurm/container_runner.example.sh` shows the digest-to-runtime boundary with
-Apptainer. The launcher reads its cached image identity and runner path from
-the generated runtime record.
-
-Lab 08 performs its cache construction, correctness checks and measurements in
-inference mode. Non-finite prompt or continuation comparisons reject the run
-before timings or successful results are recorded.
-
-## Begin with the concepts
-
-Lab 35 is a download-free CPU introduction to fixed-parameter token generation; use `"$COURSE_PYTHON" labs/35_inference_basics.py --device cpu` in the mechanics environment. Its explicit `--device cuda` path is for an allocated H100. This is not an attention or serving benchmark.
-
-## Continue learning
-
-After the core course, use [Where to Go Next](NEXT-STEPS.md) for optional
-reading on current technologies and advanced concepts. Each entry
-includes a study question, official sources and hardware or maturity limits;
-these directions do not change the required labs or environment.
-
-## Cache retention practice
-
-[Lab 36](reference/labs/36_kv_tiering.md) teaches tier capacity, idle TTL, LRU
-eviction, restoration versus recomputation, state lost on restart and
-cache invalidation after identity changes. It
-runs on CPU without an engine or storage access. Its cost model prepares the
-questions for a real cache campaign; it does not measure TTFT or qualify GDS.
-
-Compute captures for Labs 09, 17 and 23 select an annotated model or generation operation and a matrix kernel, excluding input/model initialization. Each guide states the first-invocation scope; these single-kernel diagnostics do not supply complete decode or speculative-path counters. Lab 16 requires online Hub metadata access even when artifacts are cached; use its lab-specific environment rather than changing other offline runs.
-
-Nsight Systems capture commands and report views are assigned per lab in `reference/observability.json` and repeated in each lab guide. Shared setup imports each course dashboard directory once; CPU-only and protocol-only results omit unrelated GPU telemetry. Explicit profiling exceptions explain which evidence to use instead. Keep captures separate from the unprofiled result pair.
-
-The chunked-prefill campaign captures each correctness probe and each AIPerf
-trial separately. Each server starts capture after readiness and stops it after
-that trial's requests. Check both policy variants for request activity in their
-reports before interpreting the diagnostic campaign.
-
-Offline vLLM profiler commands use `--in-process` so the `vllm_generate` NVTX range contains the single-GPU engine launches. This diagnostic mode excludes construction and warmup from the selected range; use the default engine process mode for clean throughput comparisons. See [Lab 10](reference/labs/10_vllm_offline.md).
-
-Lab 10's Compute command requests 256 GiB of host RAM with
-`SBATCH_MEM_PER_NODE=262144`, because kernel replay can back up the engine's
-device allocations in system memory. The GPU count and workload stay fixed.
-
-## Readiness checkpoints
-
-After Lesson 5, freeze a model, sampling contract, KV estimate and workload matrix. After Lesson 7, distinguish client latency from model-forward timing and run the introductory AIPerf profile before policy A/B campaigns. After Lesson 12, compare scheduling/backend/quantization changes one at a time. Dynamo disaggregation is an optional advanced branch, never a core completion gate.
-
-Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice**, summarizes the teaching in **Mental model**, then provides **Where to Go Next** and a **Glossary**. The linked guides integrate
-worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
-failure analysis and review in their relevant sections. Before moving on,
-explain the new mechanism and its limitation in your own words; a completed
-command alone is not evidence of understanding.
+TensorRT-LLM/Triton and Dynamo container exercises are optional. Their prepared
+artifacts need their own readiness, response-correctness and GPU checks;
+preparation does not build a GPU engine or qualify serving performance.
 
 ## Completion
 
-Keep mechanics and serving evidence separate. The capstone requires at least three equivalent-work trials and an honest quality/latency/memory decision; advanced engines require their own target qualification.
+Keep mechanics and serving evidence separate. Use Lab 32's trials experiment
+for at least three equivalent-work, unprofiled runs and a quality/latency/memory
+decision. Qualify real engines independently. Distributed serving belongs to
+[Advanced Labs](../advanced-gpu-communication/index.html); optional Dynamo
+experiments are not a core completion gate.
+
+Use [Where to Go Next](NEXT-STEPS.md) for optional reading after the core route.
+
+## Reference guides
+
+- [Versions and environment](VERSIONS.md): runtime identities and qualification limits.
+- [Readiness checks](reference/cluster-smoke-test.md): checks before interpreting results.
+- [Lab mechanisms and evidence](reference/lab-mechanisms.md): worked interpretation and scope.
+- [Benchmark worksheet](reference/benchmark-record.md): compare equivalent work.
+- [Evidence and privacy](reference/evidence-security.md): retain raw results privately and share sanitized summaries.
+- [Glossary](GLOSSARY.md): terms used throughout the course.

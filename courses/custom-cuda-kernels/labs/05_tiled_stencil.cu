@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
   try {
     const std::size_t count = problem_size(argc, argv, 1003, 1U << 24);
     require_course_gpu();
+    // Allocate host inputs and reference/output storage.
     std::vector<float> input(count), expected(count), observed(count);
     for (std::size_t index = 0; index < count; ++index) input[index] = static_cast<float>(index % 101) / 101.0F;
     for (std::size_t index = 0; index < count; ++index) {
@@ -23,15 +24,21 @@ int main(int argc, char** argv) {
       const float right = index + 1 < count ? input[index + 1] : 0.0F;
       expected[index] = 0.25F * left + 0.5F * input[index] + 0.25F * right;
     }
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     constexpr int threads = 256;
     const int blocks = static_cast<int>((count + threads - 1) / threads);
+    // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
     const auto timing = benchmark_cuda([&] {
       stencil<<<blocks, threads, (threads + 2) * sizeof(float)>>>(device_input.get(), output.get(), count);
     });
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(observed.data(), output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(expected, observed);
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("05_tiled_stencil", timing, count);
     std::cout << "shared_bytes_per_block=" << (threads + 2) * sizeof(float) << "\nhalo_values_per_full_block=2\n";
     std::cout << "course_checks=passed\n";

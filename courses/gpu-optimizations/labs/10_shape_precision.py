@@ -24,10 +24,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     aligned = 1_024 if args.workload == "small" else 4_096
     misaligned = aligned - 7
@@ -39,6 +41,7 @@ def main() -> None:
         ("bf16_misaligned", misaligned, torch.bfloat16),
         ("fp32_aligned", aligned, torch.float32),
     ):
+        # Create the synthetic tensors used by this experiment.
         left_fp32 = torch.randn((width, width), device="cuda", dtype=torch.float32)
         right_fp32 = torch.randn((width, width), device="cuda", dtype=torch.float32)
         left = left_fp32.to(dtype=dtype)
@@ -73,6 +76,7 @@ def main() -> None:
         all_acceptable = all_acceptable and acceptable
     if not all_finite or not all_acceptable:
         raise SystemExit("A matrix result failed the declared numerical gate.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="10_shape_precision",

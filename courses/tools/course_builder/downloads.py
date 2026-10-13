@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 from pathlib import Path
+from .links import link_attributes
 
 
 def dashboard_pointer() -> str:
@@ -16,10 +17,10 @@ def course_downloads(course: Path) -> str:
         '<div id="course-downloads"><h3>Download results</h3>'
         '<p><strong>Download all lab results:</strong><br>\n'
         f'<a class="course-download" download="{slug}-lab-results.zip" '
-        f'data-asset="lab-results" href="reference/{slug}-lab-results.zip">'
+        f'data-asset="lab-results" {link_attributes(f"reference/{course.name}-lab-results.zip", download=True)}>'
         "Grafana dashboards, Small and Large results</a></p>"
         '<p><strong>Setup the lab environment:</strong><br>\n'
-        '<a href="../lab-guide.html">Lab setup guide</a></p></div>'
+        f'<a {link_attributes("../lab-guide.html")}>Lab setup guide</a></p></div>'
     )
 
 

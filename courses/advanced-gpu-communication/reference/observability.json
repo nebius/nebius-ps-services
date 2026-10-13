@@ -50,7 +50,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/01_fabric_topology.json",
       "baseline_command": "sbatch slurm/01_fabric_topology.sbatch --workload small",
-      "systems_command": "sbatch slurm/01_fabric_topology.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/01_fabric_topology.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Repeat hardware qualification and compare readiness evidence",
       "evidence_views": [
@@ -72,10 +72,10 @@
         "view": "Open all rank reports. Expand CUDA streams and the course_measure NVTX range; confirm the tiny all-reduce appears on every participating rank. This is a readiness trace, not a bandwidth benchmark."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/01_fabric_topology/logs/%j.out\" \\\n  --error=\"$PWD/results/01_fabric_topology/logs/%j.err\" slurm/01_fabric_topology.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/01_fabric_topology/logs/%j.err\" slurm/01_fabric_topology.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/01_fabric_topology.sbatch",
-        "nsys": "slurm/01_fabric_topology.nsys.sbatch"
+        "nsys": "slurm/01_fabric_topology.sbatch"
       }
     },
     "02_collective_readiness": {
@@ -89,7 +89,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/02_collective_readiness.json",
       "baseline_command": "sbatch slurm/02_collective_readiness.sbatch --workload small",
-      "systems_command": "sbatch slurm/02_collective_readiness.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/02_collective_readiness.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -109,10 +109,10 @@
         "view": "Open both rank reports. Expand CUDA API, CUDA GPU and NCCL rows inside lab_workload; correlate the readiness all-reduce on the two hosts. A passing sum is correctness evidence, not throughput evidence."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/02_collective_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/02_collective_readiness/logs/%j.err\" slurm/02_collective_readiness.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/02_collective_readiness/logs/%j.err\" slurm/02_collective_readiness.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/02_collective_readiness.sbatch",
-        "nsys": "slurm/02_collective_readiness.nsys.sbatch"
+        "nsys": "slurm/02_collective_readiness.sbatch"
       }
     },
     "03_training_readiness": {
@@ -145,7 +145,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/03_training_readiness.json",
       "baseline_command": "sbatch slurm/03_training_readiness.sbatch --workload small",
-      "systems_command": "sbatch slurm/03_training_readiness.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/03_training_readiness.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -168,10 +168,10 @@
         "view": "Open both rank reports. Inspect lab_workload, CUDA streams and NCCL activity for the readiness all-reduce; require both ranks to participate before interpreting later training traces."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/03_training_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/03_training_readiness/logs/%j.err\" slurm/03_training_readiness.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/03_training_readiness/logs/%j.err\" slurm/03_training_readiness.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/03_training_readiness.sbatch",
-        "nsys": "slurm/03_training_readiness.nsys.sbatch"
+        "nsys": "slurm/03_training_readiness.sbatch"
       }
     },
     "04_inference_readiness": {
@@ -204,7 +204,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/04_inference_readiness.json",
       "baseline_command": "sbatch slurm/04_inference_readiness.sbatch --workload small",
-      "systems_command": "sbatch slurm/04_inference_readiness.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/04_inference_readiness.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -227,10 +227,10 @@
         "view": "Open both rank reports. Inspect lab_workload and the CUDA/NCCL all-reduce; this probe establishes collective readiness, not serving latency."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/04_inference_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/04_inference_readiness/logs/%j.err\" slurm/04_inference_readiness.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/04_inference_readiness/logs/%j.err\" slurm/04_inference_readiness.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/04_inference_readiness.sbatch",
-        "nsys": "slurm/04_inference_readiness.nsys.sbatch"
+        "nsys": "slurm/04_inference_readiness.sbatch"
       }
     },
     "05_transport_readiness": {
@@ -244,7 +244,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/05_transport_readiness.json",
       "baseline_command": "sbatch slurm/05_transport_readiness.sbatch --workload small",
-      "systems_command": "sbatch slurm/05_transport_readiness.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/05_transport_readiness.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -264,10 +264,10 @@
         "view": "Open both rank reports. Inspect lab_workload and the CUDA/NCCL collective. Confirm placement separately from the trace; kernel duration alone does not identify the network transport."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/05_transport_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/05_transport_readiness/logs/%j.err\" slurm/05_transport_readiness.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/05_transport_readiness/logs/%j.err\" slurm/05_transport_readiness.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/05_transport_readiness.sbatch",
-        "nsys": "slurm/05_transport_readiness.nsys.sbatch"
+        "nsys": "slurm/05_transport_readiness.sbatch"
       }
     },
     "06_nvlink_bandwidth": {
@@ -320,7 +320,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/06_nvlink_bandwidth.json",
       "baseline_command": "sbatch --nodes=1 slurm/06_nvlink_bandwidth.sbatch --workload small --engine ce",
-      "systems_command": "sbatch --nodes=1 slurm/06_nvlink_bandwidth.nsys.sbatch --workload small --engine ce",
+      "systems_command": "sbatch --nodes=1 slurm/06_nvlink_bandwidth.sbatch --workload small --engine ce --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--engine`",
       "evidence_views": [
@@ -341,10 +341,10 @@
         "view": "Open nvbandwidth.nsys-rep beside the private vendor JSON. Compare CUDA GPU memory-copy rows for CE against kernel rows for SM at the same buffer size. NVTX ranges are vendor-owned; no course_measure annotation is promised. Use clean matrix bandwidth for the comparison, not capture timings."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --nodes=1 --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/06_nvlink_bandwidth/logs/%j.out\" \\\n  --error=\"$PWD/results/06_nvlink_bandwidth/logs/%j.err\" slurm/06_nvlink_bandwidth.nsys.sbatch --workload small --engine ce",
+      "learner_systems_command": "sbatch --nodes=1 --error=\"$PWD/results/06_nvlink_bandwidth/logs/%j.err\" slurm/06_nvlink_bandwidth.sbatch --workload small --engine ce --profiler nsys",
       "jobs": {
         "run": "slurm/06_nvlink_bandwidth.sbatch",
-        "nsys": "slurm/06_nvlink_bandwidth.nsys.sbatch"
+        "nsys": "slurm/06_nvlink_bandwidth.sbatch"
       }
     },
     "07_rdma_bandwidth": {
@@ -436,7 +436,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/08_distributed_collectives.json",
       "baseline_command": "sbatch slurm/08_distributed_collectives.sbatch --workload small --payload-mib 4",
-      "systems_command": "sbatch slurm/08_distributed_collectives.nsys.sbatch --workload small --payload-mib 4",
+      "systems_command": "sbatch slurm/08_distributed_collectives.sbatch --workload small --payload-mib 4 --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--payload-mib`",
       "evidence_views": [
@@ -465,10 +465,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/08_distributed_collectives/logs/%j.out\" \\\n  --error=\"$PWD/results/08_distributed_collectives/logs/%j.err\" slurm/08_distributed_collectives.nsys.sbatch --workload small --payload-mib 4",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/08_distributed_collectives/logs/%j.err\" slurm/08_distributed_collectives.sbatch --workload small --payload-mib 4 --profiler nsys",
       "jobs": {
         "run": "slurm/08_distributed_collectives.sbatch",
-        "nsys": "slurm/08_distributed_collectives.nsys.sbatch"
+        "nsys": "slurm/08_distributed_collectives.sbatch"
       }
     },
     "09_nccl_transport_sweep": {
@@ -512,7 +512,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/09_nccl_transport_sweep.json",
       "baseline_command": "sbatch slurm/09_nccl_transport_sweep.sbatch --max-bytes 1048576",
-      "systems_command": "sbatch slurm/09_nccl_transport_sweep.nsys.sbatch --max-bytes 1048576",
+      "systems_command": "sbatch slurm/09_nccl_transport_sweep.sbatch --max-bytes 1048576 --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--variant`",
       "evidence_views": [
@@ -540,10 +540,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/09_nccl_transport_sweep/logs/%j.out\" \\\n  --error=\"$PWD/results/09_nccl_transport_sweep/logs/%j.err\" slurm/09_nccl_transport_sweep.nsys.sbatch --max-bytes 1048576",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/09_nccl_transport_sweep/logs/%j.err\" slurm/09_nccl_transport_sweep.sbatch --max-bytes 1048576 --profiler nsys",
       "jobs": {
         "run": "slurm/09_nccl_transport_sweep.sbatch",
-        "nsys": "slurm/09_nccl_transport_sweep.nsys.sbatch"
+        "nsys": "slurm/09_nccl_transport_sweep.sbatch"
       }
     },
     "10_nccl_tests_report": {
@@ -587,7 +587,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/10_nccl_tests_report.json",
       "baseline_command": "sbatch slurm/10_nccl_tests_report.sbatch default",
-      "systems_command": "sbatch slurm/10_nccl_tests_report.nsys.sbatch default",
+      "systems_command": "sbatch slurm/10_nccl_tests_report.sbatch default --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--variant`",
       "evidence_views": [
@@ -617,10 +617,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_nccl_tests_report/logs/%j.out\" \\\n  --error=\"$PWD/results/10_nccl_tests_report/logs/%j.err\" slurm/10_nccl_tests_report.nsys.sbatch default",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/10_nccl_tests_report/logs/%j.err\" slurm/10_nccl_tests_report.sbatch default --profiler nsys",
       "jobs": {
         "run": "slurm/10_nccl_tests_report.sbatch",
-        "nsys": "slurm/10_nccl_tests_report.nsys.sbatch"
+        "nsys": "slurm/10_nccl_tests_report.sbatch"
       }
     },
     "11_collective_layout": {
@@ -655,7 +655,7 @@
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/11_collective_layout.json",
       "baseline_command": "sbatch slurm/11_collective_layout.sbatch --workload small --layout flat",
-      "systems_command": "sbatch slurm/11_collective_layout.nsys.sbatch --workload small --layout flat",
+      "systems_command": "sbatch slurm/11_collective_layout.sbatch --workload small --layout flat --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--layout`",
       "evidence_views": [
@@ -675,10 +675,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/11_collective_layout/logs/%j.out\" \\\n  --error=\"$PWD/results/11_collective_layout/logs/%j.err\" slurm/11_collective_layout.nsys.sbatch --workload small --layout flat",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/11_collective_layout/logs/%j.err\" slurm/11_collective_layout.sbatch --workload small --layout flat --profiler nsys",
       "jobs": {
         "run": "slurm/11_collective_layout.sbatch",
-        "nsys": "slurm/11_collective_layout.nsys.sbatch"
+        "nsys": "slurm/11_collective_layout.sbatch"
       }
     },
     "12_distributed_scaling": {
@@ -722,7 +722,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/12_distributed_scaling.json",
       "baseline_command": "sbatch slurm/12_distributed_scaling.sbatch --workload small --global-batch 64",
-      "systems_command": "sbatch slurm/12_distributed_scaling.nsys.sbatch --workload small --global-batch 64",
+      "systems_command": "sbatch slurm/12_distributed_scaling.sbatch --workload small --global-batch 64 --profiler nsys",
       "compute_command": null,
       "tuning_control": "one versus two ranks at the same global batch",
       "evidence_views": [
@@ -746,10 +746,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/12_distributed_scaling/logs/%j.out\" \\\n  --error=\"$PWD/results/12_distributed_scaling/logs/%j.err\" slurm/12_distributed_scaling.nsys.sbatch --workload small --global-batch 64",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/12_distributed_scaling/logs/%j.err\" slurm/12_distributed_scaling.sbatch --workload small --global-batch 64 --profiler nsys",
       "jobs": {
         "run": "slurm/12_distributed_scaling.sbatch",
-        "nsys": "slurm/12_distributed_scaling.nsys.sbatch"
+        "nsys": "slurm/12_distributed_scaling.sbatch"
       }
     },
     "13_collective_overlap": {
@@ -791,7 +791,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/13_collective_overlap.json",
       "baseline_command": "sbatch slurm/13_collective_overlap.sbatch --workload small",
-      "systems_command": "sbatch slurm/13_collective_overlap.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/13_collective_overlap.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Compare serialized communication plus compute with asynchronous overlap at fixed payload and matrix size",
       "evidence_views": [
@@ -816,10 +816,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/13_collective_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/13_collective_overlap/logs/%j.err\" slurm/13_collective_overlap.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/13_collective_overlap/logs/%j.err\" slurm/13_collective_overlap.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/13_collective_overlap.sbatch",
-        "nsys": "slurm/13_collective_overlap.nsys.sbatch"
+        "nsys": "slurm/13_collective_overlap.sbatch"
       }
     },
     "14_distributed_profiling": {
@@ -854,7 +854,7 @@
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/14_distributed_profiling.json",
       "baseline_command": "sbatch slurm/14_distributed_profiling.sbatch --workload small --overlap off",
-      "systems_command": "sbatch slurm/14_distributed_profiling.nsys.sbatch --workload small --overlap off",
+      "systems_command": "sbatch slurm/14_distributed_profiling.sbatch --workload small --overlap off --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--overlap`",
       "evidence_views": [
@@ -874,10 +874,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/14_distributed_profiling/logs/%j.out\" \\\n  --error=\"$PWD/results/14_distributed_profiling/logs/%j.err\" slurm/14_distributed_profiling.nsys.sbatch --workload small --overlap off",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/14_distributed_profiling/logs/%j.err\" slurm/14_distributed_profiling.sbatch --workload small --overlap off --profiler nsys",
       "jobs": {
         "run": "slurm/14_distributed_profiling.sbatch",
-        "nsys": "slurm/14_distributed_profiling.nsys.sbatch"
+        "nsys": "slurm/14_distributed_profiling.sbatch"
       }
     },
     "15_ddp_train": {
@@ -930,7 +930,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/15_ddp_train.json",
       "baseline_command": "sbatch slurm/15_ddp_train.sbatch --workload small",
-      "systems_command": "sbatch slurm/15_ddp_train.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/15_ddp_train.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--zero-grad-fill`",
       "evidence_views": [
@@ -964,10 +964,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/15_ddp_train/logs/%j.out\" \\\n  --error=\"$PWD/results/15_ddp_train/logs/%j.err\" slurm/15_ddp_train.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/15_ddp_train/logs/%j.err\" slurm/15_ddp_train.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/15_ddp_train.sbatch",
-        "nsys": "slurm/15_ddp_train.nsys.sbatch"
+        "nsys": "slurm/15_ddp_train.sbatch"
       }
     },
     "16_fsdp2_train": {
@@ -1011,7 +1011,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/16_fsdp2_train.json",
       "baseline_command": "sbatch slurm/16_fsdp2_train.sbatch --workload small",
-      "systems_command": "sbatch slurm/16_fsdp2_train.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/16_fsdp2_train.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--zero-grad-fill`",
       "evidence_views": [
@@ -1043,10 +1043,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/16_fsdp2_train/logs/%j.out\" \\\n  --error=\"$PWD/results/16_fsdp2_train/logs/%j.err\" slurm/16_fsdp2_train.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/16_fsdp2_train/logs/%j.err\" slurm/16_fsdp2_train.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/16_fsdp2_train.sbatch",
-        "nsys": "slurm/16_fsdp2_train.nsys.sbatch"
+        "nsys": "slurm/16_fsdp2_train.sbatch"
       }
     },
     "17_training_expert_parallel": {
@@ -1097,7 +1097,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/17_training_expert_parallel.json",
       "baseline_command": "sbatch slurm/17_training_expert_parallel.sbatch --workload small",
-      "systems_command": "sbatch slurm/17_training_expert_parallel.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/17_training_expert_parallel.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Compare per-expert token load with the slowest-rank completion",
       "evidence_views": [
@@ -1125,10 +1125,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/17_training_expert_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/17_training_expert_parallel/logs/%j.err\" slurm/17_training_expert_parallel.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/17_training_expert_parallel/logs/%j.err\" slurm/17_training_expert_parallel.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/17_training_expert_parallel.sbatch",
-        "nsys": "slurm/17_training_expert_parallel.nsys.sbatch"
+        "nsys": "slurm/17_training_expert_parallel.sbatch"
       }
     },
     "18_training_tensor_parallel": {
@@ -1170,7 +1170,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/18_training_tensor_parallel.json",
       "baseline_command": "sbatch slurm/18_training_tensor_parallel.sbatch --workload small",
-      "systems_command": "sbatch slurm/18_training_tensor_parallel.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/18_training_tensor_parallel.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Compare the sharded linear result and input gradient with the replicated reference",
       "evidence_views": [
@@ -1196,10 +1196,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/18_training_tensor_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/18_training_tensor_parallel/logs/%j.err\" slurm/18_training_tensor_parallel.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/18_training_tensor_parallel/logs/%j.err\" slurm/18_training_tensor_parallel.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/18_training_tensor_parallel.sbatch",
-        "nsys": "slurm/18_training_tensor_parallel.nsys.sbatch"
+        "nsys": "slurm/18_training_tensor_parallel.sbatch"
       }
     },
     "19_gradient_overlap": {
@@ -1243,8 +1243,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/19_gradient_overlap.json",
       "baseline_command": "sbatch slurm/19_gradient_overlap.sbatch --workload small",
-      "systems_command": "sbatch slurm/19_gradient_overlap.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/19_gradient_overlap.ncu.sbatch --workload small --bucket-mib 8 24",
+      "systems_command": "sbatch slurm/19_gradient_overlap.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/19_gradient_overlap.sbatch --workload small --bucket-mib 8 24 --profiler ncu",
       "tuning_control": "`--bucket-mib`",
       "evidence_views": [
         "Selected comparison generation",
@@ -1268,12 +1268,12 @@
         "path": "labs/gradient_overlap_compute.py",
         "nvtx_range": "gradient_backward"
       },
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/19_gradient_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/19_gradient_overlap/logs/%j.err\" slurm/19_gradient_overlap.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/19_gradient_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/19_gradient_overlap/logs/%j.err\" slurm/19_gradient_overlap.ncu.sbatch --workload small --bucket-mib 8 24",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/19_gradient_overlap/logs/%j.err\" slurm/19_gradient_overlap.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/19_gradient_overlap/logs/%j.err\" slurm/19_gradient_overlap.sbatch --workload small --bucket-mib 8 24 --profiler ncu",
       "jobs": {
         "run": "slurm/19_gradient_overlap.sbatch",
-        "nsys": "slurm/19_gradient_overlap.nsys.sbatch",
-        "ncu": "slurm/19_gradient_overlap.ncu.sbatch"
+        "nsys": "slurm/19_gradient_overlap.sbatch",
+        "ncu": "slurm/19_gradient_overlap.sbatch"
       }
     },
     "20_parallelism_mechanics": {
@@ -1324,7 +1324,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/20_parallelism_mechanics.json",
       "baseline_command": "sbatch slurm/20_parallelism_mechanics.sbatch --workload small",
-      "systems_command": "sbatch slurm/20_parallelism_mechanics.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/20_parallelism_mechanics.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -1346,10 +1346,10 @@
         "view": "Open both rank reports. Expand lab_workload, CUDA streams and NCCL send/receive/all-gather rows. Identify pipeline bubbles and context exchange, then check the numerical-equivalence panels before proposing an overlap change."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/20_parallelism_mechanics/logs/%j.out\" \\\n  --error=\"$PWD/results/20_parallelism_mechanics/logs/%j.err\" slurm/20_parallelism_mechanics.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/20_parallelism_mechanics/logs/%j.err\" slurm/20_parallelism_mechanics.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/20_parallelism_mechanics.sbatch",
-        "nsys": "slurm/20_parallelism_mechanics.nsys.sbatch"
+        "nsys": "slurm/20_parallelism_mechanics.sbatch"
       }
     },
     "21_ddp_buckets": {
@@ -1385,7 +1385,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/21_ddp_buckets.json",
       "baseline_command": "sbatch slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 1",
-      "systems_command": "sbatch slurm/21_ddp_buckets.nsys.sbatch --hook allreduce --bucket-cap-mb 1",
+      "systems_command": "sbatch slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 1 --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--bucket-cap-mb`, `--hook`",
       "evidence_views": [
@@ -1405,10 +1405,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/21_ddp_buckets/logs/%j.out\" \\\n  --error=\"$PWD/results/21_ddp_buckets/logs/%j.err\" slurm/21_ddp_buckets.nsys.sbatch --hook allreduce --bucket-cap-mb 1",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/21_ddp_buckets/logs/%j.err\" slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 1 --profiler nsys",
       "jobs": {
         "run": "slurm/21_ddp_buckets.sbatch",
-        "nsys": "slurm/21_ddp_buckets.nsys.sbatch"
+        "nsys": "slurm/21_ddp_buckets.sbatch"
       }
     },
     "22_fabric_training": {
@@ -1461,7 +1461,7 @@
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/22_fabric_training.json",
       "baseline_command": "sbatch slurm/22_fabric_training.sbatch --workload small --microbatch 1",
-      "systems_command": "sbatch slurm/22_fabric_training.nsys.sbatch --workload small --microbatch 1",
+      "systems_command": "sbatch slurm/22_fabric_training.sbatch --workload small --microbatch 1 --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--microbatch`",
       "evidence_views": [
@@ -1483,10 +1483,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/22_fabric_training/logs/%j.out\" \\\n  --error=\"$PWD/results/22_fabric_training/logs/%j.err\" slurm/22_fabric_training.nsys.sbatch --workload small --microbatch 1",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/22_fabric_training/logs/%j.err\" slurm/22_fabric_training.sbatch --workload small --microbatch 1 --profiler nsys",
       "jobs": {
         "run": "slurm/22_fabric_training.sbatch",
-        "nsys": "slurm/22_fabric_training.nsys.sbatch"
+        "nsys": "slurm/22_fabric_training.sbatch"
       }
     },
     "23_inference_expert_parallel": {
@@ -1528,7 +1528,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/23_inference_expert_parallel.json",
       "baseline_command": "sbatch slurm/23_inference_expert_parallel.sbatch --workload small",
-      "systems_command": "sbatch slurm/23_inference_expert_parallel.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/23_inference_expert_parallel.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Follow dispatch, expert computation, and return permutation on both ranks",
       "evidence_views": [
@@ -1549,10 +1549,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/23_inference_expert_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/23_inference_expert_parallel/logs/%j.err\" slurm/23_inference_expert_parallel.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/23_inference_expert_parallel/logs/%j.err\" slurm/23_inference_expert_parallel.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/23_inference_expert_parallel.sbatch",
-        "nsys": "slurm/23_inference_expert_parallel.nsys.sbatch"
+        "nsys": "slurm/23_inference_expert_parallel.sbatch"
       }
     },
     "24_inference_tensor_parallel": {
@@ -1605,7 +1605,7 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/24_inference_tensor_parallel.json",
       "baseline_command": "sbatch slurm/24_inference_tensor_parallel.sbatch --workload small",
-      "systems_command": "sbatch slurm/24_inference_tensor_parallel.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/24_inference_tensor_parallel.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--batch-size`",
       "evidence_views": [
@@ -1631,10 +1631,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/24_inference_tensor_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/24_inference_tensor_parallel/logs/%j.err\" slurm/24_inference_tensor_parallel.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/24_inference_tensor_parallel/logs/%j.err\" slurm/24_inference_tensor_parallel.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/24_inference_tensor_parallel.sbatch",
-        "nsys": "slurm/24_inference_tensor_parallel.nsys.sbatch"
+        "nsys": "slurm/24_inference_tensor_parallel.sbatch"
       }
     },
     "25_fabric_inference": {
@@ -1678,7 +1678,7 @@
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/25_fabric_inference.json",
       "baseline_command": "sbatch slurm/25_fabric_inference.sbatch --workload small --placement replicated",
-      "systems_command": "sbatch slurm/25_fabric_inference.nsys.sbatch --workload small --placement replicated",
+      "systems_command": "sbatch slurm/25_fabric_inference.sbatch --workload small --placement replicated --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--placement`",
       "evidence_views": [
@@ -1699,10 +1699,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/25_fabric_inference/logs/%j.out\" \\\n  --error=\"$PWD/results/25_fabric_inference/logs/%j.err\" slurm/25_fabric_inference.nsys.sbatch --workload small --placement replicated",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/25_fabric_inference/logs/%j.err\" slurm/25_fabric_inference.sbatch --workload small --placement replicated --profiler nsys",
       "jobs": {
         "run": "slurm/25_fabric_inference.sbatch",
-        "nsys": "slurm/25_fabric_inference.nsys.sbatch"
+        "nsys": "slurm/25_fabric_inference.sbatch"
       }
     },
     "26_collective_latency": {
@@ -1746,7 +1746,7 @@
       "interpretation": "The source initializes sixteen ranks, performs an exact MAX reduction, and records the slowest completed rank for every sample. Cases contain 4, 4096 and 1048576 bytes. Useful GB/s divides payload bytes by elapsed seconds; it is not a physical InfiniBand link counter or NCCL bus bandwidth. Auto can already select Tree, so equal results are meaningful.",
       "dashboard": "reference/grafana/26_collective_latency.json",
       "baseline_command": "sbatch slurm/26_collective_latency.sbatch --workload small --algorithm auto",
-      "systems_command": "sbatch slurm/26_collective_latency.nsys.sbatch --workload small --algorithm auto",
+      "systems_command": "sbatch slurm/26_collective_latency.sbatch --workload small --algorithm auto --profiler nsys",
       "compute_command": null,
       "tuning_control": "algorithm",
       "evidence_views": [
@@ -1769,10 +1769,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/26_collective_latency/logs/%j.out\" \\\n  --error=\"$PWD/results/26_collective_latency/logs/%j.err\" slurm/26_collective_latency.nsys.sbatch --workload small --algorithm auto",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/26_collective_latency/logs/%j.err\" slurm/26_collective_latency.sbatch --workload small --algorithm auto --profiler nsys",
       "jobs": {
         "run": "slurm/26_collective_latency.sbatch",
-        "nsys": "slurm/26_collective_latency.nsys.sbatch"
+        "nsys": "slurm/26_collective_latency.sbatch"
       }
     },
     "27_rdma_latency": {
@@ -1865,7 +1865,7 @@
       "interpretation": "The single policy sets an exact NCCL_IB_HCA match for each node. The all policy leaves adapter selection automatic; it does not assert that every adapter is active. NCCL INIT, NET and GRAPH logs provide selected-path evidence. A faster run or an environment variable alone cannot prove GPUDirect RDMA. Correlate logs with the topology and completed collective results.",
       "dashboard": "reference/grafana/28_nic_selection.json",
       "baseline_command": "sbatch slurm/28_nic_selection.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
-      "systems_command": "sbatch slurm/28_nic_selection.nsys.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "systems_command": "sbatch slurm/28_nic_selection.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all --profiler nsys",
       "compute_command": null,
       "tuning_control": "hca_policy",
       "evidence_views": [
@@ -1887,10 +1887,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/28_nic_selection/logs/%j.out\" \\\n  --error=\"$PWD/results/28_nic_selection/logs/%j.err\" slurm/28_nic_selection.nsys.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/28_nic_selection/logs/%j.err\" slurm/28_nic_selection.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all --profiler nsys",
       "jobs": {
         "run": "slurm/28_nic_selection.sbatch",
-        "nsys": "slurm/28_nic_selection.nsys.sbatch"
+        "nsys": "slurm/28_nic_selection.sbatch"
       }
     },
     "29_nixl_transfer": {
@@ -1934,7 +1934,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/29_nixl_transfer.json",
       "baseline_command": "sbatch slurm/29_nixl_transfer.sbatch --workload small --progress-thread off",
-      "systems_command": "sbatch slurm/29_nixl_transfer.nsys.sbatch --workload small --progress-thread off",
+      "systems_command": "sbatch slurm/29_nixl_transfer.sbatch --workload small --progress-thread off --profiler nsys",
       "compute_command": null,
       "tuning_control": "progress_thread",
       "evidence_views": [
@@ -1958,10 +1958,10 @@
         "view": "Open rank0.nsys-rep and rank1.nsys-rep beside the private vendor output. Inspect UCX, CUDA API and OS runtime rows around buffer preparation and progress. GPU payload DMA may have no CUDA kernel event; use clean NIXL transfer_us and bandwidth for the network result. No course NVTX range is emitted by the vendor executable."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/29_nixl_transfer/logs/%j.out\" \\\n  --error=\"$PWD/results/29_nixl_transfer/logs/%j.err\" slurm/29_nixl_transfer.nsys.sbatch --workload small --progress-thread off",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/29_nixl_transfer/logs/%j.err\" slurm/29_nixl_transfer.sbatch --workload small --progress-thread off --profiler nsys",
       "jobs": {
         "run": "slurm/29_nixl_transfer.sbatch",
-        "nsys": "slurm/29_nixl_transfer.nsys.sbatch"
+        "nsys": "slurm/29_nixl_transfer.sbatch"
       }
     },
     "30_megatron_overlap": {
@@ -2005,7 +2005,7 @@
       "interpretation": "The four-layer BF16 model uses a distributed optimizer, FP32 gradient reduction, fixed global batch and fixed sequence length. Parameter-gather overlap stays disabled. TensorBoard iteration-time is measured in seconds and includes the vendor training loop. The callback checks skipped steps, finite loss and full final weights; a reference mismatch blocks comparison. Synthetic tokens establish execution equivalence, not model quality or production scaling.",
       "dashboard": "reference/grafana/30_megatron_overlap.json",
       "baseline_command": "sbatch slurm/30_megatron_overlap.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\"",
-      "systems_command": "sbatch slurm/30_megatron_overlap.nsys.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "systems_command": "sbatch slurm/30_megatron_overlap.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\" --profiler nsys",
       "compute_command": null,
       "tuning_control": "overlap",
       "evidence_views": [
@@ -2029,10 +2029,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/30_megatron_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/30_megatron_overlap/logs/%j.err\" slurm/30_megatron_overlap.nsys.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/30_megatron_overlap/logs/%j.err\" slurm/30_megatron_overlap.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\" --profiler nsys",
       "jobs": {
         "run": "slurm/30_megatron_overlap.sbatch",
-        "nsys": "slurm/30_megatron_overlap.nsys.sbatch"
+        "nsys": "slurm/30_megatron_overlap.sbatch"
       }
     },
     "31_context_parallel": {
@@ -2076,7 +2076,7 @@
       "interpretation": "Both configurations retain sixteen context ranks, the same tokens, model, global batch and optimizer. The hierarchical layout uses a2a+p2p with sizes [8,2]; the flat layout uses p2p. Eight query groups support the inner split, and sequence lengths divide the context partition. Keep torchrun node-contiguous rank order. Compare final parameters to the flat reference before accepting the measured step distribution.",
       "dashboard": "reference/grafana/31_context_parallel.json",
       "baseline_command": "sbatch slurm/31_context_parallel.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\"",
-      "systems_command": "sbatch slurm/31_context_parallel.nsys.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "systems_command": "sbatch slurm/31_context_parallel.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\" --profiler nsys",
       "compute_command": null,
       "tuning_control": "layout",
       "evidence_views": [
@@ -2100,10 +2100,10 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/31_context_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/31_context_parallel/logs/%j.err\" slurm/31_context_parallel.nsys.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/31_context_parallel/logs/%j.err\" slurm/31_context_parallel.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\" --profiler nsys",
       "jobs": {
         "run": "slurm/31_context_parallel.sbatch",
-        "nsys": "slurm/31_context_parallel.nsys.sbatch"
+        "nsys": "slurm/31_context_parallel.sbatch"
       }
     },
     "32_dynamo_disaggregation": {
@@ -2147,7 +2147,7 @@
       "interpretation": "The runner owns private job-scoped discovery, two vLLM workers and a loopback frontend. Both layouts use the same pinned Qwen3-8B BF16 weights, TP8 per worker and deterministic requests. The disaggregated path uses NixlConnector. Fixed output counts and complete streams establish delivery validity; identical output signatures are required for comparison. This is not a model-quality evaluation. TTFT includes queueing and transfer effects, not only GPU prefill.",
       "dashboard": "reference/grafana/32_dynamo_disaggregation.json",
       "baseline_command": "sbatch slurm/32_dynamo_disaggregation.sbatch --workload small --layout aggregated",
-      "systems_command": "sbatch slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --layout aggregated --capture systems",
+      "systems_command": "sbatch slurm/32_dynamo_disaggregation.sbatch --workload small --layout aggregated --capture systems --profiler nsys",
       "compute_command": null,
       "tuning_control": "layout",
       "evidence_views": [
@@ -2174,10 +2174,10 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_dynamo_disaggregation/logs/%j.out\" \\\n  --error=\"$PWD/results/32_dynamo_disaggregation/logs/%j.err\" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --layout aggregated --capture systems",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/32_dynamo_disaggregation/logs/%j.err\" slurm/32_dynamo_disaggregation.sbatch --workload small --layout aggregated --capture systems --profiler nsys",
       "jobs": {
         "run": "slurm/32_dynamo_disaggregation.sbatch",
-        "nsys": "slurm/32_dynamo_disaggregation.nsys.sbatch"
+        "nsys": "slurm/32_dynamo_disaggregation.sbatch"
       }
     },
     "33_dynamo_routing": {
@@ -2221,7 +2221,7 @@
       "interpretation": "The serving runner enables prefix caching and publishes KV events from each worker. Four deterministic prefix families create reuse opportunities; each run warms its own fresh deployment before timing. KV-aware routing balances cache reuse and load, so lower TTFT is not guaranteed. Complete output and signature checks prevent a failed or changed response stream from becoming an apparent improvement.",
       "dashboard": "reference/grafana/33_dynamo_routing.json",
       "baseline_command": "sbatch slurm/33_dynamo_routing.sbatch --workload small --router round-robin",
-      "systems_command": "sbatch slurm/33_dynamo_routing.nsys.sbatch --workload small --router round-robin --capture systems",
+      "systems_command": "sbatch slurm/33_dynamo_routing.sbatch --workload small --router round-robin --capture systems --profiler nsys",
       "compute_command": null,
       "tuning_control": "router",
       "evidence_views": [
@@ -2248,10 +2248,10 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_dynamo_routing/logs/%j.out\" \\\n  --error=\"$PWD/results/33_dynamo_routing/logs/%j.err\" slurm/33_dynamo_routing.nsys.sbatch --workload small --router round-robin --capture systems",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/33_dynamo_routing/logs/%j.err\" slurm/33_dynamo_routing.sbatch --workload small --router round-robin --capture systems --profiler nsys",
       "jobs": {
         "run": "slurm/33_dynamo_routing.sbatch",
-        "nsys": "slurm/33_dynamo_routing.nsys.sbatch"
+        "nsys": "slurm/33_dynamo_routing.sbatch"
       }
     },
     "34_serving_goodput": {
@@ -2304,7 +2304,7 @@
       "interpretation": "Compare identical transmitted requests and server-verified generated-token work. Different response text is allowed; output signatures are diagnostic. Fixed completion counts include reasoning tokens. Missing usage or failed requests invalidate the comparison, while zero goodput and either performance direction are valid. Use separate server captures for diagnosis; sampled telemetry does not prove a latency mechanism.",
       "dashboard": "reference/grafana/34_serving_goodput.json",
       "baseline_command": "sbatch slurm/34_serving_goodput.sbatch --workload small --concurrency 8",
-      "systems_command": "sbatch slurm/34_serving_goodput.nsys.sbatch --workload small --concurrency 8 --capture systems",
+      "systems_command": "sbatch slurm/34_serving_goodput.sbatch --workload small --concurrency 8 --capture systems --profiler nsys",
       "compute_command": null,
       "tuning_control": "concurrency",
       "evidence_views": [
@@ -2335,10 +2335,10 @@
         "view": "Open server-rank0.nsys-rep and server-rank1.nsys-rep from the private vendor folder. Expand the GPU worker process trees, CUDA streams and NCCL activity during AIPerf requests after model startup. Compare gaps and kernel activity with client TTFT/ITL; GPU utilization is not request latency. Model startup alone is an incomplete serving trace."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/34_serving_goodput/logs/%j.out\" \\\n  --error=\"$PWD/results/34_serving_goodput/logs/%j.err\" slurm/34_serving_goodput.nsys.sbatch --workload small --concurrency 8 --capture systems",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/34_serving_goodput/logs/%j.err\" slurm/34_serving_goodput.sbatch --workload small --concurrency 8 --capture systems --profiler nsys",
       "jobs": {
         "run": "slurm/34_serving_goodput.sbatch",
-        "nsys": "slurm/34_serving_goodput.nsys.sbatch"
+        "nsys": "slurm/34_serving_goodput.sbatch"
       }
     }
   },

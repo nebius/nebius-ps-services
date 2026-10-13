@@ -55,13 +55,6 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 After Lesson 3, draw the CPU-to-device execution path and explain a trustworthy timer. After Lesson 7, distinguish memory layout, lane utilization and residency. After Lesson 10, derive a roofline bound before comparing measured performance. Finish by attaching health context and the two-node collective evidence to one scoped explanation.
 
-Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
-worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
-failure analysis and review in their relevant sections. Before moving on,
-explain the new mechanism and its limitation in your own words; a completed
-command alone is not evidence of understanding.
-
 ## Completion
 
 Complete the single-GPU labs through their supplied launchers. For distributed practice, move to [Advanced Lab 02: Verify the two-node H100 platform](../advanced-gpu-communication/reference/labs/02_collective_readiness.md), then [Advanced Lab 08: Measure a two-node NCCL all-reduce](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md). Keep observation, inference and unverified hypothesis separate.

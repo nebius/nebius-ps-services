@@ -24,10 +24,12 @@ from course_evidence import annotated_operation
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     rank, world_size, local_rank = init_nccl(torch)
     device = f"cuda:{local_rank}"
@@ -35,6 +37,7 @@ def main() -> None:
     collective_mib = 64 if args.workload == "small" else 512
     element_count = collective_mib * 2**20 // 2
     collective = torch.empty(element_count, device=device, dtype=torch.bfloat16)
+    # Create the synthetic tensors used by this experiment.
     left = torch.randn((matrix_size, matrix_size), device=device, dtype=torch.bfloat16)
     right = torch.randn_like(left)
     product = torch.empty_like(left)
@@ -58,6 +61,7 @@ def main() -> None:
     def measure(operation: Callable[[], None]) -> list[float]:
         for _ in range(args.warmup):
             operation()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         samples: list[float] = []
         for _ in range(args.iterations):
@@ -65,6 +69,7 @@ def main() -> None:
             started = time.perf_counter()
             operation()
             torch.cuda.synchronize()
+            # Create explicit input values on the selected device.
             elapsed = torch.tensor(
                 (time.perf_counter() - started) * 1_000,
                 device=device,
@@ -92,6 +97,7 @@ def main() -> None:
     if rank == 0:
         serialized_median = statistics.median(serialized_samples)
         overlapped_median = statistics.median(overlapped_samples)
+        # Save the actual measurements together with their correctness checks.
         target = write_result(
             args,
             lab_id="13_collective_overlap",

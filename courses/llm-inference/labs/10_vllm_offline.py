@@ -69,6 +69,7 @@ def main() -> None:
         action="store_true",
         help="Keep the single-GPU engine in this process for NVTX-scoped diagnostics.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
@@ -138,6 +139,7 @@ def main() -> None:
     requests = len(prompts) * args.iterations
     prompt_tokens_total = sum(prompt_token_counts)
     output_tokens_total = sum(output_token_counts)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="10_vllm_offline",

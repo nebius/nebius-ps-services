@@ -46,7 +46,7 @@
     },
     {
       "id": 11,
-      "title": "Evaluation mode and gradient mode are separate"
+      "title": "Switching from training to validation and inference"
     },
     {
       "id": 12,
@@ -58,23 +58,15 @@
     },
     {
       "id": 14,
-      "title": "Batching expresses repeated work as tensor operations"
+      "title": "Batching groups samples; vectorization processes the batch"
     },
     {
       "id": 15,
-      "title": "A timer must include completion"
+      "title": "Measure GPU time with CUDA events"
     },
     {
       "id": 16,
-      "title": "Code suggests a hypothesis; a profile supplies evidence"
-    },
-    {
-      "id": 17,
-      "title": "Compilation can reduce launches and intermediate storage"
-    },
-    {
-      "id": 18,
-      "title": "Read a complete step like a performance engineer"
+      "title": "torch.compile can combine GPU operations"
     }
   ],
   "visual_manifest": "reference/visual-manifest.json"

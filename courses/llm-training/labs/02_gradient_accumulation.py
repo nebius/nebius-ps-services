@@ -45,10 +45,12 @@ def validate_gradient_samples(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
 
     width = 2_048 if args.workload == "small" else 8_192
@@ -58,6 +60,7 @@ def main() -> None:
         torch.nn.GELU(),
         torch.nn.Linear(4 * width, width, bias=False),
     ).to("cuda")
+    # Create the synthetic tensors used by this experiment.
     inputs = torch.randn((total_batch, width), device="cuda")
     targets = torch.randn((total_batch, width), device="cuda")
 
@@ -70,6 +73,7 @@ def main() -> None:
                     prediction, targets[start : start + split]
                 )
                 loss = loss * (split / total_batch)
+            # Differentiate the loss to populate parameter gradients.
             loss.backward()
 
     one_pass = annotated_operation(one_pass, "gradient_pass")
@@ -77,6 +81,7 @@ def main() -> None:
     def run(model: object, split: int) -> dict[str, float]:
         for _ in range(args.warmup):
             one_pass(model, split)
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         elapsed_samples: list[float] = []
         peak_samples: list[float] = []
@@ -103,6 +108,7 @@ def main() -> None:
     sampled_gradient_error = validate_gradient_samples(
         torch, full_gradients, [parameter.grad for parameter in reference.parameters()]
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="02_gradient_accumulation",

@@ -62,13 +62,13 @@ def test_complete_disjoint_partition_and_regular_dependency_boundary():
     "group,launcher,component",
     [
         ("cuda", "build_and_test.sbatch", "cuda-image"),
-        ("serving", "30_engine_profile.trtllm.sbatch", "trtllm-image"),
+        ("serving", "30_engine_profile.sbatch", "trtllm-image"),
         ("communication", "dynamo_disaggregated_preflight.sbatch", "dynamo-image"),
     ],
 )
 def test_container_variants_are_explicit(group, launcher, component):
     _, courses, definitions, _ = plans()
-    plan = selection.resolve(group, courses, definitions, launcher=launcher)
+    plan = selection.resolve(group, courses, definitions, launcher=launcher, experiment="trtllm" if launcher == "30_engine_profile.sbatch" else "default")
     assert component in plan["components"]
 
 
@@ -283,6 +283,8 @@ def test_native_serving_and_cuda_variants_have_no_container_dependency():
             spec = definitions["runtimes"][runtime]
             if spec["group"] in {"cuda", "serving"} and not spec.get("optional"):
                 source = (course / "slurm" / launcher).read_text()
+                if launcher.removesuffix(".sbatch") in json.loads((course / "reference/execution.json").read_text())["labs"]:
+                    source = source.split("default_none_", 1)[1].split("\n      ;;", 1)[0]
                 assert "COURSE_CONTAINER_RUNNER" not in source
                 assert "VLLM_IMAGE_DIGEST" not in source
                 assert "CUDA_IMAGE_DIGEST" not in source

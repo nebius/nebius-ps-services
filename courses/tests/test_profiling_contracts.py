@@ -228,8 +228,8 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
                 )
                 assert "invariants" in recipe
                 guide = (root / "reference/labs" / f"{recipe['lab']}.md").read_text()
-                assert "../../../lab-guide.html#lab-preparation-scripts" in guide
-                assert "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)" in guide
+                assert "../../../lab-guide.html#lab-preparation-scripts" not in guide
+                assert "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)" not in guide
                 assert "grafana import" not in guide
                 assert "grafana validate" not in guide
                 for obsolete in (
@@ -286,7 +286,7 @@ def test_grafana_official_reference_uses_exact_host(host, accepted):
 @pytest.mark.parametrize("variant", ["disabled", "enabled"])
 def test_chunked_prefill_capture_brackets_each_request_campaign(phase, variant):
     launcher = (
-        ROOT / "llm-inference/slurm/34_policy_equivalence_client.nsys.sbatch"
+        ROOT / "llm-inference/slurm/34_policy_equivalence_client.sbatch"
     ).read_text()
     trial = launcher.split("run_trial() {\n", 1)[1].split("\n}\n", 1)[0]
     # Execute the actual post-readiness campaign with only local Bash fixtures.
@@ -385,6 +385,10 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
         json.dumps({"labs": {"01_example": recipe}})
     )
     (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(result()))
+    # The reader document embeds originals but must never be published again.
+    (tmp_path / "results/01_example/jobs/3/result.json").write_text(
+        json.dumps({"schema": "course-job-result/v1", "stages": [{"measurements": [result()]}]})
+    )
     assert inspector.inspect("01_example", 4) == []
     reports = inspector.inspect("01_example", 3)
     assert (
@@ -393,8 +397,7 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
     bad = result()
     bad["experiment"]["instrumented"] = True
     (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(bad))
-    with pytest.raises(ValueError, match="unprofiled"):
-        inspector.inspect("01_example", 3)
+    assert inspector.inspect("01_example", 3) == []
 
 
 @pytest.mark.parametrize("candidate_loss", [0.2, float("nan"), "0.1"])

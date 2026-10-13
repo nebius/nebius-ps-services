@@ -24,13 +24,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--external-only", action="store_true", help="Skip the internal CUDA profiler during a separate Nsight capture.")
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     environment = require_course_gpu(torch)
     width = 256 if args.workload == "small" else 1_024
     batch = 64 if args.workload == "small" else 256
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     target = torch.randn_like(x)
     base_weight = (
@@ -45,6 +48,7 @@ def main() -> None:
     compiled = torch.compile(expression, fullgraph=True)
     compile_started = time.perf_counter()
     compiled_loss = compiled(x, base_weight, base_bias)
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     first_compiled_call_ms = (time.perf_counter() - compile_started) * 1_000
     eager_loss = expression(x, base_weight, base_bias)
@@ -64,9 +68,12 @@ def main() -> None:
     )
 
     def training_step(weight: object, bias: object, optimizer: object) -> object:
+        # Clear the previous step’s gradients before differentiating again.
         optimizer.zero_grad(set_to_none=False)
         loss = expression(x, weight, bias)
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
+        # Update the parameters using the gradients from this step.
         optimizer.step()
         return loss
 
@@ -137,6 +144,7 @@ def main() -> None:
         if "cuda" in event.key.lower() or "gemm" in event.key.lower()
     )[:20]
 
+    # Save the actual measurements together with their correctness checks.
     target_path = write_result(
         args,
         lab_id="27_fused_graph_trace",

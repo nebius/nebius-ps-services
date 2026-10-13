@@ -25,10 +25,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     width = 1_024 if args.workload == "small" else 4_096
     tensors = [
@@ -59,6 +61,7 @@ def main() -> None:
     for _ in range(args.warmup):
         sequential()
         concurrent()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
 
     host_enqueue_samples = []
@@ -95,6 +98,7 @@ def main() -> None:
     )
     if not correct:
         raise SystemExit("Sequential and stream-based results diverged.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="07_async_streams",

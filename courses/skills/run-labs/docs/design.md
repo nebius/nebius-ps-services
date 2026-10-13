@@ -454,7 +454,7 @@ scripts/prepare.py copies courses into small/large leaf directories with no runt
 
 #### Design Details
 
-Freeze per-unit requirements from every actual launcher using reference/runtime.json and the shared runtime catalog. Add a private explicit prepared_root environment selection with remote courses as its default. Copy each course beneath its per-lab/profile namespace under the actual course slug, exclude local caches and runtime state, and write a private .course-runtime-source.json binding. The shared loader validates that binding and the original root receipt while calculating relevant inputs from the copied course. Sync invokes the actual read-only loader for each selected launcher and records successful fingerprints; preflight checks complete proof coverage. Native activation repeats validation. Reject old execution contracts through native-jobs/v2. Preserve native argv, dispatch receipts, claims, recovery, qualification and collection.
+FEAT-009 supersedes filename-only selection and native-jobs/v2 with stage-aware canonical selectors and native-jobs/v3. Freeze per-unit requirements from every actual launcher using reference/runtime.json and the shared runtime catalog. Add a private explicit prepared_root environment selection with remote courses as its default. Copy each course beneath its per-lab/profile namespace under the actual course slug, exclude local caches and runtime state, and write a private .course-runtime-source.json binding. The shared loader validates that binding and the original root receipt while calculating relevant inputs from the copied course. Sync invokes the actual read-only loader for each selected launcher and records successful fingerprints; preflight checks complete proof coverage. Native activation repeats validation. Reject old execution contracts through native-jobs/v2. Preserve native argv, dispatch receipts, claims, recovery, qualification and collection.
 
 #### Selected Option
 
@@ -503,6 +503,73 @@ Implemented launcher-derived preparation inventories, private prepared-root bind
 452 focused tests pass, including all 110 recipe selections, optional launcher coverage, real local remote-sync execution, repeated sync, missing/stale/skipped records, source drift, unsafe bindings, adapter rebasing, exact container bind arguments and installed payload parity. All eight native course validators, generated build/freshness, helper parity and scoped lint pass. Portable/Codex/Claude structure and strict frontmatter pass with only the intentional docs-folder warning. Canonical evals contain 18 trigger and 22 quality definitions. Disposable pinned npx installation passes both hosts; the README command using skills 1.7.0 installs 27 matching payload files. Read-only code/security review found no blocker. Clean native trigger/model-quality runs are unavailable without isolated runner API credentials; no live cluster or preparation installation was run. See docs/run-labs-preparation-alignment.md in the enclosing courses project for evidence and limits.
 
 <!-- /FEATURE: FEAT-008 -->
+
+<!-- FEATURE: FEAT-009 reqs=REQ-009 status=ready delivery=verified priority=P1 version=3 -->
+### FEAT-009: Stage-aware canonical native campaign execution
+
+#### Requirements Covered
+
+- REQ-009: Consolidated native selectors, preparation and evidence boundaries.
+
+#### Context Evidence
+
+The enclosing courses migration replaces per-profiler and optional-experiment filenames with one launcher per lab and records originals beneath isolated stage directories.
+
+#### Design Details
+
+Resolve executable argv through course_execution and reference/execution.json. Freeze preparation rows by launcher, stage key and runtime. Emit device only for labs supporting it and carry sanitizer selections explicitly. Activate stage runtimes by declared runtime identity, retaining copied-source fingerprint validation. Use native-jobs/v3 and preserve earlier read-only status/cancellation behavior. Dispatch from the actual course cwd; collect exact whole job trees. Publication continues to select original measurement schemas and validated clean comparison inputs.
+
+#### Selected Option
+
+Reuse the existing campaign, native Slurm and original-evidence stack with the new canonical selectors.
+
+#### Alternatives Considered
+
+Retired-file wrappers and translating saved executable plans create ambiguous behavior and are excluded. Treating aggregate JSON as a measurement would duplicate evidence and is excluded.
+
+#### Implementation Boundaries
+
+Source-owned recipes, preparation and execution consumers, their directly required shared course tools, evaluation cases, and project-installed copies. No live campaign or publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: All 110 dry-run recipes select valid canonical stages and required runtimes.
+- TDD-002: Explicit CPU and sanitizer choices survive preparation without duplicated or contradictory selectors.
+- TDD-003: Missing stage/runtime proof stops preflight, while originals remain the sole publication inputs.
+
+#### Validation Plan
+
+Run campaign/preparation fixtures, source/installed parity, scoped lint, and parent course validators and build.
+
+#### Test Plan
+
+Exercise optional TensorRT-LLM, sanitizer, CPU/CUDA, multi-stage preparation and exact-job collection in temporary fixtures.
+
+#### Evaluation Plan
+
+Update the optional-experiment preparation expectation and preserve unrelated trigger and quality cases.
+
+#### Rollout And Rollback
+
+Deliver matching source and installed payloads with current course metadata. Preserve saved campaigns and historical evidence; reject incompatible execution instead of migrating it.
+
+#### Done Definition
+
+Canonical recipes, selected-runtime proofs and installed payloads agree, relevant local gates pass, and live qualification is reported separately.
+
+#### Implementation Evidence
+
+Migrated recipes to canonical selectors, stage-aware preparation and proof coverage, native-jobs/v3 dispatch, exact cwd inheritance and current result paths. Removed accidental filename-derived CUDA overrides and preserved explicit sanitizer flags. Updated operator guidance and evaluation expectation.
+
+The alignment follow-up binds host-copy evidence to the actual canonical sbatch/nsys recipe, preserves exact workload and measurement arguments, and rejects contradictory profiler requests. Its fixture now obtains command arguments from the recipe resolver instead of duplicating the retired direct-Python command.
+
+#### Verification Evidence
+
+All-course read-only planning resolves 220 small/large units with native-jobs/v3. Final preparation, auxiliary-job, explicit device/sanitizer and original-only inspection checks pass within 109 focused tests; the full parent suite passed 2,519 tests with one macOS-only skip covered by 71 Linux fixture tests. Source and installed payloads match across all 27 files. Canonical helper parity and all nine course validators pass. Aggregate-reader exclusion and instrumented timing eligibility remain explicit; no live campaign, installation or publication was performed.
+
+Fresh parent alignment verification passed 2,528 tests with one macOS skip and 79 isolated Linux fixtures. Actual-recipe negative controls reproduced the obsolete verifier failure; repaired host-copy cases and independent review cover all four recipe combinations, valid program-argument boundaries and contradictory/non-sbatch rejection. Read-only planning still resolves 220 units, all nine course validators and helper parity pass, and source/installed payloads match across 27 files. No live campaign, course-runtime installation or publication was performed.
+
+<!-- /FEATURE: FEAT-009 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

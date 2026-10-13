@@ -18,6 +18,7 @@ def main():
     add_common_args(parser)
     parser.add_argument("--overlap", choices=("off", "on"), default="off")
     parser.add_argument("--torch-trace", action="store_true")
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     if args.torch_trace:
         if os.environ.get("COURSE_PROFILE_TOOL", "none") != "none":
@@ -28,6 +29,7 @@ def main():
     try:
         size = 1024 if args.workload == "small" else 4096
         elements = (4 if args.workload == "small" else 64) * 2**20 // 4
+        # Create the synthetic tensors used by this experiment.
         x = torch.randn(size, size, device="cuda")
         y = torch.randn_like(x)
         reference = x @ y
@@ -77,6 +79,7 @@ def main():
                 for _ in range(5):
                     with torch.profiler.record_function("training_like_step"):
                         operation()
+                        # Wait for queued GPU work to finish at this measurement boundary.
                         torch.cuda.synchronize()
                     profiler.step()
             print(f"Rank {rank} PyTorch trace: {trace}")

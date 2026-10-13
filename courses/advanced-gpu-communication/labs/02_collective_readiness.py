@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -33,6 +34,7 @@ def main() -> None:
     unique_nodes = len(set(names))
     if unique_nodes != 2:
         raise SystemExit(f"Expected two distinct nodes, observed {unique_nodes}.")
+    # Create explicit input values on the selected device.
     probe = torch.tensor([float(rank + 1)], device="cuda")
     torch.distributed.all_reduce(probe)
     collective_ok = float(probe.item()) == 3.0
@@ -41,6 +43,7 @@ def main() -> None:
     if rank == 0:
         environment["node_count"] = unique_nodes
         environment["rank_count"] = world_size
+        # Save the actual measurements together with their correctness checks.
         target = write_result(
             args,
             lab_id="02_collective_readiness",

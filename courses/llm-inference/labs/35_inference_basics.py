@@ -41,6 +41,7 @@ def run_experiment(torch: Any, device: str, max_new_tokens: int) -> dict[str, An
     stop_reason = "length"
     with torch.inference_mode():
         for _ in range(max_new_tokens):
+            # Create explicit input values on the selected device.
             logits = model(torch.tensor(current, device=device))
             probabilities = logits.softmax(dim=-1)
             chosen = int(probabilities.argmax())
@@ -80,6 +81,7 @@ def main() -> None:
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--max-new-tokens", type=int, default=5)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     if args.max_new_tokens < 1:
         parser.error("--max-new-tokens must be positive")
@@ -92,6 +94,7 @@ def main() -> None:
     )
     operation = annotated_operation(run_experiment, "lab_workload")
     measurements = operation(torch, args.device, args.max_new_tokens)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="35_inference_basics",

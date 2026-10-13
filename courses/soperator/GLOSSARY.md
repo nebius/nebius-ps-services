@@ -3,10 +3,12 @@
 - **Account** — Slurm association used for charging usage and applying scheduling policy; separate from a Linux group.
 - **Allocation** — Resources granted to a job for a limited time.
 - **Controller** — Slurm scheduling service, `slurmctld`.
+- **Custom resource** — An extension to the Kubernetes API that represents an application-specific object; a controller can reconcile that object into running resources.
 - **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
 - **Jail** — Soperator's shared Linux user filesystem, with some special/node-local paths excluded.
 - **Job** — A scheduled request for work and its resource allocation.
 - **Job step** — An execution within an allocation, commonly launched by `srun`.
+- **Kubernetes node** — A worker machine, physical or virtual, on which Kubernetes runs Pods.
 - **Login node** — User entry point for preparing and submitting work and reading results.
 - **MUNGE** — Credential service used to authenticate messages between trusted Slurm components.
 - **NodeSet** — Soperator custom resource describing a group of worker Pods.

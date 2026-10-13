@@ -77,11 +77,15 @@ def test_light_palette_contrast_and_responsive_reading_rules() -> None:
         ]
         return sum(a * b for a, b in zip(linear, (0.2126, 0.7152, 0.0722)))
 
-    for foreground in ("ink", "muted", "blue", "teal", "amber"):
+    for foreground in ("ink", "muted", "blue", "teal", "amber", "code-comment"):
         for background in ("paper", "card", "blue-wash", "mint-wash", "amber-wash"):
             assert (luminance(colors[background]) + 0.05) / (
                 luminance(colors[foreground]) + 0.05
             ) >= 4.5
+    code_background = re.search(r"pre \{[^}]*background: (#[0-9a-f]{6});", css)[1]
+    assert (luminance(code_background) + 0.05) / (
+        luminance(colors["code-comment"]) + 0.05
+    ) >= 4.5
     assert "--reading-width: 88ch" in css
     assert "position: sticky" in css
     assert "@media (max-width: 600px)" in css

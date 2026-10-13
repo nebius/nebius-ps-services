@@ -27,12 +27,14 @@ def main() -> None:
         action="store_true",
         help="Zero existing gradient buffers instead of releasing them; keep all work fixed.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
     rank, world_size, local_rank = init_nccl(torch)
     try:
+        # Keep random inputs repeatable across comparable runs.
         seed_everything(torch, args.seed)
         hidden, layers, sequence, batch = (
             (512, 4, 256, 8) if args.workload == "small" else (2_048, 12, 1_024, 4)
@@ -51,6 +53,7 @@ def main() -> None:
         )
         optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
         forward = annotated_operation(model, "forward")
+        # Differentiate the loss to populate parameter gradients.
         backward = annotated_operation(lambda loss: loss.backward(), "backward")
         update = annotated_operation(optimizer.step, "optimizer")
         clear_gradients = annotated_operation(optimizer.zero_grad, "zero_grad")
@@ -88,6 +91,7 @@ def main() -> None:
         ended.record()
         ended.synchronize()
         assert loss is not None
+        # Create explicit input values on the selected device.
         elapsed_ms = torch.tensor(
             float(started.elapsed_time(ended)), device=f"cuda:{local_rank}"
         )
@@ -117,6 +121,7 @@ def main() -> None:
                 "The tracked distributed parameter did not receive a finite update."
             )
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="15_ddp_train",

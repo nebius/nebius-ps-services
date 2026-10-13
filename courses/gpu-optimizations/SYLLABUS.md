@@ -59,13 +59,6 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 
 After Lesson 3, describe the bottleneck hypothesis and the evidence that could disprove it. After Lesson 10, explain whether idle time belongs to the local workload or scheduler. In Lesson 11, qualify topology and transport, then interpret the collective size curve before changing one setting. Only then compare one- and two-rank application execution in Lesson 12. The base-route capstone in Lesson 13 integrates local decisions; revisit it with fabric evidence after Lesson 16. The final decision must preserve correctness and include independent repeated runs.
 
-Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
-worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
-failure analysis and review in their relevant sections. Before moving on,
-explain the new mechanism and its limitation in your own words; a completed
-command alone is not evidence of understanding.
-
 ## Completion
 
 Complete the profiler-backed capstone with a baseline, one controlled change, correctness checks, repeated measurements and a scoped keep/reject decision.

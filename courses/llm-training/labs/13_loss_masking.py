@@ -22,10 +22,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     vocab_size = 128
     model = build_tiny_lm(
@@ -36,6 +38,7 @@ def main() -> None:
         heads=4,
         max_sequence=16,
     ).to(device="cuda", dtype=torch.bfloat16)
+    # Create explicit input values on the selected device.
     token_ids = torch.tensor(
         [
             [11, 12, 13, 41, 42, 43, 44, 0],
@@ -58,6 +61,7 @@ def main() -> None:
     unmasked_loss = torch.nn.functional.cross_entropy(
         logits.reshape(-1, vocab_size), unmasked_labels.reshape(-1)
     )
+    # Differentiate the loss to populate parameter gradients.
     masked_loss.backward()
     trained_tokens = int((labels != -100).sum().item())
     ignored_tokens = int((labels == -100).sum().item())
@@ -67,6 +71,7 @@ def main() -> None:
     )
     if trained_tokens != 7 or ignored_tokens != 7 or not finite_gradients:
         raise SystemExit("Loss-mask invariants failed.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="13_loss_masking",

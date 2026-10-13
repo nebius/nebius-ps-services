@@ -33,7 +33,7 @@
       "lessons": [
         3
       ],
-      "after": "Concepts and code path",
+      "after": "Diagram",
       "home": "lab:07_profile_workload"
     },
     {
@@ -43,7 +43,7 @@
         3,
         2
       ],
-      "after": "Investigate the behavior",
+      "after": "Diagram",
       "home": "lab:07_profile_workload"
     },
     {
@@ -52,7 +52,7 @@
       "lessons": [
         3
       ],
-      "after": "Investigate the behavior",
+      "after": "Diagram",
       "home": "lab:14_profiler_bottlenecks"
     },
     {
@@ -80,7 +80,7 @@
       "lessons": [
         8
       ],
-      "after": "Concepts and code path",
+      "after": "Diagram",
       "home": "lab:12_allocator_lifetime"
     },
     {
@@ -98,7 +98,7 @@
       "lessons": [
         13
       ],
-      "after": "Check your results",
+      "after": "Diagram",
       "home": "lab:16_library_first_decision"
     },
     {

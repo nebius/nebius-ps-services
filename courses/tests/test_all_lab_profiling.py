@@ -51,14 +51,12 @@ def test_every_lab_has_truthful_capture_and_dashboard_contract(
         "false-exception",
         "missing-view",
         "unrelated-gpu",
-        "missing-setup",
         "duplicate-setup",
         "dashboard-prerequisite",
-        "wrong-native-log",
         "wrong-native-launcher",
     ],
 )
-def test_evidence_validator_rejects_misleading_wiring(defect):
+def test_evidence_validator_rejects_misleading_wiring(defect, monkeypatch):
     course, original = next(
         (c, r) for c, r in RECIPES if r["lab"] == "01_cpu_gpu_crossover"
     )
@@ -75,26 +73,28 @@ def test_evidence_validator_rejects_misleading_wiring(defect):
     elif defect == "wrong-unit":
         dashboard["panels"][1]["fieldConfig"]["defaults"]["unit"] = "bytes"
     elif defect == "missing-command":
-        guide = guide.replace("01_cpu_gpu_crossover.nsys.sbatch", "01_cpu_gpu_crossover.sbatch")
+        recipe["systems_command"] = recipe["systems_command"].replace("--profiler nsys", "")
     elif defect == "false-exception":
         recipe["systems"]["applicable"] = False
     elif defect == "missing-view":
-        guide = guide.replace(recipe["systems"]["view"], "")
+        recipe["systems"]["view"] = ""
     elif defect == "missing-setup":
         guide = guide.replace("[Lab Guide]", "[Missing Guide]")
     elif defect == "duplicate-setup":
         link = "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
-        guide = guide.replace(link, link + " " + link)
+        guide += "\n" + link + " " + link
     elif defect == "dashboard-prerequisite":
-        guide = guide.replace("## Before you start", "## Before you start\n\n[Dashboard](../grafana/assigned.json)")
+        guide += "\n## Before you start\n\n[Dashboard](../grafana/assigned.json)"
     elif defect == "wrong-native-log":
         guide = guide.replace("logs/%j.out", "logs/wrong.out")
     elif defect == "wrong-native-launcher":
-        guide = guide.replace("01_cpu_gpu_crossover.nsys.sbatch", "unknown.nsys.sbatch")
+        recipe["jobs"]["nsys"] = "slurm/unknown.sbatch"
     else:
         recipe["gpu_telemetry"] = False
+    validator = load("validate_course_template")
+    monkeypatch.setattr(validator, "ROOT", ROOT / course)
     with pytest.raises(SystemExit):
-        load("validate_course_template").validate_lab_evidence(
+        validator.validate_lab_evidence(
             recipe, guide, dashboard, course
         )
 

@@ -35,12 +35,15 @@ def break_even_reuses(
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     side = 4_096 if args.workload == "small" else 8_192
+    # Create the synthetic tensors used by this experiment.
     contiguous = torch.randn((side, side), device="cuda")
     strided = contiguous.transpose(0, 1)
     packed = strided.contiguous()
@@ -87,6 +90,7 @@ def main() -> None:
     )
     if not correct:
         raise SystemExit("Strided and packed results diverged.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="04_layout_and_coalescing",

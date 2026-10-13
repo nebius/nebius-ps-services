@@ -25,7 +25,7 @@ def test_lab_profile_has_complete_guides_and_no_conceptual_placeholders():
     assert document.count('data-lab-guide="complete"') == 34
     assert 'data-setup-guide="complete"' not in document
     assert 'href="../lab-guide.html"' in document
-    assert 'href="#course-downloads"' in document
+    assert 'id="course-downloads"' in document
     assert 'data-asset="lab-results"' in document
     assert 'data-asset="lab-kit"' not in document
     assert document == (ROOT / ADVANCED / "index.html").read_text()

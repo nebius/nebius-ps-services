@@ -95,12 +95,13 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         text=True,
         timeout=15,
     )
+    result.stderr += "".join(p.read_text() for p in (course / "results").rglob("stderr.txt"))
     argv = json.loads((tmp_path / "argv.json").read_text())
     assert argv[:2] == ["serve", "test/model"]
     assert argv[argv.index("--host") + 1] == "127.0.0.1"
     for flag in ["--revision", "--tokenizer-revision"]:
         assert argv[argv.index(flag) + 1] == "b" * 40
-    outputs = list((course / "results").rglob("*.json"))
+    outputs = [p for p in (course / "results").rglob("*.json") if p.name != "result.json"]
     if mode == "startup-failure":
         assert result.returncode != 0
         assert "exited before becoming ready" in result.stderr
@@ -116,7 +117,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert request["model"] == "test/model"
         assert request["max_tokens"] == 16
         if mode in {"success", "surviving-child"}:
-            assert result.returncode == 0, result.stderr
+            assert result.returncode == (2 if mode == "surviving-child" else 0), result.stderr
             assert len(outputs) == 1
             evidence = json.loads(outputs[0].read_text())
             assert evidence["run_id"] == "123456789abc"
@@ -145,7 +146,7 @@ def test_engine_recipe_uses_owned_launcher():
     assert variants["openai"] == variants["openai-repeat"]
     assert variants["triton"] == variants["triton-repeat"]
     assert variants["openai"][1] == "slurm/30_engine_profile.sbatch"
-    assert variants["triton"][1] == "slurm/30_engine_profile.trtllm.sbatch"
+    assert variants["triton"][1:] == ["slurm/30_engine_profile.sbatch", "--experiment", "trtllm"]
     assert recipe["comparisons"] == [["openai", "openai-repeat"], ["triton", "triton-repeat"]]
 
 
@@ -165,8 +166,10 @@ def test_triton_launcher_initializes_mpi_and_owns_server(mode, tmp_path):
     srun.write_text(
         f"#!{sys.executable}\n"
         "import os, sys\n"
-        "assert sys.argv[1:3] == ['--ntasks=1', '--gpus-per-task=1']\n"
-        "os.execv(sys.argv[3], sys.argv[3:])\n"
+        "args=sys.argv[1:]\n"
+        "assert '--ntasks=1' in args and '--gpus-per-task=1' in args\n"
+        "while args[0].startswith('--'): args.pop(0)\n"
+        "os.execv(args[0], args)\n"
     )
     srun.chmod(0o700)
     runner = tmp_path / "triton-fixture"
@@ -213,7 +216,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     else:
         pytest.fail("No local port available for Triton fixture")
     result = subprocess.run(
-        ["bash", str(ROOT / "llm-inference/slurm/30_engine_profile.trtllm.sbatch")],
+        ["bash", str(ROOT / "llm-inference/slurm/30_engine_profile.sbatch"), "--experiment", "trtllm"],
         cwd=course,
         env={
             "PATH": str(bin_dir) + os.pathsep + commands["PATH"],
@@ -235,6 +238,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         text=True,
         timeout=15,
     )
+    result.stderr += "".join(p.read_text() for p in (course / "results").rglob("stderr.txt"))
     argv = json.loads((tmp_path / "argv.json").read_text())
     assert argv[1:7] == [
         "mpirun",
@@ -250,10 +254,10 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         assert "--" + service + "-address=127.0.0.1" in argv
     log = (
         course
-        / f"results/30_engine_profile/jobs/{port - 20000}/logs/trtllm-triton-run-123456789abc.log"
+        / f"results/30_engine_profile/jobs/{port - 20000}/stages/normal/logs/trtllm-triton-run-123456789abc.log"
     )
     assert "fixture MPI startup" in log.read_text()
-    outputs = list((course / "results").rglob("*.json"))
+    outputs = [p for p in (course / "results").rglob("*.json") if p.name != "result.json"]
     if mode == "startup-failure":
         assert result.returncode != 0
         assert "exited before readiness" in result.stderr
@@ -263,7 +267,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         request = json.loads((tmp_path / "request.json").read_text())
         assert request["sampling_param_max_tokens"] == 16
         if mode == "success":
-            assert result.returncode == 0, result.stderr
+            assert result.returncode == (2 if mode == "surviving-child" else 0), result.stderr
             assert len(outputs) == 1
             evidence = json.loads(outputs[0].read_text())
             assert evidence["run_id"] == "123456789abc"
@@ -317,4 +321,5 @@ def test_openai_launcher_rejects_occupied_port_before_startup(tmp_path):
         finally:
             listener.close()
     assert result.returncode != 0
+    result.stderr += "".join(p.read_text() for p in (tmp_path / "results").rglob("stderr.txt"))
     assert "already occupied" in result.stderr

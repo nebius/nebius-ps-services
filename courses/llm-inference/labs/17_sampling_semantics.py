@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
@@ -33,6 +34,7 @@ def main() -> None:
         raise SystemExit("--max-new-tokens must be positive")
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -67,6 +69,7 @@ def main() -> None:
     generate_model = annotated_operation(model.generate, "generation")
 
     def generate(**settings: Any) -> tuple[list[int], float]:
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         started = time.perf_counter()
         with torch.inference_mode():
@@ -102,6 +105,7 @@ def main() -> None:
     nonempty = bool(greedy_a and sampled_a)
     if not (greedy_repeatable and seeded_sampling_repeatable and nonempty):
         raise SystemExit("Generation repeatability or non-empty output gate failed.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="17_sampling_semantics",

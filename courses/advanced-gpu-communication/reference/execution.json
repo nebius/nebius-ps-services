@@ -1,0 +1,1664 @@
+{
+  "schema": "course-execution/v1",
+  "course": "advanced-gpu-communication",
+  "labs": {
+    "01_fabric_topology": {
+      "source": "labs/01_fabric_topology.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "02_collective_readiness": {
+      "source": "labs/02_collective_readiness.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "03_training_readiness": {
+      "source": "labs/03_training_readiness.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "04_inference_readiness": {
+      "source": "labs/04_inference_readiness.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "05_transport_readiness": {
+      "source": "labs/05_transport_readiness.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "06_nvlink_bandwidth": {
+      "source": "labs/06_nvlink_bandwidth.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.06_nvlink_bandwidth",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 8,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.06_nvlink_bandwidth",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 8,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "07_rdma_bandwidth": {
+      "source": "labs/07_rdma_bandwidth.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.07_rdma_bandwidth",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 8,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "08_distributed_collectives": {
+      "source": "labs/08_distributed_collectives.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "09_nccl_transport_sweep": {
+      "source": "labs/09_nccl_transport_sweep.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "10_nccl_tests_report": {
+      "source": "labs/10_nccl_tests_report.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.10_nccl_tests_report",
+          "scope": {
+            "nodes": 2,
+            "tasks": 16,
+            "cpus_per_task": 4,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 16 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.10_nccl_tests_report",
+          "scope": {
+            "nodes": 2,
+            "tasks": 16,
+            "cpus_per_task": 4,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 16 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "11_collective_layout": {
+      "source": "labs/11_collective_layout.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "12_distributed_scaling": {
+      "source": "labs/12_distributed_scaling.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.scaling-one-node",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "two-node_none_cuda",
+          "experiment": "two-node",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.scaling-one-node",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "two-node_nsys_cuda",
+          "experiment": "two-node",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.scaling-one-node",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "13_collective_overlap": {
+      "source": "labs/13_collective_overlap.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "14_distributed_profiling": {
+      "source": "labs/14_distributed_profiling.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "15_ddp_train": {
+      "source": "labs/15_ddp_train.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "16_fsdp2_train": {
+      "source": "labs/16_fsdp2_train.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "17_training_expert_parallel": {
+      "source": "labs/17_training_expert_parallel.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "18_training_tensor_parallel": {
+      "source": "labs/18_training_tensor_parallel.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "19_gradient_overlap": {
+      "source": "labs/19_gradient_overlap.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "local Compute companion; no distributed communication"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "20_parallelism_mechanics": {
+      "source": "labs/20_parallelism_mechanics.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "21_ddp_buckets": {
+      "source": "labs/21_ddp_buckets.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 7200,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "22_fabric_training": {
+      "source": "labs/22_fabric_training.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "23_inference_expert_parallel": {
+      "source": "labs/23_inference_expert_parallel.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "24_inference_tensor_parallel": {
+      "source": "labs/24_inference_tensor_parallel.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 1,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 16,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {
+            "--nnodes": 2,
+            "--nproc-per-node": 1
+          },
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "25_fabric_inference": {
+      "source": "labs/25_fabric_inference.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "26_collective_latency": {
+      "source": "labs/26_collective_latency.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "27_rdma_latency": {
+      "source": "labs/27_rdma_latency.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.27_rdma_latency",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "28_nic_selection": {
+      "source": "labs/28_nic_selection.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.regular",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "29_nixl_transfer": {
+      "source": "labs/29_nixl_transfer.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.29_nixl_transfer",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.29_nixl_transfer",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "30_megatron_overlap": {
+      "source": "labs/30_megatron_overlap.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.30_megatron_overlap",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.30_megatron_overlap",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "31_context_parallel": {
+      "source": "labs/31_context_parallel.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.31_context_parallel",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.31_context_parallel",
+          "scope": {
+            "workers_per_node": 8,
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task",
+            "node_source": "allocation"
+          },
+          "fixed_options": {
+            "--nproc-per-node": 8
+          },
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "32_dynamo_disaggregation": {
+      "source": "labs/32_dynamo_disaggregation.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.32_dynamo_disaggregation",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.32_dynamo_disaggregation",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "33_dynamo_routing": {
+      "source": "labs/33_dynamo_routing.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.33_dynamo_routing",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.33_dynamo_routing",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "34_serving_goodput": {
+      "source": "labs/34_serving_goodput.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.34_serving_goodput",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "advanced-gpu-communication.34_serving_goodput",
+          "scope": {
+            "nodes": 2,
+            "tasks": 2,
+            "cpus_per_task": 32,
+            "gpus_per_task": 8,
+            "description": "2 node(s), 2 task(s), 8 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    }
+  }
+}

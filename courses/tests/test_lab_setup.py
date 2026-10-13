@@ -29,7 +29,7 @@ def test_fabric_preparation_belongs_to_automatic_setup():
     assert "fabric/perftest/bin/ib_write_bw" in fabric["artifacts"]
     guide = (ROOT / "advanced-gpu-communication/reference/labs/01_fabric_topology.md").read_text()
     assert "tools/install_fabric_tools.py --prefix" not in guide
-    assert "source tools/course_env.sh 01_fabric_topology --lab" in guide
+    assert "sbatch slurm/01_fabric_topology.sbatch" in guide
 
 
 def test_monitoring_verification_restores_course_from_a_new_terminal(tmp_path):
@@ -109,11 +109,7 @@ def test_documented_commands_use_the_restored_runtime(tmp_path, relative, argume
         prepare_job(tmp_path, course, lab)
         (tmp_path / "slurm").mkdir()
         (tmp_path / job).write_text((ROOT / course / job).read_text())
-        command = next(
-            block
-            for block in re.findall(r"```bash\n(.*?)```", source, re.S)
-            if block.startswith("sbatch ")
-        )
+        command = next(line for line in source.splitlines() if line.startswith("sbatch "))
         executable(
             tmp_path / "bin/sbatch",
             "import os,sys\n"
@@ -142,7 +138,7 @@ def test_documented_commands_use_the_restored_runtime(tmp_path, relative, argume
     assert json.loads((tmp_path / "prepared-argv.json").read_text()) == expected
     if "/reference/labs/" in relative:
         assert not any(
-            "gpu" in arg for arg in json.loads((tmp_path / "srun.json").read_text())
+            "gpus-per-task=1" in arg for arg in json.loads((tmp_path / "srun.json").read_text())
         )
 
 
@@ -179,16 +175,16 @@ def test_shared_guide_matches_source_and_required_runtime_routes():
             "requirements-serving.txt",
             "requirements-mechanics.txt",
         ),
-        "custom-cuda-kernels/reference/labs/13_h100_preflight.md": (
+        "custom-cuda-kernels/tools/course_bootstrap/catalog.json": (
             "CUTLASS_ROOT",
             "CUDA_HOME",
             "COURSE_BUILD_DIR",
         ),
-        "advanced-gpu-communication/reference/labs/10_nccl_tests_report.md": (
+        "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch": (
             "COURSE_MPI",
         ),
         "advanced-gpu-communication/README.md": ("DYNAMO_UCX_PREFIX", "COURSE_ETCD"),
-        "advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md": (
+        "advanced-gpu-communication/tools/course_bootstrap/catalog.json": (
             "COURSE_MODEL_DIR",
         ),
     }
@@ -389,7 +385,7 @@ def test_practice_has_local_commands_without_reading_or_setup_detours(course):
     root = ROOT / course
     for path in (root / "reference/labs").glob("*.md"):
         document = path.read_text()
-        practice = document.split("\n## Practice\n")[1].split("\n## ")[0]
+        practice = document.split("\n## Run\n")[1].split("\n## ")[0]
         prose = re.sub(r"```.*?```", "", practice, flags=re.S)
         assert "Theory preparation" not in document, path
         assert not re.search(r"\bLessons?\b|README|runbook|walkthrough|\]\(", prose), (

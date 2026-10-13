@@ -34,6 +34,17 @@ class PageTargets(HTMLParser):
                 raise ValueError(f"duplicate generated ID: {attrs['id']}")
             self.ids.add(attrs["id"])
         if tag == "a" and "href" in attrs:
+            href = attrs["href"]
+            if href and not href.startswith("#") and "download" not in attrs:
+                rel = set((attrs.get("rel") or "").lower().split())
+                if (
+                    attrs.get("target") != "_blank"
+                    or not {"noopener", "noreferrer"} <= rel
+                    or "opener" in rel
+                ):
+                    raise ValueError(f"cross-page link must open a safe new tab: {href}")
+            elif attrs.get("target") not in (None, "_self"):
+                raise ValueError(f"fragment links and downloads must keep native navigation: {href}")
             self.links.append(attrs["href"])
 
 

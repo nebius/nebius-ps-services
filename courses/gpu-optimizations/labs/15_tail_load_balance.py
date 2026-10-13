@@ -77,12 +77,14 @@ def tail_reference(torch: object, blocks: int, work: int) -> object:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
     if triton is None or uniform_tail_probe is None:
         raise SystemExit("This lab requires the environment's PyTorch Triton compiler.")
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     base = 256 if args.workload == "small" else 1_024
     balanced_widths = [base] * 8
@@ -170,6 +172,7 @@ def main() -> None:
     compiled = uniform_tail_probe[(1,)](
         torch.empty(1, device="cuda"), work=tail_work, num_warps=num_warps
     )
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     registers = int(getattr(compiled, "n_regs", 0))
     metadata = getattr(compiled, "metadata", None)
@@ -240,6 +243,7 @@ def main() -> None:
             }
         )
 
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="15_tail_load_balance",

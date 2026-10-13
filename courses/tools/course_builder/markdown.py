@@ -6,6 +6,8 @@ import base64
 import html
 import re
 from .config import COURSES, ROOT, SHARED_GUIDE_SECTIONS
+from .links import link_attributes
+from .code import render_code
 
 
 def slug(value: str) -> str:
@@ -96,7 +98,7 @@ def inline(
                     target,
                 )
             ):
-                text = f'<a href="{html.escape(target, quote=True)}">{text}</a>'
+                text = f'<a {link_attributes(target)}>{text}</a>'
             elif destination not in PLAIN_TEXT_LINKS.get(source, set()):
                 raise ValueError(
                     f"{source or 'Markdown'}: unresolved destination {destination}"
@@ -129,11 +131,34 @@ def guide_image(relative: str, alt: str) -> str:
     )
 
 
+def comparison_panels(lines: list[str], start: int) -> tuple[list[str], int]:
+    """Consume exactly two nonempty panels, preserving fenced marker literals."""
+    panels: list[list[str]] = [[]]
+    fenced = False
+    for index in range(start + 1, len(lines)):
+        line = lines[index].strip()
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and line.startswith("<!-- comparison:"):
+            if line == "<!-- comparison:next -->" and len(panels) == 1:
+                panels.append([])
+                continue
+            if line == "<!-- comparison:end -->" and len(panels) == 2:
+                contents = ["\n".join(panel).strip() for panel in panels]
+                if not all(contents):
+                    raise ValueError("comparison requires two nonempty panels")
+                return contents, index + 1
+            raise ValueError("invalid or nested comparison marker")
+        panels[-1].append(lines[index])
+    raise ValueError("unterminated comparison; expected next and end markers")
+
+
 def block(
     markdown: str,
     links: dict[str, str] | None = None,
     *,
     source: str = "",
+    context: str = "",
     prefix: str = "",
     images: bool = False,
     figure: Callable[[str, str], str] | None = None,
@@ -154,16 +179,39 @@ def block(
         if not line:
             index += 1
             continue
+        if line.startswith("<!-- comparison:"):
+            if line != "<!-- comparison:start -->":
+                raise ValueError("unexpected comparison marker")
+            panels, index = comparison_panels(lines, index)
+            rendered.append(
+                '<div class="comparison">'
+                + "".join(
+                    '<div class="comparison-panel">'
+                    + block(
+                        panel, links, source=source, context=context, prefix=prefix,
+                        images=images, figure=figure, heading_offset=heading_offset,
+                    )
+                    + "</div>"
+                    for panel in panels
+                )
+                + "</div>"
+            )
+            continue
         if line.startswith("```"):
+            language = line[3:].strip()
+            location = source or "Markdown"
+            if context:
+                location += f" [{context}]"
+            code_source = f"{location}: fragment line {index + 1}"
             code: list[str] = []
             index += 1
             while index < len(lines) and not lines[index].strip().startswith("```"):
                 code.append(lines[index])
                 index += 1
             if index == len(lines):
-                raise ValueError("unterminated Markdown code block")
+                raise ValueError(f"{code_source}: unterminated Markdown code block")
             rendered.append(
-                f'<pre tabindex="0"><code>{html.escape(chr(10).join(code))}</code></pre>'
+                f'<pre tabindex="0"><code>{render_code(chr(10).join(code), language, source=code_source)}</code></pre>'
             )
             index += 1
             continue
@@ -248,7 +296,8 @@ def block(
             index < len(lines)
             and lines[index].strip()
             and not re.match(
-                r"^(?:#{1,6}\s|```|\||[-*]\s|\d+\.\s)", lines[index].strip()
+                r"^(?:#{1,6}\s|```|\||[-*]\s|\d+\.\s|<!-- comparison:)",
+                lines[index].strip(),
             )
         ):
             paragraph.append(lines[index].strip())

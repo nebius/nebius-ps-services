@@ -29,9 +29,12 @@ def inspect(lab: str, job: int) -> list[str]:
         except (ValueError, OSError):
             continue
         if (
-            document.get("lab_id") != lab
+            document.get("schema") != "gpu-course-result/v1"
+            or document.get("lab_id") != lab
             or document.get("experiment", {}).get("slurm_job_id") != job
         ):
+            continue
+        if recipe["kind"] != "diagnostic" and (document.get("experiment", {}).get("instrumented") is not False or document.get("measurements", {}).get("acceptance_timing") is False):
             continue
         validate_result(document, lab, diagnostic=recipe["kind"] == "diagnostic")
         lines = [

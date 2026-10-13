@@ -112,7 +112,7 @@
     }
   ],
   "extensions": [
-    "CUDA Tile C++ appendix"
+    "CUDA Tile C++ lesson"
   ],
   "observability": "reference/observability.json",
   "advanced_lessons": [],

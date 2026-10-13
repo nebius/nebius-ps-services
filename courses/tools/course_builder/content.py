@@ -6,9 +6,10 @@ import html
 import posixpath
 import re
 from .markdown import block, inline, slug
+from .code import render_code, source_language
 from .metadata import executable_sources
-from .downloads import dashboard_pointer, lab_results_pointer
-from .config import FIELD_CLASSES, LAB_SECTIONS, SHARED_GUIDE_SECTIONS
+from .config import FIELD_CLASSES, GUIDE_LABELS, LAB_SECTIONS, SHARED_GUIDE_SECTIONS
+from .links import link_attributes
 
 
 def diagram_block(
@@ -43,6 +44,8 @@ def lesson_markup(
     related: list[tuple[str, str]] | None = None,
     figures: dict[str, list[dict]] | None = None,
     practice_labs: list[dict] | None = None,
+    *,
+    source: str = "",
 ) -> str:
     title = lesson["title"]
     if set(figures or {}) - set(lesson):
@@ -54,6 +57,7 @@ def lesson_markup(
     for field in FIELD_CLASSES:
         content = lesson.get(field)
         registered = (figures or {}).get(field, [])
+        field_context = f"lesson {number}: {title} / {field}"
 
         if field == "Practice" and practice_labs is not None:
             assigned = {
@@ -70,16 +74,19 @@ def lesson_markup(
             ):
                 raise ValueError(f"{title}: Practice must match its assigned guides")
             body = (
-                block(context, links)
+                block(context, links, source=source, context=field_context)
                 + "<ul>"
                 + "".join(
-                    f'<li><a href="{guide.get("href", "#lab-" + slug(guide["source"].stem))}">{html.escape(guide["title"])}</a></li>'
+                    f'<li><a {link_attributes(guide.get("href", "#lab-" + slug(guide["source"].stem)))}>{html.escape(guide["title"])}</a></li>'
                     for guide in (assigned[entry] for entry in entries)
                 )
                 + "</ul>"
             )
         elif content or registered:
-            body = diagram_block(content or "", registered, links, heading_offset=1)
+            body = diagram_block(
+                content or "", registered, links, source=source,
+                context=field_context, heading_offset=1,
+            )
         else:
             continue
         class_name = FIELD_CLASSES[field]
@@ -157,27 +164,22 @@ def lab_markup(
 ) -> str:
     source = guide["source"]
     relative = source.relative_to(course).as_posix()
+    guide_source = f"{course.name}/{guide['guide_path'].relative_to(course).as_posix()}"
     links = lab_guide_links(guide, references)
     if set(figures or {}) - set(guide["sections"]):
         raise ValueError("figure section is missing from lab guide")
-    narrative = "".join(
-        f'<div class="lab-guide-section" id="lab-{slug(source.stem)}-{slug(name)}"><h4>{html.escape(name)}</h4>'
-        + diagram_block(
-            body,
-            (figures or {}).get(name, []),
-            links,
-            prefix=f"lab-{slug(source.stem)}-{slug(name)}-",
-        )
-        + "</div>"
-        for name, body in guide["sections"].items()
-    )
+    diagram = ""
+    if "Diagram" in guide["sections"]:
+        diagram = f'<details class="lab-diagram" id="lab-{slug(source.stem)}-diagram"><summary>Teaching diagram</summary>' + diagram_block(guide["sections"]["Diagram"], (figures or {}).get("Diagram", []), links, source=guide_source, context="Diagram") + "</details>"
+    submissions = block(guide["sections"]["Run"], links, source=guide_source, context="Run")
+    results = block(guide["sections"]["Check your results"], links, source=guide_source, context="Check your results")
     return f"""
 <article class="lab" id="lab-{slug(source.stem)}" data-lab-guide="complete"><h3>{html.escape(guide["title"])}</h3>
-{block(guide["introduction"], links)}<p class="lab-scope">{"Optional extension" if guide["optional"] else "Core practice"}</p>
-<div class="lab-guide">{narrative}</div>
-<div id="dashboard-{slug(source.stem)}">{dashboard_pointer()}</div>
-{lab_results_pointer(course, source.stem)}
-<details class="lab-source" data-source="{html.escape(relative)}"><summary>Complete source: {html.escape(relative)}</summary><pre tabindex="0"><code data-source="{html.escape(relative)}">{html.escape(source.read_text(encoding="utf-8"))}</code></pre></details></article>"""
+{block(guide["introduction"], links, source=guide_source, context="Introduction")}
+<details class="lab-source" data-source="{html.escape(relative)}"><summary>Complete source: {html.escape(relative)}</summary><pre tabindex="0"><code data-source="{html.escape(relative)}">{render_code(source.read_text(encoding="utf-8"), source_language(relative), source=f"{course.name}/{relative}")}</code></pre></details>
+{diagram}
+<div class="lab-submission" id="lab-{slug(source.stem)}-run">{submissions}</div>
+<aside class="lab-results" id="lab-{slug(source.stem)}-check-your-results"><h4>Check your results</h4>{results}</aside></article>"""
 
 
 def shared_guide_links() -> dict[str, str]:
@@ -204,6 +206,7 @@ def course_glossary_markup(course: Path) -> str:
 
 def next_steps_markup(course: Path, links: dict[str, str]) -> str:
     """Keep each complete authored study direction in one semantic bullet."""
+    source = f"{course.name}/NEXT-STEPS.md"
     text = (course / "NEXT-STEPS.md").read_text(encoding="utf-8")
     if not text.startswith("# Where to Go Next\n"):
         raise ValueError("next-steps requires its canonical title")
@@ -221,12 +224,12 @@ def next_steps_markup(course: Path, links: dict[str, str]) -> str:
         if not title.strip() or not content.strip():
             raise ValueError("next-steps topics need a title and explanation")
         topics.append(
-            f"<li><h3>{inline(title, links)}</h3>{block(content, links)}</li>"
+            f"<li><h3>{inline(title, links)}</h3>{block(content, links, source=source, context=title)}</li>"
         )
     return (
         '<section id="next-steps"><h2>Where to Go Next</h2>'
         '<div data-source="NEXT-STEPS.md">'
-        + block(parts[0], links)
+        + block(parts[0], links, source=source, context="Introduction")
         + '<ul class="next-steps-list">'
         + "".join(topics)
         + "</ul></div></section>"
@@ -243,9 +246,7 @@ def guide_markup(
 ) -> str:
     document = (course / relative).read_text(encoding="utf-8")
     lines = document.splitlines()
-    title = next(
-        (line[2:] for line in lines if line.startswith("# ")), Path(relative).stem
-    )
+    title = GUIDE_LABELS[relative]
     body = "\n".join(lines[1:]) if lines and lines[0].startswith("# ") else document
     links = dict(references)
     advanced_page = "../advanced-gpu-communication/index.html"

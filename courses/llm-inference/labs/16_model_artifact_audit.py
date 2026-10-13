@@ -22,6 +22,7 @@ def main() -> None:
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
@@ -75,6 +76,7 @@ def main() -> None:
     safe_loading_policy = not bool(getattr(config, "auto_map", None))
     if not pinned_revision_matches or not expected_artifacts or not weight_files:
         raise SystemExit("The pinned model artifact contract was not satisfied.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="16_model_artifact_audit",

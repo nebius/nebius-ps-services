@@ -75,11 +75,15 @@ def test_all_authored_figures_immediately_follow_their_explanation(course):
         parsed.feed(cb_markdown.block(text, links, figure=figure))
         assert not expected.keys() & parsed.previous.keys()
         expected.update(parsed.previous)
-    assert expected == actual.previous
-    assert all(
-        previous and previous[0] in {"p", "ul", "ol", "div", "pre"}
-        for previous in expected.values()
-    )
+    assert expected.keys() == actual.previous.keys()
+    for target, previous in expected.items():
+        if previous == ("h4", "Diagram"):
+            assert actual.previous[target] == ("summary", "Teaching diagram")
+        elif previous == ("figure", ""):
+            assert actual.previous[target][0] == "figure"
+        else:
+            assert previous == actual.previous[target]
+            assert previous and previous[0] in {"p", "ul", "ol", "div", "pre"}
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -142,7 +146,8 @@ def test_every_figure_is_inline_in_its_declared_home(course: str) -> None:
             ]
             assert stages[-1] == cb_config.FIELD_CLASSES[field]
         else:
-            assert re.findall(r"<h4>(.*?)</h4>", before)[-1] == field
+            assert field == "Diagram"
+            assert '<details class="lab-diagram"' in before
 
 
 @pytest.mark.parametrize("course", COURSES)

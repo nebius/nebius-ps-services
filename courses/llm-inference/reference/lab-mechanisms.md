@@ -106,3 +106,31 @@ Review answer: conserve work and offered arrivals, charge occupied service,
 and separate policy mechanics from measured latency. Smaller chunks create more
 decision points but can sacrifice batching efficiency and add real launch and
 scheduler overhead, neither of which is priced by this model.
+
+## Keep mechanics, serving and diagnostics separate
+
+- Lab 15's streaming client measures closed-loop request latency and requests/s;
+  it does not establish open-loop overload, token throughput or SLO goodput.
+  Its optional AIPerf experiment has separate native exports.
+- Labs 33–34 put greedy-equivalence evidence on their dashboards; latency and
+  throughput come from native AIPerf exports. Lab 34 compares three fresh-server
+  correctness probes and three trials per policy in counterbalanced order.
+- Labs 20 and 34 hold batch-invariant execution and `TRITON_ATTN` fixed. Lab 34
+  also fixes eager mode; keep the exact-output gate and do not generalize to
+  compiled serving performance.
+- Lab 30 requires a nonempty text response, not just a healthy endpoint. Its
+  launcher owns startup, the bounded probe and cleanup.
+- Lab 36 is a CPU cache-retention model: it measures neither TTFT nor storage
+  throughput and does not qualify GPU Direct Storage.
+- Lab 32's capstone accepts three independent unprofiled mechanics trials with
+  matching environments; it makes no serving claim.
+
+Compute captures in Labs 09, 17 and 23 cover a selected first-invocation matrix
+operation, not the whole decode or speculative path. Lab 10's diagnostic
+`--in-process` mode places engine work in its NVTX range; use the normal engine
+process mode for clean throughput comparisons. Its Compute job requests extra
+host memory for kernel replay while keeping the GPU count and workload fixed.
+
+For the chunked-prefill campaign, inspect request activity in every policy's
+server report. Captures begin after readiness and end after the trial; the
+existence of a report alone does not prove it contains the measured requests.

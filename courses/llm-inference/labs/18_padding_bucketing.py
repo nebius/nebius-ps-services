@@ -54,11 +54,13 @@ def main() -> None:
     add_common_args(parser)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -140,6 +142,7 @@ def main() -> None:
     true_tokens = sum(lengths)
     padded_tokens = int(padded.input_ids.numel())
     bucket_tokens = sum(int(inputs.input_ids.numel()) for inputs in bucket_inputs)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="18_padding_bucketing",

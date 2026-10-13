@@ -22,9 +22,8 @@ LAB = "19_gradient_overlap"
 PROCESS_ENV = {
     "WORLD_SIZE": "1",
     "LOCAL_WORLD_SIZE": "1",
-    "SLURM_NTASKS": "1",
-    "SLURM_JOB_NUM_NODES": "1",
-    "SLURM_NNODES": "1",
+    "SLURM_STEP_NUM_TASKS": "1",
+    "SLURM_STEP_NUM_NODES": "1",
     "RANK": "0",
     "LOCAL_RANK": "0",
     "SLURM_PROCID": "0",
@@ -141,7 +140,7 @@ def test_validator_rejects_broken_companion_contract(monkeypatch, defect):
         recipe["kind"] = "server-client"
     validator = load("validate_course_template")
     monkeypatch.setattr(validator, "ROOT", COURSE)
-    message = "native Compute command" if defect == "command" else "Compute companion"
+    message = "canonical native launcher" if defect == "command" else "Compute companion"
     with pytest.raises(SystemExit, match=message):
         validator.validate_lab_evidence(recipe, guide, dashboard, COURSE.name)
 
@@ -168,3 +167,14 @@ def test_source_companion_is_standalone_without_a_new_lab_identity(tmp_path):
     )
     assert run.returncode == 0, run.stderr
     assert "--bucket-mib" in run.stdout and "--output-dir" not in run.stdout
+
+
+def test_local_compute_accepts_larger_allocation_without_changing_metadata(monkeypatch):
+    for name, value in PROCESS_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("SLURM_NTASKS", "16")
+    monkeypatch.setenv("SLURM_JOB_NUM_NODES", "2")
+    with load_lab("advanced-gpu-communication/labs/gradient_overlap_compute.py") as companion:
+        companion.require_single_process()
+    import os
+    assert os.environ["SLURM_NTASKS"] == "16"

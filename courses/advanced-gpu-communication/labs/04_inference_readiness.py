@@ -19,12 +19,14 @@ from inference_common import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
     rank, world_size, _ = init_nccl(torch)
     try:
+        # Create explicit input values on the selected device.
         value = torch.tensor(float(rank + 1), device="cuda")
         torch.distributed.all_reduce(value)
         hosts: list[str | None] = [None] * world_size
@@ -34,6 +36,7 @@ def main() -> None:
                 raise SystemExit(
                     "Expected two distinct hosts and an all-reduce result of 3.0."
                 )
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="04_inference_readiness",

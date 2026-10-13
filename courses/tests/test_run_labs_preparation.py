@@ -14,6 +14,21 @@ from course_bootstrap.state import State, atomic_json
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_auxiliary_build_preparation_has_no_lab_device_lookup(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "skills/run-labs/scripts"))
+    import catalog as campaign_catalog
+
+    selected = campaign_catalog.preparation(
+        ROOT,
+        "custom-cuda-kernels",
+        [{"kind": "dependency", "argv": ["sbatch", "slurm/build_and_test.sbatch"]}],
+    )
+    assert len(selected) == 1
+    assert selected[0]["stage"] == "auxiliary"
+    assert selected[0]["arguments"] == ["--launcher", "build_and_test.sbatch"]
+    assert selected[0]["group"] == "cuda"
+
+
 def managed_fixture(root):
     """A real root-bound runtime with source inputs and a harmless executable."""
     root.mkdir(parents=True, mode=0o700)
@@ -29,13 +44,18 @@ def managed_fixture(root):
     (course / "reference/runtime.json").write_text(
         json.dumps(
             {
-                "schema": "course-runtime-bindings/v1",
+                "schema": "course-runtime-bindings/v2",
                 "course": "example",
                 "labs": {"01_example": "sample"},
                 "launchers": {"01_example.sbatch": "sample"},
             }
         )
     )
+    (course / "reference/execution.json").write_text(json.dumps({
+        "schema": "course-execution/v1", "course": "example", "labs": {
+            "01_example": {"source": "labs/01_example.py", "device_option": False,
+                "variants": [{"key": "default_none_cuda", "experiment": "default", "profiler": "none", "device": "cuda", "runtime": "sample"}]}
+        }}))
     catalog = {
         "schema": "course-runtime-catalog/v1",
         "components": {
@@ -52,6 +72,7 @@ def managed_fixture(root):
         )
         (tools / "course_bootstrap/catalog.json").write_text(json.dumps(catalog))
         shutil.copy2(ROOT / "tools/course_runtime.py", tools / "course_runtime.py")
+        shutil.copy2(ROOT / "tools/course_execution.py", tools / "course_execution.py")
         (tools / "regular-lab-setup.py").write_text(
             "raise AssertionError('never install')\n"
         )
@@ -183,7 +204,7 @@ def test_dry_run_prepares_actual_recipe_launchers_without_mutation(tmp_path):
     )
     plan = json.loads(proc.stdout)["plan"]
     assert len(plan["units"]) == 110
-    assert plan["execution_contract"] == "native-jobs/v2"
+    assert plan["execution_contract"] == "native-jobs/v3"
     assert not list(tmp_path.iterdir())
     for unit in plan["units"]:
         selected = {r["launcher"] for r in unit["preparation"]}
@@ -207,7 +228,7 @@ def test_dry_run_prepares_actual_recipe_launchers_without_mutation(tmp_path):
     )
     optional = next(r for r in engine["preparation"] if r["optional"])
     assert optional["script"] == "serving-lab-setup.py"
-    assert optional["arguments"] == ["--launcher", "30_engine_profile.trtllm.sbatch"]
+    assert optional["arguments"] == ["--launcher", "30_engine_profile.sbatch", "--experiment", "trtllm", "--profiler", "none"]
 
 
 def test_source_owned_adapter_uses_copy_while_installation_stays_original(
@@ -262,7 +283,7 @@ def test_remote_sync_rechecks_existing_workspace(tmp_path, monkeypatch, defect):
                 "course": "example",
                 "lab": "01_example",
                 "profile": "small",
-                "preparation": [{"launcher": "01_example.sbatch", "runtime": "sample"}],
+                "preparation": [{"launcher": "01_example.sbatch", "stage": "default_none_cuda", "runtime": "sample"}],
             }
         ],
     }
@@ -321,8 +342,8 @@ def test_preflight_requires_every_selected_runtime_proof(monkeypatch):
         "profile": "small",
         "course": "example",
         "preparation": [
-            {"launcher": "01_example.sbatch", "runtime": "sample"},
-            {"launcher": "01_example.optional.sbatch", "runtime": "optional"},
+            {"launcher": "01_example.sbatch", "stage": "default_none_cuda", "runtime": "sample"},
+            {"launcher": "01_example.sbatch", "stage": "optional_none_cuda", "runtime": "optional"},
         ],
     }
     plan = {"source_sha256": "a" * 64, "units": [unit]}
@@ -337,6 +358,7 @@ def test_preflight_requires_every_selected_runtime_proof(monkeypatch):
                 "runtimes": [
                     {
                         "launcher": "01_example.sbatch",
+                        "stage": "default_none_cuda",
                         "runtime": "sample",
                         "fingerprint": "b" * 64,
                     }
@@ -348,7 +370,8 @@ def test_preflight_requires_every_selected_runtime_proof(monkeypatch):
         prepare.validate_proof(plan, proof)
     proof["units"][0]["runtimes"].append(
         {
-            "launcher": "01_example.optional.sbatch",
+            "launcher": "01_example.sbatch",
+            "stage": "optional_none_cuda",
             "runtime": "optional",
             "fingerprint": "c" * 64,
         }
@@ -371,7 +394,7 @@ def test_copied_cuda_source_tree_invalidates_existing_build(bound_workspace):
     assert runtime.load(workspace, "01_example.sbatch", launcher=True)[1] == record
     (workspace / "labs/01_example.py").write_text("changed compiled input\n")
     with pytest.raises(
-        ValueError, match="cuda-lab-setup.py --launcher 01_example.sbatch"
+        ValueError, match="cuda-lab-setup.py --lab 01_example"
     ):
         runtime.load(workspace, "01_example.sbatch", launcher=True)
 

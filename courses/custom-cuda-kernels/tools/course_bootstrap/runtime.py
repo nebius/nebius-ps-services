@@ -54,32 +54,40 @@ def context(course):
     return root, courses, catalog
 
 
-def load(course, selector, *, launcher=False):
+def load(course, selector, *, launcher=False, runtime_id=False, experiment="default", profiler="none", device=None, sanitizer=None):
     root, courses, catalog = context(course)
     course = Path(course).absolute()
     if course not in courses.values():
         raise ValueError("Run the native lab command from its course directory")
     bindings = definitions.bindings(course, catalog)
     key = Path(selector).name if launcher else selector
-    runtime = bindings["launchers" if launcher else "labs"].get(key)
+    from course_execution import capabilities, runtime_selections
+
+    if runtime_id:
+        declared = {row["runtime"] for spec in capabilities(course).values() for row in spec["variants"]}
+        declared.update(bindings["launchers"].values())
+        runtime = selector if selector in declared else None
+    elif key.removesuffix(".sbatch") in bindings["labs"]:
+        selected = runtime_selections(course, key.removesuffix(".sbatch"), experiment=experiment, profiler=profiler, device=device, sanitizer=sanitizer)
+        runtimes = {row["runtime"] for row in selected}
+        if len(runtimes) != 1:
+            raise ValueError("Activate each selected stage separately")
+        runtime = runtimes.pop()
+    else:
+        runtime = bindings["launchers" if launcher else "labs"].get(key)
     if runtime is None:
         raise ValueError(f"No declared runtime for {key}")
-    preparation = command(
-        catalog["runtimes"][runtime]["group"],
-        root=root,
-        lab=selector if not launcher else None,
-        launcher=selector
-        if launcher and catalog["runtimes"][runtime].get("optional")
-        else None,
-    )
-    if (
-        launcher
-        and not catalog["runtimes"][runtime].get("optional")
-        and catalog["runtimes"][runtime]["group"] != "regular"
-    ):
-        preparation = command(
-            catalog["runtimes"][runtime]["group"], root=root, launcher=key
-        )
+    selections = [(lab, row) for lab, spec in capabilities(course).items() for row in spec["variants"] if row["runtime"] == runtime]
+    if selections:
+        selected_lab, row = selections[0]
+        preparation = command(catalog["runtimes"][runtime]["group"], root=root, lab=selected_lab)
+        preparation += f" --experiment {row['experiment']} --profiler {row['profiler']}"
+        if capabilities(course)[selected_lab]["device_option"]:
+            preparation += f" --device {row['device']}"
+        if row["experiment"] == "sanitizer":
+            preparation += " --sanitizer memcheck"
+    else:
+        preparation = command(catalog["runtimes"][runtime]["group"], root=root, launcher=key)
     try:
         record = read_json(root / ".runtime/runtimes" / f"{runtime}.json")
     except FileNotFoundError:
@@ -159,8 +167,8 @@ def monitoring(root):
     return result
 
 
-def shell(course, selector, launcher=False):
-    root, record = load(course, selector, launcher=launcher)
+def shell(course, selector, launcher=False, **selection):
+    root, record = load(course, selector, launcher=launcher, **selection)
     environment = {**record["environment"], **monitoring(root)}
     # Clear only runtime selectors, not job identity or command-local capture/workload controls.
     managed = {
@@ -218,7 +226,12 @@ def image(course, identity):
     if not re.fullmatch(r"sif://[a-z0-9][a-z0-9_.-]*@sha256:[0-9a-f]{64}", identity):
         raise ValueError("Require an installed immutable SIF identity")
     name, checksum = identity[6:].split("@sha256:")
-    candidates = definitions.bindings(Path(course).absolute(), catalog)["launchers"]
+    candidates = dict(definitions.bindings(Path(course).absolute(), catalog)["launchers"])
+    from course_execution import capabilities
+
+    for lab, spec in capabilities(Path(course).absolute()).items():
+        for row in spec["variants"]:
+            candidates[f"{lab}.sbatch --experiment {row['experiment']} --profiler {row['profiler']}"] = row["runtime"]
     owners = [
         (launcher, catalog["runtimes"][runtime])
         for launcher, runtime in candidates.items()
@@ -258,6 +271,11 @@ def main():
     selection = activation.add_mutually_exclusive_group(required=True)
     selection.add_argument("--launcher")
     selection.add_argument("--lab")
+    selection.add_argument("--runtime")
+    activation.add_argument("--experiment", default="default")
+    activation.add_argument("--profiler", default="none")
+    activation.add_argument("--device", choices=("cpu", "cuda"))
+    activation.add_argument("--sanitizer", choices=("memcheck", "racecheck", "initcheck", "synccheck"))
     container = actions.add_parser("image")
     container.add_argument("--course-root", type=Path, required=True)
     container.add_argument("identity")
@@ -266,7 +284,7 @@ def main():
         if args.action == "image":
             image(args.course_root, args.identity)
         else:
-            shell(args.course_root, args.launcher or args.lab, bool(args.launcher))
+            shell(args.course_root, args.launcher or args.lab or args.runtime, bool(args.launcher), runtime_id=bool(args.runtime), experiment=args.experiment, profiler=args.profiler, device=args.device, sanitizer=args.sanitizer)
     except (OSError, ValueError, KeyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

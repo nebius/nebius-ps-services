@@ -33,6 +33,7 @@ def measure_steps(
 ) -> tuple[list[float], dict[str, float]]:
     for _ in range(warmup):
         operation()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     steady_state_bytes = torch.cuda.memory_allocated()
     torch.cuda.reset_peak_memory_stats()
@@ -59,6 +60,7 @@ def main() -> None:
     add_common_args(parser)
     parser.add_argument("--max-output-relative-l2", type=float, default=0.2)
     parser.add_argument("--max-gradient-relative-l2", type=float, default=0.3)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     thresholds = (args.max_output_relative_l2, args.max_gradient_relative_l2)
@@ -70,6 +72,7 @@ def main() -> None:
         )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     try:
         import transformer_engine
@@ -88,6 +91,7 @@ def main() -> None:
         bias=True,
         params_dtype=torch.bfloat16,
     ).cuda()
+    # Create the synthetic tensors used by this experiment.
     inputs = torch.randn(rows, hidden, device="cuda", dtype=torch.bfloat16)
     recipe = DelayedScaling(
         fp8_format=Format.HYBRID,
@@ -99,6 +103,7 @@ def main() -> None:
         layer.zero_grad(set_to_none=True)
         output = layer(inputs)
         loss = output.float().square().mean()
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
         return output.detach(), layer.weight.grad.detach()
 
@@ -172,6 +177,7 @@ def main() -> None:
     environment["transformer_engine_version"] = getattr(
         transformer_engine, "__version__", "unknown"
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="22_transformer_engine_fp8",

@@ -14,18 +14,12 @@ import re
 import subprocess
 
 import pytest
+
+from html_code import code_blocks
 from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
 
-SECTIONS = (
-    "Before you start",
-    "Concepts and code path",
-    "Practice",
-    "Check your results",
-    "Investigate the behavior",
-    "If something goes wrong",
-    "Takeaways and next step",
-)
+SECTIONS = ("Diagram", "Run", "Check your results")
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -37,11 +31,11 @@ def test_every_lab_has_an_authored_guide_and_explicit_lessons(course):
     assert len(guides) == len(cb_metadata.executable_sources(root))
     introductions = set()
     for guide in guides:
-        assert tuple(guide["sections"]) == SECTIONS
+        assert tuple(guide["sections"]) in (SECTIONS, SECTIONS[1:])
         assert guide["title"].startswith(f"Lab {guide['number']}: ")
         assert guide["lessons"]
         introductions.add(guide["introduction"])
-        assert "```bash" in guide["sections"]["Practice"]
+        assert "```bash" in guide["sections"]["Run"]
     assert len(introductions) == len(guides)
 
 
@@ -76,7 +70,7 @@ def test_lab_narrative_and_identity_survive_rendering(course):
         {
             html.unescape(url): "#" + anchor
             for anchor, url in re.findall(
-                r'<li id="(reference-\d+)"><a href="([^"]+)">', document
+                r'<li id="(reference-\d+)"><a[^>]* href="([^"]+)">', document
             )
         }
     )
@@ -94,8 +88,9 @@ def test_lab_narrative_and_identity_survive_rendering(course):
         ).group()
         assert f"<h3>{html.escape(guide['title'])}</h3>" in article
         assert cb_markdown.block(guide["introduction"]) in article
-        for section in SECTIONS:
-            assert f"<h4>{section}</h4>" in article
+        for section in guide["sections"]:
+            if section == "Check your results":
+                assert f"<h4>{section}</h4>" in article
             links = cb_content.lab_guide_links(guide, references)
             assert (
                 cb_markdown.block(
@@ -112,7 +107,7 @@ def test_lab_narrative_and_identity_survive_rendering(course):
                 in lesson_html[number - 1]
             )
         assert "Related lessons" not in article
-        assert html.escape(guide["source"].read_text()) in article
+        assert guide["source"].read_text() in code_blocks(article)
     assert (
         "State which resource or execution path should change before running."
         not in document
@@ -124,19 +119,15 @@ def fixture_course(tmp_path):
     (tmp_path / "reference/grafana/01_example.json").write_text("{}")
     (tmp_path / "slurm").mkdir()
     (tmp_path / "slurm/01_example.sbatch").write_text(
-        "#!/bin/bash\nexport COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0\n"
+        "#!/bin/bash\ncourse_stage() { :; }\n"
     )
     (tmp_path / "labs").mkdir()
     (tmp_path / "labs/01_example.py").write_text('"""Example."""\n')
     (tmp_path / "reference/labs").mkdir(parents=True)
-    paragraph = " ".join(
-        ["Specific explanation of inputs, execution, checks and limitations."] * 9
-    )
-    body = "# Lab 01: Example\n\n" + paragraph + "\n\n"
-    for section in SECTIONS:
-        body += f"## {section}\n\n{paragraph}\n\n"
-        if section == "Practice":
-            body += "`labs/01_example.py` demonstrates the example operation.\n\n```bash\nsbatch slurm/01_example.sbatch --workload small\n```\n\n"
+    paragraph = "Specific explanation of inputs, execution, checks and limitations."
+    body = f"# Lab 01: Example\n\n{paragraph}\n\n"
+    body += "## Run\n\n```bash\nsbatch slurm/01_example.sbatch --workload small\nsbatch slurm/01_example.sbatch --workload small --profiler all\n```\n\n"
+    body += "## Check your results\n\n```bash\nsacct -j <JOB_ID> --format=JobID,State,ExitCode\ncat results/01_example/jobs/<JOB_ID>/result.json\n```\n\nCheck the measured result.\n"
     path = tmp_path / "reference/labs/01_example.md"
     path.write_text(body)
     metadata = {

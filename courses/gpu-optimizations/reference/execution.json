@@ -1,0 +1,828 @@
+{
+  "schema": "course-execution/v1",
+  "course": "gpu-optimizations",
+  "labs": {
+    "01_timing_basics": {
+      "source": "labs/01_timing_basics.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "02_sync_trap": {
+      "source": "labs/02_sync_trap.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "03_compile_fusion": {
+      "source": "labs/03_compile_fusion.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "04_cuda_graphs": {
+      "source": "labs/04_cuda_graphs.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "05_input_pipeline": {
+      "source": "labs/05_input_pipeline.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "07_profile_workload": {
+      "source": "labs/07_profile_workload.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "09_capstone": {
+      "source": "labs/09_capstone.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "10_shape_precision": {
+      "source": "labs/10_shape_precision.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "12_allocator_lifetime": {
+      "source": "labs/12_allocator_lifetime.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "14_profiler_bottlenecks": {
+      "source": "labs/14_profiler_bottlenecks.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "15_tail_load_balance": {
+      "source": "labs/15_tail_load_balance.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "16_library_first_decision": {
+      "source": "labs/16_library_first_decision.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "19_h2d_pipeline": {
+      "source": "labs/19_h2d_pipeline.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "20_d2h_pipeline": {
+      "source": "labs/20_d2h_pipeline.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "gpu-optimizations.01_timing_basics.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    }
+  }
+}

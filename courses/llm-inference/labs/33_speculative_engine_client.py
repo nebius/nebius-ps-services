@@ -25,6 +25,7 @@ def main() -> None:
     )
     parser.add_argument("--requests", type=int, default=4)
     parser.add_argument("--output", type=Path, required=True)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     begin_experiment(args)
     require_hf_commit_revision(args.target_revision, option="--target-revision")
@@ -86,6 +87,7 @@ def main() -> None:
             "greedy_equivalence_requires_launcher_pair_comparison": True,
         },
     }
+    # Write this run’s evidence without overwriting an earlier result.
     write_json_exclusive(args.output, result)
     print(f"Wrote private {args.variant} output digests: {args.output}")
 

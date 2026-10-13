@@ -41,15 +41,12 @@ def run_block(tmp_path, environment, block):
 
 
 def test_native_example_submits_with_private_logs_and_no_monitoring(tmp_path, submit_spy):
-    block = submissions(ROOT / 'README.md')[0]
+    block = next(line for line in (ROOT / 'README.md').read_text().splitlines() if line.startswith('sbatch slurm/01_cpu_gpu_crossover.sbatch'))
     result = run_block(tmp_path, submit_spy, block)
     assert result.returncode == 0, result.stderr
     lab = '01_cpu_gpu_crossover'
     captured = json.loads((tmp_path / 'submission.json').read_text())
     assert captured['argv'] == [
-        f'--chdir={tmp_path}',
-        f'--output={tmp_path}/results/{lab}/logs/%j.out',
-        f'--error={tmp_path}/results/{lab}/logs/%j.err',
         f'slurm/{lab}.sbatch', '--workload', 'small',
     ]
     assert not (tmp_path / "results").exists()  # Preparation is a separate setup operation.
@@ -60,7 +57,7 @@ def test_submission_failure_is_not_completion_or_old_result_selection(tmp_path, 
     old.write_text('{"old": true}')
     result = run_block(
         tmp_path, {**submit_spy, 'SUBMIT_EXIT': '7'},
-        submissions(ROOT / 'README.md')[0],
+        next(line for line in (ROOT / 'README.md').read_text().splitlines() if line.startswith('sbatch slurm/01_cpu_gpu_crossover.sbatch')),
     )
     assert result.returncode == 7
     assert result.stdout == ''
@@ -89,34 +86,29 @@ def test_intro_variations_produce_inspectable_jobs(
     tmp_path, submit_spy, course, lab, cpu_runs,
 ):
     guide = (ROOT / course / 'reference/labs' / f'{lab}.md').read_text()
-    variations = guide.split('### Workload variations\n', 1)[1]
-    block = re.search(r'```bash\n(.*?)```', variations, re.DOTALL)[1]
-    commands = block.replace('\\\n', ' ').strip().splitlines()
-    assert len(commands) == cpu_runs + 1  # CPU comparisons and optional CUDA.
+    commands = re.search(r'```bash\n(.*?)```', guide, re.DOTALL)[1].splitlines()
+    commands = [line for line in commands if line.startswith('sbatch ')]
+    assert len(commands) == 2
     for index, command in enumerate(commands):
-        assert command.startswith('sbatch '), command
         result = run_block(tmp_path, submit_spy, command)
         assert result.returncode == 0, result.stderr
         argv = json.loads((tmp_path / 'submission.json').read_text())['argv']
-        assert not any('COURSE_PROFILE_TOOL=' in arg for arg in argv)
-        assert f'--output={tmp_path}/results/{lab}/logs/%j.out' in argv
-        assert f'--error={tmp_path}/results/{lab}/logs/%j.err' in argv
-        launcher = lab if index < cpu_runs else lab + '.cuda'
-        assert f'slurm/{launcher}.sbatch' in argv
-        device = argv[argv.index('--device') + 1]
-        assert device == ('cpu' if index < cpu_runs else 'cuda')
+        assert f'slurm/{lab}.sbatch' in argv
+        if index == 0:
+            assert '--device' in argv and argv[argv.index('--device') + 1] == 'cpu'
+        else:
+            assert argv[-2:] == ['--profiler', 'all']
 
 
 def test_every_lab_has_one_shared_prerequisite_link_and_native_inspection():
     assert len(GUIDES) == 110
     for path in GUIDES:
         source = path.read_text()
-        before = source.split('## Before you start\n', 1)[1].split('\n## ', 1)[0]
-        assert before.count('[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)') == 1, path
-        assert 'assigned Grafana dashboard' not in before, path
-        assert 'tools/submit_lab.py' not in source, path
-        assert '"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py' not in source, path
-        assert 'cat "$RESULT_JSON"' in source, path
+        assert '## Before you start' not in source
+        assert '[Lab Guide]' not in source
+        assert 'tools/submit_lab.py' not in source
+        assert 'sacct -j <JOB_ID> --format=JobID,State,ExitCode' in source
+        assert f'cat results/{path.stem}/jobs/<JOB_ID>/result.json' in source
 
 
 def test_all_learner_shell_examples_parse():

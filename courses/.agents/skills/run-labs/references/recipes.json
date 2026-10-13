@@ -40,9 +40,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/01_fabric_topology.nsys.sbatch",
+          "slurm/01_fabric_topology.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -59,9 +61,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_fabric_topology.nsys.sbatch",
+            "slurm/01_fabric_topology.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -106,9 +110,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/02_collective_readiness.nsys.sbatch",
+          "slurm/02_collective_readiness.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -125,9 +131,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_collective_readiness.nsys.sbatch",
+            "slurm/02_collective_readiness.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -172,9 +180,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/03_training_readiness.nsys.sbatch",
+          "slurm/03_training_readiness.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -191,9 +201,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/03_training_readiness.nsys.sbatch",
+            "slurm/03_training_readiness.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -238,9 +250,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/04_inference_readiness.nsys.sbatch",
+          "slurm/04_inference_readiness.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -257,9 +271,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_inference_readiness.nsys.sbatch",
+            "slurm/04_inference_readiness.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -304,9 +320,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/05_transport_readiness.nsys.sbatch",
+          "slurm/05_transport_readiness.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -323,9 +341,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_transport_readiness.nsys.sbatch",
+            "slurm/05_transport_readiness.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -377,11 +397,13 @@
         "systems": [
           "sbatch",
           "--nodes=1",
-          "slurm/06_nvlink_bandwidth.nsys.sbatch",
+          "slurm/06_nvlink_bandwidth.sbatch",
           "--workload",
           "small",
           "--engine",
-          "ce"
+          "ce",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -399,11 +421,13 @@
           "argv": [
             "sbatch",
             "--nodes=1",
-            "slurm/06_nvlink_bandwidth.nsys.sbatch",
+            "slurm/06_nvlink_bandwidth.sbatch",
             "--workload",
             "small",
             "--engine",
-            "ce"
+            "ce",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -414,11 +438,13 @@
           "argv": [
             "sbatch",
             "--nodes=1",
-            "slurm/06_nvlink_bandwidth.nsys.sbatch",
+            "slurm/06_nvlink_bandwidth.sbatch",
             "--workload",
             "small",
             "--engine",
-            "sm"
+            "sm",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -546,11 +572,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/08_distributed_collectives.nsys.sbatch",
+          "slurm/08_distributed_collectives.sbatch",
           "--workload",
           "small",
           "--payload-mib",
-          "4"
+          "4",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -569,11 +597,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_distributed_collectives.nsys.sbatch",
+            "slurm/08_distributed_collectives.sbatch",
             "--workload",
             "small",
             "--payload-mib",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -583,11 +613,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/08_distributed_collectives.nsys.sbatch",
+            "slurm/08_distributed_collectives.sbatch",
             "--workload",
             "small",
             "--payload-mib",
-            "32"
+            "32",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -644,9 +676,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/09_nccl_transport_sweep.nsys.sbatch",
+          "slurm/09_nccl_transport_sweep.sbatch",
           "--max-bytes",
-          "${MAX_BYTES}"
+          "${MAX_BYTES}",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -663,13 +697,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_nccl_transport_sweep.nsys.sbatch",
+            "slurm/09_nccl_transport_sweep.sbatch",
             "--max-bytes",
             "${MAX_BYTES}",
             "--workload",
             "small",
             "--variant",
-            "default"
+            "default",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -679,13 +715,15 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/09_nccl_transport_sweep.nsys.sbatch",
+            "slurm/09_nccl_transport_sweep.sbatch",
             "--max-bytes",
             "${MAX_BYTES}",
             "--workload",
             "small",
             "--variant",
-            "socket"
+            "socket",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -740,8 +778,10 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/10_nccl_tests_report.nsys.sbatch",
-          "default"
+          "slurm/10_nccl_tests_report.sbatch",
+          "default",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -758,12 +798,14 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/10_nccl_tests_report.nsys.sbatch",
+            "slurm/10_nccl_tests_report.sbatch",
             "default",
             "--workload",
             "small",
             "--max-bytes",
-            "${MAX_BYTES}"
+            "${MAX_BYTES}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -773,12 +815,14 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/10_nccl_tests_report.nsys.sbatch",
+            "slurm/10_nccl_tests_report.sbatch",
             "socket",
             "--workload",
             "small",
             "--max-bytes",
-            "${MAX_BYTES}"
+            "${MAX_BYTES}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -827,11 +871,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/11_collective_layout.nsys.sbatch",
+          "slurm/11_collective_layout.sbatch",
           "--workload",
           "small",
           "--layout",
-          "flat"
+          "flat",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -848,11 +894,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/11_collective_layout.nsys.sbatch",
+            "slurm/11_collective_layout.sbatch",
             "--workload",
             "small",
             "--layout",
-            "flat"
+            "flat",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -862,11 +910,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/11_collective_layout.nsys.sbatch",
+            "slurm/11_collective_layout.sbatch",
             "--workload",
             "small",
             "--layout",
-            "hierarchical"
+            "hierarchical",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -893,11 +943,13 @@
           "id": "repeat",
           "argv": [
             "sbatch",
-            "slurm/12_distributed_scaling.two_node.sbatch",
+            "slurm/12_distributed_scaling.sbatch",
             "--workload",
             "small",
             "--global-batch",
-            "64"
+            "64",
+            "--experiment",
+            "two-node"
           ]
         }
       ],
@@ -915,11 +967,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/12_distributed_scaling.nsys.sbatch",
+          "slurm/12_distributed_scaling.sbatch",
           "--workload",
           "small",
           "--global-batch",
-          "64"
+          "64",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -936,11 +990,13 @@
           "variant": "repeat",
           "argv": [
             "sbatch",
-            "slurm/12_distributed_scaling.nsys.sbatch",
+            "slurm/12_distributed_scaling.sbatch",
             "--workload",
             "small",
             "--global-batch",
-            "64"
+            "64",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -985,9 +1041,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/13_collective_overlap.nsys.sbatch",
+          "slurm/13_collective_overlap.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1004,9 +1062,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/13_collective_overlap.nsys.sbatch",
+            "slurm/13_collective_overlap.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1055,11 +1115,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/14_distributed_profiling.nsys.sbatch",
+          "slurm/14_distributed_profiling.sbatch",
           "--workload",
           "small",
           "--overlap",
-          "off"
+          "off",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1076,11 +1138,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/14_distributed_profiling.nsys.sbatch",
+            "slurm/14_distributed_profiling.sbatch",
             "--workload",
             "small",
             "--overlap",
-            "off"
+            "off",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -1090,11 +1154,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/14_distributed_profiling.nsys.sbatch",
+            "slurm/14_distributed_profiling.sbatch",
             "--workload",
             "small",
             "--overlap",
-            "on"
+            "on",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -1140,9 +1206,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/15_ddp_train.nsys.sbatch",
+          "slurm/15_ddp_train.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1159,9 +1227,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/15_ddp_train.nsys.sbatch",
+            "slurm/15_ddp_train.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1171,10 +1241,12 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/15_ddp_train.nsys.sbatch",
+            "slurm/15_ddp_train.sbatch",
             "--workload",
             "small",
-            "--zero-grad-fill"
+            "--zero-grad-fill",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1220,9 +1292,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/16_fsdp2_train.nsys.sbatch",
+          "slurm/16_fsdp2_train.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1239,9 +1313,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/16_fsdp2_train.nsys.sbatch",
+            "slurm/16_fsdp2_train.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1251,10 +1327,12 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/16_fsdp2_train.nsys.sbatch",
+            "slurm/16_fsdp2_train.sbatch",
             "--workload",
             "small",
-            "--zero-grad-fill"
+            "--zero-grad-fill",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1299,9 +1377,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/17_training_expert_parallel.nsys.sbatch",
+          "slurm/17_training_expert_parallel.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1318,9 +1398,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/17_training_expert_parallel.nsys.sbatch",
+            "slurm/17_training_expert_parallel.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1365,9 +1447,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/18_training_tensor_parallel.nsys.sbatch",
+          "slurm/18_training_tensor_parallel.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1384,9 +1468,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/18_training_tensor_parallel.nsys.sbatch",
+            "slurm/18_training_tensor_parallel.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1431,15 +1517,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/19_gradient_overlap.nsys.sbatch",
+          "slurm/19_gradient_overlap.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/19_gradient_overlap.ncu.sbatch",
+          "slurm/19_gradient_overlap.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -1456,9 +1546,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/19_gradient_overlap.nsys.sbatch",
+            "slurm/19_gradient_overlap.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1468,9 +1560,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/19_gradient_overlap.ncu.sbatch",
+            "slurm/19_gradient_overlap.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -1515,9 +1609,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/20_parallelism_mechanics.nsys.sbatch",
+          "slurm/20_parallelism_mechanics.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1534,9 +1630,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/20_parallelism_mechanics.nsys.sbatch",
+            "slurm/20_parallelism_mechanics.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1693,11 +1791,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/21_ddp_buckets.nsys.sbatch",
+          "slurm/21_ddp_buckets.sbatch",
           "--hook",
           "allreduce",
           "--bucket-cap-mb",
-          "1"
+          "1",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1714,7 +1814,7 @@
           "variant": "bucket1",
           "argv": [
             "sbatch",
-            "slurm/21_ddp_buckets.nsys.sbatch",
+            "slurm/21_ddp_buckets.sbatch",
             "--hook",
             "allreduce",
             "--bucket-cap-mb",
@@ -1722,7 +1822,9 @@
             "--workload",
             "small",
             "--warmup",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1732,7 +1834,7 @@
           "variant": "bucket01",
           "argv": [
             "sbatch",
-            "slurm/21_ddp_buckets.nsys.sbatch",
+            "slurm/21_ddp_buckets.sbatch",
             "--hook",
             "allreduce",
             "--bucket-cap-mb",
@@ -1740,7 +1842,9 @@
             "--workload",
             "small",
             "--warmup",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1750,7 +1854,7 @@
           "variant": "fp16",
           "argv": [
             "sbatch",
-            "slurm/21_ddp_buckets.nsys.sbatch",
+            "slurm/21_ddp_buckets.sbatch",
             "--hook",
             "fp16",
             "--bucket-cap-mb",
@@ -1758,7 +1862,9 @@
             "--workload",
             "small",
             "--warmup",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1768,7 +1874,7 @@
           "variant": "bf16",
           "argv": [
             "sbatch",
-            "slurm/21_ddp_buckets.nsys.sbatch",
+            "slurm/21_ddp_buckets.sbatch",
             "--hook",
             "bf16",
             "--bucket-cap-mb",
@@ -1776,7 +1882,9 @@
             "--workload",
             "small",
             "--warmup",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -1786,7 +1894,7 @@
           "variant": "powersgd",
           "argv": [
             "sbatch",
-            "slurm/21_ddp_buckets.nsys.sbatch",
+            "slurm/21_ddp_buckets.sbatch",
             "--hook",
             "powersgd",
             "--bucket-cap-mb",
@@ -1798,7 +1906,9 @@
             "--power-rank",
             "1",
             "--power-start",
-            "2"
+            "2",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -1847,11 +1957,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/22_fabric_training.nsys.sbatch",
+          "slurm/22_fabric_training.sbatch",
           "--workload",
           "small",
           "--microbatch",
-          "1"
+          "1",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1868,11 +1980,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/22_fabric_training.nsys.sbatch",
+            "slurm/22_fabric_training.sbatch",
             "--workload",
             "small",
             "--microbatch",
-            "1"
+            "1",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -1882,11 +1996,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/22_fabric_training.nsys.sbatch",
+            "slurm/22_fabric_training.sbatch",
             "--workload",
             "small",
             "--microbatch",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -1931,9 +2047,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/23_inference_expert_parallel.nsys.sbatch",
+          "slurm/23_inference_expert_parallel.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -1950,9 +2068,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/23_inference_expert_parallel.nsys.sbatch",
+            "slurm/23_inference_expert_parallel.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -2001,9 +2121,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/24_inference_tensor_parallel.nsys.sbatch",
+          "slurm/24_inference_tensor_parallel.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2022,11 +2144,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/24_inference_tensor_parallel.nsys.sbatch",
+            "slurm/24_inference_tensor_parallel.sbatch",
             "--workload",
             "small",
             "--batch-size",
-            "8"
+            "8",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -2036,11 +2160,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/24_inference_tensor_parallel.nsys.sbatch",
+            "slurm/24_inference_tensor_parallel.sbatch",
             "--workload",
             "small",
             "--batch-size",
-            "1"
+            "1",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -2089,11 +2215,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/25_fabric_inference.nsys.sbatch",
+          "slurm/25_fabric_inference.sbatch",
           "--workload",
           "small",
           "--placement",
-          "replicated"
+          "replicated",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2110,11 +2238,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/25_fabric_inference.nsys.sbatch",
+            "slurm/25_fabric_inference.sbatch",
             "--workload",
             "small",
             "--placement",
-            "replicated"
+            "replicated",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -2124,11 +2254,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/25_fabric_inference.nsys.sbatch",
+            "slurm/25_fabric_inference.sbatch",
             "--workload",
             "small",
             "--placement",
-            "tensor"
+            "tensor",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -2177,11 +2309,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/26_collective_latency.nsys.sbatch",
+          "slurm/26_collective_latency.sbatch",
           "--workload",
           "small",
           "--algorithm",
-          "auto"
+          "auto",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2198,11 +2332,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/26_collective_latency.nsys.sbatch",
+            "slurm/26_collective_latency.sbatch",
             "--workload",
             "small",
             "--algorithm",
-            "auto"
+            "auto",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -2212,11 +2348,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/26_collective_latency.nsys.sbatch",
+            "slurm/26_collective_latency.sbatch",
             "--workload",
             "small",
             "--algorithm",
-            "Tree"
+            "Tree",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -2331,7 +2469,7 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/28_nic_selection.nsys.sbatch",
+          "slurm/28_nic_selection.sbatch",
           "--workload",
           "small",
           "--server-hca",
@@ -2339,7 +2477,9 @@
           "--client-hca",
           "$CLIENT_HCA",
           "--hca-policy",
-          "all"
+          "all",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2356,7 +2496,7 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/28_nic_selection.nsys.sbatch",
+            "slurm/28_nic_selection.sbatch",
             "--workload",
             "small",
             "--server-hca",
@@ -2364,7 +2504,9 @@
             "--client-hca",
             "${CLIENT_HCA}",
             "--hca-policy",
-            "all"
+            "all",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -2374,7 +2516,7 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/28_nic_selection.nsys.sbatch",
+            "slurm/28_nic_selection.sbatch",
             "--workload",
             "small",
             "--server-hca",
@@ -2382,7 +2524,9 @@
             "--client-hca",
             "${CLIENT_HCA}",
             "--hca-policy",
-            "single"
+            "single",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -2431,11 +2575,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/29_nixl_transfer.nsys.sbatch",
+          "slurm/29_nixl_transfer.sbatch",
           "--workload",
           "small",
           "--progress-thread",
-          "off"
+          "off",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2452,11 +2598,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/29_nixl_transfer.nsys.sbatch",
+            "slurm/29_nixl_transfer.sbatch",
             "--workload",
             "small",
             "--progress-thread",
-            "off"
+            "off",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -2466,11 +2614,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/29_nixl_transfer.nsys.sbatch",
+            "slurm/29_nixl_transfer.sbatch",
             "--workload",
             "small",
             "--progress-thread",
-            "on"
+            "on",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -2536,13 +2686,15 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/30_megatron_overlap.nsys.sbatch",
+          "slurm/30_megatron_overlap.sbatch",
           "--workload",
           "small",
           "--overlap",
           "off",
           "--reference",
-          "$TRAINING_REFERENCE"
+          "$TRAINING_REFERENCE",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2561,13 +2713,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/30_megatron_overlap.nsys.sbatch",
+            "slurm/30_megatron_overlap.sbatch",
             "--workload",
             "small",
             "--overlap",
             "off",
             "--reference",
-            "${TRAINING_REFERENCE}"
+            "${TRAINING_REFERENCE}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -2577,13 +2731,15 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/30_megatron_overlap.nsys.sbatch",
+            "slurm/30_megatron_overlap.sbatch",
             "--workload",
             "small",
             "--overlap",
             "on",
             "--reference",
-            "${TRAINING_REFERENCE}"
+            "${TRAINING_REFERENCE}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -2649,13 +2805,15 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/31_context_parallel.nsys.sbatch",
+          "slurm/31_context_parallel.sbatch",
           "--workload",
           "small",
           "--layout",
           "flat",
           "--reference",
-          "$CONTEXT_REFERENCE"
+          "$CONTEXT_REFERENCE",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2674,13 +2832,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/31_context_parallel.nsys.sbatch",
+            "slurm/31_context_parallel.sbatch",
             "--workload",
             "small",
             "--layout",
             "flat",
             "--reference",
-            "${CONTEXT_REFERENCE}"
+            "${CONTEXT_REFERENCE}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         },
@@ -2690,13 +2850,15 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/31_context_parallel.nsys.sbatch",
+            "slurm/31_context_parallel.sbatch",
             "--workload",
             "small",
             "--layout",
             "hierarchical",
             "--reference",
-            "${CONTEXT_REFERENCE}"
+            "${CONTEXT_REFERENCE}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 16
         }
@@ -2749,7 +2911,7 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/32_dynamo_disaggregation.nsys.sbatch",
+          "slurm/32_dynamo_disaggregation.sbatch",
           "--workload",
           "small",
           "--model-dir",
@@ -2757,7 +2919,9 @@
           "--layout",
           "aggregated",
           "--capture",
-          "systems"
+          "systems",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2774,7 +2938,7 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/32_dynamo_disaggregation.nsys.sbatch",
+            "slurm/32_dynamo_disaggregation.sbatch",
             "--workload",
             "small",
             "--model-dir",
@@ -2782,7 +2946,9 @@
             "--layout",
             "aggregated",
             "--capture",
-            "systems"
+            "systems",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -2792,7 +2958,7 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/32_dynamo_disaggregation.nsys.sbatch",
+            "slurm/32_dynamo_disaggregation.sbatch",
             "--workload",
             "small",
             "--model-dir",
@@ -2800,7 +2966,9 @@
             "--layout",
             "disaggregated",
             "--capture",
-            "systems"
+            "systems",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -2853,7 +3021,7 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/33_dynamo_routing.nsys.sbatch",
+          "slurm/33_dynamo_routing.sbatch",
           "--workload",
           "small",
           "--model-dir",
@@ -2861,7 +3029,9 @@
           "--router",
           "round-robin",
           "--capture",
-          "systems"
+          "systems",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2878,7 +3048,7 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/33_dynamo_routing.nsys.sbatch",
+            "slurm/33_dynamo_routing.sbatch",
             "--workload",
             "small",
             "--model-dir",
@@ -2886,7 +3056,9 @@
             "--router",
             "round-robin",
             "--capture",
-            "systems"
+            "systems",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -2896,7 +3068,7 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/33_dynamo_routing.nsys.sbatch",
+            "slurm/33_dynamo_routing.sbatch",
             "--workload",
             "small",
             "--model-dir",
@@ -2904,7 +3076,9 @@
             "--router",
             "kv",
             "--capture",
-            "systems"
+            "systems",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -2957,7 +3131,7 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/34_serving_goodput.nsys.sbatch",
+          "slurm/34_serving_goodput.sbatch",
           "--workload",
           "small",
           "--model-dir",
@@ -2965,7 +3139,9 @@
           "--concurrency",
           "8",
           "--capture",
-          "systems"
+          "systems",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -2982,7 +3158,7 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/34_serving_goodput.nsys.sbatch",
+            "slurm/34_serving_goodput.sbatch",
             "--workload",
             "small",
             "--model-dir",
@@ -2990,7 +3166,9 @@
             "--concurrency",
             "8",
             "--capture",
-            "systems"
+            "systems",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         },
@@ -3000,7 +3178,7 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/34_serving_goodput.nsys.sbatch",
+            "slurm/34_serving_goodput.sbatch",
             "--workload",
             "small",
             "--model-dir",
@@ -3008,7 +3186,9 @@
             "--concurrency",
             "16",
             "--capture",
-            "systems"
+            "systems",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 2
         }
@@ -3057,15 +3237,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/01_vector_add.nsys.sbatch",
+          "slurm/01_vector_add.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/01_vector_add.ncu.sbatch",
+          "slurm/01_vector_add.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3082,9 +3266,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_vector_add.ncu.sbatch",
+            "slurm/01_vector_add.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         },
@@ -3094,11 +3280,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_vector_add.nsys.sbatch",
+            "slurm/01_vector_add.sbatch",
             "--workload",
             "small",
             "--threads",
-            "256"
+            "256",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3108,11 +3296,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/01_vector_add.nsys.sbatch",
+            "slurm/01_vector_add.sbatch",
             "--workload",
             "small",
             "--threads",
-            "128"
+            "128",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -3157,15 +3347,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/02_fused_elementwise.nsys.sbatch",
+          "slurm/02_fused_elementwise.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/02_fused_elementwise.ncu.sbatch",
+          "slurm/02_fused_elementwise.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3184,9 +3378,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_fused_elementwise.nsys.sbatch",
+            "slurm/02_fused_elementwise.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3196,9 +3392,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_fused_elementwise.ncu.sbatch",
+            "slurm/02_fused_elementwise.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3243,15 +3441,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/03_tiled_transpose.nsys.sbatch",
+          "slurm/03_tiled_transpose.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/03_tiled_transpose.ncu.sbatch",
+          "slurm/03_tiled_transpose.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3270,9 +3472,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/03_tiled_transpose.nsys.sbatch",
+            "slurm/03_tiled_transpose.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3282,9 +3486,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/03_tiled_transpose.ncu.sbatch",
+            "slurm/03_tiled_transpose.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3329,15 +3535,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/04_reduction.nsys.sbatch",
+          "slurm/04_reduction.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/04_reduction.ncu.sbatch",
+          "slurm/04_reduction.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3356,9 +3566,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_reduction.nsys.sbatch",
+            "slurm/04_reduction.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3368,9 +3580,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_reduction.ncu.sbatch",
+            "slurm/04_reduction.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3415,15 +3629,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/05_tiled_stencil.nsys.sbatch",
+          "slurm/05_tiled_stencil.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/05_tiled_stencil.ncu.sbatch",
+          "slurm/05_tiled_stencil.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3442,9 +3660,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_tiled_stencil.nsys.sbatch",
+            "slurm/05_tiled_stencil.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3454,9 +3674,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_tiled_stencil.ncu.sbatch",
+            "slurm/05_tiled_stencil.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3501,15 +3723,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/06_divergence_tail.nsys.sbatch",
+          "slurm/06_divergence_tail.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/06_divergence_tail.ncu.sbatch",
+          "slurm/06_divergence_tail.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3528,9 +3754,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/06_divergence_tail.nsys.sbatch",
+            "slurm/06_divergence_tail.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3540,9 +3768,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/06_divergence_tail.ncu.sbatch",
+            "slurm/06_divergence_tail.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3587,15 +3817,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/07_resource_sweep.nsys.sbatch",
+          "slurm/07_resource_sweep.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/07_resource_sweep.ncu.sbatch",
+          "slurm/07_resource_sweep.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3614,9 +3848,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_resource_sweep.nsys.sbatch",
+            "slurm/07_resource_sweep.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3626,9 +3862,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_resource_sweep.ncu.sbatch",
+            "slurm/07_resource_sweep.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3673,15 +3911,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/08_async_pipeline.nsys.sbatch",
+          "slurm/08_async_pipeline.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/08_async_pipeline.ncu.sbatch",
+          "slurm/08_async_pipeline.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3700,9 +3942,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_async_pipeline.nsys.sbatch",
+            "slurm/08_async_pipeline.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3712,9 +3956,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_async_pipeline.ncu.sbatch",
+            "slurm/08_async_pipeline.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3759,15 +4005,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/09_library_epilogue.nsys.sbatch",
+          "slurm/09_library_epilogue.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/09_library_epilogue.ncu.sbatch",
+          "slurm/09_library_epilogue.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3786,9 +4036,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_library_epilogue.nsys.sbatch",
+            "slurm/09_library_epilogue.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3798,9 +4050,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_library_epilogue.ncu.sbatch",
+            "slurm/09_library_epilogue.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3845,9 +4099,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/10_hopper_cluster.nsys.sbatch",
+          "slurm/10_hopper_cluster.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -3864,9 +4120,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/10_hopper_cluster.nsys.sbatch",
+            "slurm/10_hopper_cluster.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -3911,15 +4169,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/11_residual_rmsnorm.nsys.sbatch",
+          "slurm/11_residual_rmsnorm.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/11_residual_rmsnorm.ncu.sbatch",
+          "slurm/11_residual_rmsnorm.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -3938,9 +4200,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/11_residual_rmsnorm.nsys.sbatch",
+            "slurm/11_residual_rmsnorm.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -3950,9 +4214,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/11_residual_rmsnorm.ncu.sbatch",
+            "slurm/11_residual_rmsnorm.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -3968,9 +4234,11 @@
           "id": "trials",
           "argv": [
             "sbatch",
-            "slurm/12_capstone.trials.sbatch",
+            "slurm/12_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--experiment",
+            "trials"
           ]
         }
       ],
@@ -3979,12 +4247,15 @@
           "id": "memcheck",
           "argv": [
             "sbatch",
-            "slurm/12_capstone.sanitizer.sbatch",
+            "slurm/12_capstone.sbatch",
+            "--sanitizer",
             "memcheck",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--experiment",
+            "sanitizer"
           ]
         }
       ],
@@ -3996,19 +4267,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/12_capstone.nsys.sbatch",
+          "slurm/12_capstone.sbatch",
           "--workload",
           "small",
           "--variant-order",
-          "baseline-first"
+          "baseline-first",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/12_capstone.ncu.sbatch",
+          "slurm/12_capstone.sbatch",
           "--workload",
           "small",
           "--variant-order",
-          "baseline-first"
+          "baseline-first",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4029,11 +4304,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/12_capstone.nsys.sbatch",
+            "slurm/12_capstone.sbatch",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4043,11 +4320,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/12_capstone.ncu.sbatch",
+            "slurm/12_capstone.sbatch",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4138,15 +4417,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/01_cpu_gpu_crossover.nsys.sbatch",
+          "slurm/01_cpu_gpu_crossover.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/01_cpu_gpu_crossover.ncu.sbatch",
+          "slurm/01_cpu_gpu_crossover.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4163,9 +4446,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_cpu_gpu_crossover.nsys.sbatch",
+            "slurm/01_cpu_gpu_crossover.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4175,9 +4460,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_cpu_gpu_crossover.ncu.sbatch",
+            "slurm/01_cpu_gpu_crossover.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4226,15 +4513,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/02_tensor_core_precision.nsys.sbatch",
+          "slurm/02_tensor_core_precision.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/02_tensor_core_precision.ncu.sbatch",
+          "slurm/02_tensor_core_precision.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4251,11 +4542,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_tensor_core_precision.nsys.sbatch",
+            "slurm/02_tensor_core_precision.sbatch",
             "--workload",
             "small",
             "--matrix-size",
-            "1024"
+            "1024",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4265,11 +4558,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/02_tensor_core_precision.nsys.sbatch",
+            "slurm/02_tensor_core_precision.sbatch",
             "--workload",
             "small",
             "--matrix-size",
-            "2048"
+            "2048",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4279,11 +4574,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_tensor_core_precision.ncu.sbatch",
+            "slurm/02_tensor_core_precision.sbatch",
             "--workload",
             "small",
             "--matrix-size",
-            "1024"
+            "1024",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4332,9 +4629,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/03_transfer_and_pinning.nsys.sbatch",
+          "slurm/03_transfer_and_pinning.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -4351,11 +4650,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/03_transfer_and_pinning.nsys.sbatch",
+            "slurm/03_transfer_and_pinning.sbatch",
             "--workload",
             "small",
             "--size-mib",
-            "64"
+            "64",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4365,11 +4666,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/03_transfer_and_pinning.nsys.sbatch",
+            "slurm/03_transfer_and_pinning.sbatch",
             "--workload",
             "small",
             "--size-mib",
-            "128"
+            "128",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -4414,15 +4717,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/04_layout_and_coalescing.nsys.sbatch",
+          "slurm/04_layout_and_coalescing.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/04_layout_and_coalescing.ncu.sbatch",
+          "slurm/04_layout_and_coalescing.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4439,9 +4746,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_layout_and_coalescing.nsys.sbatch",
+            "slurm/04_layout_and_coalescing.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4451,9 +4760,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_layout_and_coalescing.ncu.sbatch",
+            "slurm/04_layout_and_coalescing.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4498,15 +4809,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/05_roofline_microbench.nsys.sbatch",
+          "slurm/05_roofline_microbench.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/05_roofline_microbench.ncu.sbatch",
+          "slurm/05_roofline_microbench.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4523,9 +4838,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_roofline_microbench.nsys.sbatch",
+            "slurm/05_roofline_microbench.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4535,9 +4852,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_roofline_microbench.ncu.sbatch",
+            "slurm/05_roofline_microbench.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4582,15 +4901,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/07_async_streams.nsys.sbatch",
+          "slurm/07_async_streams.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/07_async_streams.ncu.sbatch",
+          "slurm/07_async_streams.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4607,9 +4930,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_async_streams.nsys.sbatch",
+            "slurm/07_async_streams.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4619,9 +4944,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_async_streams.ncu.sbatch",
+            "slurm/07_async_streams.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4666,17 +4993,21 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/08_operator_to_kernels.nsys.sbatch",
+          "slurm/08_operator_to_kernels.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/08_operator_to_kernels.ncu.sbatch",
+          "slurm/08_operator_to_kernels.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4693,10 +5024,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_operator_to_kernels.nsys.sbatch",
+            "slurm/08_operator_to_kernels.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4706,10 +5039,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_operator_to_kernels.ncu.sbatch",
+            "slurm/08_operator_to_kernels.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4754,15 +5089,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/09_triton_launch_geometry.nsys.sbatch",
+          "slurm/09_triton_launch_geometry.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/09_triton_launch_geometry.ncu.sbatch",
+          "slurm/09_triton_launch_geometry.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4779,9 +5118,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_triton_launch_geometry.nsys.sbatch",
+            "slurm/09_triton_launch_geometry.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4791,9 +5132,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_triton_launch_geometry.ncu.sbatch",
+            "slurm/09_triton_launch_geometry.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -4884,15 +5227,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/11_scheduler_tail.nsys.sbatch",
+          "slurm/11_scheduler_tail.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/11_scheduler_tail.ncu.sbatch",
+          "slurm/11_scheduler_tail.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -4909,9 +5256,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/11_scheduler_tail.nsys.sbatch",
+            "slurm/11_scheduler_tail.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -4921,9 +5270,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/11_scheduler_tail.ncu.sbatch",
+            "slurm/11_scheduler_tail.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5014,15 +5365,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/01_timing_basics.nsys.sbatch",
+          "slurm/01_timing_basics.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/01_timing_basics.ncu.sbatch",
+          "slurm/01_timing_basics.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5039,9 +5394,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_timing_basics.nsys.sbatch",
+            "slurm/01_timing_basics.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5051,9 +5408,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_timing_basics.ncu.sbatch",
+            "slurm/01_timing_basics.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5102,15 +5461,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/02_sync_trap.nsys.sbatch",
+          "slurm/02_sync_trap.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/02_sync_trap.ncu.sbatch",
+          "slurm/02_sync_trap.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5127,11 +5490,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_sync_trap.nsys.sbatch",
+            "slurm/02_sync_trap.sbatch",
             "--workload",
             "small",
             "--steps",
-            "50"
+            "50",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5141,11 +5506,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/02_sync_trap.nsys.sbatch",
+            "slurm/02_sync_trap.sbatch",
             "--workload",
             "small",
             "--steps",
-            "100"
+            "100",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5155,11 +5522,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_sync_trap.ncu.sbatch",
+            "slurm/02_sync_trap.sbatch",
             "--workload",
             "small",
             "--steps",
-            "50"
+            "50",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5204,15 +5573,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/03_compile_fusion.nsys.sbatch",
+          "slurm/03_compile_fusion.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/03_compile_fusion.ncu.sbatch",
+          "slurm/03_compile_fusion.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5229,9 +5602,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/03_compile_fusion.nsys.sbatch",
+            "slurm/03_compile_fusion.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5241,9 +5616,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/03_compile_fusion.ncu.sbatch",
+            "slurm/03_compile_fusion.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5288,15 +5665,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/04_cuda_graphs.nsys.sbatch",
+          "slurm/04_cuda_graphs.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/04_cuda_graphs.ncu.sbatch",
+          "slurm/04_cuda_graphs.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5313,9 +5694,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_cuda_graphs.nsys.sbatch",
+            "slurm/04_cuda_graphs.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5325,9 +5708,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/04_cuda_graphs.ncu.sbatch",
+            "slurm/04_cuda_graphs.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5376,15 +5761,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/05_input_pipeline.nsys.sbatch",
+          "slurm/05_input_pipeline.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/05_input_pipeline.ncu.sbatch",
+          "slurm/05_input_pipeline.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5401,11 +5790,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_input_pipeline.nsys.sbatch",
+            "slurm/05_input_pipeline.sbatch",
             "--workload",
             "small",
             "--batches",
-            "50"
+            "50",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5415,11 +5806,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/05_input_pipeline.nsys.sbatch",
+            "slurm/05_input_pipeline.sbatch",
             "--workload",
             "small",
             "--batches",
-            "100"
+            "100",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5429,11 +5822,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_input_pipeline.ncu.sbatch",
+            "slurm/05_input_pipeline.sbatch",
             "--workload",
             "small",
             "--batches",
-            "50"
+            "50",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5480,17 +5875,21 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/07_profile_workload.nsys.sbatch",
+          "slurm/07_profile_workload.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/07_profile_workload.ncu.sbatch",
+          "slurm/07_profile_workload.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5507,10 +5906,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_profile_workload.nsys.sbatch",
+            "slurm/07_profile_workload.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5520,10 +5921,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_profile_workload.ncu.sbatch",
+            "slurm/07_profile_workload.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5568,15 +5971,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/09_capstone.nsys.sbatch",
+          "slurm/09_capstone.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/09_capstone.ncu.sbatch",
+          "slurm/09_capstone.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 3,
@@ -5595,9 +6002,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_capstone.nsys.sbatch",
+            "slurm/09_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5607,9 +6016,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_capstone.ncu.sbatch",
+            "slurm/09_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5654,15 +6065,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/10_shape_precision.nsys.sbatch",
+          "slurm/10_shape_precision.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/10_shape_precision.ncu.sbatch",
+          "slurm/10_shape_precision.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5679,9 +6094,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/10_shape_precision.nsys.sbatch",
+            "slurm/10_shape_precision.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5691,9 +6108,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/10_shape_precision.ncu.sbatch",
+            "slurm/10_shape_precision.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -5738,9 +6157,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/12_allocator_lifetime.nsys.sbatch",
+          "slurm/12_allocator_lifetime.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -5757,9 +6178,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/12_allocator_lifetime.nsys.sbatch",
+            "slurm/12_allocator_lifetime.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -5902,23 +6325,27 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/14_profiler_bottlenecks.nsys.sbatch",
+          "slurm/14_profiler_bottlenecks.sbatch",
           "--workload",
           "small",
           "--case",
           "sync",
           "--mode",
-          "baseline"
+          "baseline",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/14_profiler_bottlenecks.ncu.sbatch",
+          "slurm/14_profiler_bottlenecks.sbatch",
           "--workload",
           "small",
           "--case",
           "sync",
           "--mode",
-          "baseline"
+          "baseline",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -5935,13 +6362,15 @@
           "variant": "sync-baseline",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "sync",
             "--mode",
-            "baseline"
+            "baseline",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5951,13 +6380,15 @@
           "variant": "sync-optimized",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "sync",
             "--mode",
-            "optimized"
+            "optimized",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5967,13 +6398,15 @@
           "variant": "launch-baseline",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "launch",
             "--mode",
-            "baseline"
+            "baseline",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5983,13 +6416,15 @@
           "variant": "launch-optimized",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "launch",
             "--mode",
-            "optimized"
+            "optimized",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -5999,13 +6434,15 @@
           "variant": "memory-baseline",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "memory",
             "--mode",
-            "baseline"
+            "baseline",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6015,13 +6452,15 @@
           "variant": "memory-optimized",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "memory",
             "--mode",
-            "optimized"
+            "optimized",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6031,13 +6470,15 @@
           "variant": "compute-baseline",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "compute",
             "--mode",
-            "baseline"
+            "baseline",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6047,13 +6488,15 @@
           "variant": "compute-optimized",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.nsys.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "compute",
             "--mode",
-            "optimized"
+            "optimized",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6063,13 +6506,15 @@
           "variant": "sync-baseline",
           "argv": [
             "sbatch",
-            "slurm/14_profiler_bottlenecks.ncu.sbatch",
+            "slurm/14_profiler_bottlenecks.sbatch",
             "--workload",
             "small",
             "--case",
             "sync",
             "--mode",
-            "baseline"
+            "baseline",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6114,15 +6559,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/15_tail_load_balance.nsys.sbatch",
+          "slurm/15_tail_load_balance.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/15_tail_load_balance.ncu.sbatch",
+          "slurm/15_tail_load_balance.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -6139,9 +6588,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/15_tail_load_balance.nsys.sbatch",
+            "slurm/15_tail_load_balance.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6151,9 +6602,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/15_tail_load_balance.ncu.sbatch",
+            "slurm/15_tail_load_balance.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6198,15 +6651,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/16_library_first_decision.nsys.sbatch",
+          "slurm/16_library_first_decision.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/16_library_first_decision.ncu.sbatch",
+          "slurm/16_library_first_decision.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 3,
@@ -6225,9 +6682,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/16_library_first_decision.nsys.sbatch",
+            "slurm/16_library_first_decision.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6237,9 +6696,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/16_library_first_decision.ncu.sbatch",
+            "slurm/16_library_first_decision.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6309,19 +6770,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/19_h2d_pipeline.nsys.sbatch",
+          "slurm/19_h2d_pipeline.sbatch",
           "--mode",
           "serial",
           "--slots",
-          "2"
+          "2",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/19_h2d_pipeline.ncu.sbatch",
+          "slurm/19_h2d_pipeline.sbatch",
           "--mode",
           "serial",
           "--slots",
-          "2"
+          "2",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 3,
@@ -6340,13 +6805,15 @@
           "variant": "serial",
           "argv": [
             "sbatch",
-            "slurm/19_h2d_pipeline.nsys.sbatch",
+            "slurm/19_h2d_pipeline.sbatch",
             "--mode",
             "serial",
             "--slots",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6356,13 +6823,15 @@
           "variant": "pipeline",
           "argv": [
             "sbatch",
-            "slurm/19_h2d_pipeline.nsys.sbatch",
+            "slurm/19_h2d_pipeline.sbatch",
             "--mode",
             "pipeline",
             "--slots",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6372,13 +6841,15 @@
           "variant": "slot-control",
           "argv": [
             "sbatch",
-            "slurm/19_h2d_pipeline.nsys.sbatch",
+            "slurm/19_h2d_pipeline.sbatch",
             "--mode",
             "pipeline",
             "--slots",
             "1",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6388,13 +6859,15 @@
           "variant": "serial",
           "argv": [
             "sbatch",
-            "slurm/19_h2d_pipeline.ncu.sbatch",
+            "slurm/19_h2d_pipeline.sbatch",
             "--mode",
             "serial",
             "--slots",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6535,7 +7008,7 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/20_d2h_pipeline.nsys.sbatch",
+          "slurm/20_d2h_pipeline.sbatch",
           "--mode",
           "serial",
           "--slots",
@@ -6543,11 +7016,13 @@
           "--workers",
           "2",
           "--sink-ms",
-          "2"
+          "2",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/20_d2h_pipeline.ncu.sbatch",
+          "slurm/20_d2h_pipeline.sbatch",
           "--mode",
           "serial",
           "--slots",
@@ -6555,7 +7030,9 @@
           "--workers",
           "2",
           "--sink-ms",
-          "2"
+          "2",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 3,
@@ -6572,7 +7049,7 @@
           "variant": "serial",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.nsys.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "serial",
             "--slots",
@@ -6582,7 +7059,9 @@
             "--sink-ms",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6592,7 +7071,7 @@
           "variant": "workers",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.nsys.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "workers",
             "--slots",
@@ -6602,7 +7081,9 @@
             "--sink-ms",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6612,7 +7093,7 @@
           "variant": "pooled",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.nsys.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "pooled",
             "--slots",
@@ -6622,7 +7103,9 @@
             "--sink-ms",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6632,7 +7115,7 @@
           "variant": "nonblocking",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.nsys.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "nonblocking",
             "--slots",
@@ -6642,7 +7125,9 @@
             "--sink-ms",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6652,7 +7137,7 @@
           "variant": "pipeline",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.nsys.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "pipeline",
             "--slots",
@@ -6662,7 +7147,9 @@
             "--sink-ms",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6672,7 +7159,7 @@
           "variant": "zero-sink",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.nsys.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "pipeline",
             "--slots",
@@ -6682,7 +7169,9 @@
             "--sink-ms",
             "0",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6692,7 +7181,7 @@
           "variant": "serial",
           "argv": [
             "sbatch",
-            "slurm/20_d2h_pipeline.ncu.sbatch",
+            "slurm/20_d2h_pipeline.sbatch",
             "--mode",
             "serial",
             "--slots",
@@ -6702,7 +7191,9 @@
             "--sink-ms",
             "2",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6747,15 +7238,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/08_kv_cache.nsys.sbatch",
+          "slurm/08_kv_cache.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/08_kv_cache.ncu.sbatch",
+          "slurm/08_kv_cache.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -6772,9 +7267,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_kv_cache.nsys.sbatch",
+            "slurm/08_kv_cache.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6784,9 +7281,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/08_kv_cache.ncu.sbatch",
+            "slurm/08_kv_cache.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6835,19 +7334,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/09_hf_prefill_decode.nsys.sbatch",
+          "slurm/09_hf_prefill_decode.sbatch",
           "--workload",
           "small",
           "--new-tokens",
-          "1"
+          "1",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/09_hf_prefill_decode.ncu.sbatch",
+          "slurm/09_hf_prefill_decode.sbatch",
           "--workload",
           "small",
           "--new-tokens",
-          "1"
+          "1",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -6864,11 +7367,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_hf_prefill_decode.nsys.sbatch",
+            "slurm/09_hf_prefill_decode.sbatch",
             "--workload",
             "small",
             "--new-tokens",
-            "1"
+            "1",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6878,11 +7383,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/09_hf_prefill_decode.nsys.sbatch",
+            "slurm/09_hf_prefill_decode.sbatch",
             "--workload",
             "small",
             "--new-tokens",
-            "8"
+            "8",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6892,11 +7399,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/09_hf_prefill_decode.ncu.sbatch",
+            "slurm/09_hf_prefill_decode.sbatch",
             "--workload",
             "small",
             "--new-tokens",
-            "1"
+            "1",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -6942,17 +7451,21 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/10_vllm_offline.nsys.sbatch",
+          "slurm/10_vllm_offline.sbatch",
           "--workload",
           "small",
-          "--in-process"
+          "--in-process",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/10_vllm_offline.ncu.sbatch",
+          "slurm/10_vllm_offline.sbatch",
           "--workload",
           "small",
-          "--in-process"
+          "--in-process",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -6969,10 +7482,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/10_vllm_offline.ncu.sbatch",
+            "slurm/10_vllm_offline.sbatch",
             "--workload",
             "small",
-            "--in-process"
+            "--in-process",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1,
           "environment": {
@@ -6985,10 +7500,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/10_vllm_offline.nsys.sbatch",
+            "slurm/10_vllm_offline.sbatch",
             "--workload",
             "small",
-            "--in-process"
+            "--in-process",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -6998,11 +7515,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/10_vllm_offline.nsys.sbatch",
+            "slurm/10_vllm_offline.sbatch",
             "--workload",
             "small",
             "--enforce-eager",
-            "--in-process"
+            "--in-process",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -7043,7 +7562,9 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/11_serving_client.nsys.sbatch"
+          "slurm/11_serving_client.sbatch",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -7062,7 +7583,9 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/11_serving_client.nsys.sbatch"
+            "slurm/11_serving_client.sbatch",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -7102,9 +7625,11 @@
           "id": "aiperf",
           "argv": [
             "sbatch",
-            "slurm/15_streaming_client.aiperf.sbatch",
+            "slurm/15_streaming_client.sbatch",
             "${STREAM_MODEL}",
-            "${STREAM_REVISION}"
+            "${STREAM_REVISION}",
+            "--experiment",
+            "aiperf"
           ],
           "artifact_contract": "aiperf"
         }
@@ -7122,7 +7647,9 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/15_streaming_client.nsys.sbatch"
+          "slurm/15_streaming_client.sbatch",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -7141,11 +7668,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/15_streaming_client.nsys.sbatch",
+            "slurm/15_streaming_client.sbatch",
             "${STREAM_MODEL}",
             "8",
             "2",
-            "${STREAM_REVISION}"
+            "${STREAM_REVISION}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7155,11 +7684,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/15_streaming_client.nsys.sbatch",
+            "slurm/15_streaming_client.sbatch",
             "${STREAM_MODEL}",
             "8",
             "4",
-            "${STREAM_REVISION}"
+            "${STREAM_REVISION}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -7254,19 +7785,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/17_sampling_semantics.nsys.sbatch",
+          "slurm/17_sampling_semantics.sbatch",
           "--workload",
           "small",
           "--max-new-tokens",
-          "32"
+          "32",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/17_sampling_semantics.ncu.sbatch",
+          "slurm/17_sampling_semantics.sbatch",
           "--workload",
           "small",
           "--max-new-tokens",
-          "32"
+          "32",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -7283,11 +7818,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/17_sampling_semantics.nsys.sbatch",
+            "slurm/17_sampling_semantics.sbatch",
             "--workload",
             "small",
             "--max-new-tokens",
-            "32"
+            "32",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7297,11 +7834,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/17_sampling_semantics.ncu.sbatch",
+            "slurm/17_sampling_semantics.sbatch",
             "--workload",
             "small",
             "--max-new-tokens",
-            "32"
+            "32",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -7346,15 +7885,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/18_padding_bucketing.nsys.sbatch",
+          "slurm/18_padding_bucketing.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/18_padding_bucketing.ncu.sbatch",
+          "slurm/18_padding_bucketing.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -7371,9 +7914,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/18_padding_bucketing.nsys.sbatch",
+            "slurm/18_padding_bucketing.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7383,9 +7928,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/18_padding_bucketing.ncu.sbatch",
+            "slurm/18_padding_bucketing.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -7414,7 +7961,9 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/20_prefix_cache_client.nsys.sbatch"
+          "slurm/20_prefix_cache_client.sbatch",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -7435,7 +7984,9 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/20_prefix_cache_client.nsys.sbatch"
+            "slurm/20_prefix_cache_client.sbatch",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 12
         }
@@ -7488,23 +8039,27 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/23_speculative_decoding.nsys.sbatch",
+          "slurm/23_speculative_decoding.sbatch",
           "--workload",
           "small",
           "--draft-length",
           "4",
           "--max-new-tokens",
-          "32"
+          "32",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/23_speculative_decoding.ncu.sbatch",
+          "slurm/23_speculative_decoding.sbatch",
           "--workload",
           "small",
           "--draft-length",
           "4",
           "--max-new-tokens",
-          "32"
+          "32",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -7521,13 +8076,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/23_speculative_decoding.nsys.sbatch",
+            "slurm/23_speculative_decoding.sbatch",
             "--workload",
             "small",
             "--draft-length",
             "4",
             "--max-new-tokens",
-            "32"
+            "32",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7537,13 +8094,15 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/23_speculative_decoding.nsys.sbatch",
+            "slurm/23_speculative_decoding.sbatch",
             "--workload",
             "small",
             "--draft-length",
             "8",
             "--max-new-tokens",
-            "32"
+            "32",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7553,13 +8112,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/23_speculative_decoding.ncu.sbatch",
+            "slurm/23_speculative_decoding.sbatch",
             "--workload",
             "small",
             "--draft-length",
             "4",
             "--max-new-tokens",
-            "32"
+            "32",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -7604,17 +8165,21 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/24_sdpa_attention.nsys.sbatch",
+          "slurm/24_sdpa_attention.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/24_sdpa_attention.ncu.sbatch",
+          "slurm/24_sdpa_attention.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -7631,10 +8196,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/24_sdpa_attention.nsys.sbatch",
+            "slurm/24_sdpa_attention.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7644,10 +8211,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/24_sdpa_attention.ncu.sbatch",
+            "slurm/24_sdpa_attention.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -7696,19 +8265,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/25_workload_metrics.nsys.sbatch",
+          "slurm/25_workload_metrics.sbatch",
           "--workload",
           "small",
           "--concurrency",
-          "1"
+          "1",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/25_workload_metrics.ncu.sbatch",
+          "slurm/25_workload_metrics.sbatch",
           "--workload",
           "small",
           "--concurrency",
-          "1"
+          "1",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -7725,11 +8298,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/25_workload_metrics.nsys.sbatch",
+            "slurm/25_workload_metrics.sbatch",
             "--workload",
             "small",
             "--concurrency",
-            "1"
+            "1",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7739,11 +8314,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/25_workload_metrics.nsys.sbatch",
+            "slurm/25_workload_metrics.sbatch",
             "--workload",
             "small",
             "--concurrency",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7753,11 +8330,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/25_workload_metrics.ncu.sbatch",
+            "slurm/25_workload_metrics.sbatch",
             "--workload",
             "small",
             "--concurrency",
-            "1"
+            "1",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -7956,15 +8535,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/29_quantization.nsys.sbatch",
+          "slurm/29_quantization.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/29_quantization.ncu.sbatch",
+          "slurm/29_quantization.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -7981,9 +8564,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/29_quantization.nsys.sbatch",
+            "slurm/29_quantization.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -7993,9 +8578,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/29_quantization.ncu.sbatch",
+            "slurm/29_quantization.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -8029,14 +8616,18 @@
           "id": "triton",
           "argv": [
             "sbatch",
-            "slurm/30_engine_profile.trtllm.sbatch"
+            "slurm/30_engine_profile.sbatch",
+            "--experiment",
+            "trtllm"
           ]
         },
         {
           "id": "triton-repeat",
           "argv": [
             "sbatch",
-            "slurm/30_engine_profile.trtllm.sbatch"
+            "slurm/30_engine_profile.sbatch",
+            "--experiment",
+            "trtllm"
           ]
         }
       ],
@@ -8078,18 +8669,22 @@
           "id": "trials",
           "argv": [
             "sbatch",
-            "slurm/32_inference_capstone.trials.sbatch",
+            "slurm/32_inference_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--experiment",
+            "trials"
           ]
         },
         {
           "id": "trials-repeat",
           "argv": [
             "sbatch",
-            "slurm/32_inference_capstone.trials.sbatch",
+            "slurm/32_inference_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--experiment",
+            "trials"
           ]
         }
       ],
@@ -8102,19 +8697,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/32_inference_capstone.nsys.sbatch",
+          "slurm/32_inference_capstone.sbatch",
           "--workload",
           "small",
           "--variant-order",
-          "baseline-first"
+          "baseline-first",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/32_inference_capstone.ncu.sbatch",
+          "slurm/32_inference_capstone.sbatch",
           "--workload",
           "small",
           "--variant-order",
-          "baseline-first"
+          "baseline-first",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -8135,11 +8734,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/32_inference_capstone.nsys.sbatch",
+            "slurm/32_inference_capstone.sbatch",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8149,11 +8750,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/32_inference_capstone.ncu.sbatch",
+            "slurm/32_inference_capstone.sbatch",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -8186,11 +8789,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/33_speculative_engine_client.nsys.sbatch",
+          "slurm/33_speculative_engine_client.sbatch",
           "${CLUSTER_TARGET_MODEL}",
           "${CLUSTER_TARGET_REVISION}",
           "${COURSE_DRAFT_MODEL}",
-          "${COURSE_DRAFT_REVISION}"
+          "${COURSE_DRAFT_REVISION}",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -8211,11 +8816,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/33_speculative_engine_client.nsys.sbatch",
+            "slurm/33_speculative_engine_client.sbatch",
             "${CLUSTER_TARGET_MODEL}",
             "${CLUSTER_TARGET_REVISION}",
             "${COURSE_DRAFT_MODEL}",
-            "${COURSE_DRAFT_REVISION}"
+            "${COURSE_DRAFT_REVISION}",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 6
         }
@@ -8244,7 +8851,9 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/34_policy_equivalence_client.nsys.sbatch"
+          "slurm/34_policy_equivalence_client.sbatch",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -8265,7 +8874,9 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/34_policy_equivalence_client.nsys.sbatch"
+            "slurm/34_policy_equivalence_client.sbatch",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 12
         }
@@ -8281,7 +8892,7 @@
           "id": "cuda",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.cuda.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cuda",
             "--workload",
@@ -8292,7 +8903,7 @@
           "id": "cuda-repeat",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.cuda.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cuda",
             "--workload",
@@ -8303,7 +8914,7 @@
           "id": "cpu",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.cuda.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cpu",
             "--workload",
@@ -8314,7 +8925,7 @@
           "id": "cpu-repeat",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.cuda.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cpu",
             "--workload",
@@ -8325,7 +8936,7 @@
           "id": "cpu-one-token",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.cuda.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cpu",
             "--workload",
@@ -8338,7 +8949,7 @@
           "id": "cpu-one-token-repeat",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.cuda.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cpu",
             "--workload",
@@ -8370,11 +8981,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/35_inference_basics.nsys.sbatch",
+          "slurm/35_inference_basics.sbatch",
           "--device",
           "cuda",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -8394,11 +9007,13 @@
           "variant": "cuda",
           "argv": [
             "sbatch",
-            "slurm/35_inference_basics.nsys.sbatch",
+            "slurm/35_inference_basics.sbatch",
             "--device",
             "cuda",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -8576,15 +9191,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/01_tiny_transformer_train.nsys.sbatch",
+          "slurm/01_tiny_transformer_train.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/01_tiny_transformer_train.ncu.sbatch",
+          "slurm/01_tiny_transformer_train.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -8601,9 +9220,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_tiny_transformer_train.nsys.sbatch",
+            "slurm/01_tiny_transformer_train.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8613,10 +9234,12 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/01_tiny_transformer_train.nsys.sbatch",
+            "slurm/01_tiny_transformer_train.sbatch",
             "--workload",
             "small",
-            "--zero-grad-fill"
+            "--zero-grad-fill",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8626,9 +9249,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/01_tiny_transformer_train.ncu.sbatch",
+            "slurm/01_tiny_transformer_train.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -8673,15 +9298,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/02_gradient_accumulation.nsys.sbatch",
+          "slurm/02_gradient_accumulation.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/02_gradient_accumulation.ncu.sbatch",
+          "slurm/02_gradient_accumulation.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -8698,9 +9327,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_gradient_accumulation.nsys.sbatch",
+            "slurm/02_gradient_accumulation.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8710,9 +9341,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/02_gradient_accumulation.ncu.sbatch",
+            "slurm/02_gradient_accumulation.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -8758,15 +9391,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/05_lora_sft.nsys.sbatch",
+          "slurm/05_lora_sft.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/05_lora_sft.ncu.sbatch",
+          "slurm/05_lora_sft.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -8783,9 +9420,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_lora_sft.nsys.sbatch",
+            "slurm/05_lora_sft.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8795,10 +9434,12 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/05_lora_sft.nsys.sbatch",
+            "slurm/05_lora_sft.sbatch",
             "--workload",
             "small",
-            "--zero-grad-fill"
+            "--zero-grad-fill",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8808,9 +9449,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/05_lora_sft.ncu.sbatch",
+            "slurm/05_lora_sft.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -8857,15 +9500,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/06_grpo_objective.nsys.sbatch",
+          "slurm/06_grpo_objective.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/06_grpo_objective.ncu.sbatch",
+          "slurm/06_grpo_objective.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -8882,9 +9529,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/06_grpo_objective.nsys.sbatch",
+            "slurm/06_grpo_objective.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8894,11 +9543,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/06_grpo_objective.nsys.sbatch",
+            "slurm/06_grpo_objective.sbatch",
             "--workload",
             "small",
             "--group-size",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -8908,9 +9559,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/06_grpo_objective.ncu.sbatch",
+            "slurm/06_grpo_objective.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -8959,19 +9612,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/07_grpo_trainer.nsys.sbatch",
+          "slurm/07_grpo_trainer.sbatch",
           "--workload",
           "small",
           "--steps",
-          "3"
+          "3",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/07_grpo_trainer.ncu.sbatch",
+          "slurm/07_grpo_trainer.sbatch",
           "--workload",
           "small",
           "--steps",
-          "3"
+          "3",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -8988,11 +9645,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_grpo_trainer.nsys.sbatch",
+            "slurm/07_grpo_trainer.sbatch",
             "--workload",
             "small",
             "--steps",
-            "3"
+            "3",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9002,11 +9661,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/07_grpo_trainer.ncu.sbatch",
+            "slurm/07_grpo_trainer.sbatch",
             "--workload",
             "small",
             "--steps",
-            "3"
+            "3",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9051,9 +9712,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/13_loss_masking.nsys.sbatch",
+          "slurm/13_loss_masking.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -9070,9 +9733,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/13_loss_masking.nsys.sbatch",
+            "slurm/13_loss_masking.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -9117,15 +9782,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/14_activation_checkpointing.nsys.sbatch",
+          "slurm/14_activation_checkpointing.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/14_activation_checkpointing.ncu.sbatch",
+          "slurm/14_activation_checkpointing.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9142,9 +9811,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/14_activation_checkpointing.nsys.sbatch",
+            "slurm/14_activation_checkpointing.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9154,9 +9825,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/14_activation_checkpointing.ncu.sbatch",
+            "slurm/14_activation_checkpointing.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9201,15 +9874,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/21_mixed_precision_training.nsys.sbatch",
+          "slurm/21_mixed_precision_training.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/21_mixed_precision_training.ncu.sbatch",
+          "slurm/21_mixed_precision_training.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9226,9 +9903,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/21_mixed_precision_training.nsys.sbatch",
+            "slurm/21_mixed_precision_training.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9238,9 +9917,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/21_mixed_precision_training.ncu.sbatch",
+            "slurm/21_mixed_precision_training.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9285,15 +9966,19 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/22_transformer_engine_fp8.nsys.sbatch",
+          "slurm/22_transformer_engine_fp8.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/22_transformer_engine_fp8.ncu.sbatch",
+          "slurm/22_transformer_engine_fp8.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9310,9 +9995,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/22_transformer_engine_fp8.nsys.sbatch",
+            "slurm/22_transformer_engine_fp8.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9322,9 +10009,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/22_transformer_engine_fp8.ncu.sbatch",
+            "slurm/22_transformer_engine_fp8.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9369,9 +10058,11 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/24_checkpoint_resume.nsys.sbatch",
+          "slurm/24_checkpoint_resume.sbatch",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -9388,9 +10079,11 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/24_checkpoint_resume.nsys.sbatch",
+            "slurm/24_checkpoint_resume.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -9439,11 +10132,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/25_sequence_packing.nsys.sbatch",
+          "slurm/25_sequence_packing.sbatch",
           "--workload",
           "small",
           "--capacity",
-          "256"
+          "256",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -9460,11 +10155,13 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/25_sequence_packing.nsys.sbatch",
+            "slurm/25_sequence_packing.sbatch",
             "--workload",
             "small",
             "--capacity",
-            "256"
+            "256",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9474,11 +10171,13 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/25_sequence_packing.nsys.sbatch",
+            "slurm/25_sequence_packing.sbatch",
             "--workload",
             "small",
             "--capacity",
-            "512"
+            "512",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }
@@ -9531,23 +10230,27 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/26_input_pipeline.nsys.sbatch",
+          "slurm/26_input_pipeline.sbatch",
           "--workload",
           "small",
           "--workers",
           "2",
           "--prefetch",
-          "2"
+          "2",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/26_input_pipeline.ncu.sbatch",
+          "slurm/26_input_pipeline.sbatch",
           "--workload",
           "small",
           "--workers",
           "2",
           "--prefetch",
-          "2"
+          "2",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9564,13 +10267,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/26_input_pipeline.nsys.sbatch",
+            "slurm/26_input_pipeline.sbatch",
             "--workload",
             "small",
             "--workers",
             "2",
             "--prefetch",
-            "2"
+            "2",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9580,13 +10285,15 @@
           "variant": "candidate",
           "argv": [
             "sbatch",
-            "slurm/26_input_pipeline.nsys.sbatch",
+            "slurm/26_input_pipeline.sbatch",
             "--workload",
             "small",
             "--workers",
             "2",
             "--prefetch",
-            "4"
+            "4",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9596,13 +10303,15 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/26_input_pipeline.ncu.sbatch",
+            "slurm/26_input_pipeline.sbatch",
             "--workload",
             "small",
             "--workers",
             "2",
             "--prefetch",
-            "2"
+            "2",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9647,17 +10356,21 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/27_fused_graph_trace.nsys.sbatch",
+          "slurm/27_fused_graph_trace.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/27_fused_graph_trace.ncu.sbatch",
+          "slurm/27_fused_graph_trace.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9674,10 +10387,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/27_fused_graph_trace.nsys.sbatch",
+            "slurm/27_fused_graph_trace.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9687,10 +10402,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/27_fused_graph_trace.ncu.sbatch",
+            "slurm/27_fused_graph_trace.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9735,17 +10452,21 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/30_training_profiler.nsys.sbatch",
+          "slurm/30_training_profiler.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/30_training_profiler.ncu.sbatch",
+          "slurm/30_training_profiler.sbatch",
           "--workload",
           "small",
-          "--external-only"
+          "--external-only",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9762,10 +10483,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/30_training_profiler.nsys.sbatch",
+            "slurm/30_training_profiler.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9775,10 +10498,12 @@
           "variant": "baseline",
           "argv": [
             "sbatch",
-            "slurm/30_training_profiler.ncu.sbatch",
+            "slurm/30_training_profiler.sbatch",
             "--workload",
             "small",
-            "--external-only"
+            "--external-only",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9794,18 +10519,22 @@
           "id": "trials",
           "argv": [
             "sbatch",
-            "slurm/31_training_capstone.trials.sbatch",
+            "slurm/31_training_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--experiment",
+            "trials"
           ]
         },
         {
           "id": "trials-repeat",
           "argv": [
             "sbatch",
-            "slurm/31_training_capstone.trials.sbatch",
+            "slurm/31_training_capstone.sbatch",
             "--workload",
-            "small"
+            "small",
+            "--experiment",
+            "trials"
           ]
         }
       ],
@@ -9818,19 +10547,23 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/31_training_capstone.nsys.sbatch",
+          "slurm/31_training_capstone.sbatch",
           "--workload",
           "small",
           "--variant-order",
-          "baseline-first"
+          "baseline-first",
+          "--profiler",
+          "nsys"
         ],
         "compute": [
           "sbatch",
-          "slurm/31_training_capstone.ncu.sbatch",
+          "slurm/31_training_capstone.sbatch",
           "--workload",
           "small",
           "--variant-order",
-          "baseline-first"
+          "baseline-first",
+          "--profiler",
+          "ncu"
         ]
       },
       "repetitions": 1,
@@ -9851,11 +10584,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/31_training_capstone.nsys.sbatch",
+            "slurm/31_training_capstone.sbatch",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         },
@@ -9865,11 +10600,13 @@
           "variant": "trials",
           "argv": [
             "sbatch",
-            "slurm/31_training_capstone.ncu.sbatch",
+            "slurm/31_training_capstone.sbatch",
             "--workload",
             "small",
             "--variant-order",
-            "baseline-first"
+            "baseline-first",
+            "--profiler",
+            "ncu"
           ],
           "expected_reports": 1
         }
@@ -9885,7 +10622,7 @@
           "id": "cuda",
           "argv": [
             "sbatch",
-            "slurm/32_learning_basics.cuda.sbatch",
+            "slurm/32_learning_basics.sbatch",
             "--device",
             "cuda",
             "--workload",
@@ -9896,7 +10633,7 @@
           "id": "cuda-repeat",
           "argv": [
             "sbatch",
-            "slurm/32_learning_basics.cuda.sbatch",
+            "slurm/32_learning_basics.sbatch",
             "--device",
             "cuda",
             "--workload",
@@ -9907,7 +10644,7 @@
           "id": "cpu",
           "argv": [
             "sbatch",
-            "slurm/32_learning_basics.cuda.sbatch",
+            "slurm/32_learning_basics.sbatch",
             "--device",
             "cpu",
             "--workload",
@@ -9918,7 +10655,7 @@
           "id": "cpu-repeat",
           "argv": [
             "sbatch",
-            "slurm/32_learning_basics.cuda.sbatch",
+            "slurm/32_learning_basics.sbatch",
             "--device",
             "cpu",
             "--workload",
@@ -9944,11 +10681,13 @@
       "profilers": {
         "systems": [
           "sbatch",
-          "slurm/32_learning_basics.nsys.sbatch",
+          "slurm/32_learning_basics.sbatch",
           "--device",
           "cuda",
           "--workload",
-          "small"
+          "small",
+          "--profiler",
+          "nsys"
         ],
         "compute": null
       },
@@ -9967,11 +10706,13 @@
           "variant": "cuda",
           "argv": [
             "sbatch",
-            "slurm/32_learning_basics.nsys.sbatch",
+            "slurm/32_learning_basics.sbatch",
             "--device",
             "cuda",
             "--workload",
-            "small"
+            "small",
+            "--profiler",
+            "nsys"
           ],
           "expected_reports": 1
         }

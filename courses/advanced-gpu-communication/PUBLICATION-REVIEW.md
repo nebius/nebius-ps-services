@@ -1,5 +1,64 @@
 # Publication review
 
+## Course guide cleanup — 2026-10-13
+
+Reviewed `index.html` SHA-256: `3a9192825c68e7579bcd52b45658ac41870b9f9bb01d07ae0180b5706c48801d`.
+
+Simplified orientation and supporting guides, consistent titles/order/navigation,
+and corrected stale readiness references. All nine native validators and 353
+focused tests pass, with three Torch-dependent skips; six final guide-order
+checks pass. Browser review covers this page at desktop, 390px and 320px widths.
+
+See the [guide review record](../docs/course-format-validation.md#course-guide-cleanup--2026-10-13)
+for artifact identities, preservation, browser evidence and cleanup, initial
+harness failures, generic-checker limitations and validation scope. No live lab
+execution or external publication was performed. Earlier records apply to their
+own artifact identities. Later concurrent styling changes are outside this
+review; its evidence applies to the reviewed digest above.
+
+## Links that preserve the current page — 2026-10-13
+
+Reviewed `index.html` SHA-256: `8529771af9d0c9fdafa37af02bf2c2e89cf2a4275dc4cdd49f0c7ce36de42e86`.
+
+Links to other pages now open new tabs while section links and results downloads
+retain native behavior. Source/static checks and 33 whole-catalog browser cases
+pass at desktop, 390px and 320px widths, including pointer/keyboard activation,
+original reading-position preservation and opener isolation. Course content,
+styles, profiles and archive bytes are preserved. See the
+[navigation verification record](../docs/catalog-navigation-validation.md#links-that-preserve-the-current-page--2026-10-13)
+for exact tools, local traces/screenshots, cleanup, generic-checker limits and
+prior harness failures. No live lab qualification or external publication was
+performed. Earlier entries apply to their own reviewed artifact identities.
+
+## Compact labs and consolidated native jobs — 2026-10-12
+
+Reviewed `index.html` SHA-256: `8daa89f394669232a718f25a7c969c34539e3f882c2938f552178ca682eff139`.
+
+This course uses compact source-first labs, canonical selector-based submissions
+and exact-job JSON results. Its source listings, disclosures, commands, keyboard
+controls and responsive layout pass in owned headless Chrome 155.0.8059.39 at
+1440, 390 and 320 pixels. Desktop/mobile captures were inspected. The complete
+suite, Linux lifecycle fixtures, native validators, build/freshness and helper
+parity pass; source algorithms and historical evidence are preserved. See the
+[consolidation verification record](../docs/course-format-validation.md#compact-labs-and-consolidated-native-jobs--2026-10-12)
+for exact checks, hashes, browser cleanup and generic-checker limitations.
+Live GPU/Slurm qualification and external publication were not performed.
+Earlier entries apply to their own hashes.
+
+## Nine-course text and format alignment — 2026-10-12
+
+Reviewed `index.html` SHA-256: `7db5c16760aca9cb58c1cc52f977cbda92d71b58ad81d68984eaaf312a6edcb6`.
+
+The current all-course review preserves this course's declared profile and aligns
+terminology, glossary formatting and coverage, teaching claims and navigation.
+The shared build, 480 focused tests, all nine native validators, scoped lint and
+independent read-only code/security review pass. All eleven pages pass 33 final
+headless Chrome cases at desktop, 390px and 320px widths. See the
+[current alignment evidence](../docs/course-format-validation.md#nine-course-text-and-format-alignment--2026-10-12)
+for exact scope, artifacts and preserved sources. Generic-checker diagnostics,
+older dense diagram labels on narrow screens and unrefreshed live/GPU
+qualification remain explicit limits. Earlier entries apply to their own hashes.
+
 ## Nine-course alignment — 2026-10-05
 
 Reviewed `index.html` SHA-256: `2e9713272ea6b862b07f74beac12d3d59f22a7e10f433756e5df6ba545df7876`.

@@ -9,6 +9,298 @@ declared profiles. Each course closes with one Where to Go Next, one Glossary
 and final Official references.
 The earlier counts, field order and hashes below apply to their original revisions.
 
+## Course guide cleanup — 2026-10-13
+
+All nine READMEs were reviewed and shortened from 9,534 to 3,029 words. Removed
+obsolete lesson-format descriptions, layout commentary and accumulated
+implementation notes. Retained course prerequisites, first activities, completion
+criteria and distinct evidence limits; kept worked lab interpretation examples.
+Five syllabi no longer repeat the obsolete template paragraph. Local readiness
+runbooks hand off distributed work to Advanced Labs and CUDA no longer advertises
+nonexistent multi-node exercises.
+
+The six practical pages share ordered guides with matching body/sidebar titles:
+Getting started, Versions and environment, Readiness checks, Lab mechanisms and
+evidence, Benchmark worksheet, and Evidence and privacy. Optimization retains
+its additional Diagnostic tooling reference. Advanced Labs now includes the
+same submenu. Three reading profiles keep their existing appendix structure.
+
+| Review lane | Evidence and limits |
+| --- | --- |
+| Source/static | All nine native validators, complete build/freshness, 353 focused tests, six final guide-order checks, configured Markdown lint, Ruff and whitespace checks pass. Three existing Torch-dependent tests were skipped because the test environment lacks Torch. |
+| Preservation | At guide-cleanup verification, 1,546 snapshotted lab, launcher, lesson, diagram, version, metadata and result/archive files retained their bytes. The three reading-only HTML pages and catalog were unchanged. |
+| Semantic/security | Independent read-only review found one retained CUDA hardware-scope error, corrected and re-reviewed. No further actionable finding remains within this scope. Privacy guides and qualification limits are retained. |
+| Browser/visual | 21 complete-page Playwright Test cases pass: six practical pages plus Lab Guide at 1440, 390 and 320 pixels. Guide order/titles, keyboard fragment navigation, skip link, mobile TOC, local scrolling, unique IDs, fragments, passive resources and doubled-text reflow pass. Representative desktop/mobile guide captures were visually inspected. |
+| Installed environment/runtime/live target | No dependency installation or lab/runtime behavior change. GPU, Slurm, fabric, serving and profiler execution were not performed; earlier qualification records keep their own scope. |
+
+Browser: owned isolated headless Chrome 155.0.8059.40, page JavaScript disabled.
+The test runner owns and closes its browser contexts/process. Local evidence group
+`course-guides-acye6xey` contains `guides.spec.cjs`, `playwright.config.cjs`,
+`browser-results-final.json`, `browser-final/<course>-<width>/facts.json`, and
+`getting-started.png`/`readiness.png` captures. Final traces use
+`browser-traces-final` with retain-on-failure; no failing final trace is expected.
+
+The initial browser trial retained four failed navigation assertions and three
+passes before stopping. Sequential focus/fragment actions were sampled during
+smooth scrolling. The harness now waits for scrolling to settle and checks the
+exact fragment and target heading, with background throttling disabled. The
+formerly failing 390px case and the complete final matrix pass without product
+scrolling/CSS changes. Initial logs and partial traces remain separate.
+
+The generic authoring checker was run against all nine reviewed pages and exact
+reconstructed task-start pages, whose digests matched the initial snapshot.
+Its diagnostics are unchanged: shared-shell markup/CSS and relative-link rules,
+plus explicit reading/labs-only profile differences. Native profile-aware gates
+and independent generated-link checks pass; this does not declare every generic
+checker rule satisfied. Early checker setup failures (missing baseline copies
+and a symlinked temporary-root spelling) are separate from the completed checks.
+No live qualification or external publication is claimed.
+
+A concurrent task subsequently changed shared code-comment styling and regenerated
+pages. Those changes are preserved and are outside this browser trial. The evidence
+above applies to the exact reviewed digests below, even when the working-tree
+HTML differs. A subsequent read-only build freshness check passed for the shared
+working tree; it does not extend the browser evidence to the later styling.
+
+### Reviewed artifacts
+
+| Page | SHA-256 |
+| --- | --- |
+| `gpu-fundamentals/index.html` | `04e7271bca54b31cd3a10c6aeb5763f4e06bd39c0bce19389fae943087221cdd` |
+| `gpu-optimizations/index.html` | `d5cd3891189b5ece6b54e36b3264e2897490652448c466aa1baab7f61569b956` |
+| `llm-training/index.html` | `694e5fcf581a5efe90d80b9e9d9ec34de173a6c3c712538f28265fedffcd4f7d` |
+| `llm-inference/index.html` | `3529812a26ea8de69794eaadcfba6f8ec372dc0f0a2136c741982e58368a9681` |
+| `custom-cuda-kernels/index.html` | `320b2d13c5f43efab95081f176e58193fce9ccafc6f96102eb078eead997efd3` |
+| `advanced-gpu-communication/index.html` | `3a9192825c68e7579bcd52b45658ac41870b9f9bb01d07ae0180b5706c48801d` |
+| `lab-guide.html` | `e27705b18a7e3fe51033bca3d3b8bba5732b0851b7db494e482117268e263860` |
+
+## Consolidated-job alignment follow-up — 2026-10-12
+
+A fresh alignment pass repaired three reproduced contract defects: host-copy
+verification expected the retired direct-Python command; nine fabric labs reported
+two-node scope for supported one-node submissions; and reader JSON silently omitted
+original JSON larger than its 8 MiB limit. Canonical recipe validation, validated
+allocation-dependent scope, and explicit data errors now preserve the intended
+execution and evidence boundaries. Failed or oversized inputs retain their files.
+
+- The full Python suite passed **2,528 tests**, with one Linux-only skip on macOS
+  and the existing missing-NumPy warning. **79 isolated Linux fixture tests**
+  passed, including child adoption. Negative controls reproduced each defect.
+- Independent read-only review checked all eighteen affected fabric variants at
+  one and two nodes and all four host-copy recipe combinations. No remaining
+  blocking correctness or security finding was identified in the reviewed scope.
+- All nine native validators, full build/freshness, helper and 27-file skill
+  payload parity, scoped lint, 113 shell checks and 220-unit dry-run pass.
+- Playwright Test passed three fresh Lab Guide cases at 1440, 390 and 320 pixels.
+  It is the only changed HTML page; its current SHA-256 is
+  `405e49813523b8bed3bf152f9f95e74cce85654bf51cd52b3e54db33345c6c6b`. The other ten HTML identities below
+  remain unchanged, as do every lab program and all 2,872 historical evidence
+  and archive files. Owned browser resources and the loopback server were closed.
+
+README, maintainer guidance, changelog and paired design evidence reflect the
+repairs. Prior verification below retains its original revision scope, including
+the earlier Lab Guide hash. Generic-checker limitations and the separate pending
+live GPU/Slurm/Nsight qualification remain unchanged.
+
+## Compact labs and consolidated native jobs — 2026-10-12
+
+All 110 practical labs now present a concise purpose, complete actual source,
+optional collapsed diagram, two canonical submissions and exact-job accounting
+and JSON commands. Twelve existing lab figures remain unchanged. Reading-only
+profiles, course downloads and lesson Practice links are preserved. The native
+interface has 110 canonical launchers and three auxiliary jobs; profiler and
+optional-experiment selectors replace the retired variant filenames.
+
+### Verification
+
+- Full Python suite: **2,519 passed, one skipped** in 377.91 seconds. The skip is
+  Linux child adoption on macOS; an isolated Python 3.12 Linux container passed
+  **71 native-job, capture and lifecycle tests**, including that regression.
+  The local PyTorch environment reported its existing missing-NumPy warning.
+- Final focused checks after the auxiliary-preparation fix and aggregate
+  exclusion regression: **109 passed**. Native fixtures cover failures,
+  unsupported selections, diagnostic order, partial output, report checks,
+  timeout, interruption, cleanup and malformed/nonfinite measurement JSON.
+  The complete metadata matrix covers all normal and declared diagnostic paths;
+  fixtures do not execute 110 real GPU workloads.
+- All nine native course validators, full build/freshness, shared-helper parity,
+  27-file source/installed run-labs parity, 211-file scoped Ruff lint, 165-file
+  Markdown lint, Bash syntax, ShellCheck error checks and diff whitespace pass.
+  A read-only all-course campaign resolves **220 small/large units**.
+- All 97 Python programs preserve their executable AST except the authorized
+  Lab 12 distributed-initialization repair and its unused import removal.
+  All 13 CUDA programs preserve tokens apart from comments. All twelve lab SVGs
+  and **2,872 historical result/archive files** retain their original bytes.
+- Bounded code/security review findings were repaired and verified: detached
+  child ownership after early shell exit, instrumented-result eligibility,
+  overflowing JSON numbers, malformed measurement sections and auxiliary-job
+  preparation. No live target was used.
+
+### Browser evidence
+
+Owned, isolated headless Chrome **155.0.8059.39**, driven by Playwright Test,
+passed **33 cases** across all eleven rendered pages at 1440, 390 and 320 pixels.
+Three additional Custom CUDA cases refreshed its final preparation wording.
+Practical-course assertions check every lab's order, exact source bytes, collapsed
+source/diagram state, two submissions, exact-job results and absence of repeated
+ZIP pointers. Keyboard disclosures, navigation controls, local code scrollers,
+page width and doubled-text reflow pass. Shared/reading pages preserve their
+profiles and valid fragment targets. The eighteen practical cases took 11.3
+seconds; fifteen shared/reading cases took 3.3 seconds.
+
+The private validation bundle retains the repeatable test, logs and inspected
+`verified-desktop.png` and `verified-mobile.png` screenshots. An earlier harness
+assertion counted the `.sbatch` filename suffix as another command; anchoring
+command detection to line starts corrected the test, and fresh runs passed.
+The failed attempt's trace export timed out and is not evidence. Playwright MCP
+exploration was supplementary. Owned browser resources and the loopback server
+were closed; the task-created MCP snapshot was removed.
+
+### Limits
+
+The generic create-learning-course checker was run on all six practical pages.
+It still rejects this repository's supported companion links, markup/CSS and
+labs-only profile, so it is not reported as a passing gate. Profile-aware native
+validators and browser checks pass. Retained diagrams can have dense small labels
+on narrow screens; their captions remain readable. No live GPU, Slurm, Nsight,
+cluster preparation, performance acceptance or external publication is claimed.
+Original measurements remain authoritative; the new reader JSON is never clean
+benchmark evidence.
+
+### Reviewed HTML identities
+
+| Page | SHA-256 |
+|---|---|
+| `index.html` | `4e6b17804a36e3194a91eecc0c97916d1eecba5ad1a637d494689d4100e4a019` |
+| `lab-guide.html` | `f9c403dd0921312bcfa390305f7cb5d4006180a17bfa1999d886d33d2b03f610` |
+| `advanced-gpu-communication/index.html` | `8daa89f394669232a718f25a7c969c34539e3f882c2938f552178ca682eff139` |
+| `custom-cuda-kernels/index.html` | `244ee829c931046829277f8dadad43faffbb36a8bc7555d71f4a5a0c765ba9bf` |
+| `gpu-fundamentals/index.html` | `09137d9f4961d87de2431ba065ebe2d8856fe1a6578b4d457473ebd194ea5fe5` |
+| `gpu-optimizations/index.html` | `159b12f0854970efec3200653944c1498d272d04b151c7f9437949281d73ffa6` |
+| `gpu-performance-tools/index.html` | `44070a489d360aa6791d7e7ab238a98e0e51bf2a06026408e8af63519cd1aa22` |
+| `llm-inference/index.html` | `2d765cdfb7260dba43915eccf0a253434f1d06fa97bcc6105be93044b29d7516` |
+| `llm-training/index.html` | `68130c1e2fd50867c0b125e7badf0398dc9f41e481038862ba41185caaf04b43` |
+| `pytorch-gpu-performance-engineering/index.html` | `db528da5f2465c9d0c4bcd78570fcaf9b2bf2d0c3f071cb1ea40bd983cbff64f` |
+| `soperator/index.html` | `027bd9d511b0bb4c39b24c3ed929737aa58672a5b260cdc091774dfaee554aed` |
+
+## Nine-course text and format alignment — 2026-10-12
+
+Reviewed all nine course packages, 105 lesson/reference chapters and the concepts,
+identities and takeaways of 110 practical guides. The catalog and shared Lab Guide
+bring the rendered scope to eleven pages. Existing course profiles, prerequisite
+routes and lesson identities remain intact, including PyTorch's sixteen lessons.
+
+### Changes
+
+- Added 46 definitions for terms already taught, bringing the nine glossaries to
+  636 unique course-local entries. Definitions use consistent sentence casing;
+  APIs keep their exact spelling. Sorted keys, rendered definitions and lookup
+  destinations match the canonical Markdown.
+- Corrected five READMEs that described course-level appendices as per-lesson
+  sections. Every course has one Where to Go Next, one Glossary and final Official
+  references, in that order in both the page and its TOC.
+- Matched the Custom CUDA fusion explanation and visual caption to the supplied
+  two-kernel, one-intermediate baseline: 20 logical bytes per FP32 output versus
+  12 for the fused path. Clarified supported normalization widths and the optional
+  Tile lesson; no kernel implementation changed.
+- Distinguished optional CUDA Graph shape bucketing from supplied behavior.
+  Corrected Advanced Labs' readiness framing and the Lab 05 onward reference to
+  Labs 12 and 13. Expanded MPI/PMIx and distinguished first-content timing from
+  token-level TTFT.
+- Added the missing inline operator-profiling diagram to GPU Performance Tools
+  lesson 4, with a visible explanation of CPU submission, GPU work, summary totals
+  and timeline order. All five reference lessons now have a contextual diagram.
+
+### Verified evidence
+
+**Source and build:** 480 focused tests pass, as do all nine native validators,
+complete HTML/archive freshness, the shared build, configured Markdown lint and
+whitespace checks. Independent read-only code and security review found no
+concrete defect. The final NaN definition received source/HTML freshness checks
+and is included in the final browser artifact. No runtime implementation changed.
+
+**Browser:** all 33 final Playwright Test cases pass using isolated, owned headless
+Chrome 155.0.8059.39 at 1440×1000, 390×1000 and 320×1000, with page JavaScript
+disabled. All ten reading resources share the same computed body and heading
+styles at each width; the catalog retains its landing-page typography. Assertions
+cover exact catalog/menu order and identity, unique IDs, every local fragment,
+closing-section and TOC order, sorted unique glossary keys, keyboard skip/menu and
+visible local-scroller behavior, no page-width overflow, doubled-text reflow and
+no automatic HTTP requests. SVG text bounds include transforms; no label extends
+outside its figure viewBox. The new profiler figure also passes a 13px minimum
+rendered-label check at all three widths. Visual review covers phone glossaries,
+course entries and the new figure. Owned contexts and browser processes close at
+completion.
+
+The initial baseline run reported three catalog failures because the harness
+tried to focus a code block inside a closed license disclosure. The first
+post-edit run reported three Tools capture timeouts while the harness waited for
+scroll stability after a keyboard-scroller check. The final harness selects
+visible scrollers and moves to the figure with an explicit instant scroll after
+removing the prior focus. No application behavior was changed to satisfy these
+harness corrections. Earlier failed runs and traces remain separate evidence.
+
+**Preservation:** all 3,308 inventoried lab implementations, launchers, environment,
+result and archive files retain their task-start bytes; no baseline file was
+removed. Four practical guides received only the described prose corrections.
+Existing dirty edits were preserved. No staging, commit, push, installation or
+external publication was performed.
+
+### Limits and traceability
+
+The unmodified generic skill checker was run on every course using exact embedded
+source and companion-link manifests in an isolated fixture. It reports five
+known shared favicon/footer/structure/link diagnostics per standard course, six
+for each reading course and seven for the labs-only Advanced course. These
+profile and shared-markup diagnostics remain separate from the passing native
+validators; the generic checker is not recorded as passing.
+
+Older dense diagrams still shrink some labels below 13px at 320px. All diagrams
+fit their page and retain their labels, but containment is not proof of comfortable
+phone readability. PyTorch's 21 diagrams and the new operator figure pass the
+minimum-label check. This audit does not claim unrestricted mobile visual
+readiness. GPU execution, compiler speedups, installed environments and live
+Slurm/Nsight/Grafana qualification were not refreshed by this authoring work.
+
+Local evidence group `courses-align-3dxs35el` contains task-start hashes,
+source snapshots, build/native/test/lint logs, checker diagnostics, preservation
+results and the final `browser-verified` captures, harness and JSON report. The
+following hashes identify the final pages; historical sections retain their own
+counts and artifacts.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `index.html` | `4e6b17804a36e3194a91eecc0c97916d1eecba5ad1a637d494689d4100e4a019` |
+| `lab-guide.html` | `3c9b7a5c054824902f104d403d0da7cb9d7ad9045e1e1e65387704f5b89b0e18` |
+| `soperator/index.html` | `976120e42c78a7d901a3b8195905e3f43b58c4613447269301645d6aff1dc6ea` |
+| `gpu-performance-tools/index.html` | `bef9be5ebb76281d34cd91456d461716c679134c1370da6b35dd9d2c2e9b713d` |
+| `pytorch-gpu-performance-engineering/index.html` | `b822af049a6b0d246df70ccb3528dc6c955c44fcd46e13b589df68a1848e2d62` |
+| `gpu-fundamentals/index.html` | `81c9ee778300be473c5a4dedc96c535497696dc610208dc409c1ed62bb405373` |
+| `gpu-optimizations/index.html` | `b5668d7b0b5487c2e23dd0d130ae4120b04f2f8b516d8116e2c5f941e8029b69` |
+| `llm-training/index.html` | `aeae1ee2212df5b69098ef5171aa46c12ed709dc2bb43a920cf650bd26b7b5ee` |
+| `llm-inference/index.html` | `12165cd6d248177fe4ed8fafca01e2f655b52a59221b1798bc251687aeffe422` |
+| `custom-cuda-kernels/index.html` | `43cc2d547ead2f4e6775d575d425b7cb4446cf94e46292156639844e08cad400` |
+| `advanced-gpu-communication/index.html` | `7db5c16760aca9cb58c1cc52f977cbda92d71b58ad81d68984eaaf312a6edcb6` |
+
+Terminology was checked against the owning course implementations and current
+primary documentation: [PyTorch autograd](https://docs.pytorch.org/docs/2.14/notes/autograd.html#locally-disabling-gradient-computation),
+[Kubernetes nodes](https://kubernetes.io/docs/concepts/architecture/nodes/),
+[Kubernetes custom resources](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/),
+[Linux DMA-BUF](https://docs.kernel.org/driver-api/dma-buf.html),
+[CUDA Cooperative Groups](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cooperative-groups.html),
+[CUDA compiler driver](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html),
+[CUDA Tile C++](https://docs.nvidia.com/cuda/cuda-tile-cpp-api-reference/general_principles.html),
+[CTest](https://cmake.org/cmake/help/latest/manual/ctest.1.html) and
+[PMIx](https://pmix.org/). No version or target was declared qualified merely from
+reading its documentation.
+
+The work used create-learning-course, global-context-management,
+maintain-project-specs and align, with linter and nested read-only code-review and
+apply-security. Prior notes guided preservation and profile handling; current
+source and generated pages determined the actual inventory. All four audit/review
+helpers finished; this host exposes no agent-close control. No reusable skill
+change was needed.
+
 ## Nine-course alignment — 2026-10-05
 
 Audited all nine current course packages, ten catalog resources and eleven HTML

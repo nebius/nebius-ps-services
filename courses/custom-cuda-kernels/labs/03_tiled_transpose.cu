@@ -37,13 +37,17 @@ int main(int argc, char** argv) {
     require_course_gpu();
     const int columns = rows + 17;
     const std::size_t count = static_cast<std::size_t>(rows) * columns;
+    // Allocate host inputs and reference/output storage.
     std::vector<float> input(count), expected(count), naive_observed(count), unpadded_observed(count), padded_observed(count);
     for (std::size_t index = 0; index < count; ++index) input[index] = static_cast<float>(index % 251);
     for (int row = 0; row < rows; ++row) for (int column = 0; column < columns; ++column) expected[column * rows + row] = input[row * columns + column];
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), naive_output(count), unpadded_output(count), padded_output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     const dim3 threads(tile_width, tile_width);
     const dim3 blocks((columns + tile_width - 1) / tile_width, (rows + tile_width - 1) / tile_width);
+    // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
     const auto naive_timing = benchmark_cuda([&] {
       naive_transpose<<<blocks, threads>>>(device_input.get(), naive_output.get(), rows, columns);
     });
@@ -53,12 +57,15 @@ int main(int argc, char** argv) {
     const auto padded_timing = benchmark_cuda([&] {
       tiled_transpose<<<blocks, threads>>>(device_input.get(), padded_output.get(), rows, columns);
     });
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(naive_observed.data(), naive_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(unpadded_observed.data(), unpadded_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(padded_observed.data(), padded_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(expected, naive_observed);
     check_close(expected, unpadded_observed);
     check_close(expected, padded_observed);
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("03_tiled_transpose", padded_timing, count);
     print_timing("naive", naive_timing);
     print_timing("tiled_unpadded", unpadded_timing);

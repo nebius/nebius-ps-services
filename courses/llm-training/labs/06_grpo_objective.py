@@ -19,6 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--group-size", type=int, default=8)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.group_size < 2:
@@ -27,9 +28,11 @@ def main() -> None:
         )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
 
     prompts = 4
+    # Create the synthetic tensors used by this experiment.
     old_log_probs = torch.randn((prompts, args.group_size), device="cuda") * 0.1
     new_log_probs = (
         old_log_probs + torch.randn_like(old_log_probs) * 0.02
@@ -47,6 +50,7 @@ def main() -> None:
         log_ratio = reference_log_probs - new_log_probs
         approximate_kl = log_ratio.exp() - log_ratio - 1
         loss = -(surrogate - 0.02 * approximate_kl).mean()
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
         return advantages, approximate_kl, loss
 
@@ -58,6 +62,7 @@ def main() -> None:
         raise SystemExit(
             "The normalized advantages or policy objective failed validation."
         )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="06_grpo_objective",

@@ -94,10 +94,15 @@ def source_identity(root, courses):
 
 
 def preparation(root, course, stages):
-    """Resolve actual jobs, including optional recipe variants, without effects."""
+    """Resolve selected stages and runtimes from canonical native commands."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("course_execution", root / "tools/course_execution.py")
+    execution = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(execution)
     definitions = read(root / "tools/course_bootstrap/catalog.json")
     bindings = read(root / course / "reference/runtime.json")
-    if bindings.get("course") != course or bindings.get("schema") != "course-runtime-bindings/v1":
+    if bindings.get("course") != course or bindings.get("schema") != "course-runtime-bindings/v2":
         raise ValueError("Invalid course runtime bindings")
     result = {}
     for stage in stages:
@@ -106,21 +111,38 @@ def preparation(root, course, stages):
         argv = stage["argv"]
         jobs = [value for value in argv if value.endswith(".sbatch")]
         if not argv or argv[0] != "sbatch" or len(jobs) != 1:
-            raise ValueError("Preparation requires one native launcher per executable stage")
+            raise ValueError("Preparation requires one canonical native launcher per stage")
         launcher = Path(jobs[0]).name
-        if jobs[0] != "slurm/" + launcher:
+        if jobs[0] != "slurm/" + launcher or launcher not in bindings["launchers"]:
             raise ValueError("Preparation requires a course-owned native launcher")
-        runtime = bindings["launchers"][launcher]
-        spec = definitions["runtimes"][runtime]
-        group = spec["group"]
-        result[launcher] = {
-            "launcher": launcher,
-            "runtime": runtime,
-            "group": group,
-            "script": f"{group}-lab-setup.py",
-            "arguments": [] if group == "regular" else ["--launcher", launcher],
-            "optional": bool(spec.get("optional")),
-        }
+        lab = launcher.removesuffix(".sbatch")
+        if lab in bindings["labs"]:
+            requested, program_args = execution.parse(argv[argv.index(jobs[0]) + 1:])
+            selected = execution.select(root / course, lab, requested, program_args)
+        else:
+            selected = [{"key": "auxiliary", "runtime": bindings["launchers"][launcher], "status": "unstarted"}]
+        for selected_stage in selected:
+            if selected_stage["status"] == "skipped":
+                continue
+            runtime = selected_stage["runtime"]
+            owner = definitions["runtimes"][runtime]
+            group = owner["group"]
+            arguments = ["--launcher", launcher]
+            for flag in ("experiment", "profiler", "device"):
+                if flag == "device" and (
+                    lab not in bindings["labs"]
+                    or not execution.capabilities(root / course)[lab]["device_option"]
+                ):
+                    continue
+                if selected_stage.get(flag):
+                    arguments += ["--" + flag, selected_stage[flag]]
+            if lab in bindings["labs"] and requested.get("sanitizer"):
+                arguments += ["--sanitizer", requested["sanitizer"]]
+            result[launcher, selected_stage["key"]] = {
+                "launcher": launcher, "stage": selected_stage["key"], "runtime": runtime,
+                "group": group, "script": f"{group}-lab-setup.py", "arguments": arguments,
+                "optional": bool(owner.get("optional")),
+            }
     if not result:
         raise ValueError("Campaign unit has no executable preparation selections")
     return [result[name] for name in sorted(result)]
@@ -217,7 +239,7 @@ def freeze(root, selected, recipes, profiles, variables, overrides=None):
             )
     return {
         "schema": "run-labs-plan/v1",
-        "execution_contract": "native-jobs/v2",
+        "execution_contract": "native-jobs/v3",
         "source": source,
         "source_sha256": canonical(source),
         "recipes_sha256": digest(RECIPE_FILE),

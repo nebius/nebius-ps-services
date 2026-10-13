@@ -201,6 +201,7 @@ def main() -> None:
     parser.add_argument("--latency-ms", type=float, default=0.2)
     parser.add_argument("--restart-at", type=int, default=-1)
     parser.add_argument("--revision-change-at", type=int, default=-1)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     try:
@@ -228,6 +229,7 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
     measurements["policy"] = vars(policy)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="36_kv_tiering",

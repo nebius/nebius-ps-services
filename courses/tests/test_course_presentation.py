@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+from html_code import code_blocks
 from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
 
@@ -30,10 +32,11 @@ def test_banner_is_only_title_and_short_guided_hours(course: str) -> None:
         lab = re.search(
             rf'<article class="lab" id="{target}".*?</article>', document, re.S
         ).group()
-        assert ("Optional extension" if item["optional"] else "Core practice") in lab
+        assert '<details class="lab-source"' in lab
+        assert "Core practice" not in lab and "Optional extension" not in lab
 
 
-@pytest.mark.parametrize("course", COURSES)
+@pytest.mark.parametrize("course", (*COURSES, "advanced-gpu-communication"))
 def test_pages_share_style_and_navigate_readable_supporting_guides(course: str) -> None:
     root = ROOT / course
     document = (root / "index.html").read_text()
@@ -56,6 +59,33 @@ def test_pages_share_style_and_navigate_readable_supporting_guides(course: str) 
     ).group()
     assert "<table>" in worksheet and '<th scope="col">Baseline</th>' in worksheet
     assert 'href="#official-references"' in document
+    guides = re.findall(
+        r'<article class="supporting-guide" id="([^"]+)" data-source="([^"]+)">\s*<h3>(.*?)</h3>',
+        document,
+    )
+    expected_sources = [
+        ("README.md", "Getting started"),
+        ("VERSIONS.md", "Versions and environment"),
+        ("reference/cluster-smoke-test.md", "Readiness checks"),
+        ("reference/lab-mechanisms.md", "Lab mechanisms and evidence"),
+        ("reference/benchmark-record.md", "Benchmark worksheet"),
+        ("reference/evidence-security.md", "Evidence and privacy"),
+    ]
+    if course == "gpu-optimizations":
+        expected_sources.append(
+            ("reference/tooling-setup.md", "Diagnostic tooling reference")
+        )
+    expected = [
+        (cb_content.guide_id(path), path, label) for path, label in expected_sources
+    ]
+    assert guides == expected
+    sidebar = document.split("</aside>", 1)[0]
+    positions = []
+    for target, _, label in expected:
+        link = f'<a href="#{target}">{label}</a>'
+        assert sidebar.count(link) == 1
+        positions.append(sidebar.index(link))
+    assert positions == sorted(positions)
 
 
 def test_guide_markdown_preserves_order_tables_lists_code_and_safe_links() -> None:
@@ -166,12 +196,7 @@ def test_generated_launch_recipes_use_owned_runtime_and_actual_build_directory()
             + cb_config.SUPPORTING_GUIDES.get(course.name, ())
         }
         rendered = cb_content.lab_markup(course, guide, lessons, references)
-        commands = [
-            html.unescape(block)
-            for block in re.findall(
-                r"<pre[^>]*><code>(.*?)</code></pre>", rendered, re.S
-            )
-        ]
+        commands = code_blocks(rendered)
         assert any(expected in command for command in commands)
 
 

@@ -37,7 +37,7 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
         " f.write(json.dumps(sys.argv[1:])+'\\n')\n"
         "if 'aiperf' in sys.argv: sys.exit(0)\n"
         "signal.signal(signal.SIGTERM,lambda *a: sys.exit(0))\n"
-        "os.write(int(os.environ['SERVER_READY_WRITE_FD']),b'1')\n"
+        "open(os.environ['SERVER_READY_FILE'],'w').close()\n"
         "while True: time.sleep(1)\n"
     )
     python = course / "client-python"
@@ -48,9 +48,10 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
         "args=sys.argv[1:]\n"
         "if args[0]=='-c':\n"
         " if 'urllib.request' in args[1]:\n"
-        "  fd=int(os.environ['SERVER_READY_READ_FD'])\n"
-        "  readable,_,_=select.select([fd],[],[],2)\n"
-        "  sys.exit(0 if readable and os.read(fd,1)==b'1' else 1)\n"
+        "  ready=Path(os.environ['SERVER_READY_FILE'])\n"
+        "  found=ready.exists()\n"
+        "  if found: ready.unlink()\n"
+        "  sys.exit(0 if found else 1)\n"
         " else:\n"
         "  sys.argv=['-c',*args[2:]]\n"
         "  exec(compile(args[1],'<launcher-check>','exec'))\n"
@@ -80,6 +81,7 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
         "MISMATCH": "1" if mismatch else "0",
         "SERVER_STARTUP_DELAY": str(startup_delay),
     }
+    environment["SERVER_READY_FILE"] = str(course / "server.ready")
     environment.pop("COURSE_PROFILE_TOOL", None)
     # Consume one startup signal per server; elapsed time cannot prove readiness.
     ready_read, ready_write = os.pipe()
@@ -102,6 +104,7 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
     finally:
         os.close(ready_read)
         os.close(ready_write)
+    completed.stderr += "".join(p.read_text() for p in (course / "results").rglob("stderr.txt"))
     assert completed.returncode == (1 if mismatch else 0), completed.stderr
     commands = [json.loads(line) for line in record.read_text().splitlines()]
     servers = [x for x in commands if "aiperf" not in x]

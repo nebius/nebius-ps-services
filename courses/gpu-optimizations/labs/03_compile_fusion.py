@@ -21,12 +21,15 @@ from course_evidence import annotated_operation
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     elements = 16_000_000 if args.workload == "small" else 128_000_000
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn(elements, device="cuda")
     bias = torch.randn(elements, device="cuda")
 
@@ -38,6 +41,7 @@ def main() -> None:
     compiled = torch.compile(workload, fullgraph=True)
     compile_started = time.perf_counter()
     compiled(x, bias)
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     first_call_ms = (time.perf_counter() - compile_started) * 1_000
     eager_samples = cuda_times_ms(
@@ -57,6 +61,7 @@ def main() -> None:
     )
     if not correct:
         raise SystemExit("Compiled and eager results diverged.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="03_compile_fusion",

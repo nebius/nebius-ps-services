@@ -65,6 +65,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--prefetch", type=int, default=2)
     parser.add_argument("--producer-delay-ms", type=float, default=3.0)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.batches < 2:
@@ -159,6 +160,7 @@ def main() -> None:
         serial["sample_order_and_content_digest"]
         == prefetched["sample_order_and_content_digest"]
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="26_input_pipeline",

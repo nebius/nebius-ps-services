@@ -1,20 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 338" role="img" aria-labelledby="pt-inference-controls-title pt-inference-controls-desc" style="max-width: 360px; margin-inline: auto">
-  <title id="pt-inference-controls-title">Two independent controls for inference</title>
-  <desc id="pt-inference-controls-desc">Evaluation mode changes module behavior, such as disabling dropout. Inference mode controls gradient recording and tracking. Neither control automatically sets the other.</desc>
-  <defs>
-    <marker id="pt-inference-controls-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
-    </marker>
-  </defs>
-  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
-    <rect x="16" y="14" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
-    <text x="160" y="45" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">eval</tspan><tspan>()</tspan></text>
-    <text x="160" y="76" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Select evaluation behavior</tspan></text>
-    <text x="160" y="125" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">Dropout</tspan><tspan> passes values through</tspan></text>
-    <rect x="16" y="173" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
-    <text x="160" y="204" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.inference_mode</tspan><tspan>()</tspan></text>
-    <text x="160" y="235" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Disable gradient tracking</tspan></text>
-    <text x="160" y="287" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>No gradient recording</tspan></text>
-    <text x="160" y="326" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Use both for this inference path</tspan></text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 490" role="img" aria-labelledby="pt-inference-controls-title pt-inference-controls-desc" style="max-width: 390px; margin-inline: auto">
+  <title id="pt-inference-controls-title">Use the trained model to predict new outputs</title>
+  <desc id="pt-inference-controls-desc">Select evaluation behavior and inference mode for the trained model. Dropout is inactive and no backward calculation is recorded. New inputs flow through the model to predictions. This example uses no known targets, loss, backward pass or optimizer update.</desc>
+  <defs><marker id="pt-inference-controls-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" /></marker></defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" text-anchor="middle">
+    <rect x="16" y="16" width="308" height="134" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="170" y="48" font-size="22" fill="#206757" font-family="ui-monospace, monospace" font-weight="700">model.eval()</text>
+    <text x="170" y="79" font-size="20" fill="#206757" font-family="ui-monospace, monospace" font-weight="700">torch.inference_mode()</text>
+    <text x="170" y="110" font-size="20" fill="#24343d">Dropout inactive</text>
+    <text x="170" y="137" font-size="20" fill="#24343d">No backward recording</text>
+    <path d="M170 153 V177" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-inference-controls-arrow)" />
+    <rect x="16" y="181" width="308" height="56" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="216" font-size="20" fill="#24343d">New inputs</text>
+    <path d="M170 239 V263" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-inference-controls-arrow)" />
+    <rect x="16" y="267" width="308" height="71" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="296" font-size="20" fill="#24343d">Trained model</text>
+    <text x="170" y="324" font-size="20" fill="#24343d">Use learned weights + biases</text>
+    <path d="M170 340 V364" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-inference-controls-arrow)" />
+    <rect x="16" y="368" width="308" height="56" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="403" font-size="20" fill="#24343d">Predictions</text>
+    <text x="170" y="457" font-size="20" fill="#24343d">No targets or loss needed</text>
+    <text x="170" y="482" font-size="20" fill="#24343d">No parameter updates</text>
   </g>
 </svg>

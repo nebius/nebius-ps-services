@@ -96,7 +96,7 @@ def test_every_reading_page_has_the_same_ordered_menu(current):
     document = path.read_text()
     menu = re.search(r'<div class="catalog-navigation">(.*?)</div>', document, re.S).group(1)
     prefix = "" if guide else "../"
-    assert f'class="catalog-home" href="{prefix}index.html"' in menu
+    assert f'class="catalog-home" target="_blank" rel="noopener noreferrer" href="{prefix}index.html"' in menu
     items = re.findall(r'<li>(.*?)</li>', menu, re.S)
     assert len(items) == len(RESOURCES)
     assert menu.count('aria-current="page"') == 1

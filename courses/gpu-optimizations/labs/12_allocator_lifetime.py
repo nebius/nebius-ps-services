@@ -20,10 +20,12 @@ from course_evidence import annotated_operation
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
 
     def snapshot() -> dict[str, Any]:
@@ -55,6 +57,7 @@ def main() -> None:
     after_three_allocations = snapshot()
     del middle
     gc.collect()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     after_middle_delete = snapshot()
     replacement = allocate(24)
@@ -106,6 +109,7 @@ def main() -> None:
         )
     ):
         raise SystemExit("CUDA allocator lifetime invariants did not hold.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="12_allocator_lifetime",

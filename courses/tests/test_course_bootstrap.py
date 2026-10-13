@@ -96,11 +96,16 @@ def test_every_catalog_lab_and_launcher_has_one_runtime():
     assert len(courses) == 6
     rows = [catalog.bindings(course, definitions) for course in courses.values()]
     assert sum(len(row["labs"]) for row in rows) == 110
-    assert sum(len(row["launchers"]) for row in rows) == 288
+    assert sum(len(row["launchers"]) for row in rows) == 113
     assert root == ROOT
     for course in courses.values():
         for launcher in (course / "slurm").glob("*.sbatch"):
-            assert f"source tools/course_env.sh {launcher.name}" in launcher.read_text()
+            source = launcher.read_text()
+            if launcher.stem in json.loads((course / "reference/execution.json").read_text())["labs"]:
+                for stage in json.loads((course / "reference/execution.json").read_text())["labs"][launcher.stem]["variants"]:
+                    assert f"source tools/course_env.sh {stage['runtime']} --runtime" in source
+            else:
+                assert f"source tools/course_env.sh {launcher.name}" in source
 
 
 def test_installed_generation_is_reused_and_missing_artifact_is_repaired(tmp_path):
@@ -786,7 +791,13 @@ controller.setup(None, None, plan={})
                 pass
 
 
+def execution_fixture(root, labs):
+    (root / "reference").mkdir(exist_ok=True)
+    (root / "reference/execution.json").write_text(json.dumps({"schema": "course-execution/v1", "course": root.name, "labs": labs}))
+
+
 def runtime_fixture(root, monkeypatch):
+    execution_fixture(root, {"lab": {"device_option": False, "variants": [{"key": "default_none_cuda", "experiment": "default", "profiler": "none", "device": "cuda", "runtime": "sample"}]}})
     state = State(root)
     prefix = state.generation("sample", "fingerprint")
     (prefix / "binary").write_text("binary")
@@ -851,6 +862,7 @@ def test_immutable_image_identity_survives_new_component_generation(
         "bindings",
         lambda *a: {"launchers": {"build_and_test.sbatch": "image-runtime"}},
     )
+    execution_fixture(tmp_path, {})
     state = State(tmp_path)
     directory = tmp_path / ".runtime/images"
     directory.mkdir(mode=0o700)

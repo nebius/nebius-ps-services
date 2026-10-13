@@ -27,13 +27,39 @@ A profiler records application activity while a workload runs. Instrumentation a
 
 ![A measured optimization loop](reference/diagrams/tools-measurement-loop.svg)
 
-`--workload small|large` selects problem size. It does not turn profiling on. The normal `.sbatch` job runs the workload; the `.nsys.sbatch` and supported `.ncu.sbatch` jobs show the native diagnostic commands. PyTorch profiler labs are explicitly diagnostic even when no external tool is attached.
+`--workload small|large` selects problem size. Each lab has one `.sbatch` file;
+`--profiler` selects what it runs. The native Slurm and NVIDIA commands remain
+visible in that file.
+
+| Profiler selection | Execution |
+| --- | --- |
+| Omitted or `none` | Run the normal experiment only. |
+| `nsys` | Run the supported Systems diagnostic only. |
+| `ncu` | Run the supported Compute diagnostic only. |
+| `all` | Run supported Systems, then Compute, in fresh processes; no normal run. |
+
+`all` records unsupported tools as skipped with a reason. If neither applies,
+it records a skipped result without running the workload. An explicitly
+requested unsupported tool fails. Execution, timeout, permission, report or
+cleanup failures stop subsequent stages. Servers must stop before another
+capture begins.
+
+Profiler-teaching labs retain their built-in PyTorch collector during normal
+execution and disable it for external captures. Their normal timings are still
+instrumented. Optional CUDA and two-node captures state their actual scope;
+Compute for distributed gradient overlap uses a local backward companion.
+An explicit `--device cpu` or topology choice is never silently changed to make
+a diagnostic run.
+
+```bash
+sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small --profiler nsys
+sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small --profiler ncu
+```
 
 `sbatch` submits a job and requests an allocation. The `#SBATCH` lines at the top of the file describe its resources. `srun` starts a job step using that allocation. One `srun python labs/example.py ...` starts one Python program per task, not all Python files mentioned by the surrounding documentation. Separate `srun` commands create separate steps; use sequential commands or explicit concurrent steps when an experiment needs several programs.
 
 | Slurm or shell option | Meaning in these courses |
 | --- | --- |
-| `--chdir="$PWD"` | Start the job in the directory from which you submit; relative lab and result paths resolve there. |
 | `--nodes`, `--ntasks`, `--ntasks-per-node` | Allocate nodes and processes; distributed jobs state their layout explicitly. |
 | `--gpus-per-node` | Allocate that many GPUs on each node for the job. |
 | `--gpus-per-task` | Assign GPUs to each launched task; a partition name alone does not allocate a GPU. |
@@ -45,11 +71,11 @@ A profiler records application activity while a workload runs. Instrumentation a
 | `--` | End a command's options when that command supports the convention. It does not mean “run another script.” Everything following belongs to that command's positional arguments. |
 | `"$@"` | Forward the current script's remaining arguments as separate, quoted arguments. |
 
-Job requests and step requests have different scopes. A simple one-task step can inherit task counts, but explicit `srun --ntasks=1 --gpus-per-task=1` states exactly what that step launches and how its GPU is assigned. Multi-step jobs need that distinction. Shell variables in `#SBATCH` directives are not expanded; use submission options for values such as `$PWD`.
+Job requests and step requests have different scopes. The batch reserves the largest selectable allocation; an explicit `srun --nodes=1 --ntasks=1 --cpus-per-task=8 --gpus-per-task=1` confines a smaller step to its actual needs. CPU steps use `--gres=none`. Multi-step jobs need that distinction. Shell variables in `#SBATCH` directives are not expanded; submit from the course directory so relative source and output paths resolve correctly.
 
-New output is `results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}`. Scheduler logs remain `results/LAB/logs/JOB_ID.out` and `.err`. The shared setup prepares the parent directories; the job creates its own private directory exclusively. Existing files are never selected by “newest file” rules.
+Read `results/LAB/jobs/JOB_ID/result.json` for the job summary. Original output is isolated under `results/LAB/jobs/JOB_ID/stages/STAGE/{results,profiles,logs,artifacts}`. Scheduler logs remain `results/LAB/logs/JOB_ID.out` and `.err`. The shared setup prepares the parent directories; the job creates its own private directory exclusively. Existing files are never selected by “newest file” rules.
 
-Diagnostic commands use `timeout --signal=TERM --kill-after=15s 900s`: send TERM after 900 seconds, then KILL after 15 more seconds if needed. This bounds the process lifetime. The profiler's capture duration controls collection, not the whole application's lifetime. Keep the Slurm wall limit as an additional bound.
+Diagnostic commands use `timeout --signal=TERM --kill-after=15s 900s`: send TERM after 900 seconds, then KILL after 15 more seconds if needed. This bounds the process lifetime. The profiler's capture duration controls collection, not the whole application's lifetime. The launcher also bounds each stage and reserves teardown time plus 60 seconds for final JSON updates. It rejects a scheduler limit that would shorten the selected sequence.
 
 ### Mental model
 
@@ -203,6 +229,10 @@ Relate framework operators to device work while keeping profiler overhead out of
 ### How it works
 
 **PyTorch profiler** connects framework operators to CPU activity and CUDA work. Use it when a question starts at the tensor/operator level: which operation launches work, which shapes matter, and which operators account for device activity? Systems supplies the wider process timeline; Compute supplies selected kernel counters.
+
+For a CUDA operation, follow the CPU operator call to the GPU work it submits. One operator can launch several kernels. The same capture can be viewed as a summary of repeated events or as a timeline that preserves their order.
+
+![Connect an operator to GPU work and two profiler views](reference/diagrams/tools-operator-profile.svg)
 
 ```python
 with torch.profiler.profile(

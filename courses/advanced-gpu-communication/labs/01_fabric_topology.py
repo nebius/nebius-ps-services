@@ -31,6 +31,7 @@ def validate_placement(rows, world):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch, rank, world, local, env = initialize(args.seed)

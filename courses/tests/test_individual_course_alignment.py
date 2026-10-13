@@ -44,24 +44,21 @@ def test_optimization_timing_distinguishes_intervals_from_active_kernels():
     body = text("gpu-optimizations", "reference/labs/01_timing_basics.md")
     assert "omit host and queueing time" not in body
     assert "idle gaps" in body
-    assert "outside the marker interval" in body
-    assert "Lab 02 reports medians only" in body
-    assert "raw-sample export" in body
     assert "min/median/max" not in body
-    assert "host-time medians and CUDA-event min/median/p90" in body
+    assert "host and event timing boundaries" in body
 
 
 def test_fusion_traffic_is_logical_until_profiled():
     body = text("gpu-optimizations", "reference/labs/03_compile_fusion.md")
     assert "2 GiB of intermediate HBM traffic" not in body
-    assert "2 GiB of logical intermediate traffic" in body
+    assert "logical intermediate traffic" in body
     assert "actual HBM traffic" in body
 
 
-def test_optimization_readme_includes_two_node_preflight():
+def test_optimization_readme_routes_distributed_practice_to_advanced_owner():
     body = text("gpu-optimizations", "README.md")
     assert (
-        "Distributed transport, scaling and profiling practice now belongs to the advanced course"
+        "Distributed transport, scaling and profiling practice belongs to"
         in body
     )
     assert "../advanced-gpu-communication/index.html" in body
@@ -81,17 +78,14 @@ def test_training_summaries_keep_actual_validation_and_mfu_scope():
 
 def test_lora_saved_artifacts_are_an_explicit_extension():
     body = text("llm-training", "reference/labs/05_lora_sft.md")
-    assert "checkpoint saving is not implemented" in body
-    assert "save/reload equivalence" in body
-    assert "held_out_next_token_before/after" in body
-    assert "held_out_logits_digest_before/after" in body
+    assert "does not save checkpoints" in body
+    assert "held-out predictions and adapter updates" in body
 
 
 def test_recomputation_matches_work_within_each_lab_not_across_models():
     body = text("llm-training", "reference/labs/14_activation_checkpointing.md")
-    assert "same tiny-transformer forward/loss/backward path" in body
-    assert "durations from a different model are not comparable" in body
-    assert "no optimizer is constructed or updated in this lab" in body
+    assert "matched tiny-transformer paths" in body
+    assert "excludes optimizer work and optimizer state" in body
 
 
 def test_inference_readme_selects_mechanics_interpreter_for_mechanics_job():
@@ -100,14 +94,14 @@ def test_inference_readme_selects_mechanics_interpreter_for_mechanics_job():
         r"Example mechanics run:.*?```bash\n(.*?)```", readme, re.DOTALL
     )[1]
     assert "COURSE_PYTHON=" not in command
-    assert "source tools/course_env.sh 09_hf_prefill_decode.sbatch" in text(
+    assert "source tools/course_env.sh llm-inference.08_kv_cache.ncu --runtime" in text(
         "llm-inference", "slurm/09_hf_prefill_decode.sbatch"
     )
     assert (
         'slurm/09_hf_prefill_decode.sbatch'
         in command
     )
-    assert 'sbatch --chdir="$PWD"' in command
+    assert 'sbatch slurm/09_hf_prefill_decode.sbatch' in command
     launcher = text("llm-inference", "slurm/09_hf_prefill_decode.sbatch")
     assert "COURSE_PYTHON" in launcher
 
@@ -116,12 +110,12 @@ def test_distributed_serving_has_a_complete_advanced_owner():
     body = text(
         "advanced-gpu-communication", "reference/labs/24_inference_tensor_parallel.md"
     )
-    assert "Mechanics timing must not be reported as live serving TTFT" in body
-    assert "Labs 32–34" in body
+    assert "do not measure live serving TTFT" in body
     serving = text(
         "advanced-gpu-communication", "reference/labs/32_dynamo_disaggregation.md"
     )
-    assert "NixlConnector" in serving and "--capture systems" in serving
+    assert "slurm/32_dynamo_disaggregation.sbatch" in serving
+    assert "--profiler all" in serving
 
 
 def test_inference_phase_lab_does_not_promise_unrecorded_client_metrics():
@@ -148,7 +142,7 @@ def test_custom_capstone_uses_completed_build_directory():
     body = text("custom-cuda-kernels", "reference/labs/12_capstone.md")
     assert "slurm/capstone_three_trials.sbatch build/12_capstone" not in body
     assert (
-        'slurm/12_capstone.trials.sbatch' in body
+        'slurm/12_capstone.sbatch' in body
     )
 
 

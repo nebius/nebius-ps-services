@@ -237,7 +237,7 @@ The plan refers to storage as well as operations. In this PyTorch workflow, capt
 
 ![Execution-plan reuse](#diagram-11-execution-plan-reuse)
 
-Shapes, referenced storage, control flow, stream dependencies and participating operations form this capture's contract. An input outside that contract cannot simply be substituted and assumed safe. The course's dynamic-input extension handles a bounded set of shape buckets with separate compatible captures and sends other inputs through an eager fallback.
+Shapes, referenced storage, control flow, stream dependencies and participating operations form this capture's contract. An input outside that contract cannot simply be substituted and assumed safe. As an optional extension, implement separate compatible captures for a bounded set of shape buckets and route other inputs through an eager path.
 
 Graph replay does not erase preparation costs or free memory retained by graph pools. Compilation time, capture time, steady replay time, retained memory and bucket hit/fallback rates therefore describe different consequences. A compiled region may be captured, but compilation determines its implementation while the CUDA Graph records how the resulting device work is submitted.
 

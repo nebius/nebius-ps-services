@@ -1,55 +1,28 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=2
+#SBATCH --ntasks=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=32
+#SBATCH --time=01:01:30
 #SBATCH --exclusive
-#SBATCH --time=01:00:00
 #SBATCH --no-requeue
 #SBATCH --output=results/32_dynamo_disaggregation/logs/%j.out
 #SBATCH --error=results/32_dynamo_disaggregation/logs/%j.err
 
-set -euo pipefail
-
-# Workload size is independent of the profiler selected by this job file.
-if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  printf 'Usage: sbatch %s [--workload small|large] [lab options]\n' "$0"
-  exit 0
-fi
-workload=${COURSE_WORKLOAD:-small}
-lab_args=()
-while (($#)); do
-  case "$1" in
-    --workload) [[ $# -ge 2 ]] || { printf 'ERROR: --workload needs small or large.\n' >&2; exit 2; }; workload=$2; shift 2 ;;
-    --workload=*) workload=${1#*=}; shift ;;
-    --profile|--profile=*) printf 'ERROR: use --workload small|large.\n' >&2; exit 2 ;;
-    *) lab_args+=("$1"); shift ;;
-  esac
-done
-[[ $workload == small || $workload == large ]] || { printf 'ERROR: --workload must be small or large.\n' >&2; exit 2; }
-set -- "${lab_args[@]}"
-export COURSE_WORKLOAD=$workload
-[[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
-  printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
-}
-# Load this launcher's persistent installation inside the allocated job.
-source tools/course_env.sh 32_dynamo_disaggregation.sbatch
-umask 077
-for directory in results results/32_dynamo_disaggregation results/32_dynamo_disaggregation/logs results/32_dynamo_disaggregation/jobs; do
-  [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
-  }
-done
-export COURSE_JOB_DIR="$PWD/results/32_dynamo_disaggregation/jobs/$SLURM_JOB_ID"
-mkdir -m 700 -- "$COURSE_JOB_DIR"
-mkdir -m 700 -- "$COURSE_JOB_DIR/results" "$COURSE_JOB_DIR/profiles" "$COURSE_JOB_DIR/logs" "$COURSE_JOB_DIR/artifacts"
-export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
-export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
-export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
-export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
-printf 'Job results: %s\n' "$COURSE_JOB_DIR"
-source tools/course_job_cache.sh
-
+# Reserve the largest selectable allocation; every srun below limits its step.
+# Each stage runs in a fresh shell with separate original results and reports.
+course_stage() {
+  set -euo pipefail
+  umask 077
+  local selection=$1 workload=$2
+  shift 2
+  export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
+  case "$selection" in
+    default_nsys_cuda)
+      # Actual scope: 2 node(s), 2 task(s), 8 GPU(s) per task.
+      source tools/course_env.sh advanced-gpu-communication.32_dynamo_disaggregation --runtime
+      source tools/course_job_cache.sh
 set -euo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
@@ -59,6 +32,49 @@ if [[ ${1:-} == --help ]]; then
 fi
 : "${SLURM_JOB_ID:?submit through the course launcher}"
 : "${COURSE_PYTHON:?complete Lab 00}"
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "$COURSE_PYTHON" tools/fabric_guard.py
+srun --cpus-per-task=32 --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "$COURSE_PYTHON" tools/fabric_guard.py
+# The coordinator runs on the batch host; child steps stay inside this allocation.
+"$COURSE_PYTHON" labs/32_dynamo_disaggregation.py "$@" --capture systems \
+  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
+  --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none \
+  --discard-environment=true --force-overwrite=false --kill=none \
+  --trace-fork-before-exec=true --cuda-graph-trace=node \
+  --capture-range=cudaProfilerApi --capture-range-end=stop \
+  --flush-on-cudaprofilerstop=false --wait=primary \
+  '--output={report}'
+
+# Successful exit alone does not prove that a profiler collected a report.
+report_count=0
+while IFS= read -r -d '' report; do
+  [[ -s $report ]] || { printf 'ERROR: empty profiler report: %s\n' "$report" >&2; exit 2; }
+  report_count=$((report_count + 1))
+done < <(find "$COURSE_JOB_DIR" -type f -name '*.nsys-rep' -print0)
+((report_count == 2)) || { printf 'ERROR: native profiler report count differs from the required producer count.\n' >&2; exit 2; }
+printf 'Diagnostic reports: %s; use a separate normal job for timing.\n' "$COURSE_JOB_DIR"
+      ;;
+    default_none_cuda)
+      # Actual scope: 2 node(s), 2 task(s), 8 GPU(s) per task.
+      source tools/course_env.sh advanced-gpu-communication.32_dynamo_disaggregation --runtime
+      source tools/course_job_cache.sh
+set -euo pipefail
+umask 077
+export PYTHONDONTWRITEBYTECODE=1
+if [[ ${1:-} == --help ]]; then
+  printf 'Usage: sbatch slurm/vendor_job.sbatch labs/LAB.py [options]\n'
+  exit 0
+fi
+: "${SLURM_JOB_ID:?submit through the course launcher}"
+: "${COURSE_PYTHON:?complete Lab 00}"
+srun --cpus-per-task=32 --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "$COURSE_PYTHON" tools/fabric_guard.py
 # The coordinator runs on the batch host; child steps stay inside this allocation.
 "$COURSE_PYTHON" labs/32_dynamo_disaggregation.py "$@"
+      ;;
+    *) printf 'ERROR: unknown stage selection.\n' >&2; return 2 ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
+  exec python3.12 -B tools/course_job.py --lab 32_dynamo_disaggregation --launcher "$0" -- "$@"
+fi

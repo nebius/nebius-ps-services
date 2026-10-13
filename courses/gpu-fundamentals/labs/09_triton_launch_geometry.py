@@ -46,10 +46,12 @@ else:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     if triton is None or scale_kernel is None:
         raise SystemExit(
@@ -58,6 +60,7 @@ def main() -> None:
         )
 
     element_count = 8_000_003 if args.workload == "small" else 64_000_003
+    # Create the synthetic tensors used by this experiment.
     source = torch.randn(element_count, device="cuda", dtype=torch.float32)
     target = torch.empty_like(source)
     reference = source * 1.25
@@ -84,6 +87,7 @@ def main() -> None:
             iterations=args.iterations,
         )
         launch()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         correct = bool(torch.equal(target, reference))
         if not correct:
@@ -105,6 +109,7 @@ def main() -> None:
             "logical_gib_per_second": round(logical_bytes / median_seconds / 2**30, 3),
         }
         correctness[f"block_{block_size}_exact"] = True
+    # Save the actual measurements together with their correctness checks.
     target_path = write_result(
         args,
         lab_id="09_triton_launch_geometry",

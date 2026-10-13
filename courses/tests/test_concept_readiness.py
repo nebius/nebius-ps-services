@@ -1,55 +1,17 @@
 """Guard specific explanatory bridges, not automated semantic completeness."""
 
 import ast
-import math
 
-import pytest
 
-from test_course_content_contract import lab_section, ROOT
+from test_course_content_contract import ROOT
 from test_substantive_editorial import lesson
 
 
-@pytest.mark.parametrize(
-    ("path", "terms"),
-    [
-        (
-            "gpu-fundamentals/reference/labs/08_operator_to_kernels.md",
-            ("matrix multiplication", "GELU", "child events"),
-        ),
-        (
-            "gpu-fundamentals/reference/labs/04_layout_and_coalescing.md",
-            ("logical index", "strides", "storage offsets"),
-        ),
-        (
-            "gpu-fundamentals/reference/labs/09_triton_launch_geometry.md",
-            ("1,003", "four programs", "bounds mask"),
-        ),
-        (
-            "gpu-fundamentals/reference/labs/01_cpu_gpu_crossover.md",
-            ("atol + rtol", "reference"),
-        ),
-        (
-            "gpu-fundamentals/reference/labs/02_tensor_core_precision.md",
-            ("square root", "every element"),
-        ),
-        (
-            "gpu-optimizations/reference/labs/02_sync_trap.md",
-            ("one number", "one-element tensor", "Python number"),
-        ),
-        (
-            "llm-inference/reference/labs/29_quantization.md",
-            ("square root", "nonzero", "0.26", "0.30"),
-        ),
-        (
-            "custom-cuda-kernels/reference/labs/12_capstone.md",
-            ("tanh(1.25*x + 0.5)", "affine", "-1 and 1"),
-        ),
-    ],
-)
-def test_lab_defines_required_concepts_before_commands(path, terms):
-    before_commands = (ROOT / path).read_text().split("## Practice")[0]
-    for term in terms:
-        assert term.lower() in before_commands.lower()
+def test_compact_guides_explain_purpose_before_submission():
+    for path in ROOT.glob("*/reference/labs/*.md"):
+        purpose = path.read_text().split("\n\n", 1)[1].split("\n## ", 1)[0]
+        assert purpose.strip() and "sbatch " not in purpose
+        assert len(purpose.split()) <= 100
 
 
 def test_lora_teaches_composition_before_counting_savings():
@@ -63,24 +25,10 @@ def test_lora_teaches_composition_before_counting_savings():
     assert result == [3, 7]
 
 
-def test_numerical_gate_hand_calculations():
-    guide = (
-        ROOT / "gpu-fundamentals/reference/labs/02_tensor_core_precision.md"
-    ).read_text()
-    assert "[3, 4]" in guide and "[3, 4.1]" in guide
-    assert math.sqrt(3**2 + 4**2) == 5
-    assert math.sqrt((3 - 3) ** 2 + (4.1 - 4) ** 2) / 5 == pytest.approx(0.02)
-    assert 1e-6 + 1e-5 * abs(2) == pytest.approx(0.000021)
-
-
-def test_training_capstone_requires_evidence_from_its_own_workload():
-    preparation = lab_section("llm-training", 31, "Before you start")
-    assert "matched linear/GELU/bias baseline and candidate" in preparation
-    assert (
-        "different transformer workload cannot explain this comparison" in preparation
-    )
+def test_training_capstone_identifies_its_own_workload():
     guide = (ROOT / "llm-training/reference/labs/31_training_capstone.md").read_text()
-    assert "identical input shapes and update semantics" in guide
+    assert "linear training step" in guide and "preserving the intended update" in guide
+    assert "--variant-order baseline-first" in guide
 
 
 def test_crossover_scales_tolerance_by_the_cpu_reference():

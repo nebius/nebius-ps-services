@@ -68,7 +68,8 @@ $run-labs --help
 
 The execution contract and per-job paths are documented in
 [execution.md](references/execution.md). Native job files are authoritative;
-there is no Python submission or profiling wrapper between the job and its workload.
+the shared lifecycle helper selects isolated stages and assembles the reader result;
+each batch file keeps its native srun, profiler, worker and server commands visible.
 
 ## Workflow
 

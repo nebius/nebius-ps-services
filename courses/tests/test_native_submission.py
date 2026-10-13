@@ -43,7 +43,7 @@ def test_native_submission_preserves_argv_and_prepares_logs_before_scheduler(tmp
     argv = remote.native_submission(root, source, "rl-" + "a" * 24)
     assert argv[0:2] == ["sbatch", "--parsable"]
     assert argv[-len(source[1:]) :] == source[1:]
-    assert f"--chdir={root}" in argv
+    assert not any(arg.startswith("--chdir") for arg in argv)
     assert f"--output={root}/results/01_example/logs/%j.out" in argv
     for path in (root / "results").rglob("*"):
         assert path.is_dir() and path.stat().st_mode & 0o777 == 0o700

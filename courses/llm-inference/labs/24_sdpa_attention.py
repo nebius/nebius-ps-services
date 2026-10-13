@@ -24,6 +24,7 @@ def peak_bytes(torch: object, operation: object) -> int:
     baseline_bytes = int(torch.cuda.memory_allocated())
     torch.cuda.reset_peak_memory_stats()
     operation()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     return int(torch.cuda.max_memory_allocated()) - baseline_bytes
 
@@ -32,10 +33,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--external-only", action="store_true", help="Skip the internal CUDA profiler during a separate Nsight capture.")
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     sequence = 512 if args.workload == "small" else 2_048
     batch, heads, head_dim = 2, 8, 64
@@ -44,6 +47,7 @@ def main() -> None:
         ("prefill", sequence, True),
         ("decode", 1, False),
     ):
+        # Create the synthetic tensors used by this experiment.
         query = torch.randn(
             (batch, heads, query_length, head_dim),
             device="cuda",
@@ -119,6 +123,7 @@ def main() -> None:
                 "max_abs_error": round(max_error, 6),
             }
         )
+    # Save the actual measurements together with their correctness checks.
     target_path = write_result(
         args,
         lab_id="24_sdpa_attention",

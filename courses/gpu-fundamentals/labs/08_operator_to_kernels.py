@@ -25,13 +25,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     width = 1_024 if args.workload == "small" else 4_096
     batch = 64 if args.workload == "small" else 256
+    # Create the synthetic tensors used by this experiment.
     values = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
     bias = torch.randn((width,), device="cuda", dtype=torch.bfloat16)
@@ -43,6 +46,7 @@ def main() -> None:
 
     for _ in range(args.warmup):
         workload()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     measured_workload = annotated_operation(workload, "course_measure")
     if not args.external_only:
@@ -76,6 +80,7 @@ def main() -> None:
     finite = bool(torch.isfinite(loss).item())
     if not finite or (not args.external_only and not rows):
         raise SystemExit("Profiler did not capture finite CUDA work.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="08_operator_to_kernels",

@@ -98,7 +98,7 @@ def claim_path(state, unit):
 
 
 def verify_frozen(state):
-    if state.get("plan", {}).get("execution_contract") != "native-jobs/v2":
+    if state.get("plan", {}).get("execution_contract") != "native-jobs/v3":
         raise ValueError("Saved execution plan predates managed preparation binding; preserve its evidence and create a new campaign")
     root = Path(state["courses_root"])
     actual = source_identity(root, [u["course"] for u in state["plan"]["units"]])

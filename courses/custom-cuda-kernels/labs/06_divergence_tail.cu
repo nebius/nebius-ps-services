@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
   try {
     const std::size_t count = problem_size(argc, argv, 4096, 1U << 25);
     const auto properties = require_course_gpu();
+    // Allocate host inputs and reference/output storage.
     std::vector<float> input(count), expected(count), divergent_observed(count), grouped_observed(count);
     auto apply_work = [](float value, int iterations) {
       for (int iteration = 0; iteration < iterations; ++iteration) value = std::fma(value, 1.00001F, 0.00001F);
@@ -57,12 +58,15 @@ int main(int argc, char** argv) {
       input[index] = 0.25F + static_cast<float>(index % 31) * 0.01F;
       expected[index] = apply_work(input[index], (index & 1U) == 0U ? 32 : 4);
     }
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), divergent_output(count), grouped_input(count),
         grouped_output(count), grouped_scattered_output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     constexpr int threads = 256;
     const int blocks = static_cast<int>((count + threads - 1) / threads);
     const std::size_t long_count = (count + 1) / 2;
+    // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
     const auto divergent_timing = benchmark_cuda([&] {
       divergent_work<<<blocks, threads>>>(device_input.get(), divergent_output.get(), count);
     });
@@ -80,13 +84,16 @@ int main(int argc, char** argv) {
       grouped_work<<<blocks, threads>>>(grouped_input.get(), grouped_output.get(), count, long_count);
       scatter_grouped<<<blocks, threads>>>(grouped_output.get(), grouped_scattered_output.get(), count, long_count);
     });
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(divergent_observed.data(), divergent_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(grouped_observed.data(), grouped_scattered_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(expected, divergent_observed);
     check_close(expected, grouped_observed);
     check_close(divergent_observed, grouped_observed);
     const int waves = (blocks + properties.multiProcessorCount - 1) / properties.multiProcessorCount;
     const int tail_blocks = blocks - (waves - 1) * properties.multiProcessorCount;
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("06_divergence_tail", grouped_end_to_end_timing, count);
     print_timing("divergent", divergent_timing);
     print_timing("grouped_core_only", grouped_core_timing);

@@ -1,0 +1,930 @@
+{
+  "schema": "course-execution/v1",
+  "course": "llm-training",
+  "labs": {
+    "01_tiny_transformer_train": {
+      "source": "labs/01_tiny_transformer_train.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "02_gradient_accumulation": {
+      "source": "labs/02_gradient_accumulation.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "05_lora_sft": {
+      "source": "labs/05_lora_sft.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.05_lora_sft.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.05_lora_sft.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.05_lora_sft.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "06_grpo_objective": {
+      "source": "labs/06_grpo_objective.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "07_grpo_trainer": {
+      "source": "labs/07_grpo_trainer.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.05_lora_sft.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.05_lora_sft.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.05_lora_sft.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "13_loss_masking": {
+      "source": "labs/13_loss_masking.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "14_activation_checkpointing": {
+      "source": "labs/14_activation_checkpointing.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "21_mixed_precision_training": {
+      "source": "labs/21_mixed_precision_training.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "22_transformer_engine_fp8": {
+      "source": "labs/22_transformer_engine_fp8.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.22_transformer_engine_fp8.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.22_transformer_engine_fp8.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.22_transformer_engine_fp8.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "24_checkpoint_resume": {
+      "source": "labs/24_checkpoint_resume.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "25_sequence_packing": {
+      "source": "labs/25_sequence_packing.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "26_input_pipeline": {
+      "source": "labs/26_input_pipeline.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "27_fused_graph_trace": {
+      "source": "labs/27_fused_graph_trace.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "30_training_profiler": {
+      "source": "labs/30_training_profiler.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "31_training_capstone": {
+      "source": "labs/31_training_capstone.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "trials_none_cuda",
+          "experiment": "trials",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "32_learning_basics": {
+      "source": "labs/32_learning_basics.py",
+      "device_option": true,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": false,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cpu",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cpu",
+          "default_device": true,
+          "runtime": "llm-training.01_tiny_transformer_train.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 0,
+            "description": "1 node(s), 1 task(s), 0 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    }
+  }
+}

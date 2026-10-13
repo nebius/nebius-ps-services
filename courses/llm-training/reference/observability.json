@@ -61,8 +61,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/01_tiny_transformer_train.json",
       "baseline_command": "sbatch slurm/01_tiny_transformer_train.sbatch --workload small",
-      "systems_command": "sbatch slurm/01_tiny_transformer_train.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/01_tiny_transformer_train.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/01_tiny_transformer_train.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/01_tiny_transformer_train.sbatch --workload small --profiler ncu",
       "tuning_control": "`--zero-grad-fill`",
       "evidence_views": [
         "Selected comparison generation",
@@ -95,12 +95,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate forward and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/01_tiny_transformer_train/logs/%j.out\" \\\n  --error=\"$PWD/results/01_tiny_transformer_train/logs/%j.err\" slurm/01_tiny_transformer_train.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/01_tiny_transformer_train/logs/%j.out\" \\\n  --error=\"$PWD/results/01_tiny_transformer_train/logs/%j.err\" slurm/01_tiny_transformer_train.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/01_tiny_transformer_train/logs/%j.err\" slurm/01_tiny_transformer_train.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/01_tiny_transformer_train/logs/%j.err\" slurm/01_tiny_transformer_train.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/01_tiny_transformer_train.sbatch",
-        "nsys": "slurm/01_tiny_transformer_train.nsys.sbatch",
-        "ncu": "slurm/01_tiny_transformer_train.ncu.sbatch"
+        "nsys": "slurm/01_tiny_transformer_train.sbatch",
+        "ncu": "slurm/01_tiny_transformer_train.sbatch"
       }
     },
     "02_gradient_accumulation": {
@@ -151,8 +151,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/02_gradient_accumulation.json",
       "baseline_command": "sbatch slurm/02_gradient_accumulation.sbatch --workload small",
-      "systems_command": "sbatch slurm/02_gradient_accumulation.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/02_gradient_accumulation.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/02_gradient_accumulation.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/02_gradient_accumulation.sbatch --workload small --profiler ncu",
       "tuning_control": "Compare full-batch updates with the supplied microbatch accumulation reference",
       "evidence_views": [
         "Selected comparison generation",
@@ -176,12 +176,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/02_gradient_accumulation/logs/%j.out\" \\\n  --error=\"$PWD/results/02_gradient_accumulation/logs/%j.err\" slurm/02_gradient_accumulation.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/02_gradient_accumulation/logs/%j.out\" \\\n  --error=\"$PWD/results/02_gradient_accumulation/logs/%j.err\" slurm/02_gradient_accumulation.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/02_gradient_accumulation/logs/%j.err\" slurm/02_gradient_accumulation.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/02_gradient_accumulation/logs/%j.err\" slurm/02_gradient_accumulation.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/02_gradient_accumulation.sbatch",
-        "nsys": "slurm/02_gradient_accumulation.nsys.sbatch",
-        "ncu": "slurm/02_gradient_accumulation.ncu.sbatch"
+        "nsys": "slurm/02_gradient_accumulation.sbatch",
+        "ncu": "slurm/02_gradient_accumulation.sbatch"
       }
     },
     "05_lora_sft": {
@@ -243,8 +243,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/05_lora_sft.json",
       "baseline_command": "sbatch slurm/05_lora_sft.sbatch --workload small",
-      "systems_command": "sbatch slurm/05_lora_sft.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/05_lora_sft.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/05_lora_sft.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/05_lora_sft.sbatch --workload small --profiler ncu",
       "tuning_control": "`--zero-grad-fill`",
       "evidence_views": [
         "Selected comparison generation",
@@ -277,12 +277,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate forward and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/05_lora_sft/logs/%j.out\" \\\n  --error=\"$PWD/results/05_lora_sft/logs/%j.err\" slurm/05_lora_sft.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/05_lora_sft/logs/%j.out\" \\\n  --error=\"$PWD/results/05_lora_sft/logs/%j.err\" slurm/05_lora_sft.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/05_lora_sft/logs/%j.err\" slurm/05_lora_sft.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/05_lora_sft/logs/%j.err\" slurm/05_lora_sft.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/05_lora_sft.sbatch",
-        "nsys": "slurm/05_lora_sft.nsys.sbatch",
-        "ncu": "slurm/05_lora_sft.ncu.sbatch"
+        "nsys": "slurm/05_lora_sft.sbatch",
+        "ncu": "slurm/05_lora_sft.sbatch"
       }
     },
     "06_grpo_objective": {
@@ -335,8 +335,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/06_grpo_objective.json",
       "baseline_command": "sbatch slurm/06_grpo_objective.sbatch --workload small",
-      "systems_command": "sbatch slurm/06_grpo_objective.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/06_grpo_objective.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/06_grpo_objective.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/06_grpo_objective.sbatch --workload small --profiler ncu",
       "tuning_control": "`--group-size`",
       "evidence_views": [
         "Selected comparison generation",
@@ -359,12 +359,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/06_grpo_objective/logs/%j.out\" \\\n  --error=\"$PWD/results/06_grpo_objective/logs/%j.err\" slurm/06_grpo_objective.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/06_grpo_objective/logs/%j.out\" \\\n  --error=\"$PWD/results/06_grpo_objective/logs/%j.err\" slurm/06_grpo_objective.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/06_grpo_objective/logs/%j.err\" slurm/06_grpo_objective.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/06_grpo_objective/logs/%j.err\" slurm/06_grpo_objective.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/06_grpo_objective.sbatch",
-        "nsys": "slurm/06_grpo_objective.nsys.sbatch",
-        "ncu": "slurm/06_grpo_objective.ncu.sbatch"
+        "nsys": "slurm/06_grpo_objective.sbatch",
+        "ncu": "slurm/06_grpo_objective.sbatch"
       }
     },
     "07_grpo_trainer": {
@@ -417,8 +417,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/07_grpo_trainer.json",
       "baseline_command": "sbatch slurm/07_grpo_trainer.sbatch --workload small --steps 3",
-      "systems_command": "sbatch slurm/07_grpo_trainer.nsys.sbatch --workload small --steps 3",
-      "compute_command": "sbatch slurm/07_grpo_trainer.ncu.sbatch --workload small --steps 3",
+      "systems_command": "sbatch slurm/07_grpo_trainer.sbatch --workload small --steps 3 --profiler nsys",
+      "compute_command": "sbatch slurm/07_grpo_trainer.sbatch --workload small --steps 3 --profiler ncu",
       "tuning_control": "`--steps`",
       "evidence_views": [
         "Selected comparison generation",
@@ -441,12 +441,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/07_grpo_trainer/logs/%j.out\" \\\n  --error=\"$PWD/results/07_grpo_trainer/logs/%j.err\" slurm/07_grpo_trainer.nsys.sbatch --workload small --steps 3",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/07_grpo_trainer/logs/%j.out\" \\\n  --error=\"$PWD/results/07_grpo_trainer/logs/%j.err\" slurm/07_grpo_trainer.ncu.sbatch --workload small --steps 3",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/07_grpo_trainer/logs/%j.err\" slurm/07_grpo_trainer.sbatch --workload small --steps 3 --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/07_grpo_trainer/logs/%j.err\" slurm/07_grpo_trainer.sbatch --workload small --steps 3 --profiler ncu",
       "jobs": {
         "run": "slurm/07_grpo_trainer.sbatch",
-        "nsys": "slurm/07_grpo_trainer.nsys.sbatch",
-        "ncu": "slurm/07_grpo_trainer.ncu.sbatch"
+        "nsys": "slurm/07_grpo_trainer.sbatch",
+        "ncu": "slurm/07_grpo_trainer.sbatch"
       }
     },
     "13_loss_masking": {
@@ -497,7 +497,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/13_loss_masking.json",
       "baseline_command": "sbatch slurm/13_loss_masking.sbatch --workload small",
-      "systems_command": "sbatch slurm/13_loss_masking.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/13_loss_masking.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -522,10 +522,10 @@
         "view": "Expand lab_workload, CUDA API and CUDA GPU rows. Locate forward, cross-entropy and backward launches; compare the trained/ignored token and finite-gradient evidence. The trace explains execution, not a masking speedup."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/13_loss_masking/logs/%j.out\" \\\n  --error=\"$PWD/results/13_loss_masking/logs/%j.err\" slurm/13_loss_masking.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/13_loss_masking/logs/%j.err\" slurm/13_loss_masking.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/13_loss_masking.sbatch",
-        "nsys": "slurm/13_loss_masking.nsys.sbatch"
+        "nsys": "slurm/13_loss_masking.sbatch"
       }
     },
     "14_activation_checkpointing": {
@@ -585,8 +585,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/14_activation_checkpointing.json",
       "baseline_command": "sbatch slurm/14_activation_checkpointing.sbatch --workload small",
-      "systems_command": "sbatch slurm/14_activation_checkpointing.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/14_activation_checkpointing.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/14_activation_checkpointing.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/14_activation_checkpointing.sbatch --workload small --profiler ncu",
       "tuning_control": "Compare checkpointing disabled/enabled at the same shape",
       "evidence_views": [
         "Selected comparison generation",
@@ -609,12 +609,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/14_activation_checkpointing/logs/%j.out\" \\\n  --error=\"$PWD/results/14_activation_checkpointing/logs/%j.err\" slurm/14_activation_checkpointing.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/14_activation_checkpointing/logs/%j.out\" \\\n  --error=\"$PWD/results/14_activation_checkpointing/logs/%j.err\" slurm/14_activation_checkpointing.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/14_activation_checkpointing/logs/%j.err\" slurm/14_activation_checkpointing.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/14_activation_checkpointing/logs/%j.err\" slurm/14_activation_checkpointing.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/14_activation_checkpointing.sbatch",
-        "nsys": "slurm/14_activation_checkpointing.nsys.sbatch",
-        "ncu": "slurm/14_activation_checkpointing.ncu.sbatch"
+        "nsys": "slurm/14_activation_checkpointing.sbatch",
+        "ncu": "slurm/14_activation_checkpointing.sbatch"
       }
     },
     "21_mixed_precision_training": {
@@ -656,8 +656,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/21_mixed_precision_training.json",
       "baseline_command": "sbatch slurm/21_mixed_precision_training.sbatch --workload small",
-      "systems_command": "sbatch slurm/21_mixed_precision_training.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/21_mixed_precision_training.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/21_mixed_precision_training.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/21_mixed_precision_training.sbatch --workload small --profiler ncu",
       "tuning_control": "Compare the supplied precision policies using both device and complete-step timing",
       "evidence_views": [
         "Selected comparison generation",
@@ -681,12 +681,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/21_mixed_precision_training/logs/%j.out\" \\\n  --error=\"$PWD/results/21_mixed_precision_training/logs/%j.err\" slurm/21_mixed_precision_training.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/21_mixed_precision_training/logs/%j.out\" \\\n  --error=\"$PWD/results/21_mixed_precision_training/logs/%j.err\" slurm/21_mixed_precision_training.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/21_mixed_precision_training/logs/%j.err\" slurm/21_mixed_precision_training.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/21_mixed_precision_training/logs/%j.err\" slurm/21_mixed_precision_training.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/21_mixed_precision_training.sbatch",
-        "nsys": "slurm/21_mixed_precision_training.nsys.sbatch",
-        "ncu": "slurm/21_mixed_precision_training.ncu.sbatch"
+        "nsys": "slurm/21_mixed_precision_training.sbatch",
+        "ncu": "slurm/21_mixed_precision_training.sbatch"
       }
     },
     "22_transformer_engine_fp8": {
@@ -737,8 +737,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/22_transformer_engine_fp8.json",
       "baseline_command": "sbatch slurm/22_transformer_engine_fp8.sbatch --workload small",
-      "systems_command": "sbatch slurm/22_transformer_engine_fp8.nsys.sbatch --workload small",
-      "compute_command": "sbatch slurm/22_transformer_engine_fp8.ncu.sbatch --workload small",
+      "systems_command": "sbatch slurm/22_transformer_engine_fp8.sbatch --workload small --profiler nsys",
+      "compute_command": "sbatch slurm/22_transformer_engine_fp8.sbatch --workload small --profiler ncu",
       "tuning_control": "Compare the BF16 reference with Transformer Engine FP8 under the declared scaling recipe and numerical gate",
       "evidence_views": [
         "Selected comparison generation",
@@ -765,12 +765,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/22_transformer_engine_fp8/logs/%j.out\" \\\n  --error=\"$PWD/results/22_transformer_engine_fp8/logs/%j.err\" slurm/22_transformer_engine_fp8.nsys.sbatch --workload small",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/22_transformer_engine_fp8/logs/%j.out\" \\\n  --error=\"$PWD/results/22_transformer_engine_fp8/logs/%j.err\" slurm/22_transformer_engine_fp8.ncu.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/22_transformer_engine_fp8/logs/%j.err\" slurm/22_transformer_engine_fp8.sbatch --workload small --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/22_transformer_engine_fp8/logs/%j.err\" slurm/22_transformer_engine_fp8.sbatch --workload small --profiler ncu",
       "jobs": {
         "run": "slurm/22_transformer_engine_fp8.sbatch",
-        "nsys": "slurm/22_transformer_engine_fp8.nsys.sbatch",
-        "ncu": "slurm/22_transformer_engine_fp8.ncu.sbatch"
+        "nsys": "slurm/22_transformer_engine_fp8.sbatch",
+        "ncu": "slurm/22_transformer_engine_fp8.sbatch"
       }
     },
     "24_checkpoint_resume": {
@@ -812,7 +812,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/24_checkpoint_resume.json",
       "baseline_command": "sbatch slurm/24_checkpoint_resume.sbatch --workload small",
-      "systems_command": "sbatch slurm/24_checkpoint_resume.nsys.sbatch --workload small",
+      "systems_command": "sbatch slurm/24_checkpoint_resume.sbatch --workload small --profiler nsys",
       "compute_command": null,
       "tuning_control": "Compare uninterrupted training with save-and-resume using the restored optimizer and RNG state",
       "evidence_views": [
@@ -833,10 +833,10 @@
         "view": "Expand lab_workload and CUDA API/GPU rows. Locate training updates and device-to-host/host-to-device checkpoint transfers. Distinguish host serialization from GPU work, and require reference/resumed losses and parameter error to match."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/24_checkpoint_resume/logs/%j.out\" \\\n  --error=\"$PWD/results/24_checkpoint_resume/logs/%j.err\" slurm/24_checkpoint_resume.nsys.sbatch --workload small",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/24_checkpoint_resume/logs/%j.err\" slurm/24_checkpoint_resume.sbatch --workload small --profiler nsys",
       "jobs": {
         "run": "slurm/24_checkpoint_resume.sbatch",
-        "nsys": "slurm/24_checkpoint_resume.nsys.sbatch"
+        "nsys": "slurm/24_checkpoint_resume.sbatch"
       }
     },
     "25_sequence_packing": {
@@ -898,7 +898,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/25_sequence_packing.json",
       "baseline_command": "sbatch slurm/25_sequence_packing.sbatch --workload small --capacity 256",
-      "systems_command": "sbatch slurm/25_sequence_packing.nsys.sbatch --workload small --capacity 256",
+      "systems_command": "sbatch slurm/25_sequence_packing.sbatch --workload small --capacity 256 --profiler nsys",
       "compute_command": null,
       "tuning_control": "`--capacity`",
       "evidence_views": [
@@ -923,10 +923,10 @@
         "view": "Expand lab_workload and CUDA GPU rows. Locate zero-fill, triangular-mask construction and scalar-read synchronization. This lab validates a boundary-safe mask; it does not benchmark packed transformer training."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/25_sequence_packing/logs/%j.out\" \\\n  --error=\"$PWD/results/25_sequence_packing/logs/%j.err\" slurm/25_sequence_packing.nsys.sbatch --workload small --capacity 256",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/25_sequence_packing/logs/%j.err\" slurm/25_sequence_packing.sbatch --workload small --capacity 256 --profiler nsys",
       "jobs": {
         "run": "slurm/25_sequence_packing.sbatch",
-        "nsys": "slurm/25_sequence_packing.nsys.sbatch"
+        "nsys": "slurm/25_sequence_packing.sbatch"
       }
     },
     "26_input_pipeline": {
@@ -980,8 +980,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/26_input_pipeline.json",
       "baseline_command": "sbatch slurm/26_input_pipeline.sbatch --workload small --workers 2 --prefetch 2",
-      "systems_command": "sbatch slurm/26_input_pipeline.nsys.sbatch --workload small --workers 2 --prefetch 2",
-      "compute_command": "sbatch slurm/26_input_pipeline.ncu.sbatch --workload small --workers 2 --prefetch 2",
+      "systems_command": "sbatch slurm/26_input_pipeline.sbatch --workload small --workers 2 --prefetch 2 --profiler nsys",
+      "compute_command": "sbatch slurm/26_input_pipeline.sbatch --workload small --workers 2 --prefetch 2 --profiler ncu",
       "tuning_control": "`--workers`, `--prefetch`",
       "evidence_views": [
         "Selected comparison generation",
@@ -1005,12 +1005,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/26_input_pipeline/logs/%j.out\" \\\n  --error=\"$PWD/results/26_input_pipeline/logs/%j.err\" slurm/26_input_pipeline.nsys.sbatch --workload small --workers 2 --prefetch 2",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/26_input_pipeline/logs/%j.out\" \\\n  --error=\"$PWD/results/26_input_pipeline/logs/%j.err\" slurm/26_input_pipeline.ncu.sbatch --workload small --workers 2 --prefetch 2",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/26_input_pipeline/logs/%j.err\" slurm/26_input_pipeline.sbatch --workload small --workers 2 --prefetch 2 --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/26_input_pipeline/logs/%j.err\" slurm/26_input_pipeline.sbatch --workload small --workers 2 --prefetch 2 --profiler ncu",
       "jobs": {
         "run": "slurm/26_input_pipeline.sbatch",
-        "nsys": "slurm/26_input_pipeline.nsys.sbatch",
-        "ncu": "slurm/26_input_pipeline.ncu.sbatch"
+        "nsys": "slurm/26_input_pipeline.sbatch",
+        "ncu": "slurm/26_input_pipeline.sbatch"
       }
     },
     "27_fused_graph_trace": {
@@ -1052,8 +1052,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/27_fused_graph_trace.json",
       "baseline_command": "sbatch slurm/27_fused_graph_trace.sbatch --workload small",
-      "systems_command": "sbatch slurm/27_fused_graph_trace.nsys.sbatch --workload small --external-only",
-      "compute_command": "sbatch slurm/27_fused_graph_trace.ncu.sbatch --workload small --external-only",
+      "systems_command": "sbatch slurm/27_fused_graph_trace.sbatch --workload small --external-only --profiler nsys",
+      "compute_command": "sbatch slurm/27_fused_graph_trace.sbatch --workload small --external-only --profiler ncu",
       "tuning_control": "Compare eager, compiled, and captured complete updates against the same reference",
       "evidence_views": [
         "Selected comparison generation",
@@ -1077,12 +1077,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/27_fused_graph_trace/logs/%j.out\" \\\n  --error=\"$PWD/results/27_fused_graph_trace/logs/%j.err\" slurm/27_fused_graph_trace.nsys.sbatch --workload small --external-only",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/27_fused_graph_trace/logs/%j.out\" \\\n  --error=\"$PWD/results/27_fused_graph_trace/logs/%j.err\" slurm/27_fused_graph_trace.ncu.sbatch --workload small --external-only",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/27_fused_graph_trace/logs/%j.err\" slurm/27_fused_graph_trace.sbatch --workload small --external-only --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/27_fused_graph_trace/logs/%j.err\" slurm/27_fused_graph_trace.sbatch --workload small --external-only --profiler ncu",
       "jobs": {
         "run": "slurm/27_fused_graph_trace.sbatch",
-        "nsys": "slurm/27_fused_graph_trace.nsys.sbatch",
-        "ncu": "slurm/27_fused_graph_trace.ncu.sbatch"
+        "nsys": "slurm/27_fused_graph_trace.sbatch",
+        "ncu": "slurm/27_fused_graph_trace.sbatch"
       }
     },
     "30_training_profiler": {
@@ -1106,8 +1106,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/30_training_profiler.json",
       "baseline_command": "sbatch slurm/30_training_profiler.sbatch --workload small",
-      "systems_command": "sbatch slurm/30_training_profiler.nsys.sbatch --workload small --external-only",
-      "compute_command": "sbatch slurm/30_training_profiler.ncu.sbatch --workload small --external-only",
+      "systems_command": "sbatch slurm/30_training_profiler.sbatch --workload small --external-only --profiler nsys",
+      "compute_command": "sbatch slurm/30_training_profiler.sbatch --workload small --external-only --profiler ncu",
       "tuning_control": "Map the expensive operators to forward/backward phases and CUDA launches",
       "evidence_views": [
         "Selected comparison generation",
@@ -1125,12 +1125,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/30_training_profiler/logs/%j.out\" \\\n  --error=\"$PWD/results/30_training_profiler/logs/%j.err\" slurm/30_training_profiler.nsys.sbatch --workload small --external-only",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/30_training_profiler/logs/%j.out\" \\\n  --error=\"$PWD/results/30_training_profiler/logs/%j.err\" slurm/30_training_profiler.ncu.sbatch --workload small --external-only",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/30_training_profiler/logs/%j.err\" slurm/30_training_profiler.sbatch --workload small --external-only --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/30_training_profiler/logs/%j.err\" slurm/30_training_profiler.sbatch --workload small --external-only --profiler ncu",
       "jobs": {
         "run": "slurm/30_training_profiler.sbatch",
-        "nsys": "slurm/30_training_profiler.nsys.sbatch",
-        "ncu": "slurm/30_training_profiler.ncu.sbatch"
+        "nsys": "slurm/30_training_profiler.sbatch",
+        "ncu": "slurm/30_training_profiler.sbatch"
       }
     },
     "31_training_capstone": {
@@ -1190,8 +1190,8 @@
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/31_training_capstone.json",
       "baseline_command": "sbatch slurm/31_training_capstone.sbatch --workload small --variant-order baseline-first",
-      "systems_command": "sbatch slurm/31_training_capstone.nsys.sbatch --workload small --variant-order baseline-first",
-      "compute_command": "sbatch slurm/31_training_capstone.ncu.sbatch --workload small --variant-order baseline-first",
+      "systems_command": "sbatch slurm/31_training_capstone.sbatch --workload small --variant-order baseline-first --profiler nsys",
+      "compute_command": "sbatch slurm/31_training_capstone.sbatch --workload small --variant-order baseline-first --profiler ncu",
       "tuning_control": "Compare baseline and candidate complete steps using all three independent seeded trials",
       "evidence_views": [
         "Selected comparison generation",
@@ -1219,12 +1219,12 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/31_training_capstone/logs/%j.out\" \\\n  --error=\"$PWD/results/31_training_capstone/logs/%j.err\" slurm/31_training_capstone.nsys.sbatch --workload small --variant-order baseline-first",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/31_training_capstone/logs/%j.out\" \\\n  --error=\"$PWD/results/31_training_capstone/logs/%j.err\" slurm/31_training_capstone.ncu.sbatch --workload small --variant-order baseline-first",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/31_training_capstone/logs/%j.err\" slurm/31_training_capstone.sbatch --workload small --variant-order baseline-first --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/31_training_capstone/logs/%j.err\" slurm/31_training_capstone.sbatch --workload small --variant-order baseline-first --profiler ncu",
       "jobs": {
         "run": "slurm/31_training_capstone.sbatch",
-        "nsys": "slurm/31_training_capstone.nsys.sbatch",
-        "ncu": "slurm/31_training_capstone.ncu.sbatch"
+        "nsys": "slurm/31_training_capstone.sbatch",
+        "ncu": "slurm/31_training_capstone.sbatch"
       }
     },
     "32_learning_basics": {
@@ -1293,7 +1293,7 @@
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/32_learning_basics.json",
       "baseline_command": "sbatch slurm/32_learning_basics.sbatch --device cpu --workload small",
-      "systems_command": "sbatch slurm/32_learning_basics.nsys.sbatch --device cuda",
+      "systems_command": "sbatch slurm/32_learning_basics.sbatch --device cuda --profiler nsys",
       "compute_command": null,
       "tuning_control": "Hand-calculate the SGD update and verify the recorded trajectory",
       "evidence_views": [
@@ -1315,10 +1315,10 @@
         "view": "For --device cuda only, expand lab_workload and CUDA API/GPU rows. Observe short elementwise/reduction launches and synchronization from scalar reads. Relate them to the 30 updates and held-out result; this scalar exercise is not a training-throughput benchmark. CPU mode has no GPU profiling."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_learning_basics/logs/%j.out\" \\\n  --error=\"$PWD/results/32_learning_basics/logs/%j.err\" slurm/32_learning_basics.nsys.sbatch --device cuda",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/32_learning_basics/logs/%j.err\" slurm/32_learning_basics.sbatch --device cuda --profiler nsys",
       "jobs": {
         "run": "slurm/32_learning_basics.sbatch",
-        "nsys": "slurm/32_learning_basics.nsys.sbatch"
+        "nsys": "slurm/32_learning_basics.sbatch"
       }
     }
   },

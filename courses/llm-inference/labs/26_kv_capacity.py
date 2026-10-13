@@ -25,6 +25,7 @@ def main() -> None:
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--sequence", type=int, default=4096)
     parser.add_argument("--concurrency", type=int, default=8)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.sequence < 1 or args.concurrency < 1:
@@ -40,6 +41,7 @@ def main() -> None:
             "ideal_gib": round(per_token * args.sequence * args.concurrency / 2**30, 4),
         }
     probe = torch.empty((2, 32, 8, 128), device="cuda", dtype=torch.bfloat16)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="26_kv_capacity",

@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--requests", type=int, default=16)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--output", type=Path, default=None)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     begin_experiment(args)
     require_hf_commit_revision(args.revision)
@@ -95,6 +96,7 @@ def main() -> None:
         },
     }
     output = args.output or Path(f"results/11_serving_client-run-{run_id}.json")
+    # Write this run’s evidence without overwriting an earlier result.
     write_json_exclusive(output, payload)
     print(f"Completed local serving benchmark: {output}")
 
