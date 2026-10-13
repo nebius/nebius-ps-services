@@ -7305,7 +7305,7 @@
             "--workload",
             "small",
             "--new-tokens",
-            "1"
+            "2"
           ]
         },
         {
@@ -7338,7 +7338,7 @@
           "--workload",
           "small",
           "--new-tokens",
-          "1",
+          "2",
           "--profiler",
           "nsys"
         ],
@@ -7348,7 +7348,7 @@
           "--workload",
           "small",
           "--new-tokens",
-          "1",
+          "2",
           "--profiler",
           "ncu"
         ]
@@ -7371,7 +7371,7 @@
             "--workload",
             "small",
             "--new-tokens",
-            "1",
+            "2",
             "--profiler",
             "nsys"
           ],
@@ -7403,7 +7403,7 @@
             "--workload",
             "small",
             "--new-tokens",
-            "1",
+            "2",
             "--profiler",
             "ncu"
           ],

@@ -177,8 +177,8 @@ Write down the process layout before choosing flags:
 | `--partition=NAME` | Select an eligible partition. |
 | `--account=NAME` | Charge the job to an authorized Slurm account. |
 
-Two nodes, one task per node, four CPUs per task and one GPU per node requests
-two tasks, eight CPUs and two GPUs in total. With `--mem=16G`, each node must
+With two nodes, one task per node, four CPUs per task and one GPU per node,
+this request reserves two tasks, eight CPUs and two GPUs in total. With `--mem=16G`, each node must
 supply the requested host memory. These are illustrative requests, not universal
 CPU-to-GPU sizing recommendations. A Slurm CPU can represent a core or hardware
 thread depending on site configuration.

@@ -1,5 +1,10 @@
 # Catalog navigation validation
 
+Current catalog-wide source, style and TOC evidence is recorded in the
+[complete catalog review](course-format-validation.md#complete-catalog-review-and-alignment--2026-10-13),
+including the Advanced Labs runtime-support destination and final browser hashes.
+Earlier entries below retain their own scope.
+
 ## Links that preserve the current page — 2026-10-13
 
 All eleven generated HTML pages now open their 584 cross-page links in new tabs

@@ -14,6 +14,7 @@
 - **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
 - **Decode** — Autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
 - **Dequantization** — Reconstructing approximate numerical values from quantized codes and their scale metadata.
+- **Detokenization** — Converting generated token IDs back into text using the tokenizer’s decoding rules.
 - **Disaggregated serving** — Separate prefill and decode worker pools connected by request and KV-state handoff.
 - **DMA** — Direct memory access; transfer hardware moves bytes without CPU instructions copying each byte.
 - **DP** — Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
@@ -77,6 +78,7 @@
 - **Temperature** — Positive divisor applied to logits before softmax; lower values sharpen the distribution.
 - **Throughput** — Completed requests or tokens per second for a declared workload and boundary.
 - **Token** — A model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.
+- **Tokenization** — Converting input text into token IDs using the selected vocabulary and tokenization rules.
 - **Top-k** — Sampling filter retaining the k highest-scoring candidates, followed by renormalization.
 - **Top-p** — Sampling filter retaining the smallest ranked prefix reaching a declared cumulative probability threshold.
 - **TP (tensor parallelism)** — Splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.

@@ -123,9 +123,9 @@
       "question": "Draw which token is input to each pass and which token is sampled from its output. Why is the last generated token not necessarily already represented in the returned cache when generation stops?",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/09_hf_prefill_decode.json",
-      "baseline_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 1",
-      "systems_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 1 --profiler nsys",
-      "compute_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 1 --profiler ncu",
+      "baseline_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 2",
+      "systems_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 2 --profiler nsys",
+      "compute_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 2 --profiler ncu",
       "tuning_control": "`--new-tokens`",
       "evidence_views": [
         "Selected comparison generation",
@@ -171,8 +171,8 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --error=\"$PWD/results/09_hf_prefill_decode/logs/%j.err\" slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 1 --profiler nsys",
-      "learner_compute_command": "sbatch --error=\"$PWD/results/09_hf_prefill_decode/logs/%j.err\" slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 1 --profiler ncu",
+      "learner_systems_command": "sbatch --error=\"$PWD/results/09_hf_prefill_decode/logs/%j.err\" slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 2 --profiler nsys",
+      "learner_compute_command": "sbatch --error=\"$PWD/results/09_hf_prefill_decode/logs/%j.err\" slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 2 --profiler ncu",
       "jobs": {
         "run": "slurm/09_hf_prefill_decode.sbatch",
         "nsys": "slurm/09_hf_prefill_decode.sbatch",

@@ -81,7 +81,7 @@ All seven standalone validators, HTML/helper parity and 69 focused catalog/text-
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=18 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=19 -->
 ### FEAT-002: Shared authoring and publication contract
 
 #### Requirements Covered
@@ -153,6 +153,8 @@ One coherent authoring/presentation contract applies to every course.
 
 #### Implementation Evidence
 
+Complete-catalog review (2026-10-13): reviewed all 105 lesson/reference chapters and 110 compact guides under the existing profiles. Added the missing Advanced runtime-support TOC entry, corrected three syllabus summary orders and five compact-guide descriptions, added 11 glossary terms and local tensor/operator definitions, clarified two diagram labels, and repaired CUDA capstone/preflight and AIPerf route directions. Lab 09 now illustrates prefill plus one continuation pass with two output tokens; its guide, observability and source/installed campaign recipes agree. Lab algorithms, identities and historical results remain unchanged. Maintainer guidance, changelog and all nine publication reviews reflect the same sources.
+
 Current text/format alignment (2026-10-12): restored the existing all-nine-course contract after the sixteen-lesson PyTorch revision. Added 46 taught-term definitions, consistent glossary sentence casing, accurate course-ending README guidance and the missing Tools operator-profiling diagram. Corrected the supplied two-kernel fusion example, supported normalization widths, optional CUDA Graph/Tile wording, Advanced readiness framing, TTFT proxy terminology and the Lab 05 onward reference. All lesson identities and declared profiles remain intact; practical implementations are unchanged.
 
 Nine-course alignment: reconciled current prerequisite and tools ownership, clarified supplied-versus-extension lab capabilities, added 55 glossary keys while consolidating one combined entry, and preserved the three-part PyTorch overview content. All 105 chapters and 110 guide associations retain their identities. Shared runtime discovery/preparation now honors the lessons-only exclusion; see FEAT-043 for focused repair evidence.
@@ -180,6 +182,8 @@ validation and lab-guide maintenance for course maintainers. The Fundamentals
 README labels its publication instruction, including in the generated HTML.
 
 #### Verification Evidence
+
+Complete-catalog review (2026-10-13): all nine native validators, full build/freshness and 748 focused tests pass, with three unavailable-Torch skips and one Linux-only skip. A failing-first regression exercises the existing pure generation scheduler for 21 guide/recipe commands. After the AIPerf repair, 113 focused tests pass with three Torch skips. Final read-only review has no remaining concrete finding. Thirty-three isolated Playwright 1.62.1/headless Chrome 155.0.8059.40 cases cover all eleven pages at desktop/390px/320px; the final Inference prose has a separate three-case rerun and every fact record matches the current artifact hash. Computed typography agrees across all courses, source/installed recipes match, all six archives retain their hashes and all 3,249 tracked lab/launcher/environment/dashboard/result/archive files are unchanged. See docs/course-format-validation.md for exact artifact identities, baseline generic-checker diagnostics, earlier harness failures and remaining dense-diagram/mobile and live-target limitations. Broader feature delivery stays implemented; no installation, live execution or publication is claimed.
 
 Current text/format alignment (2026-10-12): 480 focused tests, all nine native validators, HTML/archive freshness, shared build, scoped Markdown/whitespace checks and final read-only code/security review pass. All 33 isolated headless Chrome 155.0.8059.39 cases pass across eleven pages at desktop/390px/320px, verifying exact navigation, shared reading typography, glossary/appendix order, fragment targets, keyboard interaction, local scrollers and reflow. All 3,308 protected implementation/launcher/environment/result/archive files retain task-start bytes. See docs/course-format-validation.md for exact artifact hashes, earlier harness failures, generic-checker profile/markup diagnostics and remaining dense-diagram and live/GPU qualification limits. This restores presentation consistency without promoting broader runtime acceptance.
 

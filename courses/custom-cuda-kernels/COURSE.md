@@ -115,7 +115,7 @@ Successful host compilation does not prove device code was generated for SM90, l
 
 **Practice**
 
-Complete Lab 13 to build the SM90 program and verify the allocated target before attempting the vector kernel.
+After preparation builds the SM90 program, use Lab 13 to verify the allocated target before attempting the vector kernel.
 
 - [Lab 13: Build and identify the H100 CUDA execution target](reference/labs/13_h100_preflight.md)
 
@@ -193,7 +193,7 @@ A kernel with a race can pass thousands of runs and fail under another schedule 
 
 **Practice**
 
-Revisit Lab 01 with its sanitizer and profiling launchers; establish correctness and memory safety before interpreting kernel counters.
+Revisit Lab 01 with the lab launcher’s sanitizer and profiler selections; establish correctness and memory safety before interpreting kernel counters.
 
 - [Lab 01: Launch and validate a bounds-safe vector kernel](reference/labs/01_vector_add.md)
 
@@ -567,7 +567,7 @@ Suppose a kernel accounts for 40% of a 10-millisecond application step. Making t
 
 **Practice**
 
-Complete Lab 12’s three independent kernel acceptance trials with counterbalanced order and numerical checks. Keep end-to-end acceptance pending until you implement and time the separate application integration described in the guide.
+Complete Lab 12’s three fresh-process kernel acceptance trials with `--experiment trials`, as described in its guide. The launcher alternates baseline-first, candidate-first and baseline-first order and checks numerical correctness. Application integration is a separate learner exercise: call the accepted operation from an application and compare the complete baseline and candidate paths before claiming end-to-end improvement.
 
 - [Lab 12: Assemble a kernel acceptance report](reference/labs/12_capstone.md)
 

@@ -1,6 +1,8 @@
 # Glossary
 
 - **Activation checkpointing** — Discarding selected forward activations and recomputing them during backward to trade compute for memory.
+- **AdamW** — An adaptive optimizer that tracks moving averages of gradients and squared gradients while applying weight decay separately from the gradient-based update.
+- **Attention mask** — A rule selecting which token positions may attend to which others, such as blocking future tokens or separating packed examples.
 - **Autocast** — PyTorch's operation-specific choice of computation dtype inside a mixed-precision region; it does not uniformly convert every operation to the same dtype.
 - **Autograd** — Automatic differentiation that records operations and computes gradients during the backward pass.
 - **Backward pass** — Propagating loss derivatives through recorded operations to compute gradients for trainable parameters.
@@ -15,6 +17,7 @@
 - **DDP** — DistributedDataParallel; one model replica per rank with gradient synchronization, commonly by all-reduce.
 - **DP** — Data parallelism: replicas process different examples while synchronizing gradients to preserve the same global optimizer update.
 - **Effective batch** — All examples or tokens contributing to one optimizer update.
+- **Embedding** — A learned vector representation retrieved for a token ID before the model processes the sequence.
 - **EOS** — End-of-sequence token; a signal that may terminate generation, distinct from reaching a length limit.
 - **EP** — Expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
 - **Epoch** — One complete pass through the training dataset under the declared sampling policy.
@@ -56,6 +59,7 @@
 - **NVTX** — NVIDIA Tools Extension Library, an annotation API for named markers and ranges; it does not synchronize or time GPU work by itself.
 - **Old policy** — Frozen behavior policy used to sample the rollout whose probability ratios enter the update.
 - **Optimizer** — An update rule, such as SGD or Adam, that uses gradients and possibly stored state to change parameters.
+- **Padding** — Extra positions that make variable-length examples fit a common tensor shape; padded positions must be handled correctly by attention and loss masks.
 - **Parameter / weight** — A learned numeric value that affects a model's output; activations are intermediate values computed from inputs and parameters.
 - **PEFT** — Parameter-efficient fine-tuning; adapting a subset of parameters or added small parameter sets instead of updating every base weight.
 - **Pinned buffer** — Page-locked host memory used for asynchronous host/device transfers; pinning and allocation have costs.
@@ -77,7 +81,9 @@
 - **Strong scaling** — Adding ranks while total useful work remains fixed.
 - **TF32** — TensorFloat-32; a reduced-mantissa compute mode for selected FP32 matrix operations on supported NVIDIA hardware, not a tensor storage dtype.
 - **Throughput** — Completed requests or tokens per second for a declared workload and boundary.
+- **Token** — A model’s unit of text representation, mapped to an integer by its tokenizer; it need not be a whole word.
 - **Token-weighted loss** — Loss aggregated by the number of valid labels rather than by equally averaging batches with different valid-token counts.
+- **Tokenization** — Converting text into token IDs using the selected vocabulary and tokenization rules.
 - **TP (tensor parallelism)** — Splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
 - **Training** — Adjusting model parameters using data and an objective, then checking whether the resulting model generalizes to examples not used for those updates.
 - **Transformer Engine** — NVIDIA library for optimized transformer layers and low-precision recipes.

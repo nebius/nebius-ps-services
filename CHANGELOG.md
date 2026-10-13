@@ -6,6 +6,12 @@ project folder.
 
 ## [Unreleased]
 
+- Review all nine courses and align TOCs, numbered syllabus routes, glossary
+  coverage, diagram labels and compact-guide directions. Correct the prefill
+  example to include continuation, expose the CUDA capstone trial selection,
+  and provide the existing AIPerf submission route; preserve course profiles
+  and refresh source/browser review evidence.
+
 - Color embedded code comments saturated burnt orange across all nine courses and the Lab
   Guide, preserving exact source text and offline reading through the shared
   standard-library renderer and stylesheet. Invalid snippets identify their source

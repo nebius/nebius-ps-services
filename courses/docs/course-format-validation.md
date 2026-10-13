@@ -9,6 +9,96 @@ declared profiles. Each course closes with one Where to Go Next, one Glossary
 and final Official references.
 The earlier counts, field order and hashes below apply to their original revisions.
 
+## Complete catalog review and alignment — 2026-10-13
+
+Reviewed all nine course packages: 105 lesson/reference chapters, 110 compact
+lab guides, missions, syllabi, READMEs, glossary and onward-study sources,
+metadata, shared styles and navigation. Preserved the text-only, reference-only,
+lessons-only and labs-only profiles and every lesson/lab identity.
+
+### Corrections
+
+- Added Advanced Labs’ missing **Complete runtime support** TOC destination.
+  Corrected maintainer catalog counts and retained the shared typography.
+- Put the Optimization, Training and Inference syllabus summaries in their
+  numbered reading order; aligned all five practical syllabi with compact labs.
+- Added 11 taught-term glossary entries, defined tensors/operators before the
+  profiler explanation, and made every Tools onward option a bullet.
+- Clarified autograd’s gradient label, participating ranks in the serving
+  diagram, CUDA preparation versus preflight, and sanitizer/profiler selections.
+- Connected CUDA capstone teaching to its supplied three-trial selection while
+  identifying application integration as a separate learner exercise. Located
+  the introductory AIPerf submission in Readiness checks with its actual defaults.
+- Changed Lab 09’s illustrated and baseline recipe budget from one to two output
+  tokens so it performs both prefill and continuation. Aligned the guide, five
+  observability commands, and five source/installed campaign recipe fields.
+  The eight-token candidate and one-token edge-case coverage remain valid.
+
+### Verification and limits
+
+| Lane | Result |
+| --- | --- |
+| Source/static | All nine native validators, full build and HTML/archive freshness pass. 748 focused tests pass with three unavailable-Torch skips and one Linux-only skip; 113 focused tests pass after the AIPerf wording repair. Ruff, configured Markdown lint, whitespace and paired spec validation pass. |
+| Semantic/code/security | Four bounded read-only source reviews covered the catalog. Independent final review caught and resolved misleading AIPerf help/command wording. No remaining concrete changed-scope finding. This is not renewed expert qualification of every technology or external reference. |
+| Preservation | All 3,249 tracked lab, launcher, environment, dashboard and historical-result/archive files are unchanged. The six archive SHA-256 values match the task-start snapshot. Source and installed recipe JSON remain byte-identical. |
+| Browser/visual | 33 isolated full-page checks pass at 1440×1000, 390×1000 and 320×1000. Three Inference cases were rerun after its final prose correction; all 33 fact records match the final hashes below. Exact catalog/menu order, fragment targets, unique IDs, appendices/glossary order, keyboard controls, local scrollers, page containment and doubled-text reflow pass. Computed body/H2/H3 typography agrees across all nine courses at each width. |
+| Installed environment/runtime/live target | No packages installed, GPU/Slurm jobs submitted, serving workloads run, or external publication performed. The 21-command regression executes the existing pure generation scheduler, not a real model. Existing target qualification limits remain in force. |
+
+Browser evidence uses Playwright Test 1.62.1 and owned headless Chrome
+155.0.8059.40, with page JavaScript disabled and isolated contexts. Entry,
+glossary and selected figure captures were visually inspected across all nine
+courses, plus the catalog and Lab Guide. No page-level overflow or desktop SVG
+label overflow was found. The revised autograd label is readable at 320px.
+Older dense multi-column diagrams, including the serving-parallelism figure,
+still have small phone labels; their visible captions explain the relationships.
+This review does not claim unrestricted mobile diagram readability or full
+publication readiness. Required live-target gates remain pending.
+
+The generic skill checker was run on all nine current pages and reconstructed
+starting pages. It reports identical diagnostics for shared shell/CSS/listing
+markup, relative navigation and explicit nonstandard course profiles. Native
+profile-aware validators remain the acceptance gates; the generic checker is
+not claimed passing or weakened.
+
+Local evidence group `course-review-mv9sjep6` contains the baseline and final
+hash inventories, semantic regression negative control, build/native/test logs,
+generic-checker reports, `publication-verified.spec.cjs`,
+`playwright-verified.config.cjs`, `browser-verified/<page>-<width>/facts.json`,
+`entry.png`, `glossary.png` and selected figure captures. The 33-case log is
+`browser-verified.log`; `browser-inference-final.log` records the final three
+cases. Traces use `browser-traces-verified` with retain-on-failure, so passing
+final cases produce no retained trace. Test-owned contexts and browser processes
+closed; no personal browser profile or server was used.
+
+Initial evidence remains separate: builds rejected an unsupported source
+fragment and an extra compact-guide introduction paragraph; both were repaired.
+A prematurely launched test run observed stale generated pages, then the complete
+post-build suite passed. The older Playwright 1.57.0 trial timed out on Lab Guide;
+the available 1.62.1 runner and explicit screenshot positioning passed against
+the same guide bytes. This is a harness correction, not a product fix. Tests use
+existing cached pytest 9.1.1 and dependencies; they do not qualify a clean install.
+
+Terminology checks used the official [PyTorch AdamW documentation](https://docs.pytorch.org/docs/2.14/generated/torch.optim.AdamW.html),
+[PyTorch profiler documentation](https://docs.pytorch.org/docs/2.14/profiler.html)
+and [NCCL collective definitions](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html).
+Browser harness options were checked against [Playwright configuration](https://playwright.dev/docs/test-use-options).
+
+### Reviewed artifacts
+
+| Page | SHA-256 |
+| --- | --- |
+| `index.html` | `b2a0076e140ebfd647f9bc74e4cc2467c3b74115810a7c0d6fd10efe141ae349` |
+| `lab-guide.html` | `fd2256d04e4a7e585a6ca4dac9c8d812ef0cae4f575e3c300d37cd262463b05d` |
+| `gpu-fundamentals/index.html` | `9cf9b2ecb1bc4b0d05c2882c6d0deb86544f65a1bbceeb9e6c5e105ada3b1128` |
+| `custom-cuda-kernels/index.html` | `60b6efc61a676ba67dc3c6932320fbd479c6df836000c4ea9f599ecc05a9c134` |
+| `advanced-gpu-communication/index.html` | `1b51b58d11ab2b6e42d8d7108cb381c2bd9891c3de581dcace71bdf362eb65bd` |
+| `gpu-performance-tools/index.html` | `d23659e2dc45da9dd070018fc7976152e96841f11e544577132769990a89d6ce` |
+| `pytorch-gpu-performance-engineering/index.html` | `2ade22b24a401a65cf5678e50921f25c0b12b6450654bf75008e1d3171054ebb` |
+| `llm-inference/index.html` | `d56e57ce26be532df63f273692c907719ade656a9980e854f4a2cbf52917fb5a` |
+| `soperator/index.html` | `ccc6e8804cb25eb5836722203e13967187327a81ea2b1a4073d673eeea92eaa3` |
+| `llm-training/index.html` | `fc2a0f42b3c07838aafbc450a72332b12b9b728107f9e350ff5cfdfee95cc904` |
+| `gpu-optimizations/index.html` | `2c0925d01f604f93b94cdcacf187ac1632345f6ea5aceedddb9b6095c63a9c69` |
+
 ## Course guide cleanup — 2026-10-13
 
 All nine READMEs were reviewed and shortened from 9,534 to 3,029 words. Removed

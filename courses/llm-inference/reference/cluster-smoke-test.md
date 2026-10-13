@@ -116,19 +116,22 @@ necessarily correspond one-to-one with model tokens.
 
 ## Engine qualification and causal report
 
-Inspect each specialized launcher's help before providing its required engine
-repository or profile inputs:
+Inspect the specialized launcher selections, submit the introductory AIPerf
+comparison, and run the local capstone trials:
 
 ```bash
 bash slurm/30_engine_profile.sbatch --experiment trtllm --help
-bash slurm/15_streaming_client.sbatch --experiment aiperf --help
+sbatch slurm/15_streaming_client.sbatch --experiment aiperf --workload small
 bash slurm/dynamo_disaggregated_preflight.sbatch --help
 bash slurm/33_speculative_engine_client.sbatch --help
 sbatch slurm/32_inference_capstone.sbatch --experiment trials --workload small
 ```
 
-Lab 30 and its engine profiles document TensorRT-LLM/Triton, AIPerf, and
-conditional Dynamo qualification. Real-engine speculative decoding is optional
+Lab 30 owns TensorRT-LLM/Triton profiling; Lab 15’s `--experiment aiperf`
+route owns the introductory AIPerf comparison from Lesson 7. The submission
+above starts the pinned default model on loopback, runs a bounded streaming
+profile, and stops the server. It needs the prepared serving runtime. The default
+Lab 15 submission uses the supplied streaming client. The separate Dynamo preflight checks conditional qualification. Real-engine speculative decoding is optional
 and requires compatible target/draft artifacts. Dynamo disaggregation remains
 an advanced exercise with capacity, transport, and routing prerequisites.
 

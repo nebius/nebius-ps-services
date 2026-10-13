@@ -18,7 +18,7 @@ Estimated guided time: **36 hours**.
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lesson’s Practice section identifies the activity and links to its lab. The lab introduces its purpose, presents its source, and provides Run and Check your results commands. Use the syllabus to distinguish a reading preview from full execution.
 
 Begin with the library-first decision and a reproducible SM90 build. Write one correct vector kernel, learn validation/profiling, then build fusion, memory and reduction skills. Establish resource limits before diagnosing tails, combine mechanisms in pipelines and RMSNorm, and complete acceptance before optional Hopper and Tile branches.
 
@@ -42,7 +42,7 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | 1 | Custom kernel decision making | Reject custom ownership unless maintained paths leave an important gap | Library-first worksheet; run Lab 01 in Lesson 3 |
 | 2 | CUDA compilation and execution targets | Build a reproducible SM90 program and verify the allocated device | Lab 13 |
 | 3 | Kernel indexing and execution safety | Map elements to threads with complete bounds and error checks | Lab 01 |
-| 4 | Kernel correctness and performance evidence | Validate outputs and safety before collecting focused profiler evidence | Revisit Lab 01 with sanitizer/profiler launchers |
+| 4 | Kernel correctness and performance evidence | Validate outputs and safety before collecting focused profiler evidence | Revisit Lab 01 with the lab launcher’s sanitizer and profiler selections |
 | 5 | Elementwise kernel fusion | Remove intermediate traffic while preserving the elementwise operation | Lab 02 |
 | 6 | Memory layout and tiled transposition | Use shared tiles to coalesce both sides of a transpose | Lab 03 |
 | 7 | Parallel reductions | Compare aggregation and synchronization against a maintained reduction baseline | Lab 04 |

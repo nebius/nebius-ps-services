@@ -19,4 +19,4 @@ sacct -j <JOB_ID> --format=JobID,State,ExitCode
 cat results/07_grpo_trainer/jobs/<JOB_ID>/result.json
 ```
 
-A systems small test should have a controlled signal and observable state transition.
+A small systems test should have a controlled signal and observable state transition.

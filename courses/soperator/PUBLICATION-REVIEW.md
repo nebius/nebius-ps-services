@@ -1,5 +1,20 @@
 # Publication review
 
+## Complete catalog review and alignment — 2026-10-13
+
+Reviewed `index.html` SHA-256: `ccc6e8804cb25eb5836722203e13967187327a81ea2b1a4073d673eeea92eaa3`.
+
+Source, syllabus, glossary, compact-guide directions and navigation were reviewed
+under this course’s declared profile. Native validators and source/build parity
+pass. The complete 748-test scope passes with four documented skips; browser
+checks cover this final artifact at desktop, 390px and 320px widths.
+
+See the [complete catalog review](../docs/course-format-validation.md#complete-catalog-review-and-alignment--2026-10-13)
+for changes, final artifact hashes, scoped reruns, visual findings, generic-checker
+diagnostics and harness history. Dense phone diagrams and applicable live-target
+qualification remain explicit limitations. No installation, live lab execution
+or external publication occurred. Earlier records retain their own artifact scope.
+
 ## Course guide cleanup — 2026-10-13
 
 Reviewed `index.html` SHA-256: `25b971adec75cbf09e4d4c5248cbc9ee4985548d5fe8e0212e129d3961eef5d2`.

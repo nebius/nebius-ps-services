@@ -18,7 +18,7 @@ Estimated guided time: **44 hours**, for the conceptual and local practical rout
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lesson’s Practice section identifies the activity and links to its lab. The lab introduces its purpose, presents its source, and provides Run and Check your results commands. Use the syllabus to distinguish a reading preview from full execution.
 
 Read the conceptual lessons in numbered order: workload and measurement (1–3), local optimization (4–10), communication and scaling (11–12), library-first decisions (13), then fabric topology, GPU memory registration and rank timelines (14–16). Complete local practice on the base cluster. For distributed execution, follow the advanced course’s own lab route, which verifies topology and transport before training or serving experiments.
 
@@ -31,8 +31,9 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | --- | --- | --- |
 | Experimental contract | 1–3 | Freeze equivalent work, measure correctly and select focused evidence |
 | Local optimization | 4–10 | Tune execution/data paths and diagnose local imbalance |
+| Communication and scaling | 11–12 | Interpret qualified communication paths, fixed-work scaling and overlap |
 | Local integration and decision | 13 | Choose the smallest justified intervention |
-| Advanced GPU fabric | 14, 15, 11, 12, 16 | Qualify peer/RDMA paths, tune collectives and correlate rank traces |
+| Advanced GPU fabric | 14–16 | Interpret peer paths, GPU-memory registration and rank timelines |
 
 ## Lesson-by-lesson route
 

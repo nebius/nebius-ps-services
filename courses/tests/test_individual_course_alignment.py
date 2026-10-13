@@ -1,7 +1,9 @@
 """Course onboarding and evidence descriptions match the supplied experiments."""
 
 import importlib.util
+import json
 import re
+import shlex
 import shutil
 import subprocess
 
@@ -123,6 +125,26 @@ def test_inference_phase_lab_does_not_promise_unrecorded_client_metrics():
     assert "per-token gaps, total generation time, and stop reason" not in body
     assert "fixed output-token budget" in body
     assert "client-boundary observations" in body
+
+
+def test_prefill_continuation_recipes_exercise_both_phases():
+    lab = "09_hf_prefill_decode"
+    guide = text("llm-inference", f"reference/labs/{lab}.md")
+    commands = [shlex.split(line) for line in guide.splitlines() if line.startswith("sbatch ")]
+    observation = json.loads(text("llm-inference", "reference/observability.json"))["labs"][lab]
+    commands.extend(shlex.split(value) for key, value in observation.items() if key.endswith("_command"))
+    for relative in ("skills/run-labs", ".agents/skills/run-labs"):
+        recipe = json.loads((ROOT / relative / "references/recipes.json").read_text())["labs"][f"llm-inference:{lab}"]
+        commands.extend(variant["argv"] for variant in recipe["variants"])
+        commands.extend(recipe["profilers"].values())
+        commands.extend(run["argv"] for run in recipe["profiling_runs"])
+    assert len(commands) == 21
+    with load_lab(f"llm-inference/labs/{lab}.py") as module:
+        for command in commands:
+            tokens = int(command[command.index("--new-tokens") + 1])
+            schedule = module.generation_schedule(prompt_tokens=8, new_tokens=tokens)
+            assert schedule[0].phase == "prefill"
+            assert any(step.phase == "decode" for step in schedule), command
 
 
 def test_cluster_launch_dimension_uses_runtime_struct_members():

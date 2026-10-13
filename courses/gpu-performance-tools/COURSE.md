@@ -228,6 +228,8 @@ Relate framework operators to device work while keeping profiler overhead out of
 
 ### How it works
 
+A **tensor** holds numeric data with a shape, such as a vector or matrix. An **operator** performs a computation on tensors, such as addition or matrix multiplication.
+
 **PyTorch profiler** connects framework operators to CPU activity and CUDA work. Use it when a question starts at the tensor/operator level: which operation launches work, which shapes matter, and which operators account for device activity? Systems supplies the wider process timeline; Compute supplies selected kernel counters.
 
 For a CUDA operation, follow the CPU operator call to the GPU work it submits. One operator can launch several kernels. The same capture can be viewed as a summary of repeated events or as a timeline that preserves their order.

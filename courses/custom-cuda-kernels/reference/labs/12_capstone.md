@@ -4,6 +4,8 @@ A custom kernel is ready only when its correctness, memory safety, performance m
 
 ## Run
 
+The normal command below runs one kernel comparison. For three counterbalanced fresh-process trials, replace `--variant-order baseline-first` with `--experiment trials` in the normal submission. The supplied experiment does not implement or time application integration.
+
 ```bash
 # Normal execution
 sbatch slurm/12_capstone.sbatch --workload small --variant-order baseline-first

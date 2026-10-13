@@ -1,6 +1,8 @@
 # Glossary
 
 - **AIPerf** — The workload and measurement client used here to report request latency, throughput and service-objective results.
+- **All-gather** — A collective that collects each rank’s contribution and gives the complete set to every participating rank.
+- **All-reduce** — A collective that combines corresponding values across ranks with an operation such as sum and returns the combined result to every rank.
 - **All-to-all (a2a)** — An exchange in which each participating rank sends a portion of its data to every rank, used here for token or state redistribution.
 - **BF16** — Bfloat16; a 16-bit floating-point format with FP32-like exponent range and fewer significand bits.
 - **Collective** — A coordinated operation such as all-reduce, all-gather or all-to-all across a process group.
@@ -34,6 +36,7 @@
 - **PP** — Pipeline parallelism; placing layer ranges on different ranks and scheduling microbatches through the stages.
 - **Rank** — One process participating in a distributed group; global rank identifies the process across workers.
 - **RDMA** — Remote direct memory access between registered memory regions.
+- **Reduce-scatter** — A collective that combines corresponding values across ranks, then distributes distinct portions of the reduced result among the ranks.
 - **SGD** — Stochastic gradient descent; parameter updates driven by gradients estimated from sampled data.
 - **SLO** — Service-level objective; a declared threshold, such as a latency bound, used to determine whether completed work counts toward goodput.
 - **TP** — Tensor parallelism; partitioning tensor operations within model layers across ranks, with communication of intermediate results.

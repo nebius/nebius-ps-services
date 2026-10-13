@@ -333,7 +333,7 @@ Tools disagree about ITL/TPOT boundaries, empty chunks, warm-up, and throughput 
 
 **Practice**
 
-Use Labs 11 and 15 for request latency and streaming boundaries, including the introductory AIPerf comparison in the guides. Lab 15's supplied client runs a finite closed-loop workload and reports median/p90 first-content and completion latency, inter-chunk gaps and requests/s. It does not implement open-loop arrivals or measure token throughput or SLO goodput. Revisit Lab 25 only as an operator-level contrast, not a serving benchmark.
+Use Labs 11 and 15 for request latency and streaming boundaries, including the introductory AIPerf comparison through Lab 15’s `--experiment aiperf` route in [Readiness checks](reference/cluster-smoke-test.md). The default lab commands use the supplied clients; the AIPerf route uses the prepared serving runtime and its pinned default model. Lab 15's supplied client runs a finite closed-loop workload and reports median/p90 first-content and completion latency, inter-chunk gaps and requests/s. It does not implement open-loop arrivals or measure token throughput or SLO goodput. Revisit Lab 25 only as an operator-level contrast, not a serving benchmark.
 
 - [Lab 11: Measure concurrent completion requests](reference/labs/11_serving_client.md)
 - [Lab 15: Observe first content and streaming gaps](reference/labs/15_streaming_client.md)

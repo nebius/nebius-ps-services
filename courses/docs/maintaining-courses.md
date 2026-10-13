@@ -76,14 +76,14 @@ its stable `slug` identifies the course even if a downloaded folder is renamed.
 Catalog introductions and learning outcomes live in the renderer, while
 `tools/catalog.css` owns the catalog's embedded styles. Edit these sources
 instead of generated HTML. A selected-course build also refreshes the shared guide and catalog;
-rebuild all eight course pages when shared metadata, navigation, styles or licensing
+rebuild all nine course pages when shared metadata, navigation, styles or licensing
 changes. `--check` always checks the shared guide and catalog as well as the selected courses.
 
-The reader-facing order is Soperator, Lab Guide, GPU Performance Tools, GPU Fundamentals, GPU Performance
+The reader-facing order is Soperator, Lab Guide, GPU Performance Tools, PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance
 Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs.
 `course_builder.config.CATALOG_GROUPS` owns the presentation groups and derives
-the nine-entry sequence used by cards, the learning path, and every course/guide
-menu. `COURSES` remains the eight real course packages; never add the README-derived
+the ten-entry sequence used by cards, the learning path, and every course/guide
+menu. `COURSES` remains the nine real course packages; never add the README-derived
 guide to that build registry. Its generated title is Lab Guide, and it has no
 invented guided hours. Each menu has one current-page marker and a separate
 catalog backlink. Read GPU Performance Tools before starting lab-bearing courses;
@@ -134,7 +134,7 @@ synchronize remote files or publish the website.
 
 Run the offline validation commands below before committing generated HTML.
 Once Pages is enabled, reviewed changes to `main` publish those committed files.
-Confirm the deployment succeeded and the root, catalog, shared guide and eight course URLs
+Confirm the deployment succeeded and the root, catalog, shared guide and nine course URLs
 serve the intended revision before declaring a publication complete. See
 [GitHub's publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 for the branch deployment settings.
@@ -161,7 +161,7 @@ Every lesson has a concise title naming its central subject. The five conceptual
 GPU courses use **Objective**, **How it works**, **Practice** and **Mental model**.
 Optional **References** come last. The text-only Soperator course uses **Practice** for reading checks with answers
 and intentionally has no diagrams, labs or runtime assets. GPU Performance Tools
-is reference-only with contextual diagrams. The advanced communication course is labs-only and retains complete practical guides.
+is reference-only with contextual diagrams. PyTorch for GPU Performance Engineering is lessons-only: sixteen lessons with Objective, How it works and Mental model, contextual diagrams and no Practice or lab/runtime assets. The advanced communication course is labs-only and retains complete practical guides.
 All lesson fields render as semantic subheadings in the same visual style.
 The objective states the capability to learn. How it works starts with a
 plain-English definition, integrates useful prerequisite connections and

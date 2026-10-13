@@ -18,7 +18,7 @@ comparing scheduling, quantization or speculation.
   `"$COURSE_PYTHON" labs/35_inference_basics.py --device cpu` in the mechanics runtime.
 - After Lesson 5, fix the model, sampling contract, cache estimate and workload.
 - After Lesson 7, distinguish client latency from model-forward time; try the
-  introductory AIPerf profile before a policy comparison.
+  introductory [AIPerf profile](reference/cluster-smoke-test.md) through Lab 15’s `--experiment aiperf` route before a policy comparison.
 - Change scheduling, backend or precision one at a time. CPU cache models and
   mechanics experiments do not establish live serving performance.
 
