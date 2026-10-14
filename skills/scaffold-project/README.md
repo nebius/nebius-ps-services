@@ -67,6 +67,9 @@ or participate in Agentic SDLC.
 - `scripts/scaffold_project.py`: deterministic finalizer, validator, status,
   and apply executor.
 - `scripts/test_scaffold_project.py`: disposable unit and race fixtures.
+  Directory-replacement fixtures retain the displaced directory and assert a
+  distinct device/inode identity, so Linux inode reuse cannot invalidate the
+  test setup.
 - `scripts/test_frontend_scaffold_e2e.py`: offline app-stack to frontend apply
   contract.
 - `evals/trigger-prompts.csv`: positive, negative, and overlap trigger cases.

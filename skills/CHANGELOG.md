@@ -4,6 +4,9 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Make scaffold directory-replacement fixtures deterministic on Linux by
+  retaining the original inode and asserting a distinct replacement identity.
+
 - Route project/component creation, including Python-only projects, through
   implicitly selectable scaffold-project under the original task authorization.
   Keep existing Python maintenance direct and digest checks internal.

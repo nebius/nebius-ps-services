@@ -50,6 +50,18 @@ class ScaffoldProjectTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def _replace_directory(self, path: Path) -> None:
+        original = path.stat()
+        # Keep the original allocated: Linux may immediately reuse a deleted
+        # directory's inode, which would not exercise an identity change.
+        path.rename(path.with_name(path.name + "-displaced"))
+        path.mkdir()
+        replacement = path.stat()
+        self.assertNotEqual(
+            (original.st_dev, original.st_ino),
+            (replacement.st_dev, replacement.st_ino),
+        )
+
     def _draft(
         self,
         operations: list[dict[str, Any]],
@@ -455,8 +467,7 @@ class ScaffoldProjectTest(unittest.TestCase):
             nonlocal replaced
             original_write(path, value)
             if path.name == "journal.json" and not replaced:
-                self.target.rmdir()
-                self.target.mkdir()
+                self._replace_directory(self.target)
                 replaced = True
 
         with (
@@ -827,8 +838,7 @@ class ScaffoldProjectTest(unittest.TestCase):
                 result["bundle_digest"],
                 before_operation=interrupt_first,
             )
-        self.target.rmdir()
-        self.target.mkdir()
+        self._replace_directory(self.target)
         with self.assertRaisesRegex(MODULE.ScaffoldError, "target directory identity"):
             MODULE.apply_bundle(self.target, self.bundle, result["bundle_digest"])
 
@@ -860,9 +870,7 @@ class ScaffoldProjectTest(unittest.TestCase):
                 nested_result["bundle_digest"],
                 before_operation=interrupt_second,
             )
-        (self.target / "src/a.py").unlink()
-        (self.target / "src").rmdir()
-        (self.target / "src").mkdir()
+        self._replace_directory(self.target / "src")
         with self.assertRaisesRegex(MODULE.ScaffoldError, "directory identity changed"):
             MODULE.apply_bundle(
                 self.target,
