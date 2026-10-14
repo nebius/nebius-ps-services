@@ -16,7 +16,8 @@ REPO = "example/project"
 POLICY = {
     "schema": "merge-policy/v1",
     "ci_workflows": [{"file": "ci.yml", "paths": ["**"]}],
-    "excluded_checks": [],
+    "merge_workflow": "skills-merge-pr.yml",
+    "completion_workflow": "merge-completion.yml",
 }
 ENV = {
     "MERGE_OPERATOR_IDS": "[123]",
@@ -108,6 +109,9 @@ class API:
             "head_sha": HEAD,
             "head_branch": "feature",
         }
+        self.orchestration_suites = {}
+        self.orchestration_runs = {}
+        self.suite_reads = []
         self.intents = [
             {
                 "id": 900,
@@ -146,6 +150,10 @@ class API:
             return copy.deepcopy(self.pr)
         if path == "check-suites/50":
             return self.suite
+        if path.startswith("check-suites/"):
+            suite_id = int(path.rsplit("/", 1)[1])
+            self.suite_reads.append(suite_id)
+            return self.orchestration_suites[suite_id]
         if path == "pulls/1/reviews/10":
             return copy.deepcopy(self.review)
         if path.startswith("compare/"):
@@ -161,6 +169,8 @@ class API:
             return self.files
         if path == "pulls/1/reviews":
             return self.reviews
+        if path.startswith("actions/runs?check_suite_id="):
+            return self.orchestration_runs[int(path.split("=", 1)[1])]
         if path.startswith("actions/runs?"):
             return self.runs
         if "/check-runs?" in path:
@@ -192,6 +202,143 @@ class MergeTests(unittest.TestCase):
 
     def execute(self):
         return gate.execute(self.api, 1, HEAD, 10, "squash", POLICY)
+
+    def orchestration(self, *, event="pull_request_target", workflow="merge_workflow"):
+        check = {
+            "name": f"required-ci-status (1, {HEAD})",
+            "head_sha": HEAD,
+            "app": {"id": 15368},
+            "check_suite": {"id": 60},
+            "status": "completed",
+            "conclusion": "cancelled",
+        }
+        suite = copy.deepcopy(self.api.suite)
+        suite["id"] = 60
+        run = {
+            **self.api.runs[0],
+            "id": 43,
+            "path": ".github/workflows/" + POLICY[workflow],
+            "event": event,
+            "check_suite_id": 60,
+            "pull_requests": [{"number": 1, "base": {"ref": "main"}}],
+            "status": "completed",
+            "conclusion": "cancelled",
+        }
+        if event != "pull_request_target":
+            suite["head_branch"] = run["head_branch"] = "main"
+        self.api.checks.append(check)
+        self.api.orchestration_suites[60] = suite
+        self.api.orchestration_runs[60] = [run]
+        return check, suite, run
+
+    def test_orchestration_status_is_not_its_own_ci_gate(self):
+        for status, conclusion in (("completed", "cancelled"), ("in_progress", None)):
+            for event in (
+                "pull_request_target",
+                "workflow_dispatch",
+                "workflow_run",
+                "schedule",
+            ):
+                with self.subTest(status=status, event=event):
+                    self.api = API()
+                    check, _, _ = self.orchestration(event=event)
+                    check.update(status=status, conclusion=conclusion)
+                    self.check()
+
+    def test_completion_checks_are_also_orchestration(self):
+        check, _, _ = self.orchestration(
+            event="workflow_run", workflow="completion_workflow"
+        )
+        check["name"] = "dispatch-result-ci (1, anything)"
+        self.check()
+
+    def test_orchestration_provenance_is_cached_only_within_one_evaluation(self):
+        check, _, _ = self.orchestration()
+        self.api.checks.append({**check, "name": "merge-admission (1, head)"})
+        self.check()
+        self.assertEqual(self.api.suite_reads, [60])
+        self.api.orchestration_runs[60][0]["event"] = "pull_request"
+        with self.assertRaises(gate.Blocked):
+            self.check()
+        self.assertEqual(self.api.suite_reads, [60, 60])
+
+    def test_unknown_or_untrusted_orchestration_origin_still_gates(self):
+        mutations = {
+            "external app": lambda c, s, r: c.update(app={"id": 99}),
+            "missing suite": lambda c, s, r: c.pop("check_suite"),
+            "suite app": lambda c, s, r: s.update(app={"id": 99}),
+            "suite repository": lambda c, s, r: s.update(
+                repository={"full_name": "other/repo"}
+            ),
+            "suite head": lambda c, s, r: s.update(head_sha=BASE),
+            "check head": lambda c, s, r: c.update(head_sha=BASE),
+            "suite id": lambda c, s, r: s.update(id=61),
+            "run repository": lambda c, s, r: r.update(
+                repository={"full_name": "other/repo"}
+            ),
+            "run suite": lambda c, s, r: r.update(check_suite_id=61),
+            "run head": lambda c, s, r: r.update(head_sha=BASE),
+            "wrong path": lambda c, s, r: r.update(path=".github/workflows/ci.yml"),
+            "PR controlled": lambda c, s, r: r.update(event="pull_request"),
+            "unknown event": lambda c, s, r: r.update(event="repository_dispatch"),
+            "dispatch branch": lambda c, s, r: r.update(event="workflow_dispatch"),
+            "target base": lambda c, s, r: r["pull_requests"][0]["base"].update(
+                ref="feature"
+            ),
+            "target association": lambda c, s, r: r.update(pull_requests=[]),
+            "target PR": lambda c, s, r: r["pull_requests"][0].update(number=2),
+            "target branch": lambda c, s, r: r.update(head_branch="other"),
+            "target repository": lambda c, s, r: r.update(
+                head_repository={"full_name": "other/repo"}
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                self.api = API()
+                mutate(*self.orchestration())
+                with self.assertRaises(gate.Blocked):
+                    self.check()
+
+    def test_ambiguous_or_missing_producer_is_not_excluded(self):
+        for count in (0, 2):
+            with self.subTest(count=count):
+                self.api = API()
+                _, _, run = self.orchestration()
+                self.api.orchestration_runs[60] = [run] * count
+                with self.assertRaises(gate.Blocked):
+                    self.check()
+
+    def test_name_cannot_exempt_real_validation_or_missing_required_workflow(self):
+        self.orchestration()
+        self.api.checks[0].update(name="required-ci-status", conclusion="failure")
+        with self.assertRaises(gate.Blocked):
+            self.check()
+        self.api.checks[0]["conclusion"] = "success"
+        self.api.runs = []
+        with self.assertRaises(gate.Pending):
+            self.check()
+
+    def test_orchestration_rerun_remains_excluded(self):
+        _, _, run = self.orchestration()
+        run["run_attempt"] = 2
+        self.check()
+
+    def test_fork_target_without_historical_base_evidence_stays_gated(self):
+        self.api.pr["head"]["repo"]["full_name"] = "contributor/project"
+        self.api.runs[0]["head_repository"]["full_name"] = "contributor/project"
+        check, _, run = self.orchestration()
+        run["pull_requests"] = []
+        with self.assertRaises(gate.Blocked):
+            gate.checks_ready(self.api, self.api.pr, self.api.files, POLICY)
+        check.update(status="in_progress", conclusion=None)
+        with self.assertRaises(gate.Pending):
+            gate.checks_ready(self.api, self.api.pr, self.api.files, POLICY)
+
+    def test_fork_target_with_authoritative_default_base_can_be_excluded(self):
+        self.api.pr["head"]["repo"]["full_name"] = "contributor/project"
+        self.api.runs[0]["head_repository"]["full_name"] = "contributor/project"
+        self.orchestration()
+        gate.checks_ready(self.api, self.api.pr, self.api.files, POLICY)
 
     def test_exact_head_protected_merge(self):
         result = self.execute()

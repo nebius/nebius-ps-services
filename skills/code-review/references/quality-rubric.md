@@ -33,9 +33,11 @@ Choose the narrowest mode that satisfies the user's request.
   Focus on CI, rollback, observability, compatibility, migrations, feature
   flags, and operator procedures. Use `review-pr` for GitHub PR readiness.
 
-If the user names a GitHub PR by number, URL, or current branch, route to
-`review-pr` even when the request asks for bugs, regressions, tests, or code
-quality.
+If the user names a GitHub PR by number, URL, or current branch, route its
+orchestration to `review-pr` even when the request asks for bugs, regressions,
+tests, or code quality. A parent-owned create-pr/review-pr call may delegate
+analysis of that frozen complete diff here; accept it read-only and return
+findings without routing back to the parent or taking over GitHub readiness.
 
 ## Evidence Standard
 

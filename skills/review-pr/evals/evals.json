@@ -52,6 +52,37 @@
         "Performs complete local review of dependency and security information with the matching Python specialist.",
         "Does not treat metadata or CI as review evidence and never starts merging."
       ]
+    },
+    {
+      "id": "combined-review-merge",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. The root request is: $review-pr, review PR 42 and merge it after fixing safe issues. Describe the call sequence.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Delegates once before review work to merge-pr, which invokes parent-owned review-pr and then protected merge.",
+        "The internal review-pr never delegates merge-pr again even though the original prompt requests merge.",
+        "Uses nested read-only code-review; review-pr owns safe repairs and fresh GitHub readiness while preserving the parent grant and deadline."
+      ]
+    },
+    {
+      "id": "same-operation-analysis",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Create-pr just completed code-review at exact head A/base B in this operation. Review-pr now runs for that PR, but a human has requested changes since analysis.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "May reuse unchanged complete code analysis from this operation but refreshes GitHub reviews, threads, checks, identity and mergeability.",
+        "Blocks readiness and merging on the unresolved human objection; existing analysis or attestation does not override it."
+      ]
+    },
+    {
+      "id": "stale-analysis",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Merge-pr calls review-pr for a PR with a passing attestation from yesterday and a newer base. Describe the required review.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Performs fresh complete nested code-review and validation for the changed base rather than reusing prior-session evidence.",
+        "Returns evidence/blocker to merge-pr without closing its parent grant or recursively invoking merge-pr."
+      ]
     }
   ]
 }

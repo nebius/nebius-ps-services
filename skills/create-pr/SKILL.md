@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use only when explicitly asked to complete a GitHub PR from unmanaged work: validate, commit, push, locally review/fix, and delegate protected merge; --prepare-only stops before merge. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees; use commit-push when no PR is wanted."
+description: "Use only when explicitly asked to create a GitHub PR from unmanaged work: validate, commit, code-review before publication, push, and verify PR readiness. Stop at the reviewed PR by default; explicit merge intent delegates merge-pr. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees."
 disable-model-invocation: true
 ---
 
@@ -34,8 +34,9 @@ never permission to bypass a guard or claim unobserved behavior.
 Use this skill to turn local repository work or named branches into GitHub pull
 requests with a safe default-branch workflow. It can prepare a single PR or one
 PR per branch, resolve straightforward merge conflicts against the default
-branch, run local review-pr until safe repairs pass, and route every ordinary
-merge through merge-pr. `--prepare-only` stops at the reviewed PR.
+branch, run code-review before publication and review-pr until safe repairs pass.
+Stop at the reviewed PR by default. Explicit user intent to merge routes through
+merge-pr.
 
 ## When To Use
 
@@ -74,9 +75,13 @@ Managed children must finish their owning integration workflow first.
 
 ## Inputs
 
-Public usage: `$create-pr [<branch> ...] [--prepare-only]`. `-h, --help`
-shows help only. Ordinary default completion includes local review and protected
-merge. `--prepare-only` reviews/fixes but does not merge. Active Agentic SDLC
+Public usage: `$create-pr [<branch> ...]`. `-h, --help` shows help only.
+No additional public flags. Default completion creates/reuses and reviews the
+PR without merging. A request such as "create a PR and merge it" additionally
+authorizes delegation to merge-pr, including an action request phrased as
+"Can you create a PR and merge it?" Interpret intent semantically; negation,
+informational questions about skill behavior, quoted examples, discussion and
+merging the base into a branch do not authorize merging the GitHub PR. Active Agentic SDLC
 retains publication-only behavior regardless of the ordinary default.
 
 - A Git repository with an `origin` remote.
@@ -192,11 +197,12 @@ blocks continuation; never reset claims, fabricate receipts or bypass hooks.
 
 ## Completion Criteria
 
-Ordinary default completion requires review-pr's passing current-head/base
-attestation, merge-pr's confirmed merge, remote destination proof and separately
-reported result CI. A queued PR is pending. `--prepare-only` ends after the
-reviewed pushed head and terminal checks. Close the continuation grant only at
-that selected boundary; an internal preparation handoff keeps it open. Active
+Ordinary default completion ends at the reviewed pushed PR head, passing local
+validation and terminal checks, with review-pr's current-head/base attestation
+when eligible. Explicit merge intent additionally requires merge-pr's confirmed
+merge, remote destination proof and separately reported result CI. A queued PR
+is pending. Close the continuation grant only at the selected boundary; an
+internal preparation or review handoff keeps it open. Active
 Agentic SDLC ends at its exact promoted PR head and does not use this loop.
 
 ## Branch Preparation
@@ -317,9 +323,18 @@ order, branch selection and base synchronization before the process below.
    branches. If validation fails and the failures are plausibly caused by the
    branch, continue repairing the branch before treating PR creation as
    complete. Do not stop at opening a PR link when the branch has fixable local
-   test, lint, build, or CI failures. Commit and push the repair, then rerun
-   the focused failing checks.
+   test, lint, build, or CI failures. Validate and commit the repair, then repeat
+   the final candidate review before pushing.
 9. Publish each branch.
+   For ordinary work, after final base synchronization and validation, freeze
+   the exact base/head and invoke nested read-only code-review on the **complete
+   proposed PR diff**, including affected callers and tests. The parent owns
+   safe repairs; changed head/base requires fresh validation and full review
+   before push or PR creation. An unresolved blocking finding stops publication.
+   Carry this analysis into review-pr within the same root operation; it may
+   reuse only the unchanged exact head/base, never stale prior-session evidence.
+   This also applies to private preparation handoffs without calling review-pr
+   or merge-pr recursively.
    In an Agentic SDLC run, write
    `permissions/pr-authorization.json` in the active run directory immediately
    before pushing or opening/reusing the PR. Follow the stricter active-run
@@ -368,8 +383,10 @@ order, branch selection and base synchronization before the process below.
    PR creation/reuse completes.
 12. For ordinary work, execute `references/ordinary-completion.md`: local
     review-pr, safe fixes through the preparation handoff, fresh validation and
-    review, then merge-pr unless preparation-only. For multiple PRs, complete
-    in dependency order and synchronize/review each next PR against the new base.
+    review, then stop at the reviewed PR unless explicit merge intent authorizes
+    merge-pr. For multiple PRs, respect declared dependencies without assuming
+    earlier PRs merged; only an authorized merge sequence refreshes each next PR
+    against the newly advanced base.
     Active Agentic SDLC skips this step.
 13. Return the result.
    Report:
@@ -415,8 +432,8 @@ URLs, customer data, raw logs, or one-off local state.
   reuse the PR for that same branch.
 - Reuse an existing open PR for the same branch instead of creating duplicates.
 - Do not push directly to the default branch.
-- Do not issue merge commands directly. Ordinary default completion delegates
-  to merge-pr; `--prepare-only`, report-only and Agentic SDLC do not merge.
+- Do not issue merge commands directly. Only explicit merge intent delegates
+  to merge-pr; plain create-pr, report-only and Agentic SDLC do not merge.
 - Do not open a PR from uncommitted changes alone. Commit first or stop.
 - For local-work PRs, always stage from the repository root with `git add -A`
   so monorepo-wide related changes stay together. Do not path-limit staging; if

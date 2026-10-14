@@ -1,14 +1,5 @@
 {
   "schema": "merge-policy/v1",
-  "excluded_checks": [
-    "merge-candidates",
-    "protected-merge",
-    "required-ci-status",
-    "completion-candidates",
-    "dispatch-result-ci",
-    "verify-pages",
-    "merge-admission"
-  ],
   "ci_workflows": [
     {
       "file": "vpngw-ci.yml",

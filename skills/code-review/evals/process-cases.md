@@ -62,3 +62,14 @@ where the source skill is installed or discoverable:
 
 Report runtime activation as observed only after this check. Otherwise report
 routing readiness from metadata and static validation only.
+
+## Frozen PR diff delegation
+
+- create-pr delegates the complete final base/head diff and affected callers before
+  push/open PR. Analyze it read-only; return findings to the parent without GitHub
+  orchestration, repairs, commits or calling align.
+- review-pr delegates a frozen PR diff while retaining checks, threads, objections,
+  safe repairs and readiness. Accept this analysis task despite the PR origin.
+- The owning workflow may reuse analysis only within the same root operation at
+  unchanged exact head/base. A changed base or repaired head requires full renewed
+  analysis; a cached result never replaces fresh GitHub readiness.

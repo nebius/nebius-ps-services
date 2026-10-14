@@ -11,6 +11,11 @@ existing branch, or begin canonical intake then create a feature from default.
 Preserve the caller's grant through safe review fixes. Complete invokes local
 review-pr and merge-pr; prep returns the reviewed PR without merging. Missing
 Actions configuration stops; never use raw commits or merge commands as fallback.
+The caller retains the original receipt, grant, targets and deadlines across
+create-pr and parent-owned review-pr; default PR-only completion does not close
+a complete publication task. Final candidate code-review precedes publication.
+Bind the final reviewed head before merge and reconcile any later safe repair
+through the publication owner before broker dispatch.
 
 After merge-pr proves the resulting SHA in remote default history and passing
 applicable result CI, freeze repository/origin, PR, reviewed head/base, result,

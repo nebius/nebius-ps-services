@@ -29,6 +29,16 @@ Use merge automation narrowly.
 - Require explicit trusted operator dispatch and local exact-head/base COMMENT
   review for every merge, including Dependabot and Docker updates.
 - PR events, CI events and schedules may report Required CI, never initiate merges.
+- Plain create-pr stops at the reviewed PR after pre-publication code-review;
+  only explicit combined merge intent or complete publication delegates merge-pr.
+  The operator starts the same local workflow for every Dependabot update class.
+- Exclude orchestration checks from CI only by Actions app/repository, suite/run,
+  configured merge/completion workflow and trusted event provenance. Display
+  names, matrix suffixes and prefixes cannot exempt real validation. Unknown
+  origins remain gated; required CI workflow inventory stays mandatory.
+- Workflow contract tests should require immutable action SHAs by repository,
+  without duplicating a golden release hash. Preserve tool inputs, conditions,
+  uniqueness and ordering checks across Dependabot updates.
 - Review the complete diff, breaking changes, security/dependency information and
   meaningful validation; safely repaired heads and changed bases need fresh review.
 - `pull_request_target` is acceptable only for metadata observation without PR checkout.

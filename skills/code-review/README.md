@@ -44,8 +44,10 @@ initial worktree state. Priority and auto-fix safety remain independent.
   reruns the finding-specific proof, affected repository-native checks, scoped
   static checks when available, `git diff --check`, and a final review of its
   touched diff.
-- Keep `align`'s nested `code-review` lane report-only. `align` owns any
-  separately authorized cross-surface remediation.
+- Keep all nested lanes report-only. create-pr delegates the complete frozen
+  candidate before publication; review-pr delegates PR diff analysis while
+  retaining GitHub state, repairs and readiness. align retains remediation
+  ownership for its changed-scope lane.
 - Use `system-design-rules` for design-phase architecture decisions before
   implementation.
 - Use `apply-security` for security-specific scans, threat modeling, and

@@ -65,14 +65,20 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
 
 ## Workflow
 
-1. Confirm explicit merge intent or delegated ordinary create-pr/complete
-   publication intent. Exclude active Agentic SDLC and propagate prepare-only,
+1. Confirm explicit merge intent, including delegated combined create/review-and-merge
+   or complete publication intent. Plain create-pr/review-pr does not authorize
+   this step. Exclude active Agentic SDLC and propagate publication preparation-only,
    help and report-only restrictions. A request to review and merge authorizes
    this full sequence without routine reconfirmation. Dependabot, including
-   Docker, follows the same review and repair path. Freeze host/repository/default/PR identity.
+   major updates and Docker, follows the same operator-initiated review and repair
+   path. No scheduler starts local review. Freeze host/repository/default/PR identity.
 2. If already merged, skip effects and verify that exact operation's result.
    Otherwise require same-repository, non-draft, live-default target. Invoke
-   local review-pr when the current head/base lacks a passing attestation.
+   local review-pr as a parent-owned coordinator for **every unmerged PR**, even
+   with an existing passing attestation. It must not re-delegate merge-pr.
+   Reuse code analysis only within this root operation at unchanged exact
+   head/base; always refresh GitHub identity, checks, threads, human objections
+   and mergeability. An already-merged observation never starts repair work.
    Delegate safe repairs to create-pr's private preparation handoff; do not
    mutate branch history here. Unsafe findings and human objections stop.
 3. Wait for applicable current-head CI, synchronize/review again when default
@@ -80,6 +86,8 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    insufficient. The broker authorizes configured numeric operator IDs only.
    PR readiness has a fixed 10,800-second budget. Reuse the publication caller's
    checkpoint deadline when present; repairs and refreshed gates never reset it.
+   Carry the original receipt, grant and targets through review/repair handoffs;
+   only the completion owner closes the grant at its selected final boundary.
    If a publication caller already bound its head, return any refreshed head and
    review evidence to that owner for guarded checkpoint reconciliation before
    dispatch. Keep the caller's completion task active through this handoff.

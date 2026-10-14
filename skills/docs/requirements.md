@@ -3475,7 +3475,7 @@ routing and unchanged repository gates. Live publication requires its own target
 
 #### User Story
 
-Ordinary create-pr completes through local review-pr, safe validated repairs and merge-pr. Preserve prepare-only and publication partial modes. Route Helm, image and GitHub Release preparation through canonical repository-wide commits and tag only the verified merged result. Dependabot, including Docker updates, follows the same complete local review and safe repair path. Agentic SDLC is excluded.
+Ordinary create-pr performs complete local code review before publication and stops at a reviewed PR by default. Only explicit user intent to merge delegates merge-pr. Plain review-pr reviews and repairs; an explicit combined review-and-merge request delegates once to merge-pr. Preserve publication partial modes. Route Helm, image and GitHub Release preparation through canonical repository-wide commits and tag only the verified merged result. Dependabot, including Docker updates, follows the same complete local review and safe repair path. Agentic SDLC is excluded.
 
 #### Acceptance Criteria
 
@@ -3489,7 +3489,11 @@ Ordinary create-pr completes through local review-pr, safe validated repairs and
 - AC-007: Unsupported queue or workflow-file merges stop for a maintainer without credential substitution.
 - AC-008: A trusted receipt precedes merge effects; completion and CI checkout accept only trusted operator-dispatched positive-review intents. Preserve immutable receipts, duplicate suppression, exact-result CI, Pages and publication guards.
 - AC-009: PR events, CI events and schedules update Required CI but produce no merge candidates. Completion schedules recover previously authorized operations only. MERGE_OPERATOR_IDS is the only merge-specific repository variable; no rollout toggles or metadata-only admission remain.
-- AC-010: Standalone review-pr never merges. Merge-pr invokes review when needed; review-and-merge and complete publication requests authorize the entire sequence without routine reconfirmation. Preparation-only modes remain available.
+- AC-010: Plain create-pr and review-pr never initiate merging. Explicit combined merge requests delegate once to merge-pr, which invokes parent-owned review-pr for every unmerged PR without recursive delegation. Remove create-pr --prepare-only; publication preparation-only modes remain.
+- AC-011: Before push or PR creation, create-pr delegates complete frozen candidate-diff analysis to nested read-only code-review. Parent-owned repairs require fresh validation and review. Reuse analysis only within the same root operation at unchanged head/base; always refresh GitHub identity, checks, objections, threads and mergeability. Preserve the original grant, receipt, targets, readiness deadline and publication checkpoint owner across handoffs.
+- AC-012: No scheduler or unattended agent initiates work. An operator starts the same local workflow for ordinary and Dependabot PRs, including major updates; dependency metadata never replaces review or CI.
+- AC-013: CI aggregation excludes orchestration checks only through authoritative GitHub Actions app, repository, check-suite/run and configured workflow/event provenance. Names and prefixes cannot exempt checks; unknown provenance remains gated.
+- AC-014: Workflow tests locate exactly one setup-uv action by repository and require a full immutable commit SHA, while retaining tool-version, cache-input, condition and ordering assertions. Valid Dependabot SHA updates require no duplicated golden hash change.
 
 #### Negative Criteria
 

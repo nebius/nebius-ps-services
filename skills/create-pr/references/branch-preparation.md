@@ -58,5 +58,5 @@ force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
 - Use the repository default branch as the PR base unless the user explicitly
   provides another base.
 
-An explicitly selected non-default base is preparation-only. Do not silently
-retarget it; default completion returns a merge blocker for that base.
+An explicitly selected non-default base can produce a reviewed PR. Do not
+silently retarget it; an explicit merge request returns a blocker for that base.

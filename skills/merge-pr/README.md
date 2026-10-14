@@ -21,7 +21,9 @@ ordinary branches; keep the head branch unless deletion is explicitly requested.
 - Resolves a PR from a number, URL, or current branch.
 - Waits for PR checks when they are pending.
 - Verifies review state, draft state, mergeability, and head SHA.
-- Requires local review-pr evidence and safe repairs before dispatching a
+- Invokes parent-owned review-pr for every unmerged PR, refreshing GitHub state
+  even with passing evidence. Same-operation exact-head/base analysis may be
+  reused; the review child never re-delegates merge. Requires safe repairs before dispatching a
   trusted default-branch GitHub Actions workflow. The async API guards the exact
   reviewed head. Required merge queues stop for a maintainer.
 - Refuses admin bypasses and branch-protection overrides.
@@ -61,7 +63,11 @@ Read-only wait       Remote destination ancestry
 - The user or calling skill must have explicit merge intent.
 - `squash` is the default merge method for ordinary protected branches.
 - GITHUB_TOKEN cannot enqueue merge queues; there is no credential fallback.
-- Ordinary create-pr and complete publish-* requests delegate merge authority.
+- Explicit combined create/review-and-merge and complete publish-* requests
+  delegate merge authority. Plain create-pr and review-pr do not.
+- Already-merged PRs use observation and exact-result verification only.
+- The operator starts local review for ordinary and Dependabot PRs, including
+  major updates; no unattended agent initiates work.
 - Actions approves after local exact-head/base review. Agents run locally;
   Actions runs deterministic scripts. See [setup/protocol](references/actions-protocol.md).
 - Required reviews, branch protection, and environment rules are blockers, not
