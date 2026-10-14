@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Validate setup-uv by repository and full immutable SHA rather than a duplicated
+  release hash, retaining exact tool/cache inputs, conditions and setup ordering.
+  Dependabot action updates no longer require matching test-only hash edits.
+
 ## [nebius-cxcli-v0.1.9] - 2026-10-08
 
 - Keep documentation checks valid after release preparation by checking the

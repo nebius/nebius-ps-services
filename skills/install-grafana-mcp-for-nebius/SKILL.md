@@ -59,8 +59,8 @@ queries to `$nebius-grafana-query`.
   variables, and never prints the token or user ID.
 - Require an `mcp-grafana` build with
   `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` support for Nebius-managed Grafana,
-  while accounting for stdio builds through `v0.17.2` retaining the startup
-  client instead of rereading rotations. Setup pre-mints a private startup
+  while accounting for the stdio startup-client retention verified in `v2.0.2`
+  instead of assuming token rotations reload. Setup pre-mints a private startup
   token; the wrapper reuses it for up to one hour and renews a missing or older
   token before launching MCP. Foreground renewal may open the pinned profile's
   browser-authentication flow and is covered by the canonical bounded Codex
@@ -110,11 +110,16 @@ queries to `$nebius-grafana-query`.
   authentication variables.
 - Check `command -v mcp-grafana` before installing. Do not reinstall when the
   binary is already present and responds to `mcp-grafana --help`.
-- Check `codex mcp get <server-name>` before registering Codex MCP config. If
+- Require successful `codex mcp list --json` discovery before registering Codex
+  MCP config. Failed or malformed discovery is an error, not proof of absence.
+  Recheck absence immediately before adding a missing entry. Inspect existing
+  entries with `codex mcp get <server-name> --json` before creating private
+  identity state or refreshing a token; reject unapproved registration drift
+  without changing that state. If
   the server exists and matches the desired wrapper-based command, read-only
   args, and expected env keys, leave it in place. If it exists but points
-  at a byte-identical source or installed copy of the wrapper, treat it as
-  matching state. Compare the structured `--json` values, not masked display
+  at a trusted, executable, byte-identical source or installed copy of the
+  wrapper, treat it as matching state. Compare structured values, not masked display
   placeholders. If it points somewhere else or any value differs, report the
   mismatch and update only after the user confirms replacement. Accept only a
   typed simple stdio shape and re-read it immediately before removal. Discard
@@ -143,6 +148,11 @@ queries to `$nebius-grafana-query`.
   startup waits up to 210 seconds so one bounded browser login can complete
   within the 300-second MCP startup budget. Refresh recovers dead, PID-reused,
   and incomplete locks and replaces the token atomically.
+- Repeated check/apply on canonical state with a fresh token must preserve the
+  config, identity binding, token, and private-directory metadata. An expired
+  token renews once; subsequent applies reuse it. Recover a stale incomplete
+  lock containing only an empty, private, unchanged `owner-pid.tmp`; preserve
+  populated or ambiguous provisional state for inspection.
 - Require the registered wrapper and every path component from `HOME` to that
   file to be user-owned, non-symlinked, and not group/world writable.
 - For the optional external Grafana flow, look up the service account, group,

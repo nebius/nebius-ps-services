@@ -1340,8 +1340,9 @@ test checks finish, validate the staged diff, merge `origin/<base>` into the PR
 branch before PR creation without rewriting history, reuse the current
 non-default branch without creating another branch, push with explicit
 refspecs, wait for available GitHub checks before calling the PR ready, and
-run local review-pr and safe repairs, then delegate protected Actions merge to
-merge-pr by default. `--prepare-only` stops at the reviewed PR.
+run complete nested code-review before publication, then local review-pr and
+safe repairs. Default completion stops at the reviewed PR; explicit merge intent
+delegates protected Actions merge to merge-pr.
 When a matching active Agentic SDLC run exists, that generic preparation path
 is disabled: `create-pr` requires passing UAT and publishes only the clean exact
 promoted SHA. A conflict, failed check, remote-head mismatch, or required
@@ -2061,8 +2062,8 @@ documents the native runner and reports unavailable credentials or traces as
 
 ## Ordinary PR and publication completion
 
-`create-pr` defaults to local review, safe fixes and protected GitHub Actions merge;
-`--prepare-only` stops at the reviewed PR. `merge-pr` is the only ordinary merge
+`create-pr` defaults to complete code-review before publication, safe fixes and
+a reviewed PR. Only explicit merge intent continues to merge-pr. `merge-pr` is the only ordinary merge
 owner used by create-pr and all three publish skills. Review agents run locally;
 Actions performs deterministic checks and protected Actions effects. Unsafe findings
 and unresolved human objections stop. Agentic SDLC is excluded.
@@ -2070,7 +2071,11 @@ See [Actions protocol](merge-pr/references/actions-protocol.md) and
 [repository setup](../.github/merge-automation.md). Helm/image prep is content-only;
 canonical whole-repository commits are followed by tagging the exact merge result.
 Dependabot updates, including Docker, use the same local review path and wait for
-an explicit operator dispatch. Standalone review never merges; automatic events
+an explicit operator dispatch. Plain review never merges; an explicit root
+review-and-merge request delegates once to merge-pr, whose parent-owned review-pr
+call returns without recursion. Every unmerged PR refreshes GitHub readiness;
+only exact-head/base analysis from the same root operation may be reused. No
+scheduled local agent initiates work. Automatic events
 only report CI or recover authorized completion. Skill installation and workflow
 deployment are separate from protection setup and live acceptance evidence.
 

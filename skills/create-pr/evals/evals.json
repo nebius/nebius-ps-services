@@ -33,13 +33,74 @@
       ]
     },
     {
-      "id": "prepare-only",
-      "prompt": "Offline contract simulation only. Read the skill and its required local references; do not contact GitHub, mutate files, execute publication or wait. Use $create-pr. Invoke $create-pr --prepare-only from main with dirty work. Describe the intended boundary.",
-      "expected_output": "Applies the ordinary review and protected merge contract with precise boundaries.",
+      "id": "default-reviewed-pr",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $create-pr from main with dirty work. The user asked only to create a PR. Describe the completion boundary.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
       "files": [],
       "assertions": [
-        "Begins canonical intake and creates a feature carrying the work before repository-wide staging.",
-        "Runs local review and safe repairs but stops before merge; does not push main."
+        "Begins canonical intake and carries work to a feature branch before repository-wide staging.",
+        "After final base sync, delegates nested read-only code-review of the complete candidate and affected callers before push or PR creation.",
+        "Uses review-pr for fresh GitHub readiness, repairs safely and stops at the reviewed PR without invoking merge-pr; closes only at this boundary."
+      ]
+    },
+    {
+      "id": "explicit-combined-merge",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. The root request is: $create-pr, create a PR and merge it. Explain the full continuation.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Runs complete code-review before publication, then review-pr readiness and merge-pr for protected merge and exact-result verification.",
+        "Keeps the original receipt, grant, targets and fixed readiness deadline across every handoff and closes only at the requested completion boundary."
+      ]
+    },
+    {
+      "id": "base-sync-is-not-merge-intent",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. The root request is: $create-pr, merge main into this branch before opening a PR; do not merge the PR. Explain the permitted effects.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Distinguishes branch synchronization from GitHub PR merge intent and stops at the reviewed PR.",
+        "Does not use token matching, quoted examples or discussion as merge authorization."
+      ]
+    },
+    {
+      "id": "multi-branch-create-only",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $create-pr for branches feature-a and feature-b with a declared dependency. The user did not ask to merge either PR.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Preserves one PR per branch and declared dependency validation without assuming feature-a landed.",
+        "Reviews both complete candidates before publishing and does not dispatch either merge."
+      ]
+    },
+    {
+      "id": "release-owner-handoff",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Complete publish-release delegated preparation to create-pr. Review repaired head A to B after an existing release checkpoint. Describe who continues.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Returns B and fresh review evidence to the publication owner for guarded checkpoint reconciliation before merge dispatch.",
+        "Preserves complete publication authorization and original grant/deadline; default create-only behavior does not terminate the outer release task."
+      ]
+    },
+    {
+      "id": "interrogative-action-request",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. The root request is: $create-pr, can you create a PR and merge it after checks pass? Explain the selected completion boundary.",
+      "expected_output": "Distinguishes semantic action intent from informational question form.",
+      "files": [],
+      "assertions": [
+        "Treats the explicit requested action as merge intent despite its question form, without routine reconfirmation.",
+        "Runs complete candidate code-review before publication, then review-pr readiness and merge-pr for protected merge with original authority."
+      ]
+    },
+    {
+      "id": "informational-question",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. The user asks: Does $create-pr merge by default, or does it stop at the reviewed PR? Explain what may happen in this turn.",
+      "expected_output": "Distinguishes semantic action intent from informational question form.",
+      "files": [],
+      "assertions": [
+        "Answers that default creation stops at the reviewed PR and explicit merge requests delegate merge-pr.",
+        "Treats this as an informational question and does not initiate Git, PR, review or merge effects."
       ]
     }
   ]

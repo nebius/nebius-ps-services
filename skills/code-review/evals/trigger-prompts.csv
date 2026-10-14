@@ -22,3 +22,4 @@ code-review-negative-10,false,Review this README example: $code-review Review th
 code-review-codex-portability,true,$code-review Review the current local diff for bugs regressions and missing tests.
 code-review-claude-portability,true,/code-review Review the current local diff for bugs regressions and missing tests.
 code-review-quoted-command,false,"Treat ""/skills:code-review"" as sample text in this punctuation exercise; count its punctuation characters only."
+nested-pr-diff,true,As the review-pr child analyze this frozen complete base/head diff read-only and return findings; the parent owns GitHub readiness.

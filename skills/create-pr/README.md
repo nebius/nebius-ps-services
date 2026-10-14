@@ -69,7 +69,7 @@ Commit current feature-branch work or reuse requested commits
 Base refresh, merge update, or conflict handling
   |
   v
-Run focused validation and repair safe branch-owned failures
+Run focused validation, then nested code-review of the complete final diff
   |
   v
 Push branch
@@ -78,10 +78,10 @@ Push branch
 Open or reuse GitHub PR
   |
   v
-Local review-pr -> safe repairs/review -> protected merge-pr Actions broker
+Local review-pr -> safe repairs/review -> reviewed PR (default)
   |
   v
-Report actual merge and result CI (or explicit prepare-only outcome)
+Explicit merge intent only -> merge-pr -> actual merge and result CI
 ```
 
 ## Workflow
@@ -96,7 +96,9 @@ Report actual merge and result CI (or explicit prepare-only outcome)
    branch before PR creation. For a `main` base branch, merge `origin/main`.
 5. Rerun focused validation after formatting fixes, merge, or conflict
    repair, and repair safe branch-owned failures.
-6. Push the branch with an explicit refspec.
+6. Freeze the final base/head and run nested read-only code-review of the complete
+   diff and affected callers before pushing with an explicit refspec. Safe repairs
+   require fresh validation and review.
 7. Open or reuse the PR with the requested title and body.
 8. For active Agentic SDLC runs, require passing UAT, reverify the recorded
    remote-default branch and HEAD, and publish only the exact promoted SHA;
@@ -105,8 +107,9 @@ Report actual merge and result CI (or explicit prepare-only outcome)
    real blocker. If GitHub checks are still pending, report the PR as pending
    instead of ready.
 10. For ordinary work, run local review-pr and safe canonical repairs until the
-    final head/base passes. Unless `--prepare-only`, delegate to merge-pr and
-    observe actual merge and result CI. Agentic SDLC remains publication-only.
+    final head/base passes, then stop at the reviewed PR by default. Only explicit
+    merge intent delegates to merge-pr and observes actual merge and result CI.
+    Agentic SDLC remains publication-only.
 11. Return PR/review identity, selected completion outcome and any blocker.
 
 ## Core Concepts
@@ -153,9 +156,12 @@ retain the grant. Local review and protected Actions approval are separate from 
 
 ## Ordinary completion
 
-Default invocation completes local review-pr, safe repair/revalidation and
-protected Actions merge through merge-pr. Use `--prepare-only` to stop at the reviewed
-PR. Reuse the current feature branch; from default create a feature before the
+Default invocation performs complete nested code-review before publication,
+then local review-pr, safe repair/revalidation and GitHub readiness checks. It
+stops at the reviewed PR. Explicit "create a PR and merge it" delegates merge-pr.
+An action request such as "Can you create a PR and merge it?" has the same
+meaning; asking whether the skill merges by default does not authorize a merge.
+There is no preparation flag; publication skills retain their own prep modes. Reuse the current feature branch; from default create a feature before the
 canonical whole-repository commit. All agents stay local. Unsafe findings and
 human objections stop. Agentic SDLC remains exact-head publication-only.
 See [the completion contract](references/ordinary-completion.md).

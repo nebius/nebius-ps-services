@@ -994,29 +994,52 @@ if actual != expected:
 ' 3<<<"$expected_json"
 }
 
-ensure_codex_mcp() {
-  local current_config
-  local expected_digest
+codex_mcp_presence() {
+  local inventory
+
+  inventory="$(codex mcp list --json 2>/dev/null)" || return 1
+  printf '%s' "$inventory" | python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+if not isinstance(payload, list):
+    raise SystemExit(1)
+names = []
+for entry in payload:
+    if not isinstance(entry, dict):
+        raise SystemExit(1)
+    name = entry.get("name")
+    if not isinstance(name, str) or not name or name in names:
+        raise SystemExit(1)
+    names.append(name)
+print("present" if sys.argv[1] in names else "missing")
+' "$mcp_server_name" 2>/dev/null
+}
+
+# Inspect eligibility before creating identity state or refreshing credentials.
+# Only successful structured discovery can authorize adding an absent entry.
+inspect_codex_mcp() {
+  local presence
   local existing_command
   local existing_config
   local command_acceptable="true"
   local mismatch="false"
 
-  if ! command -v codex >/dev/null 2>&1; then
-    warn "codex: codex CLI not found on PATH; cannot inspect MCP config"
-    drift_found="true"
-    return
-  fi
+  codex_action="none"
+  command -v codex >/dev/null 2>&1 \
+    || die "codex CLI not found on PATH; cannot safely inspect MCP config"
+  presence="$(codex_mcp_presence)" \
+    || die "unable to read a valid structured Codex MCP inventory; refusing to change setup state"
 
-  if ! codex mcp get "$mcp_server_name" >/dev/null 2>&1; then
+  if [ "$presence" = "missing" ]; then
     if [ "$mode" = "check" ]; then
       info "codex: MCP server '$mcp_server_name' is missing; --apply would add it"
       print_add_command
       drift_found="true"
       return
     fi
-    add_codex_mcp \
-      || die "unable to add canonical MCP server '$mcp_server_name'"
+    codex_action="add"
     return
   fi
 
@@ -1030,12 +1053,15 @@ ensure_codex_mcp() {
   )"; then
     existing_command=""
   fi
+  codex_inspected_config="$existing_config"
+  codex_inspected_command="$existing_command"
 
   info "codex: MCP server '$mcp_server_name' already exists; comparing structured values without printing them"
 
   if [ "$existing_command" != "$wrapper_path" ]; then
     if [ -n "$existing_command" ] \
       && [ -f "$existing_command" ] \
+      && [ -x "$existing_command" ] \
       && [ -f "$wrapper_path" ] \
       && cmp -s "$existing_command" "$wrapper_path" \
       && trusted_equivalent_wrapper_path "$existing_command"; then
@@ -1066,23 +1092,7 @@ ensure_codex_mcp() {
       drift_found="true"
       return
     fi
-    expected_digest="$(codex_config_digest)" \
-      || die "unable to bind the inspected MCP registration to the exact Codex config bytes"
-    current_config="$(
-      codex mcp get "$mcp_server_name" --json 2>/dev/null
-    )" || die "Codex MCP registration disappeared before setting the startup timeout"
-    printf '%s' "$current_config" \
-      | registration_json_matches "$existing_config" \
-      || die "Codex MCP registration changed concurrently before setting the startup timeout"
-    set_codex_mcp_startup_timeout "$expected_digest" \
-      || die "unable to set the bounded MCP startup timeout"
-    current_config="$(
-      codex mcp get "$mcp_server_name" --json 2>/dev/null
-    )" || die "Codex MCP registration disappeared after setting the startup timeout"
-    printf '%s' "$current_config" \
-      | registration_values_match "$existing_command" \
-      || die "Codex MCP registration failed verification after setting the startup timeout"
-    info "codex: set the bounded startup timeout without replacing the MCP registration"
+    codex_action="timeout"
     return
   fi
 
@@ -1098,13 +1108,56 @@ ensure_codex_mcp() {
     | registration_replacement_shape_supported "$mcp_server_name"; then
     die "existing MCP server has non-default or malformed structured settings; replace it manually after backing up Codex config"
   fi
+  codex_action="replace"
+}
+
+ensure_codex_mcp() {
+  local current_config
+  local expected_digest
+  local presence
+
+  case "$codex_action" in
+    none) return ;;
+    add)
+      presence="$(codex_mcp_presence)" \
+        || die "unable to recheck structured Codex MCP inventory before adding the server"
+      [ "$presence" = "missing" ] \
+        || die "Codex MCP registration appeared concurrently; refusing to overwrite it"
+      add_codex_mcp \
+        || die "unable to add canonical MCP server '$mcp_server_name'"
+      return
+      ;;
+    timeout)
+      expected_digest="$(codex_config_digest)" \
+        || die "unable to bind the inspected MCP registration to the exact Codex config bytes"
+      current_config="$(
+        codex mcp get "$mcp_server_name" --json 2>/dev/null
+      )" || die "Codex MCP registration disappeared before setting the startup timeout"
+      printf '%s' "$current_config" \
+        | registration_json_matches "$codex_inspected_config" \
+        || die "Codex MCP registration changed concurrently before setting the startup timeout"
+      set_codex_mcp_startup_timeout "$expected_digest" \
+        || die "unable to set the bounded MCP startup timeout"
+      current_config="$(
+        codex mcp get "$mcp_server_name" --json 2>/dev/null
+      )" || die "Codex MCP registration disappeared after setting the startup timeout"
+      printf '%s' "$current_config" \
+        | registration_values_match "$codex_inspected_command" \
+        || die "Codex MCP registration failed verification after setting the startup timeout"
+      info "codex: set the bounded startup timeout without replacing the MCP registration"
+      return
+      ;;
+    replace) ;;
+    *) die "unexpected Codex registration action" ;;
+  esac
+
   if ! current_config="$(
     codex mcp get "$mcp_server_name" --json 2>/dev/null
   )"; then
     die "Codex MCP registration disappeared before replacement; inspect the named entry before retrying"
   fi
   if ! printf '%s' "$current_config" \
-    | registration_json_matches "$existing_config"; then
+    | registration_json_matches "$codex_inspected_config"; then
     die "Codex MCP registration changed concurrently after inspection; refusing to remove or overwrite it"
   fi
 
@@ -1149,6 +1202,10 @@ info "human profile: $user_profile"
 info "identity binding: $identity_file"
 info "token file: $token_file"
 info "wrapper: $wrapper_path"
+
+if [ "$skip_codex" = "false" ]; then
+  inspect_codex_mcp
+fi
 
 ensure_identity_binding
 check_binary

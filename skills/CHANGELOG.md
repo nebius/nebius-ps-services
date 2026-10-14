@@ -4,6 +4,24 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Make Grafana MCP setup fail closed on unreadable or malformed registration
+  discovery, reject unapproved drift before identity/token writes, and require
+  executable equivalent wrappers. Cover repeated setup, one-time renewal,
+  rejected drift, and discovery failures with state-preservation regressions.
+
+- Make create-pr stop at a reviewed PR by default and run complete nested
+  code-review before publication. Explicit combined create/review-and-merge
+  delegates once to merge-pr; every unmerged PR refreshes review-pr readiness.
+  Remove create-pr --prepare-only and preserve publication checkpoint ownership.
+  Align the skill picker description and distinguish action requests phrased as
+  questions from informational questions about merging behavior.
+- Exclude orchestration checks by authoritative Actions producer provenance,
+  not display names, so matrix-expanded pending/cancelled CI writers cannot
+  self-gate when trusted. Unknown origins and real validation remain gated.
+
+- Recover stale, empty provisional PID files left by interrupted Grafana MCP
+  token-refresh initialization, while preserving unsafe or ambiguous lock state.
+
 - Make scaffold directory-replacement fixtures deterministic on Linux by
   retaining the original inode and asserting a distinct replacement identity.
 
@@ -1108,7 +1126,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   safely drifted managed state with rollback, and leaves healthy repeated runs
   byte-for-byte and PID-stable.
 
-### Changed
+### Changed (continued)
 
 - Default local installation now installs skills, all reviewed hooks and
   registrations. `--agent claude` selects Claude homes/settings; Codex remains

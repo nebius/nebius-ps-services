@@ -4,6 +4,10 @@ An explicit unmanaged PR task covers necessary reviewed commits, base merges,
 checks and pushes for its selected targets. Do not demand another standalone
 commit invocation after a safe failed attempt or a branch-owned repair.
 Discussion, help and requests to edit skill source do not authorize Git effects.
+Plain create-pr ends at the reviewed PR. An explicit combined create/review-and-merge
+request keeps the original root receipt, targets, grant and readiness deadline
+through merge-pr and its parent-owned review-pr call. Only the completion owner
+closes at the selected boundary; no handoff mints a new authorization.
 
 An explicit complete `publish-release`, `publish-helm` or `publish-image` request delegates its necessary PR,
 validated repository-wide commits, synchronization and pushes to this owner.
@@ -35,7 +39,9 @@ own authority and do not use this root-task protocol.
    result and run affected checks before acknowledging its exact tree. Use
    `validate-order` for multiple targets; retain conflict/interruption evidence
    until exact cleanup is proved. Never publish the scratch ref.
-5. Push only the verified target with `origin HEAD:<branch>`, inspect current-head
+5. After final base synchronization, delegate nested read-only code-review of
+   the complete final candidate and affected callers. Renew validation/review
+   after changes. Push only the reviewed target with `origin HEAD:<branch>`, inspect current-head
    checks, and continue safe repairs under the same task until complete.
 6. Call private `finish --outcome completed` only at the selected public
    completion boundary, including zero-commit tasks. Never close it during a

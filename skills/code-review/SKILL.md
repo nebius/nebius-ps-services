@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "Review local diffs/branches, files, modules, or patches for prioritized correctness, regression, test, reliability, and maintainability risks. Standalone may fix safe findings unless report-only; nested use is read-only. Use review-pr for PRs."
+description: "Review local diffs/branches, files, modules, or frozen patches for prioritized correctness, regression, test, reliability, and maintainability risks. Standalone may fix safe findings unless report-only; nested PR-diff analysis is read-only. Use review-pr for GitHub orchestration."
 ---
 
 # Code Review
@@ -59,8 +59,10 @@ implementation easier to reason about.
 
 ## When Not To Use
 
-- Do not use for GitHub PR checkout, branch update, conflict repair, checks,
-  reviews, or merge readiness; use `review-pr`.
+- Do not use for GitHub orchestration: PR checkout, branch update, conflict
+  repair, checks, posting reviews or merge readiness; use `review-pr`.
+  Delegated analysis of a frozen complete PR diff is supported in nested
+  report-only mode; the parent retains GitHub state and repair ownership.
 - Do not use for project-wide changed-scope repair across tests, docs, CLI,
   workflows, and configuration; use `align`.
 - Do not use for security-specific scans, threat modeling, or remediation; use
@@ -75,13 +77,14 @@ Select the mode before inspecting or changing files:
 - **Direct closed loop:** a standalone attached skill invocation or explicit
   current-task directive to use `$code-review` defaults to review, safe scoped
   remediation, focused self-validation, and final reporting.
-- **Direct report-only:** `review only`, `audit only`, `report only`,
-  `findings only`, `do not edit`, `do not fix`, or equivalent no-write intent
-  overrides the direct default. Review and report without changing files.
+- **Direct report-only:** explicit no-write intent such as review-only,
+  audit-only, or report-only overrides the direct default. Examples include
+  `review only`, `audit only`, `report only`, `findings only`, `do not edit`, and
+  `do not fix`. Review and report without changing files.
 - **Implicit report-only:** when the agent selects this skill from a natural review
   request, or `$code-review` appears only in quoted text, discussion, examples,
   patches, or file content, never edit files or invoke remediation.
-- **Nested parent-owned:** when `align`, `align-skill`, an SDLC workflow,
+- **Nested parent-owned:** when `create-pr`, `review-pr`, `align`, `align-skill`, an SDLC workflow,
   `task-implementer`, or another owning workflow loads this skill as a lane,
   inherit the parent's declared scope but remain report-only. Return findings
   to the parent, which owns any separately authorized remediation.

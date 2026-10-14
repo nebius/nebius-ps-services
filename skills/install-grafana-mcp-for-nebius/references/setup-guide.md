@@ -135,15 +135,19 @@ The helper is intentionally conservative:
   profile/user binding below a profile-scoped mode-`0700` state directory.
 - It derives the token path from the MCP server name and pinned profile; two
   profiles never share a token file.
-- It adds the Codex MCP server only when `codex mcp get "$MCP_SERVER_NAME"`
-  cannot find it.
+- It adds the Codex MCP server only when a successful `codex mcp list --json`
+  proves the named entry is absent, and rechecks absence before adding. Failed,
+  malformed, or duplicate-name discovery fails closed without config writes.
+- It checks registration eligibility before creating private identity state
+  or renewing a token. Unapproved registration drift does not refresh even an
+  expired token or create a new binding.
 - It uses `codex mcp get "$MCP_SERVER_NAME" --json` to compare the exact URL,
   profile, identity path, token path, args, and command without printing those
   values. Masked human-readable output is not sufficient. For timeout-only
   repair, it digest-binds that structured read to the exact config bytes and
   rechecks the bytes immediately before atomic replacement.
 - It accepts an existing Codex MCP server whose command points at a
-  byte-identical wrapper file, for example a repo source checkout instead of
+  byte-identical executable wrapper file, for example a repo source checkout instead of
   the installed `~/.agents` copy, only when every component from `HOME` is
   owned, non-symlinked, and not group/world writable.
 - It reports an old shared-token or ambient-profile registration as migration
@@ -157,6 +161,10 @@ The helper is intentionally conservative:
   rollback. If structured post-write verification sees drift, the helper
   leaves that entry intact for inspection rather than deleting potentially
   concurrent state.
+- Repeated check/apply on canonical state preserves config, binding, fresh token,
+  and private-directory metadata. A stale token renews once and is then reused.
+  Registration rechecks detect observed races but do not serialize independent
+  installers or external config editors.
 
 ### Hook-Safe Invocation Boundary
 
@@ -467,12 +475,15 @@ docs support both `GRAFANA_SERVICE_ACCOUNT_TOKEN` and
 server can read the file fresh on every request and pick up rotations without
 restart. The Nebius-managed path capability-checks the binary and rejects an
 older build without token-file support. Upstream issue
-[`#987`](https://github.com/grafana/mcp-grafana/issues/987) records that stdio
-builds through `v0.17.2` construct the Grafana client once at startup despite
-that general documentation. The wrapper therefore closes stdio after a
+[`#987`](https://github.com/grafana/mcp-grafana/issues/987) records the stdio
+limitation. Source review of `v2.0.2` confirms that
+[stdio constructs its context once](https://github.com/grafana/mcp-grafana/blob/0eb7e0adf9235720fdc7a8a390e145a8bcc6a152/cmd/mcp-grafana/main.go#L1184-L1194),
+while [per-call client refresh is restricted to HTTP transports](https://github.com/grafana/mcp-grafana/blob/0eb7e0adf9235720fdc7a8a390e145a8bcc6a152/mcpgrafana.go#L1840-L1875).
+The wrapper therefore closes stdio after a
 scheduled refresh and reports that a new chat or Codex restart is required;
 the next process then reads the new token. Generic Grafana may still use its
-separate service-account inline-token configuration.
+separate service-account inline-token configuration. This source evidence does
+not substitute for a live long-running renewal test.
 
 ### Nebius-Managed Grafana
 
@@ -626,6 +637,11 @@ observability questions.
 - Nebius-managed Grafana auth failure: rerun the helper in check mode, verify
   the pinned profile is still a human user, and confirm the binding and token
   paths remain private. Never fall back to an agent token.
+- Token refresh lock timeout before authentication: an interrupted startup can
+  leave an empty `owner-pid.tmp` without an owner record. The wrapper recovers
+  this stale, private provisional state after the incomplete-lock grace period.
+  Populated PID files, unsafe entries, or unknown contents are preserved; inspect
+  their owner before recovery instead of deleting the lock indiscriminately.
 - Identity binding mismatch: create or reauthenticate a distinct human profile;
   do not overwrite the existing binding to accept a changed principal.
 - Old shared-token registration: review and run

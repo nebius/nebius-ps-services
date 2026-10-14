@@ -416,6 +416,36 @@
         "Preserves the confirmed merge and reports missing or inconsistent GraphQL result evidence as a completion blocker before effects.",
         "Keeps local observation read-only and leaves explicit CI and Pages effects to the completion owner."
       ]
+    },
+    {
+      "id": "always-refresh-review",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $merge-pr on an unmerged PR with a passing COMMENT review from an earlier operation. Explain the review handoff.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Invokes parent-owned review-pr for every unmerged PR and requires fresh analysis because prior-operation evidence is not reusable.",
+        "Always refreshes identity, current checks, human objections, threads and mergeability; existing attestation alone cannot skip the coordinator."
+      ]
+    },
+    {
+      "id": "already-merged-observation",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $merge-pr on an already merged PR whose old branch has since changed. Explain the next permitted steps.",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "Observes and verifies the original authoritative result and destination/CI only, without starting branch repair or a new review/merge.",
+        "Reports exact-result evidence separately from later branch state."
+      ]
+    },
+    {
+      "id": "manual-dependabot-major",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. A major-version Dependabot PR has green CI but has never been reviewed. No operator has started a local workflow. Should a scheduled agent merge it?",
+      "expected_output": "Applies the selected completion boundary, exact review scope and nonrecursive owner handoffs.",
+      "files": [],
+      "assertions": [
+        "No scheduler or unattended initiating agent exists; an operator must start the local workflow.",
+        "Major updates are eligible for the same complete review, bounded safe repair and protected merge path; metadata/green CI cannot replace review."
+      ]
     }
   ]
 }

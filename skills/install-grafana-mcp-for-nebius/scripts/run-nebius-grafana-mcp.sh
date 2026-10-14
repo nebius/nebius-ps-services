@@ -593,6 +593,58 @@ if age < 0 or age > 3600:
 PY
 }
 
+remove_stale_empty_pid_file() {
+  # Match the existing incomplete-lock grace period. Never discard a PID,
+  # published owner, unknown entry, or state that changed during inspection.
+  python3 - "$1" "$2" "$3" <<'PY'
+import os
+import stat
+import sys
+import time
+
+path, expected_inode, grace = sys.argv[1:]
+directory_fd = None
+file_fd = None
+
+def snapshot(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+try:
+    directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.fstat(directory_fd)
+    if (directory.st_ino != int(expected_inode)
+            or directory.st_uid != os.getuid()
+            or stat.S_IMODE(directory.st_mode) != 0o700
+            or time.time() - directory.st_mtime < int(grace)
+            or os.listdir(directory_fd) != ["owner-pid.tmp"]):
+        raise SystemExit(1)
+    file_fd = os.open("owner-pid.tmp", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                      dir_fd=directory_fd)
+    provisional = os.fstat(file_fd)
+    if (not stat.S_ISREG(provisional.st_mode)
+            or provisional.st_uid != os.getuid()
+            or stat.S_IMODE(provisional.st_mode) != 0o600
+            or provisional.st_nlink != 1
+            or provisional.st_size != 0
+            or time.time() - provisional.st_mtime < int(grace)):
+        raise SystemExit(1)
+    if (snapshot(os.lstat(path)) != snapshot(directory)
+            or os.listdir(directory_fd) != ["owner-pid.tmp"]
+            or snapshot(os.stat("owner-pid.tmp", dir_fd=directory_fd,
+                                follow_symlinks=False)) != snapshot(provisional)):
+        raise SystemExit(1)
+    os.unlink("owner-pid.tmp", dir_fd=directory_fd)
+except OSError:
+    raise SystemExit(1)
+finally:
+    if file_fd is not None:
+        os.close(file_fd)
+    if directory_fd is not None:
+        os.close(directory_fd)
+PY
+}
+
 refresh_token() {
   local auth_mode="${1:-noninteractive}"
   local -a auth_args=(
@@ -755,6 +807,10 @@ refresh_token() {
       esac
       if [ "$lock_age" -ge "$lock_wait_seconds" ] \
         && [ "$(file_inode "$lock_dir" 2>/dev/null || true)" = "$lock_inode" ]; then
+        if [ -z "$owner_file_inode" ]; then
+          remove_stale_empty_pid_file "$lock_dir" "$lock_inode" "$lock_wait_seconds" \
+            || true
+        fi
         if [ -n "$owner_file_inode" ]; then
           if [ "$(file_inode "$lock_owner_file" 2>/dev/null || true)" = "$owner_file_inode" ]; then
             rm -f -- "$lock_owner_file"
@@ -764,7 +820,8 @@ refresh_token() {
           waited=$((waited + 1))
           continue
         fi
-        if rmdir -- "$lock_dir" 2>/dev/null; then
+        if [ "$(file_inode "$lock_dir" 2>/dev/null || true)" = "$lock_inode" ] \
+          && rmdir -- "$lock_dir" 2>/dev/null; then
           printf 'warning: recovered an incomplete profile-scoped token refresh lock\n' >&2
           continue
         fi
@@ -966,7 +1023,7 @@ run_refresh_loop() {
     return 1
   fi
 
-  # mcp-grafana stdio builds through v0.17.2 keep the startup Grafana client
+  # mcp-grafana stdio (source-verified in v2.0.2) keeps the startup Grafana client
   # for the life of the process and do not re-read a rotated token file.
   # Close the transport after rotation so the next process loads the fresh
   # credential instead of silently retaining the expiring in-memory token.

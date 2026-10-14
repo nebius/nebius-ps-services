@@ -272,7 +272,7 @@ set -euo pipefail
 
 : "${CODEX_CAPTURE_FILE:?CODEX_CAPTURE_FILE is required}"
 
-if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "get" ]; then
+if [ "${1:-}" = "mcp" ] && { [ "${2:-}" = "get" ] || [ "${2:-}" = "list" ]; }; then
   mkdir -p -- "${CODEX_HOME:?CODEX_HOME is required}"
   mode_file="${CODEX_HOME}/fake-mode"
   added_file="${CODEX_HOME}/fake-added"
@@ -283,9 +283,35 @@ if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "get" ]; then
     previous_mode="$(cat "$mode_file")"
   fi
   if [ "$current_mode" != "$previous_mode" ]; then
-    rm -f -- "$added_file" "$json_count_file"
+    rm -f -- "$added_file" "$json_count_file" "${CODEX_HOME}/fake-list-count"
     printf '%s\n' "$current_mode" >"$mode_file"
   fi
+  if [ "${2:-}" = "list" ]; then
+    case "$current_mode" in
+      list-read-error) exit 1 ;;
+      list-malformed) printf '{"unexpected":true}\n'; exit 0 ;;
+      list-duplicate) printf '[{"name":"grafana-nebius"},{"name":"grafana-nebius"}]\n'; exit 0 ;;
+      missing-then-present)
+        if [ -f "${CODEX_HOME}/fake-list-count" ]; then
+          printf '[{"name":"grafana-nebius"}]\n'
+        else
+          : >"${CODEX_HOME}/fake-list-count"
+          printf '[]\n'
+        fi
+        exit 0
+        ;;
+    esac
+    if [ ! -f "$added_file" ] \
+      && { [ "$current_mode" = "missing" ] || [ "$current_mode" = "post-write-command-drift" ]; }; then
+      printf '[]\n'
+    else
+      printf '[{"name":"grafana-nebius"}]\n'
+    fi
+    exit 0
+  fi
+  case "$current_mode" in
+    get-read-error | list-read-error | list-malformed | list-duplicate) exit 1 ;;
+  esac
   if [ -f "$added_file" ]; then
     startup_timeout="null"
     if grep -Eq '^startup_timeout_sec = 300([.]0)?$' \
@@ -808,6 +834,25 @@ grep -Fq "NEBIUS_GRAFANA_IDENTITY_FILE=${identity_file}" "$codex_capture"
 grep -Fq 'NEBIUS_GRAFANA_USER_PROFILE=human-primary' "$codex_capture"
 grep -Fq -- '--disable-write --max-loki-log-limit 20' "$codex_capture"
 
+created_state="$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+created_token_count="$(cat "$token_counter")"
+CODEX_MODE="missing" run_ensure --apply --user-profile human-primary >/dev/null
+CODEX_MODE="missing" run_ensure --check --user-profile human-primary >/dev/null
+test "$created_state" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+test "$(cat "$token_counter")" = "$created_token_count"
+test "$(grep -Fc 'mcp add grafana-nebius' "$codex_capture")" = 1
+
+before_concurrent_add="$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+: >"$codex_capture"
+if CODEX_MODE="missing-then-present" \
+  run_ensure --apply --user-profile human-primary >"${tmp_dir}/concurrent-add-output" 2>&1; then
+  printf 'expected a concurrently appearing registration to block add\n' >&2
+  exit 1
+fi
+grep -Fq 'registration appeared concurrently' "${tmp_dir}/concurrent-add-output"
+test ! -s "$codex_capture"
+test "$before_concurrent_add" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+
 if CODEX_MODE="post-write-command-drift" \
   CODEX_ADDED_WRAPPER="/unexpected/wrapper" \
   run_ensure \
@@ -897,6 +942,69 @@ if grep -Eq 'mcp (add|remove) grafana-nebius' "$codex_capture"; then
   printf 'mismatch without replacement approval rewrote the MCP registration\n' >&2
   exit 1
 fi
+
+# Discovery failures must never be interpreted as an absent registration.
+for discovery_mode in get-read-error list-read-error list-malformed list-duplicate; do
+  : >"$codex_capture"
+  protected_state_before="$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+  if CODEX_MODE="$discovery_mode" \
+    run_ensure --apply --user-profile human-primary >"${tmp_dir}/discovery-output" 2>&1; then
+    printf 'expected failed or malformed discovery to fail closed: %s\n' "$discovery_mode" >&2
+    exit 1
+  fi
+  test "$protected_state_before" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+  test ! -s "$codex_capture"
+  test "$(cat "$token_counter")" = "$token_counter_before"
+done
+
+# Reject registration drift before renewing an expired token or creating state.
+python3 - "$token_file" <<'PY'
+import os
+import sys
+os.utime(sys.argv[1], (1, 1))
+PY
+protected_state_before="$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+if CODEX_MODE="canonical" CODEX_JSON_PROFILE="human-secondary" \
+  run_ensure --apply --user-profile human-primary >"${tmp_dir}/stale-mismatch-output" 2>&1; then
+  printf 'expected stale-token setup drift to require replacement approval\n' >&2
+  exit 1
+fi
+test "$protected_state_before" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+test "$(cat "$token_counter")" = "$token_counter_before"
+if CODEX_MODE="canonical" \
+  run_ensure --apply --user-profile human-primary \
+    --state-root "${test_home}/rejected-new-state" >/dev/null 2>&1; then
+  printf 'expected new private-state binding drift to require replacement approval\n' >&2
+  exit 1
+fi
+test ! -e "${test_home}/rejected-new-state"
+test "$(cat "$token_counter")" = "$token_counter_before"
+
+# A legitimate renewal converges once; further apply/check calls are no-ops.
+CODEX_MODE="canonical" run_ensure --apply --user-profile human-primary >/dev/null
+test "$(cat "$token_counter")" = "$((token_counter_before + 1))"
+protected_state_before="$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+CODEX_MODE="canonical" run_ensure --apply --user-profile human-primary >/dev/null
+CODEX_MODE="canonical" run_ensure --check --user-profile human-primary >/dev/null
+test "$(cat "$token_counter")" = "$((token_counter_before + 1))"
+test "$protected_state_before" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
+
+# Byte equivalence alone cannot make a nonexecutable installed copy usable.
+alternate_wrapper="${test_home}/.codex/skills/install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh"
+mkdir -p "$(dirname -- "$alternate_wrapper")"
+cp "$configured_wrapper" "$alternate_wrapper"
+chmod 755 "$alternate_wrapper"
+CODEX_MODE="canonical" CODEX_EXISTING_WRAPPER="$alternate_wrapper" \
+  run_ensure --check --user-profile human-primary >/dev/null
+chmod 600 "$alternate_wrapper"
+for inspection_mode in --check --apply; do
+  if CODEX_MODE="canonical" CODEX_EXISTING_WRAPPER="$alternate_wrapper" \
+    run_ensure "$inspection_mode" --user-profile human-primary >/dev/null 2>&1; then
+    printf 'expected a nonexecutable equivalent wrapper to be rejected\n' >&2
+    exit 1
+  fi
+done
+test "$protected_state_before" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
 
 python3 - "${test_home}/.codex/config.toml" <<'PY'
 from pathlib import Path
@@ -1144,6 +1252,72 @@ STRINGS_MODE="token-file" \
 grep -Fq 'recovered an incomplete profile-scoped token refresh lock' \
   "${tmp_dir}/incomplete-lock-output"
 test ! -e "${token_file}.lock"
+
+# An interrupted PID capture leaves a nonempty directory with no owner record.
+# Startup must recover this exact provisional state before authenticating.
+: >"$token_counter"
+mkdir "${token_file}.lock"
+chmod 700 "${token_file}.lock"
+: >"${token_file}.lock/owner-pid.tmp"
+chmod 600 "${token_file}.lock/owner-pid.tmp"
+python3 - "${token_file}.lock" <<'PY'
+import os
+import sys
+
+os.utime(os.path.join(sys.argv[1], "owner-pid.tmp"), (1, 1))
+os.utime(sys.argv[1], (1, 1))
+PY
+NEBIUS_GRAFANA_STARTUP_LOCK_WAIT_SECONDS=1 \
+  run_wrapper --refresh-token-only >"${tmp_dir}/incomplete-pid-output" 2>&1
+grep -Fq 'recovered an incomplete profile-scoped token refresh lock' \
+  "${tmp_dir}/incomplete-pid-output"
+test "$(cat "$token_counter")" = "1"
+test ! -e "${token_file}.lock"
+
+for provisional_case in populated symlink directory permissions hardlink unknown; do
+  : >"$token_counter"
+  mkdir "${token_file}.lock"
+  chmod 700 "${token_file}.lock"
+  provisional_file="${token_file}.lock/owner-pid.tmp"
+  case "$provisional_case" in
+    populated) printf '%s\n' "$$" >"$provisional_file"; chmod 600 "$provisional_file" ;;
+    symlink) ln -s "$token_file" "$provisional_file" ;;
+    directory) mkdir "$provisional_file" ;;
+    permissions) : >"$provisional_file"; chmod 644 "$provisional_file" ;;
+    hardlink) ln "$token_file" "$provisional_file" ;;
+    unknown)
+      : >"$provisional_file"
+      chmod 600 "$provisional_file"
+      printf 'preserve\n' >"${token_file}.lock/unrecognized"
+      ;;
+  esac
+  python3 - "${token_file}.lock" <<'PY'
+import os
+import sys
+
+os.utime(os.path.join(sys.argv[1], "owner-pid.tmp"), (1, 1), follow_symlinks=False)
+os.utime(sys.argv[1], (1, 1))
+PY
+  before_provisional="$(snapshot_paths "${token_file}.lock" "$provisional_file" "$token_file")"
+  if NEBIUS_GRAFANA_STARTUP_LOCK_WAIT_SECONDS=1 \
+    run_wrapper --refresh-token-only >"${tmp_dir}/preserved-pid-output" 2>&1; then
+    printf 'expected unsafe or ambiguous provisional state to be preserved: %s\n' \
+      "$provisional_case" >&2
+    exit 1
+  fi
+  test "$before_provisional" = "$(snapshot_paths "${token_file}.lock" "$provisional_file" "$token_file")"
+  test ! -s "$token_counter"
+  if [ "$provisional_case" = directory ]; then
+    rmdir "$provisional_file"
+  else
+    rm "$provisional_file"
+  fi
+  if [ "$provisional_case" = unknown ]; then
+    grep -Fxq 'preserve' "${token_file}.lock/unrecognized"
+    rm "${token_file}.lock/unrecognized"
+  fi
+  rmdir "${token_file}.lock"
+done
 
 for refresh_iteration in 1 2 3; do
   : >"$token_counter"

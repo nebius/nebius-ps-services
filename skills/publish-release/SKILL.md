@@ -120,6 +120,9 @@ setup. Complete follows every step below.
 4. Use the serialized content-only preparation helper, then create-pr's review,
    validation, complete-tree commit, base synchronization, push and PR reuse.
    An initially dirty worktree is normal. Preparation itself never commits.
+   Complete publication retains merge authorization and ownership of the original
+   grant/deadlines; create-pr's default PR-only boundary does not close this task.
+   Nested code-review covers the final candidate before push/PR publication.
 5. Run local review-pr and safe repairs through create-pr's private preparation
    handoff. Bind the final reviewed pushed PR/head to the checkpoint, then invoke
    merge-pr for Actions approval and guarded merge. Do not wait for human approval

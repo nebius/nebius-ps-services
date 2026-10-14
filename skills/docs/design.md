@@ -7683,7 +7683,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=5 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -7692,11 +7692,21 @@ acceptance rather than inferred from deterministic tests.
 
 #### Context Evidence
 
-The earlier broker had separate ordinary-review and Dependabot metadata admission plus rollout controls. The accepted redesign replaces both paths with universal local review while preserving the existing completion and publication safeguards.
+The existing reviewed broker already requires operator dispatch, exact review evidence and protected merge. PR #223 exposed a duplicated setup-uv release hash in cxcli workflow tests and a latent Required CI self-gate: matrix-expanded orchestration check names miss name-only exclusions. The accepted revision separates default PR creation from explicit merge intent and repairs both causal owners.
 
 #### Design Details
 
-All ordinary PRs and configured Dependabot updates, including Docker, use local review-pr, safe repairs through create-pr, fresh exact-head/base review and CI, then merge-pr. Standalone review records evidence without starting a merge; a complete review-and-merge request authorizes the sequence. Route Python, Actions and Docker changes to the matching specialists and stop for unsafe findings, unavailable meaningful validation or human objections. Every changed head or base invalidates earlier review.
+Plain create-pr performs nested read-only code-review of the complete proposed diff and affected callers after final base synchronization, before push or PR creation. The parent owns bounded safe repairs, validation and renewed review. After publication, review-pr refreshes GitHub state and readiness; create-pr stops at the reviewed PR. Remove the redundant create-pr --prepare-only interface without a compatibility alias. Multi-branch preparation does not assume previous branches were merged.
+
+Explicit user intent to merge delegates merge-pr. Plain review-pr reviews/repairs only; a root combined review-and-merge entry delegates once to merge-pr before review work. Merge-pr always invokes parent-owned review-pr for every unmerged PR; that internal call returns to its parent and never re-delegates. Interpret intent semantically: discussion, negation, quoted commands, informational questions about behavior and base synchronization do not authorize merging a PR. An explicit action request phrased as a question, such as "Can you create a PR and merge it?", does authorize that requested sequence. Skill picker metadata must describe the PR-only default. Already-merged operations only observe and verify the exact result.
+
+Code-review owns local diff analysis, including a delegated frozen PR diff, not GitHub orchestration. Nested analysis is read-only and reusable only in the same root operation for the exact unchanged head/base. Always refresh GitHub identity, checks, threads, objections and mergeability. Carry the original receipt, grant, targets and readiness deadline through handoffs; only the completion owner closes at the selected boundary. Private create-pr preparation remains nonrecursive. Complete release/image/Helm requests retain merge authorization; repaired heads return to their publication checkpoint owner before broker dispatch. Preserve SDLC exact promoted-SHA publication and its separate merge owner.
+
+The operator manually starts this workflow locally for ordinary and every configured Dependabot update class, including majors and Docker. No new scheduler or unattended initiating agent. Route dependency and domain changes to matching specialists; unsafe findings or unavailable meaningful validation stop merge effects. Changed head/base invalidates earlier review.
+
+CI policy uses configured merge/completion workflow identities instead of excluded check names. Resolve check-suite provenance through GitHub Actions app and repository identity plus exactly one associated workflow run, trusted event semantics and configured workflow path. Cache by suite only within one gate evaluation. pull_request_target uses PR head/branch metadata; workflow_dispatch requires the live default branch. Unknown or ambiguous producers and PR-controlled runs remain normal gating checks. A pull_request_target run must retain its authoritative default-base association; GitHub may omit this for forks, so those unknown origins remain gated rather than inferring historical trust from current PR state. Required validation workflow inventory is still mandatory, independent of names.
+
+Cxcli workflow tests select exactly one astral-sh/setup-uv repository reference, require a full 40-hex commit SHA, and keep exact uv version/cache inputs, conditions and step ordering. Missing, duplicate, tag, abbreviated, malformed and wrong-repository references fail explicitly. Multiple valid SHAs pass without updating a golden release hash.
 
 Only an explicit trusted numeric operator workflow_dispatch can initiate a merge. Independently fetch and validate the positive GitHub COMMENT review ID, author, repository/PR/head/base and validation before intent and again before effects. Bot identity, metadata, labels and CI cannot replace review. Remove metadata admission and rollout toggles without compatibility paths; MERGE_OPERATOR_IDS is the only merge-specific variable. Preserve same-feature reuse, canonical repository-wide commits and preparation-only publication modes.
 
@@ -7720,8 +7730,10 @@ Ordinary review/merge/create and publication owners, reusable workflows, broker/
 
 - TDD-001: Ordinary, Python, Actions and Docker PRs use identical positive-review dispatch admission. Missing, zero, malformed, forged or stale evidence blocks all effects.
 - TDD-002: Safe Dependabot source repairs invalidate old review; head/base changes, objections and missing/failed CI stop the operation.
-- TDD-003: Standalone review and automatic events cannot initiate merging; ordinary/fork Required CI still reports.
+- TDD-003: Plain standalone review and automatic events cannot initiate merging; ordinary/fork Required CI still reports.
 - TDD-004: Interrupted completion, exact checkout, duplicate suppression, Pages and verified-result tags retain their safeguards.
+- TDD-005: Plain create/review stops at readiness; explicit combined intent delegates once, preserves ownership and does not recurse. Final candidate analysis precedes publication; repairs invalidate analysis.
+- TDD-006: Valid immutable setup-uv updates pass; invalid identity/pinning/inputs/conditions/order fail. Pending/cancelled orchestration checks are excluded only with authoritative provenance; same-name validation and forged/ambiguous producers still gate.
 
 #### Validation Plan
 
@@ -7745,9 +7757,17 @@ Code, instructions, templates and tests agree; independent review passes. Report
 
 #### Implementation Evidence
 
-Implemented universal positive COMMENT review admission and explicit trusted operator dispatch. Deleted dependency metadata admission, its producer/template, policy key and obsolete check exclusion. Removed rollout controls with no replacement or compatibility path. Completion selection and CI checkout require operator-dispatched positive-review intents; immutable receipts, repeated CI/review gates, exact-result checkout, journals and publication ownership remain. Dependabot configuration is unchanged. Updated instructions, reusable assets, evaluations, READMEs and Unreleased changelogs; installed the four changed skill payloads from their verified source owners.
+Revision 5 implements PR-only create-pr defaults, complete nested code-review before publication, early one-time combined review-and-merge delegation and mandatory parent-owned review-pr for every unmerged PR. Updated instructions, metadata, evaluations, direct release/image/Helm callers and documentation preserve receipts, grants, deadlines, publication checkpoints and SDLC isolation. Removed the redundant create-pr preparation flag and check-name exclusions. CI now resolves orchestration producer provenance; cxcli workflow tests enforce structural immutable action pinning without a golden release hash. Refreshed all eight affected installed skill payloads while preserving their owners. No commit, deployment, PR update or live merge was performed.
 
 #### Verification Evidence
+
+Revision 5 source evidence (2026-10-14): new regression tests failed on the original code, then passed after the repairs. 182 focused tests pass: 95 merge/completion/publication-helper, 57 release, 2 workflow-asset, 9 code-review contract and 19 cxcli workflow tests. The two formerly failing cxcli contract tests also pass against read-only workflow payloads from PR #223 at 43df54d42dd416ccdf4022070fce3c7291c0e18d; this is artifact-bound local proof, not live Actions execution. Ruff check/format, changed Markdown, diff checks and paired spec validation pass. Read-only code/security review found no blocking source issue; the unknown fork-base provenance limitation remains explicit and fail-closed. Follow-up align corrected the skill picker description and clarified action requests phrased as questions versus informational questions, with paired evaluation cases. Independent final review found no authority or delegation regression; the 182-test suite, 24 profile checks, scoped lint and source/installed parity passed again. Native execution of the new semantic cases remains unverified.
+
+All eight affected skills pass 24 portable/Codex/Claude structure/profile checks and actual isolated npx discovery, copy parity, repeat-install and isolation checks. Personal installed payloads and executable modes match source with ownership markers preserved. Native Codex and Claude trigger probes are authentication-unavailable; comparative quality and native end-to-end execution remain unverified. The workflow repair is not deployed and PR #223 has not been merged by this implementation. Live protected merge, exact-result CI/Pages and workflow-file token permissions require a separately operator-initiated publication/acceptance operation.
+
+#### Prior Revision Evidence
+
+Implemented universal positive COMMENT review admission and explicit trusted operator dispatch. Deleted dependency metadata admission, its producer/template, policy key and obsolete check exclusion. Removed rollout controls with no replacement or compatibility path. Completion selection and CI checkout require operator-dispatched positive-review intents; immutable receipts, repeated CI/review gates, exact-result checkout, journals and publication ownership remain. Dependabot configuration is unchanged. Updated instructions, reusable assets, evaluations, READMEs and Unreleased changelogs; installed the four changed skill payloads from their verified source owners.
 
 Historical foundation evidence: 179 focused tests and initial skill/workflow checks passed; the maintainer bootstrap PR passed 41 checks with 13 expected skips, and cxcli passed 8,278 tests. The bootstrap merged on 2026-10-08 and legacy Pages built that result. A later alignment passed 77 merge/completion/publication/template tests and 21 service checks with source/installed parity. These results do not verify this redesign or token-driven completion. Current source, installed, CI and live evidence must be recorded separately after implementation; delivery remains unverified until acceptance is observed.
 
