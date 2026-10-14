@@ -79,6 +79,15 @@ workflow/path inventory and other checks/statuses. Broker admission remains a
 separate gate. All write-enabled workflows share `github-actions[bot]`; this
 design does not provide custom-App isolation. Keep each job least-privileged.
 
+Exclude orchestration check runs only after binding the Actions app and repository,
+check suite, unique associated workflow run, configured merge/completion path and
+trusted event. Job names and matrix suffixes are not authority. Use the Actions
+[check-suite filter](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository)
+and cache provenance only within one evaluation. Required validation workflows
+remain mandatory. Unknown origins stay gating, including pull_request_target fork
+runs whose default-base association is omitted; current PR state cannot prove
+their historical event base. Never broaden the exclusion to a name prefix.
+
 ## Result CI, Pages and recovery
 
 An accepted request is pending. Confirm actual merge and the authoritative

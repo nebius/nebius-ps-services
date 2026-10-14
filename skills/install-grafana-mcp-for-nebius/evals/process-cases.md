@@ -5,7 +5,7 @@ These cases preserve detailed workflow and output-quality expectations.
 does not define skill routing.
 
 Fresh routing checks use CSV rows `grafana-install-positive-01` through
-`grafana-install-positive-05` and `grafana-install-negative-01` through
+`grafana-install-positive-06` and `grafana-install-negative-01` through
 `grafana-install-negative-06`. The table below assumes the skill has already
 been selected and preserves only setup-state and handoff expectations.
 
@@ -21,6 +21,12 @@ been selected and preserves only setup-state and handoff expectations.
 | The installed MCP build lacks token-file support | Fail closed and require an updated `mcp-grafana`; do not add an inline-token compatibility path. |
 | The cached startup token is missing or older than one hour | Renew through the pinned human profile before MCP launch, permit browser authentication only for the foreground identity check, mint and revalidate noninteractively, wait long enough to reuse one concurrent foreground renewal, and fail closed without launching MCP if renewal fails. |
 | The Codex MCP entry lacks the canonical startup timeout | Set only `startup_timeout_sec = 300.0` in place when every other structured value is canonical and the digest-bound config bytes remain unchanged; do not use inline `sh -c` or put a token in TOML. |
+| The CLI cannot read MCP inventory or returns malformed or duplicate entries | Fail closed before config, binding, or token writes; never infer absence from a failed get. |
+| Registration drift is rejected while the token is stale or private state is missing | Preserve the existing token and leave missing private state absent; require replacement approval before local convergence. |
+| Repeated check/apply on canonical state | Preserve config, binding, fresh token, and private-directory metadata; do not add, remove, or mint again. |
+| A stale token is renewed during an approved canonical apply | Renew once; subsequent apply/check calls reuse the token without rewriting protected state. |
+| An existing command points to a byte-identical trusted wrapper without execute permission | Report registration drift; do not accept the command as launchable. |
+| Refresh initialization left only a stale empty private `owner-pid.tmp` | Recover the unchanged provisional lock and refresh once; preserve populated, linked, unsafe, or unknown state. |
 | A parent inspection command combines direct Nebius CLI use with `env -u` or `unset` of managed auth variables | Treat it as expected command-shape enforcement: make no setup mutation, run profile discovery separately, and invoke the setup helper directly. |
 | `$install-grafana-mcp-for-nebius` configure external Grafana for Nebius read endpoints | Use the guarded external-Grafana IAM/static-key/datasource flow. |
 | Setup completes and datasources list successfully | Report readiness and hand routine queries to `$nebius-grafana-query`. |

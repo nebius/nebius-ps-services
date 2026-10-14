@@ -1,7 +1,11 @@
 # Protected merge setup
 
-Every ordinary PR and configured Dependabot update, including Docker, follows
-local review-pr, safe repair, fresh review and CI, then merge-pr. The trusted
+Every ordinary PR and configured Dependabot update, including majors and Docker,
+uses the same operator-initiated review path. Plain create-pr performs complete
+code-review before publication and stops at the reviewed PR. Plain review-pr
+reviews/repairs without merging. Explicit combined merge intent or complete
+publication delegates merge-pr, which always refreshes readiness through a
+parent-owned review-pr call before protected merge. The trusted
 GitHub Actions broker uses GITHUB_TOKEN for protected approval and merge.
 Dependabot waits until a local operation is started. Agents run locally;
 Agentic SDLC retains its separate authorization and workflow.
@@ -60,8 +64,9 @@ Review the complete diff, breaking changes, dependency/security information and
 meaningful validation. Route Python, GitHub Actions and Docker changes to their
 matching specialists. Safe fixes may change source files; synchronize and
 re-review each changed head or base. Stop for unsafe findings, missing meaningful
-validation or unresolved human objections. Standalone review-pr never merges;
-review-and-merge authorizes the complete sequence without routine reconfirmation.
+validation or unresolved human objections. Plain review-pr never merges; a root
+review-and-merge request delegates once to merge-pr without routine reconfirmation.
+Its review-pr child returns to the parent and never re-delegates.
 
 For a small ordinary PR and a real eligible Dependabot PR, record:
 
@@ -82,6 +87,16 @@ Dependabot evidence. No scheduled local agent is introduced.
 `.github/dependabot.yml` preserves schedules, groups, labels, limits, target
 branch and ecosystems. There is no separate dependency approval/merge producer.
 Bot identity, labels, metadata and green CI never substitute for local review.
+
+Required CI excludes orchestration checks by GitHub Actions app, repository,
+check-suite/run identity, configured merge/completion workflow and trusted event
+provenance. Display names (including matrix suffixes) never authorize an exclusion.
+Unknown or ambiguous producers remain gating checks; required validation workflows
+are independently mandatory. A pull_request_target run needs its default-base
+association: GitHub may omit that association for forks, in which case a pending
+or failed orchestration check remains a blocker. Current PR state alone cannot
+prove the historical event base. Workflow tests accept full immutable setup-uv
+SHA updates while preserving tool-version, cache, condition and ordering checks.
 
 ## Completion and recovery
 

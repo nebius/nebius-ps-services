@@ -4,6 +4,7 @@ grafana-install-positive-02,true,Invoke the Grafana MCP installer to repair my p
 grafana-install-positive-03,true,Check and explicitly converge the existing Codex Grafana MCP registration.
 grafana-install-positive-04,true,Use install-grafana-mcp-for-nebius to migrate the named Grafana MCP entry from a shared token to my pinned human profile.
 grafana-install-positive-05,true,Invoke install-grafana-mcp-for-nebius to configure external Grafana for Nebius read endpoints.
+grafana-install-positive-06,true,Use install-grafana-mcp-for-nebius again and verify it reuses my matching local setup without rewriting it.
 grafana-install-negative-01,false,Show GPU utilization for this Nebius project using the configured Grafana server.
 grafana-install-negative-02,false,Query Nebius Control Plane Audit Logs for this resource.
 grafana-install-negative-03,false,Create a Grafana dashboard and alert.

@@ -28,6 +28,14 @@ The skill keeps a strict boundary between four credentials and token surfaces:
   expected human user ID, and revalidated on every token mint. Ambient agent
   profiles and credentials are cleared.
 
+Interrupted refresh initialization can leave an empty `owner-pid.tmp` before
+the owner record is published. Once the incomplete-lock grace period expires,
+the wrapper recovers this exact state only when the directory and file remain
+private, owned, unchanged, and free of other entries. Populated PID files,
+symlinks, hard links, and unknown state are preserved for inspection. As with
+empty incomplete locks, the grace period assumes initialization has not been
+suspended beyond that period.
+
 The most important correction is that `GRAFANA_URL` must be a Grafana base URL,
 not a Nebius Prometheus, Loki, or Tempo read URL. Installing the
 `mcp-grafana` binary alone also does not make Codex discover it; Codex needs an
@@ -38,8 +46,12 @@ accounts or static keys.
 The local setup is idempotent by design. Re-running the skill checks the
 existing `mcp-grafana` binary, private profile/user binding, profile-scoped
 token state, and `grafana-nebius` Codex MCP entry before changing anything.
-Matching state is reused, including an entry pointing at a byte-identical
-trusted wrapper copy. Structured registration values are compared without
+Matching state is reused, including an entry pointing at an executable,
+byte-identical trusted wrapper copy. Successful structured inventory must prove
+that an entry is missing; a CLI failure or malformed response never authorizes
+an add. Registration eligibility is checked before creating private identity
+state or renewing a token, so unapproved registration drift leaves that state
+unchanged. Structured registration values are compared without
 printing them, including the command, enabled state, tool filters, and absence
 of a tool-timeout override. The canonical registration has a 300-second startup
 timeout so bounded browser authentication can finish before MCP initialization.
@@ -56,6 +68,12 @@ named entry and rerun apply after correcting the add failure; no legacy
 registration is restored. Failed post-write verification leaves the
 unverifiable entry intact instead of risking deletion of another process's
 update.
+
+Repeated check/apply on canonical state preserves the config, identity binding,
+fresh token, and private-directory metadata. Expired tokens renew once and are
+then reused. The helper rechecks absence before adding and rechecks inspected
+values before modifying existing entries. These checks detect observed races;
+they do not serialize independent installers or external config editors.
 
 Run the setup helper as a standalone Bash command. Do not inline its internal
 managed-auth environment cleanup into a parent inspection command or combine
@@ -125,7 +143,8 @@ summaries. This installer does not retain a second operational query path.
 - `scripts/test-run-nebius-grafana-mcp.sh`: local fake-command smoke test for
   stock macOS Bash/Python compatibility, human identity enforcement, token
   freshness and rotation, concurrent/stale/PID-reused/incomplete locks,
-  canonical replacement failure, stopped-child supervision, environment
+  repeated setup and renewal convergence, failed-discovery preservation,
+  rejected registration drift, canonical replacement failure, stopped-child supervision, environment
   sanitization, and private-state and wrapper-path safety.
 - `scripts/test_grafana_skill_contract.py`: static cross-skill ownership,
   routing, metadata, catalog, and eval assertions.

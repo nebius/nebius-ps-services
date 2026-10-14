@@ -6,6 +6,11 @@ project folder.
 
 ## [Unreleased]
 
+- Align ordinary PR skills around review before publication and explicit merge
+  intent. Keep Dependabot on the manually initiated reviewed path. Fix Required
+  CI self-gating through authoritative workflow provenance, and make cxcli
+  setup-uv contract tests accept immutable action updates without a golden hash.
+
 - Keep course and Lab Guide section navigation instant so focus-triggered
   scrolling cannot overtake keyboard link activation. Add isolated desktop and
   mobile Playwright navigation regressions and rebuild the course pages.

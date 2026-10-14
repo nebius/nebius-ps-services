@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Use only when explicitly asked to review a GitHub PR by number, URL, or branch: run a local exact-head review, fix safe writable findings through create-pr, revalidate, and attest readiness; never merge. In Agentic SDLC, report only."
+description: "Use only when explicitly asked to review a GitHub PR by number, URL, or branch: coordinate code-review, safe repairs through create-pr, GitHub checks and readiness. Plain review never merges; explicit combined review-and-merge delegates once to merge-pr. In Agentic SDLC, report only."
 disable-model-invocation: true
 ---
 
@@ -34,6 +34,12 @@ never permission to bypass a guard or claim unobserved behavior.
 Use this skill for GitHub-backed pull request review work when the goal is to
 inspect any provided PR, identify real issues, fix safe problems when branch
 permissions allow, and leave it closer to merge-ready.
+
+Plain review stops at findings and readiness. A root request to review **and
+merge** delegates once to merge-pr before review work. Its parent-owned
+review-pr call returns evidence to merge-pr without delegating again, even
+when the original prompt includes merge intent. This is calling context, not
+a public mode flag. Help, report-only and active SDLC limits take precedence.
 
 ## Use This Skill For
 
@@ -92,6 +98,10 @@ Do not load unrelated skills just because they exist.
 
 Route selectively like this:
 
+- `code-review`: always owns nested read-only analysis of the frozen complete
+  base/head diff and affected callers/tests. Reuse analysis only from the same
+  root operation at unchanged exact head/base; review-pr always refreshes
+  GitHub identity, checks, comments, objections, threads and mergeability.
 - `align`: when the PR spans multiple surfaces and needs end-to-end alignment
   across implementation, tests, docs, help output, CI, or examples.
 - `github-workflows`: when the PR changes `.github/workflows/**`, reusable
@@ -113,21 +123,26 @@ Route selectively like this:
 - `publish-release`, `publish-image`, or `publish-helm`: when the PR changes a
   release helper plus its matching publication workflow and changelog contract.
 
-If the PR is narrow, use only the matching domain skill. If the PR is broad,
-use `align` plus the one or two domain skills that cover the specialized
-surfaces.
+Alongside code-review, select only the matching domain skills. A broad PR may
+need `align` plus the one or two specialists for its surfaces. All child analysis
+is report-only; review-pr owns repair decisions and final readiness.
 
 ## Workflow
 
 1. Freeze the exact host/repository/PR, head/base branches and SHAs, author,
    ownership, draft state and live default. Resolve the actual PR, not an
    unrelated current branch. Active Agentic SDLC uses its read-only mode above.
+   For an ordinary root combined review-and-merge request, delegate once to
+   merge-pr with the original intent/receipt and selected PR, then return its
+   outcome. A parent-owned call must continue here without re-delegation.
 2. For ordinary work, read
    the ordinary completion reference from the installed create-pr skill and
    the commit continuation reference from that same skill.
    Honor report-only restrictions and externally owned/fork branch limits.
-3. Inspect the complete base-to-head diff, specs, review comments, unresolved
-   threads, checks and conflicts. For dependency updates, including Docker, review
+3. Delegate complete frozen base-to-head diff analysis to nested read-only
+   code-review (or reuse same-operation exact-head/base analysis). Inspect specs,
+   fresh review comments, unresolved threads, checks and conflicts. For dependency
+   updates, including major versions and Docker, review
    breaking changes and dependency/security information with meaningful validation.
    Select the matching Python, Actions or container specialist. Bot identity,
    metadata and green CI never replace review. Safe repairs may include source
@@ -154,9 +169,12 @@ surfaces.
    Standalone review also returns this evidence when writable and eligible;
    report-only/fork/non-default reviews return findings without merge admission.
 8. Return findings/fixes, validation, final identity and attestation or blocker.
-   Do not merge. The calling create-pr/publication/merge-pr owner continues only
+   The review coordinator never issues merge effects. The calling
+   create-pr/publication/merge-pr owner continues only
    within its existing completion authorization. Standalone review closes its
-   repair transaction after publication and verification.
+   repair transaction after publication and verification. Parent-owned review
+   preserves the original receipt, grant, targets and readiness deadline; only
+   the completion owner closes at the selected final boundary.
 
 ## Command Reference
 

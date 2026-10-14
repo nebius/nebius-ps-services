@@ -1,58 +1,74 @@
 # Ordinary PR completion
 
-This contract excludes Agentic SDLC. All agent reasoning and review runs on the
-local host; GitHub Actions runs only deterministic verification and Actions effects.
-Dependabot updates, including Docker, use this same review and safe repair path.
-Bot metadata never substitutes for review; automatic events cannot start merges.
+This contract excludes Agentic SDLC. The operator starts work on the local host;
+GitHub Actions runs only deterministic verification and authorized effects.
+Dependabot updates, including majors and Docker, use the same review and safe
+repair path. Bot metadata never substitutes for review. No scheduler or unattended
+agent initiates review or merging; existing completion schedules recover only
+previously authorized operations.
 
 1. Use the live default branch. Reuse the current feature branch; when on the
    default, begin canonical create-pr intake before creating the frozen feature
    at the receipt HEAD. Carry dirty changes with it. Never push the default.
-2. Prepare, validate and commit the whole repository through the canonical
-   transaction (root `git add -A`, normal hooks), synchronize the base, push the
-   selected feature and open/reuse its PR. Preserve unrelated work; if whole-tree
-   staging would absorb unrelated changes, resolve scope before effects.
-3. Invoke local review-pr on that PR. Inspect the full diff, requirements,
-   checks, reviews and unresolved threads. Safe means a supported, bounded repair
-   with a clear expected result and relevant validation. Stop for semantic choices,
-   unsafe changes, human requested changes that are not resolved, or missing
-   authority. Never self-dismiss human objections.
+2. Prepare, validate and commit through the canonical transaction (root
+   `git add -A`, normal hooks), then synchronize the base. Before push or PR
+   creation, freeze the final head/base and invoke nested read-only code-review
+   on the complete proposed PR diff and relevant callers/tests. The parent owns
+   bounded safe repairs, renewed validation and review. Preserve unrelated work;
+   if whole-tree staging would absorb unrelated changes, resolve scope first.
+   Publish only the reviewed candidate and open/reuse its PR.
+3. Invoke local review-pr to coordinate readiness. It delegates frozen diff
+   analysis to code-review or reuses it only within this root operation at the
+   exact unchanged head/base. Always refresh GitHub identity, requirements,
+   checks, reviews, human objections, unresolved threads and mergeability.
+   Safe means a supported, bounded repair with a clear expected result and
+   relevant validation. Stop for semantic choices, unsafe changes, unresolved
+   human requested changes, or missing authority. Never self-dismiss objections.
 4. For each safe repair, reuse the same create-pr grant through its **private
-   preparation handoff**: validate/commit/synchronize/push/update the existing PR
-   and return its new head. This handoff never invokes review-pr or merge-pr,
-   never posts a passing review and never closes the caller's grant. This is an
-   internal calling contract, not a public flag. Re-review the full final diff;
-   head or base movement invalidates the prior attestation.
-5. After local review and checks pass, review-pr records the exact head and base
-   with the structured attestation described by merge-pr. This is an authenticated
-   operator attestation, not independent proof of model execution.
-6. Public `--prepare-only` returns here and closes the grant. Default completion
-   invokes merge-pr with PR, exact head/base and review ID. A publication caller
-   may bind its release checkpoint here before merge; it keeps ownership of the
-   grant until completion. Never dispatch before a release checkpoint binds the
-   final reviewed head. If later synchronization or repair changes that head,
-   return fresh review evidence to the publication owner for its guarded
-   checkpoint reconciliation before broker dispatch. Unsafe findings return a
-   blocker without merge.
-7. Merge-pr dispatches the protected Actions workflow. The create-pr/publication
-   completion caller observes the request until actual merge or the fixed
+   preparation handoff**: validate/commit/synchronize, review the complete final
+   candidate, push/update the existing PR and return its new head. This handoff
+   may use nested read-only code-review but never invokes review-pr or merge-pr,
+   posts a passing GitHub review or closes the caller's grant. It is an internal
+   calling contract, not a public flag. Head/base movement invalidates analysis
+   and attestation; the parent re-evaluates readiness after the handoff.
+5. After local review and checks pass, review-pr records the exact head/base
+   with the structured COMMENT attestation described by merge-pr when eligible.
+   This is an authenticated operator attestation, not independent proof of model
+   execution. Ineligible/report-only reviews return findings without admission.
+6. **Plain create-pr stops at the reviewed PR and closes its grant here.** Only
+   explicit semantic intent to merge delegates merge-pr with the PR, exact
+   head/base, review ID and original authority. An explicit action request such
+   as "Can you create a PR and merge it?" authorizes the requested sequence.
+   Negation, discussion, informational questions about skill behavior, quotes or
+   base-to-branch synchronization do not authorize PR merging. For
+   multiple PRs, preserve dependency order without assuming earlier PRs merged.
+   Complete publication callers retain ownership, bind their checkpoint to the
+   final reviewed head and then delegate merge-pr. If later repair or sync changes
+   that head, return fresh evidence to the publication owner for guarded checkpoint
+   reconciliation before dispatch. Publication preparation-only modes still stop
+   at their selected boundary.
+7. Merge-pr invokes parent-owned review-pr for every unmerged PR, refreshes state
+   and dispatches the protected Actions workflow only after readiness passes.
+   Parent-owned review-pr returns evidence without re-delegating merge-pr.
+   An already-merged PR uses observation and exact-result verification only.
+   Preserve the original receipt, grant, targets and readiness deadline across
+   every handoff. Only the completion owner closes at the selected boundary.
+8. The merge/completion owner observes until actual merge or the fixed
    10,800-second limit; pending is not completed and the grant stays open.
    PR readiness, merge settlement and post-merge verification each have an
-   independent fixed 10,800-second budget. Use a publication caller's checkpoint
-   deadlines when supplied. Gate changes, safe repairs and reruns never reset
-   them; only explicit release resume renews release budgets. Preserve the
-   checkpoint, leave GitHub work running and report the exact resume command
-   on timeout. Keep existing short API timeouts, polling and minute progress.
-   Exact-result CI and configured Pages must be verified by the completion
-   helper before reporting complete. Missing setup/permissions, merge queues or
-   unsupported workflow-file merges stop for a maintainer, never a PAT,
-   admin, auto-merge, direct push or direct CLI merge fallback. Close the grant
-   after the selected completion boundary or explicit cancellation.
+   independent fixed 10,800-second budget. Use publication checkpoint deadlines
+   when supplied. Repairs and reruns never reset them; only explicit release
+   resume renews release budgets. Preserve checkpoints, leave GitHub work running
+   and report the exact resume command on timeout. Keep short API timeouts,
+   bounded polling and minute progress. Verify exact-result CI and configured
+   Pages through the completion helper before reporting complete. Missing setup,
+   permissions, merge queues or unsupported workflow-file merges stop for a
+   maintainer; never use PAT, admin, auto-merge, direct push or CLI merge fallback.
 
-Standalone review-pr uses this same private preparation contract for authorized
-safe writable repairs and never merges. Standalone merge-pr invokes review-pr
-when current evidence is missing; repairs use the same owner. Explicit complete
-publish-release, publish-helm and publish-image requests authorize these necessary
-ordinary PR steps without another commit/PR/merge prompt. A review-and-merge
-request likewise authorizes review, safe repair and protected merge together. Preparation-only,
-report-only, help and Agentic SDLC restrictions always propagate.
+Plain review-pr reviews/repairs and returns readiness without merging. A root
+combined review-and-merge request delegates **once, before review work**, to
+merge-pr, which calls parent-owned review-pr and then protected merge. The child
+never interprets the root merge request as permission to recurse. Explicit
+complete publish-release, publish-helm and publish-image requests authorize their
+necessary ordinary PR and merge steps without another routine prompt. Help,
+report-only and Agentic SDLC restrictions always propagate.

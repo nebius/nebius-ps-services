@@ -348,6 +348,59 @@ def run_matches_pr(api, run, pr):
     )
 
 
+def orchestration_suite(api, suite_id, pr, policy):
+    """Identify trusted status/merge producers; display names carry no authority."""
+    suite = api.api(f"check-suites/{suite_id}")
+    if (
+        suite.get("id") != suite_id
+        or suite.get("app", {}).get("id") != 15368
+        or suite.get("repository", {}).get("full_name") != api.repo
+        or suite.get("head_sha") != pr["head"]["sha"]
+    ):
+        return False
+    runs = api.pages(f"actions/runs?check_suite_id={suite_id}", "workflow_runs")
+    if len(runs) != 1:
+        return False
+    run = runs[0]
+    paths = {
+        f".github/workflows/{policy[key]}"
+        for key in ("merge_workflow", "completion_workflow")
+        if policy.get(key)
+    }
+    if (
+        run.get("check_suite_id") != suite_id
+        or run.get("repository", {}).get("full_name") != api.repo
+        or run.get("head_sha") != suite["head_sha"]
+        or run.get("head_branch") != suite.get("head_branch")
+        or run.get("path") not in paths
+    ):
+        return False
+    event = run.get("event")
+    # GitHub executes these events from the default branch. The run's head
+    # metadata is not an authority to execute PR code in these workflows.
+    if event in {"workflow_run", "schedule"}:
+        return True
+    default = api.repo_info()["default_branch"]
+    if event == "workflow_dispatch":
+        return run.get("head_branch") == default
+    if event == "pull_request_target":
+        # Unlike GITHUB_REF, the Actions REST run records the PR head/branch.
+        # Bind its base association too: target events can use non-default bases.
+        return (
+            run["path"] == f".github/workflows/{policy.get('merge_workflow')}"
+            and pr["base"]["ref"] == default
+            and run.get("head_branch") == pr["head"]["ref"]
+            and run.get("head_repository", {}).get("full_name")
+            == pr["head"]["repo"]["full_name"]
+            and any(
+                p.get("number") == pr["number"]
+                and p.get("base", {}).get("ref") == default
+                for p in run.get("pull_requests", [])
+            )
+        )
+    return False
+
+
 def checks_ready(api, pr, files, policy):
     sha = pr["head"]["sha"]
     paths = changed_paths(files)
@@ -373,9 +426,19 @@ def checks_ready(api, pr, files, policy):
             raise Pending("Expected CI is pending")
         require(run["conclusion"] == "success", "Expected CI did not pass")
     checks = api.pages(f"commits/{sha}/check-runs?filter=latest", "check_runs")
+    orchestration = {}
     for check in checks:
-        if check["name"] in policy.get("excluded_checks", []):
-            continue
+        suite_id = check.get("check_suite", {}).get("id")
+        if (
+            check.get("app", {}).get("id") == 15368
+            and check.get("head_sha") == sha
+            and type(suite_id) is int
+            and suite_id > 0
+        ):
+            if suite_id not in orchestration:
+                orchestration[suite_id] = orchestration_suite(api, suite_id, pr, policy)
+            if orchestration[suite_id]:
+                continue
         if check["status"] != "completed":
             raise Pending("PR check is pending")
         require(

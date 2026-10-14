@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import pytest
 import yaml
 
-_SETUP_UV_ACTION = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
+_SETUP_UV_REPOSITORY = "astral-sh/setup-uv"
 _SETUP_UV_INPUTS = {
     "version": "0.12.9",
     "enable-cache": "true",
@@ -35,20 +37,92 @@ def _named_step(steps: list[object], name: str) -> dict[str, object]:
 
 
 def _uses_step(steps: list[object], action: str) -> dict[str, object]:
-    step = next(step for step in steps if isinstance(step, dict) and step.get("uses") == action)
-    assert isinstance(step, dict)
-    return step
+    matches = [step for step in steps if isinstance(step, dict) and step.get("uses") == action]
+    assert len(matches) == 1, f"Expected exactly one {action} step, found {len(matches)}"
+    return matches[0]
 
 
 def _assert_pinned_uv(steps: list[object], *, condition: str | None = None) -> None:
     setup_python = _uses_step(steps, "actions/setup-python@v7")
-    setup_uv = _uses_step(steps, _SETUP_UV_ACTION)
+    matches = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and isinstance(step.get("uses"), str)
+        and step["uses"].partition("@")[0] == _SETUP_UV_REPOSITORY
+    ]
+    assert len(matches) == 1, (
+        f"Expected exactly one {_SETUP_UV_REPOSITORY} step, found {len(matches)}"
+    )
+    setup_uv = matches[0]
+    assert re.fullmatch(r"astral-sh/setup-uv@[0-9a-fA-F]{40}", setup_uv["uses"]), (
+        "setup-uv must be pinned to a full immutable commit SHA"
+    )
     assert setup_uv["with"] == _SETUP_UV_INPUTS
     if condition is None:
         assert "if" not in setup_uv
     else:
         assert setup_uv["if"] == condition
     assert steps.index(setup_python) < steps.index(setup_uv)
+
+
+@pytest.mark.parametrize("revision", ["1" * 40, "a" * 40])
+@pytest.mark.parametrize("condition", [None, "steps.guard.outputs.allowed == 'true'"])
+def test_pinned_uv_accepts_immutable_updates(revision: str, condition: str | None) -> None:
+    steps = [
+        {"uses": "actions/setup-python@v7"},
+        {"uses": f"astral-sh/setup-uv@{revision}", "with": dict(_SETUP_UV_INPUTS)},
+    ]
+    if condition is not None:
+        steps[1]["if"] = condition
+    _assert_pinned_uv(steps, condition=condition)
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "astral-sh/setup-uv@v10",
+        "astral-sh/setup-uv@abc1234",
+        "astral-sh/setup-uv@" + "z" * 40,
+        "astral-sh/setup-uv",
+        "other/setup-uv@" + "a" * 40,
+    ],
+)
+def test_pinned_uv_rejects_invalid_reference(action: str) -> None:
+    steps = [
+        {"uses": "actions/setup-python@v7"},
+        {"uses": action, "with": dict(_SETUP_UV_INPUTS)},
+    ]
+    with pytest.raises(AssertionError, match="setup-uv"):
+        _assert_pinned_uv(steps)
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_pinned_uv_requires_exactly_one_action(count: int) -> None:
+    steps = [{"uses": "actions/setup-python@v7"}] + [
+        {"uses": "astral-sh/setup-uv@" + "a" * 40, "with": dict(_SETUP_UV_INPUTS)}
+        for _ in range(count)
+    ]
+    with pytest.raises(AssertionError, match="exactly one astral-sh/setup-uv"):
+        _assert_pinned_uv(steps)
+
+
+@pytest.mark.parametrize(
+    "change", ["version", "enable-cache", "cache-dependency-glob", "condition", "order"]
+)
+def test_pinned_uv_preserves_setup_contract(change: str) -> None:
+    steps = [
+        {"uses": "actions/setup-python@v7"},
+        {"uses": "astral-sh/setup-uv@" + "a" * 40, "with": dict(_SETUP_UV_INPUTS)},
+    ]
+    if change in _SETUP_UV_INPUTS:
+        steps[1]["with"][change] = "changed"
+    elif change == "condition":
+        steps[1]["if"] = "false"
+    else:
+        steps.reverse()
+    with pytest.raises(AssertionError):
+        _assert_pinned_uv(steps)
 
 
 def _assert_grafana_api_qualification(steps: list[object], *, condition: str | None = None) -> None:
