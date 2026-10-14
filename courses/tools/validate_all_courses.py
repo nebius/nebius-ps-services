@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every standalone course validator with the active Python."""
+"""Check shared helper parity and every standalone course with the active Python."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ COURSES = (
 
 def main() -> None:
     subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "sync_course_tools.py"), "--check"],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run(
         [sys.executable, str(ROOT / "tools" / "build_course_html.py"), "--check"],
         cwd=ROOT,
         check=True,
@@ -32,7 +37,7 @@ def main() -> None:
         cwd=ROOT,
         check=True,
     )
-    print("PASS: six practical and three reading course validators")
+    print("PASS: shared helper parity, six practical and three reading course validators")
 
 
 if __name__ == "__main__":

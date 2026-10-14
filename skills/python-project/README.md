@@ -3,10 +3,11 @@
 `python-project` scaffolds and hardens Python projects with a uv-first,
 lockfile-backed workflow and reusable modern defaults.
 
-It supports two scopes: standalone repository ownership and
-`coordinated-candidate`, where `scaffold-project` assigns a bounded Python
-component and this skill emits private candidate files without touching the
-target or claiming root cross-cutting artifacts.
+Creation is coordinated by `scaffold-project`, including Python-only projects.
+This skill produces private candidates and completes Python readiness after
+apply. Existing Python maintenance runs directly. See the
+[producer contract](references/project-contract.md) and the shared
+[creation routing](../scaffold-project/references/creation-routing.md).
 
 ## What It Does
 
@@ -34,25 +35,31 @@ target or claiming root cross-cutting artifacts.
 ## Architecture
 
 ```text
-Python project request
+Python creation request
   |
   v
-Choose project profile
+scaffold-project -> Python candidate producer
+  |
+  v
+Choose core profile
   |
   +--> base package layout
   +--> CLI or service/API templates
   +--> tests and fixtures
-  +--> lint and CI config
-  `--> docs and release metadata
+  +--> component lint and test tooling
+  `--> component docs and package metadata
+
+Root README/Makefile -> scaffold-project
+Root ignore rules -> gitignore; root CI -> github-workflows
 ```
 
 ## Workflow
 
-1. Identify project type and risk profile.
+1. Route creation to the coordinator once; keep maintenance direct.
 2. Inspect existing files before scaffolding.
 3. Add only the needed templates and dependencies through the selected
    package manager.
-4. Align the lockfile, tests, linting, docs, and CI.
+4. After apply, bootstrap the real lockfile and project environment.
 5. Run focused Python validation.
 
 ## Core Concepts
@@ -68,6 +75,8 @@ Choose project profile
 ## Files
 
 - `SKILL.md`: Python scaffolding workflow and guardrails.
+- `scripts/python_project.py`: offline render/validate and post-apply bootstrap.
+- `scripts/python_bootstrap.py`: environment isolation and readiness evidence.
 - `assets/`: project templates.
 - `references/`: profile-specific guidance.
 - `agents/openai.yaml`: UI metadata.
@@ -79,3 +88,9 @@ then run both `scripts/test_python_project_contract.py` and
 `scripts/test_testing_templates.py`. The latter renders disposable projects and
 tests actual pytest behavior and installed-wheel negative controls. Runtime
 triggering and comparative model quality remain separate evidence.
+
+Core executable profiles are package/library, CLI, API and systemd. Extended
+profiles remain guidance and are not silently accepted by the producer.
+Readiness includes lint, tests and installed-wheel verification; it never
+activates services. New metadata omits unspecified author/license declarations
+instead of referencing nonexistent files.

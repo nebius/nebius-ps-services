@@ -16,6 +16,7 @@ Engineers need a Slurm and Soperator introduction, a shared performance-tools re
 - AC-003: Fundamentals and Optimizations are prerequisites for the three specialized courses; neither LLM course is a prerequisite for Custom Kernels.
 - AC-004: Each complete teaching topic and experiment has a course owner selected by its learning objective. Move misplaced content together with its labs, guides, diagrams, references and launch/test wiring; retain standalone setup helpers where each environment needs them.
 - AC-005: Collection titles use Performance Engineering or GPU Optimization without H100 branding. Hardware-specific explanations and qualification requirements remain explicit.
+- AC-006: Fundamentals Lesson 12 provides immediate entry to Advanced Lab 02, then Lab 08 after successful placement and correctness checks. Reading Fundamentals through Lesson 12 supplies the conceptual prerequisites for this assignment; Optimization, a specialization, Advanced Lab 01 and Labs 03–07 are not entry gates. Shared preparation, two eight-H100 workers, fabric qualification and supplied launcher checks remain required. The full Advanced route retains Fundamentals, Optimization and the relevant training or inference foundations or equivalent readiness, beginning with Lab 01. Course guidance, the two lab introductions, readiness instructions and catalog distinguish the selected assignment from the full route.
 
 #### Negative Criteria
 
@@ -824,7 +825,7 @@ Learners need an executable, evidence-led GPU optimization workflow across all s
 
 - AC-001: All executable labs have a versioned dashboard, supported local capture and comparison recipes, guided one-variable tuning and independent investigation, with explicit CPU/model/qualification exceptions.
 - AC-002: The shared README contains cluster creation, connection/copy, cxcli-managed Nsight installation, cxcli-managed Grafana and Pushgateway installation and unnumbered environment readiness checks. Explain the measurement-to-dashboard flow with the existing inline diagram, distinguishing immutable benchmark results from sampled telemetry. The GPU Performance Tools reference precedes experiments without renumbering practical lessons or labs.
-- AC-003: Publish selected baseline/candidate numeric summaries after timing through one serialized PUT per fixed workspace/course/lab/profile; validate equivalent workloads and exact-generation readback, with bounded labels and separate publication failures.
+- AC-003: Publish eligible completed lab results automatically through the shared job runner after timing, following REQ-030. Retain explicit baseline/candidate numeric summaries through an independent serialized comparison PUT per fixed workspace/course/lab/profile; validate equivalent workloads and exact-generation readback, with bounded labels and separate publication failures.
 - AC-004: Initial private monitoring setup uses `nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway`. Course setup only discovers and verifies the installed services and writes private connection files; it never creates a catalog or installs infrastructure. Shared setup imports every selected course dashboard directory using the current immediate cxcli import command with explicit config, target, existing course-folder UID and an explicitly selected datasource in the interactive import wizard; automation supplies its prepared datasource UID. Inspect the rendered dashboard separately. Sampled telemetry does not replace benchmark timers or establish exclusive job attribution.
 - AC-005: Qualify the actual installed Nsight versions, shared worker/container availability, private access and both workers through executed canaries and matching report inspection. All executable labs and applicable documented variants require independent live workload, profiler-content and Grafana verification before an all-lab qualification claim; static checks, an installed binary and a nonempty report are insufficient.
 - AC-006: Audit all 110 executable labs for an applicable Nsight Systems recipe reaching the actual CUDA worker, distributed rank or GPU server. Record explicit reasons for CPU-model, artifact-inspection, protocol-only and RDMA wire-timing exceptions; CUDA correctness labs and optional CUDA exercises must not be excluded merely by their teaching category. Bind each lab to its own Grafana JSON, mapped measurements and relevant telemetry, and validate guide/capture/dashboard parity.
@@ -1098,7 +1099,7 @@ Learners prepare the environment once and then connect, run, profile and inspect
 - AC-007: The browsing section gives `nebius-cxcli grafana show --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET"` and `nebius-cxcli soperator profiling show "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET"`. Learners run the printed explicit-target, loopback forwarding commands in separate terminals, retrieve passwords using the printed commands and open the printed URLs. Preserve both Nsight HTTP/TURN mappings, the installer-selected Nsight username (admin by default), Grafana's printed username and private report originals. Initial installation remains separate from routine access; do not maintain duplicate service, Secret, port or URL recipes in the guide.
 
 - AC-008: Teach a command-first learner path with explicit Python 3.12, current-context verification and no-argument sync-labs.sh discovery. Use portable placeholders and explain each command's effect. Basic readiness uses an explicitly allocated GPU and the existing compatibility-stack lab; it does not claim profiling, container, distributed or monitoring qualification. Retain full qualification before the relevant evidence claims and preserve automated run-labs contracts.
-- AC-009: Learners submit jobs with native sbatch and inspect the exact job's logs and printed result paths. The no-argument regular-lab-setup.py command and selected specialized preparation commands create and validate private result, log and profile directories before submissions; standalone copies discover their course root automatically. Reject symlinked, foreign-owned or non-private existing directories without changing them. Remove repeated directory-preparation blocks and learner-facing umask commands from lab instructions. Preserve working directory, job identity, workload arguments and per-lab output/error paths. Use native sbatch dispatch for automation and retain inspection utilities; REQ-024 replaces generic execution wrappers.
+- AC-009: Learners submit jobs with native sbatch and inspect the exact job's logs and printed result paths. The no-argument regular-lab-setup.py command and selected specialized preparation commands create and validate private result, log and profile directories before submissions; standalone copies discover their course root automatically. Tighten owned result, lab, log and jobs directories to mode 0700 when the owner has full access and the mode has no special bits or write access for other users; preserve existing files. Reject symlinks, foreign ownership, files and group/world-writable directories before changing any catalog path. Runtime and tool-state directories must already be private. Remove repeated directory-preparation blocks and learner-facing umask commands from lab instructions. Preserve working directory, job identity, workload arguments and per-lab output/error paths. Use native sbatch dispatch for automation and retain inspection utilities; REQ-024 replaces generic execution wrappers.
 - AC-010: Each lab's Before you start contains one shared Lab Guide link and no assigned-dashboard link; retain distinct prerequisites and dashboard interpretation. Concisely introduce every supplied Python or CUDA lab program by its actual purpose, actions, correctness checks and output immediately before its canonical Practice command. Explain the retained monitoring discovery, publication, capture and qualification helpers where used. Move detailed campaign instructions to the existing run-labs documentation.
 - AC-011: Explain that driver capability, framework CUDA build and compiler toolkit versions need compatibility, not equality. Never recommend generic CUDA/driver upgrades in the Soperator learner flow. Make supported Ubuntu Python and Apptainer installation conditional administrator preparation; actual worker/container checks remain necessary. Keep fresh-terminal variables explicit, credential reuse accurate, full-project Grafana deployment effects visible and obsolete lab-kit instructions absent.
 - AC-012: Every executable lab guide has one normal submission and one optional profiling submission to its canonical launcher under REQ-028. CPU steps request no GPUs even when the allocation reserves an optional GPU path. Lesson Practice remains links and teaching context.
@@ -1229,8 +1230,10 @@ After source synchronization and SSH, a learner runs python3.12 "$HOME/courses/t
 - AC-009: Remove course_setup.py with no compatibility alias. Update imports, help, errors, tests, sync inventories, all six standalone copies, README, lab teaching and generated HTML/archives. After verified synchronization retire only digest-identified old distributed entrypoints; preserve modified files, symlinks, runtime state and evidence.
 - AC-010: Complete the five full commands sequentially, then repeat the unchanged sequence, for two successful runs per script on the authorized non-production target. Independently verify receipts, package versions, generations, activation and historical preservation. Report first/repeat wall times, failed/repair time, skips, existing-cache disclosure and total validation time; runtime smokes are separate from preparation timing.
 - AC-011: The README-derived Lab Guide has a dedicated Lab Preparation Scripts topic explaining each script's learner purpose, lab scope, automated installations, prerequisites, selection commands, shared model reuse and installation-versus-qualification boundary. Its sidebar exposes all top-level topics and authored subsections in body order, including each preparation group. Review the entire guide for native/default versus optional-container consistency and retain visible Slurm/profiler commands.
-- AC-012: Across all eight courses and 110 lab guides, dependency preparation has one shared Lab Guide referral per course entry, without duplicated installation commands or competing manual setup procedures. The guide maps each available course/lab number to its preparation group and explains optional selections. Preserve lab-specific hardware/data prerequisites, runtime checks, native execution and intentional build experiments. Current learner teaching and runbooks must not direct users to retired setup entrypoints.
+- AC-012: Across all nine course packages and 110 lab guides, dependency preparation has one shared Lab Guide referral per course entry, without duplicated installation commands or competing manual setup procedures. The guide maps each available course/lab number to its preparation group and explains optional selections. Preserve lab-specific hardware/data prerequisites, runtime checks, native execution and intentional build experiments. Current learner teaching and runbooks must not direct users to retired setup entrypoints.
 - AC-013: The source-owned run-labs skill resolves every selected recipe launcher, including optional variants, to its preparation group. Campaign copies reuse an explicitly bound prepared installation without copying or rewriting runtime receipts. Independently validate selected managed runtimes before dispatch, report exact owning preparation commands when missing, preserve isolated job evidence and never install dependencies during a campaign. Refresh and verify the project-local skill through the documented npx installer.
+
+- AC-014: Aggregate offline validation rejects stale standalone helpers. Regression checks exercise all five preparation plans from each isolated practical course copy, verify every lab launcher uses prepared result paths, and cover safe directory repair and terminated-versus-live child cleanup. A scoped Linux CI workflow runs these checks with real synchronization tools on course pull requests and main-branch changes.
 
 #### Negative Criteria
 
@@ -1374,7 +1377,7 @@ Local checks establish implementation behavior only; report unavailable live GPU
 
 <!-- /REQUIREMENT: REQ-028 -->
 
-<!-- REQUIREMENT: REQ-029 status=satisfied priority=P1 type=quality -->
+<!-- REQUIREMENT: REQ-029 status=active priority=P1 type=quality -->
 ### REQ-029: Concise and organized course guides
 
 #### User Story
@@ -1387,6 +1390,8 @@ Learners need useful course-specific orientation and supporting references witho
 - AC-002: Getting-started content keeps prerequisites, practical scope, the first activity and completion criteria. Shared setup and profiler instructions link to their canonical guides. Remove obsolete lesson-template prose and layout commentary.
 - AC-003: Retain distinct interpretation, worked examples, hardware qualification and privacy limits in their owning guide or lab. Correct obsolete distributed-lab references without changing executable work or historical evidence.
 - AC-004: Rebuild affected publications and verify source parity, guide destinations, profile boundaries and desktop/mobile navigation.
+
+- AC-005: Keep the shared README-derived Lab Guide concise and aligned with current preparation, native job and automatic-publication interfaces. Preserve its four main sections and linked preparation anchors, complete lab lookup, distinct prerequisites and evidence limits. Present selective setup before group-wide installation; use the canonical launcher for the first compatibility lab; distinguish clean measurements, diagnostic runs and publication status. Remove repeated presentation commentary, obsolete commands and unnecessary implementation detail.
 
 #### Negative Criteria
 
@@ -1406,5 +1411,41 @@ A learner can find the starting activity, readiness checks and evidence guidance
 
 <!-- /REQUIREMENT: REQ-029 -->
 
+<!-- REQUIREMENT: REQ-030 status=active priority=P1 type=feature -->
+### REQ-030: Automatic publication for every practical lab
+
+#### User Story
+
+Learners submit the existing native sbatch command and view the completed result in Grafana without manually publishing each job.
+
+#### Acceptance Criteria
+
+- AC-001: Cover all 110 practical labs and every declared experiment, profiler, device and topology variant through one shared post-execution lifecycle. Preserve three reading-only profiles and native launch commands. Initialize publication automatically after successful ordinary or selected specialized runtime preparation when private monitoring settings are installed; provide COURSE_AUTO_PUBLISH=0 as a job opt-out.
+- AC-002: Original validated gpu-course-result/v1 files remain measurement authority. Freeze selected relative paths, hashes, policy and provenance; the job index is only inventory. Define explicit single, multi-trial, paired-equivalence, status-only and diagnostic policies. Reject ambiguous, incomplete, mismatched or incorrect measurement sets; never promote instrumented or acceptance_timing=false timings to clean results.
+- AC-003: Keep latest successful results separately by installation, workspace, course, lab, workload, supported experiment/device and resolved topology. Diagnostics and explicit comparisons use independent groups and namespaces. Bound labels and trial roles; retain arbitrary parameters and full history privately, not as metric labels. Display source job, completion time, units and declared workload controls.
+- AC-004: Shared private state belongs to the canonical prepared root, including isolated campaign copies. Use a persistent root/target-bound installation identity and monotonic run-start sequence; stale retries and older jobs cannot overwrite newer eligible results. Missing/inconsistent state and optional monitoring errors never prevent workload execution.
+- AC-005: Supervise initial registration within five seconds and final publication within 45 seconds and the existing 60-second reserve. Save benchmark results before publication, reap publisher children and preserve the benchmark exit status. Distinguish failed delivery, uncertain delivery, acknowledged but unconfirmed visibility, confirmed, superseded, disabled and unconfigured outcomes.
+- AC-006: Journal attempts durably before PUT. An ambiguous delivery pauses that configuration/channel while retaining newer candidates. No retry, newer write or readback alone clears the pause. Explicit recovery checks expected generation and records operator attestation that earlier transport is quiescent, then revalidates and publishes the newest eligible candidate under the ordinary lock. Infrastructure recovery remains platform-owned.
+- AC-007: Generate distinct Latest results, Diagnostics and run status, and Selected comparison dashboard rows with stable UIDs. Preserve comparison campaign evidence and historical originals/screenshots. Align recipes, validators, shared copies, setup/help, docs and generated course publications.
+- AC-008: All five setup entrypoints share initialization through the installation controller. Learner commands use python3.12 "$HOME/courses/tools/<group>-lab-setup.py" with the catalog-selected group and variant arguments; custom and standalone roots remain script-derived. Synchronization includes the complete shared initializer import closure. Remove the separate publication-init action without a compatibility alias.
+- AC-009: Missing monitoring settings leave setup successful with an explicit unconfigured message. Validate malformed settings and inconsistent existing publication state before dependency installation. Initialize only after successful reconciliation, including cached reruns; preserve installation identity, sequence, journals and original results. Read-only plans/help and unselected specialized commands never initialize. Monitoring discovery and settings transfer remain separate workstation steps; late settings take effect on rerunning the appropriate setup command.
+
+#### Negative Criteria
+
+- NC-001: Do not install new monitoring infrastructure, run live cluster workloads, backfill historical jobs or perform Git publication as part of local implementation. Static/browser proof is not all-lab GPU qualification.
+
+#### Validation Method
+
+Inspect every execution variant and publication policy, original provenance, configuration identity and monitoring ownership.
+
+#### Test Method
+
+Exercise complete inventory coverage, exceptional output sets, concurrency, stale retries, corruption, endpoint binding, ambiguous transport quarantine, recovery, deadlines, signals, dashboard dimensions and source/copy parity.
+
+#### Evaluation Method
+
+Verify local source, process, generated and browser behavior separately. Require a designated prepared non-production cluster and the existing all-variant campaign before claiming live qualification.
+
+<!-- /REQUIREMENT: REQ-030 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

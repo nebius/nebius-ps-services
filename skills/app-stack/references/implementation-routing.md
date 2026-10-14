@@ -15,7 +15,7 @@ modernization, or repository changes.
 
 `scaffold-project` owns repository shape, materialization/runtime-unit
 normalization, exact paths, exclusions, candidate sets, per-path content
-ownership, final validation, digest approval, and apply. The upstream
+ownership, final validation, digest integrity, apply, and readiness coordination. The upstream
 recommendation never becomes an executable file plan by itself.
 
 Matching specialist skills own their established workflows. Discover them from
@@ -28,8 +28,9 @@ available. Common routing examples include:
 | Current product, framework, protocol, or pattern research | `research` |
 | Complete solution design and implementation plan | `design` |
 | Architecture decision stress test | `system-design-rules` |
-| Complete repository topology and multi-component scaffold after stack approval | `scaffold-project`, only after explicit scaffold authorization |
-| Python project structure, packaging, API, CLI, or service scaffolding | `python-project` |
+| New repository or component topology after stack approval | `scaffold-project` under the existing creation task |
+| New Python project/component | `scaffold-project` then bounded `python-project` producer/bootstrap |
+| Existing Python packaging, dependencies and tooling | `python-project` directly |
 | React, TypeScript, and Vite frontend scaffolding | `frontend-project` |
 | OCI images, Dockerfiles/Containerfiles, build/runtime contracts, Compose, multi-platform or GPU containers, and supply-chain requirements | `container` |
 | Hosted website construction | `sites-building`, especially when `.openai/hosting.json` exists |
@@ -50,8 +51,8 @@ explicit-only invocation policies and every specialist's stricter safety rules.
 2. Lock the stack decision, assumptions, deferred components, interfaces, data
    ownership, and operational boundaries.
 3. Identify true prerequisites: repository skeleton, contracts, authentication,
-   migrations, shared test harness, or deployment safety. When a complete or
-   multi-component skeleton is explicitly requested, create a scaffold handoff
+   migrations, shared test harness, or deployment safety. When a single-component or
+   multi-component skeleton is requested, create a scaffold handoff
    and route that bounded step through `scaffold-project`.
 4. Build the smallest vertical slice that proves one real user or system flow
    across its required layers.
@@ -77,9 +78,10 @@ Schema version 2 supports only `application`, `frontend`, `infrastructure`, and
 physical materialization units, runtime units, file owners, candidate sets,
 validation ownership, or apply permissions.
 
-Do not invoke `scaffold-project` when one language specialist can own the whole
-request, when the user has not explicitly authorized that broad scaffold
-workflow, or when material architecture decisions remain open.
+Route new repositories and components through `scaffold-project` under the
+existing creation request. Use language specialists directly for existing
+component maintenance. Resolve material architecture decisions before creating
+candidates; a plan-only request does not authorize apply or setup.
 
 For a `kind: web-ui` React/Vite component, use these canonical materialization
 capability IDs when the decision applies: `routing`, `styling`, `testing`,
@@ -95,7 +97,8 @@ language, runtime, and canonical technology name through scaffold binding.
 External services bind their selected `technology.name` directly; an approved
 PostgreSQL decision cannot become Redis while retaining the same component ID.
 The current executable scaffold contract binds detailed capability selections
-only for `frontend` components. Leave non-frontend component capability arrays
+for frontend and core Python components. Use the Python producer contract
+for package-kind, cli, api and systemd selections. Leave other component capability arrays
 empty and express their requirements as constraints and validation
 expectations until the applicable specialist exposes a closed candidate-input
 binding; `scaffold-project` fails closed instead of silently dropping them.

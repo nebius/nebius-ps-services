@@ -303,7 +303,7 @@ run_trial() {
   if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM %s did not become ready.\n' "${variant}" >&2; exit 2; fi
 
   if [[ ${phase} == probe ]]; then
-    "${course_python}" labs/34_policy_equivalence_client.py \
+    COURSE_TRIAL_INDEX=${trial} "${course_python}" labs/34_policy_equivalence_client.py \
       --base-url "http://127.0.0.1:${port}" --model "${model}" \
       --revision "${revision}" --workload chunked-prefill --variant "${variant}" \
       --output "${base_dir}/${variant}-trial-${trial}-digests.json"

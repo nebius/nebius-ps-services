@@ -45,7 +45,8 @@ Core objects:
 - `operations`: exact candidate files and intended action.
 - `validations`: candidate-set-bound checks and external-evidence status.
 - `execution`: explicit capabilities; schema v2 requires every external or hidden
-  action to remain false.
+  action in the static executor to remain false. Post-apply Python bootstrap
+  is a distinct declared phase under the same creation request.
 - `safety.reserved_paths`: additional instruction or protected paths.
 
 Every candidate operation contains:
@@ -83,11 +84,13 @@ identity plus the normalized producer inputs, their recomputed digest, exact
 file paths, candidate-relative paths, modes, content digests, and validation
 records. Candidate-phase validation must already be `passed` and offline.
 Dependency-backed post-apply validation may remain `pending` or `not-run` but
-stays visible in the approved digest.
+stays visible in the finalized digest; readiness is subsequently recorded
+separately without changing immutable manifest contents.
 
 An operation inside a materialization-unit path must name that unit. Every
 required unit must contain at least one operation owned by its specialist.
-Cross-cutting root files use `null`; a container-owned Dockerfile inside a
+Cross-cutting root files use `null`, except all root operations bind the sole
+Python root unit when its path is `.`; a container-owned Dockerfile inside a
 component names that component's unit while retaining `container` as
 its file owner. Materialization owners are limited to Python, React/Vite,
 Terraform, Helm, and shell contracts with matching language/framework values.
@@ -111,7 +114,8 @@ Allowed actions are `create`, `semantic_merge`, and `unchanged`. In schema v2,
 `semantic_merge` is limited to `.gitignore`, `README.md`, and `Makefile`; its
 candidate must preserve every original byte and append a non-empty suffix
 without changing the mode. `.gitignore` suffixes accept only unique reviewed
-baseline/add-on rules. README and Makefile suffixes require one matching named
+baseline/add-on rules and exact Python integration rules derived from validated
+candidates in the same bundle. README and Makefile suffixes require one matching named
 marker block. File modes are limited to `0644` and `0755`.
 
 ## Status Rules
@@ -128,8 +132,8 @@ marker block. File modes are limited to `0644` and `0755`.
 
 Use:
 
-- `direct-user` when the current user explicitly approves the supplied
-  architecture; or
+- `direct-user` when the creation request supplies or adopts the selected
+  architecture, including ordinary specialist defaults; or
 - `approved-artifact` with one or more absolute or resolvable source paths and
   their SHA-256 digests.
 
@@ -164,8 +168,9 @@ runtime unit carries `capability_id`; every runtime for that capability must
 match the approved runtime, which preserves API and worker separation even
 when they share a source unit. Component and external-service kinds must match.
 External services must retain their canonical selected technology.
-Non-frontend capability selections are rejected until their specialist owns a
-closed candidate-input binding. For an app-stack-approved React/Vite component,
+Python candidates always use the closed Python producer contract and core
+capability binding in python-project/references/project-contract.md. Other
+non-frontend capability selections remain unsupported. For an app-stack-approved React/Vite component,
 the validator additionally compares the package manager, exact version map,
 materialization-unit binding, declared
 routing/styling/testing/public-environment/lint/format selections, and frontend
@@ -216,3 +221,12 @@ When requested, create a separate `docs/scaffold-plan.json` containing only the
 logical graph, relative paths, owners, statuses, and non-sensitive validation
 summary. Exclude absolute paths, payloads, before-state metadata, journals,
 backups, prompts, and secrets.
+
+## Python Root and Readiness
+
+The sole Python materialization unit may use `.`; file paths cannot. Root
+README/Makefile/LICENSE stay coordinator-owned. Candidate Python content is
+reproduced and validated regardless of architecture origin. Root and nested
+Python metadata must bind their README operation before apply. Bootstrap is
+serialized with apply, creates real dependency/environment artifacts, and
+reports readiness separately. See [creation routing](creation-routing.md).

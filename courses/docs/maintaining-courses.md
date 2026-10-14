@@ -15,14 +15,23 @@ to exactly one runtime. Keep those bindings complete when adding a variant.
 
 Normal sync/SSH ensures Python 3.12; dry-run and sync-only never install packages.
 Setup uses private locked state, stable generation paths and atomic receipts under
-`.runtime`. Native jobs source `tools/course_env.sh` with their literal launcher
-name (Slurm changes `$0`), and reject stale definitions. Setup never submits GPU
+`.runtime`. Native stages source `tools/course_env.sh` with their declared runtime
+identity, and reject stale definitions. Setup never submits GPU
 jobs or runs qualification. Unsupported configured hardware skips; missing or
 failed dependencies are errors. Preserve old generations and historical results.
 
 Standalone copies carry the same bootstrap modules and recipes. Run
-`python3 tools/sync_course_tools.py` after helper changes. Monitoring discovery
-remains the distinct `regular-lab-setup.py monitoring` workstation action.
+`python3 tools/sync_course_tools.py` after helper changes, then
+`python3 tools/validate_all_courses.py`; the aggregate validator checks every
+shared copy before checking course publications. Synchronization must include
+the complete top-level setup import closure as well as course-local tools.
+Monitoring discovery remains the distinct `regular-lab-setup.py monitoring`
+workstation action.
+
+Preparation creates `results/<lab>/logs/` and `results/<lab>/jobs/` for every
+practical lab. It tightens owned, readable result directories to mode `0700`,
+preserves existing outputs, and rejects symlinks, foreign ownership and shared
+write access. Keep `.runtime` and profiler state private from creation.
 
 Each lab has a concise purpose, complete source disclosure, optional collapsed
 teaching diagram, two native submissions and an exact-job results box. Keep
@@ -163,6 +172,9 @@ Optional **References** come last. The text-only Soperator course uses **Practic
 and intentionally has no diagrams, labs or runtime assets. GPU Performance Tools
 is reference-only with contextual diagrams. PyTorch for GPU Performance Engineering is lessons-only: sixteen lessons with Objective, How it works and Mental model, contextual diagrams and no Practice or lab/runtime assets. The advanced communication course is labs-only and retains complete practical guides.
 All lesson fields render as semantic subheadings in the same visual style.
+Course and Lab Guide fragment navigation uses native instant scrolling. Keep
+focus and section navigation free of competing scroll animations so rapid
+keyboard activation reaches the selected heading.
 The objective states the capability to learn. How it works starts with a
 plain-English definition, integrates useful prerequisite connections and
 purpose, and follows the causal steps through to their consequences. It contains
@@ -311,6 +323,29 @@ python3 tools/validate_all_courses.py
 python3 -m pytest -q
 ```
 
+With an existing Playwright installation and Chrome available, also run the
+keyboard-navigation regression (no dependencies are installed by this check):
+
+```bash
+playwright test --config tests/browser/playwright.config.cjs
+```
+
+The runner owns isolated headless contexts, disables page JavaScript and checks
+all nine courses plus the Lab Guide at 1440px, 390px and 320px. It requires the
+selected heading to enter the viewport after rapid focus/Enter navigation,
+without corrective scrolling or animation overrides. Failure traces go to a
+fresh `course-navigation-*` directory under the system temporary directory.
+For intermittent regressions, use the runner's `--repeat-each` option. This
+focused check supplements full-page visual, reflow and source-parity review.
+
+The `courses-ci` Ubuntu workflow runs aggregate validation and focused
+preparation, synchronization, standalone-copy and native-job regressions on
+course pull requests and main-branch changes. It is also registered with the
+repository's protected merge completion checks. Its regression suite exercises
+all five preparation plans in each of six isolated course copies, every lab's
+scheduler output paths, safe directory repair, and Linux terminated-child and
+live-worker cleanup. It installs `rsync` and process tools so these checks run.
+
 GPU and engine workloads are intentionally excluded from offline validation.
 Learner submissions use one native `.sbatch` per lab. Preparation creates the
 private output parents; Slurm inherits the course submission directory and reads
@@ -331,8 +366,9 @@ rather than a synthetic direct-Python command.
 The Soperator text-only validator checks its exact metadata, lesson and syllabus
 identities, complete generated prose, public references and navigation without
 requiring lab folders or runtime dependencies. Synchronization discovers a
-course through `reference/course.json` and `COURSE.md`, so both reading packages
-(Soperator and GPU Performance Tools) travel with the catalog and six practical
+course through `reference/course.json` and `COURSE.md`, so all three reading packages
+(Soperator, GPU Performance Tools and PyTorch for GPU Performance Engineering)
+travel with the catalog and six practical
 GPU packages. Removing a local course excludes it from future transfers;
 existing destination-only files are retained, including prior course copies.
 
@@ -472,7 +508,51 @@ SSH handoff, with dependency installation and private configuration transfer sep
 
 Every executable recipe declares Nsight Systems applicability, the process to capture, a report view, and whether GPU telemetry is relevant. The 99 applicable labs capture a GPU worker, distributed rank, vendor process, or owned server; 11 CPU/model, artifact, health, protocol and RDMA wire-measurement exceptions explain their evidence limits. Six CPU/protocol dashboards omit GPU telemetry. Standalone validators reject mismatched capture commands, dashboard identities, query metrics and units. See [the all-lab audit](lab-profiling-audit.md).
 
-Completed private JSON artifacts are authoritative. The publisher validates two selected slots, serializes updates by workspace/course/lab/profile, and confirms the same generation through VictoriaMetrics. Selected-result panels use VictoriaMetrics wall-clock evaluation so they remain visible when the time picker ends at the experiment end. GPU and node telemetry follow the chosen historical interval. Pushgateway is replaceable cache state; retain the local selection directory and republish artifacts if cache state is lost. cxcli owns Pushgateway persistence and lifecycle. A persistent learner workspace has one authoritative checkout and selection directory; do not publish the same workspace from independent clones.
+Completed private JSON artifacts are authoritative. `course_publication.py` owns
+automatic delivery and supervision, `course_publication_state.py` owns the private
+installation journal, and `course_publication_evidence.py` selects originals.
+`publish_results.py` also retains
+the independent explicit comparison interface. Every execution variant has an
+explicit `publication.policies` entry in its observability recipe. Selection
+checks complete original sets, correctness, workload/job provenance and hashes.
+Capstone and paired-serving trials carry explicit bounded trial ordinals;
+prefix-cache publication also checks its auxiliary equivalence probes. Empty
+metric recipes publish status/provenance without inferred timings.
+
+All five lab preparation scripts initialize `.runtime/publications` at the
+canonical prepared root after successful setup when private monitoring settings
+are present. Unconfigured preparation succeeds with local results; configuring
+monitoring later requires rerunning the same setup selection. Initialization
+performs local state work only and preserves identity/order on reruns. Its
+identity binds the root, workspace and transport settings; isolated
+campaign copies resolve to that authority. Independent installations need
+distinct identities. Preserve the identity, run counter, registrations, candidate
+offers and group journals together. Missing or mismatched state disables
+publication rather than resetting order. Short candidate-offer locks are separate
+from transport locks, so completed runs remain available during an in-flight or
+paused write. The highest eligible run-start sequence wins. Old or unregistered
+jobs cannot become newer through replay.
+
+The runner allows five seconds for registration and 45 seconds for final
+publication within its existing finalization reserve, including bounded process
+cleanup. A failed publication never changes workload status. Runtime activation
+does not parse optional monitoring settings. The publisher records `sending`
+before network transport, acknowledges delivery durably, then verifies the exact
+generation and job through VictoriaMetrics. A crash/uncertain PUT pauses that
+group; a delayed readback after acknowledgment is only unconfirmed. Recovery
+requires the expected generation and recorded operator quiescence attestation;
+readback cannot clear uncertainty. The course tools do not restart infrastructure.
+
+Latest, diagnostic and comparison groups use independent namespaces. Automatic
+labels are bounded installation/configuration/role/trial/case/metric/unit values;
+job IDs and timestamps are numeric samples. Recipe-approved numeric controls are
+values, not new configuration dimensions. Full parameters and history remain in
+private JSON. Dashboards retain UIDs, use compact generated JSON to fit course
+ConfigMap budgets, and preserve trial dimensions in tables with explicit units.
+Summary panels use wall-clock evaluation; GPU/node telemetry follows the chosen
+historical interval. Future run-labs captures explicitly expand Selected comparison;
+existing result archives and screenshots are unchanged. Explicit comparisons keep
+their original single-authority workspace selection directory and retry contract.
 
 ```bash
 python3 -m venv .venv-validation

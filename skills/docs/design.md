@@ -7768,5 +7768,124 @@ installed copies or repeat live publication acceptance.
 Source, installed, bootstrap CI and live merge evidence are distinct. Real Dependabot acceptance remains unverified because no eligible PR was open; Docker admission is covered offline. The workflow-changing bootstrap used a maintainer; built-in-token workflow-file permission behavior is not established by that result. Native trigger and comparative quality evaluation remain authentication-unavailable. Full delivery remains implemented rather than verified.
 
 <!-- /FEATURE: FEAT-042 -->
+
+<!-- FEATURE: FEAT-043 reqs=REQ-044 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-043: Implicit scaffold coordination and Python producer readiness
+
+#### Requirements Covered
+
+- REQ-044: Implicit creation coordination and complete Python readiness.
+
+#### Context Evidence
+
+Before this change the executor bound private candidates and exact digests,
+but only frontend candidates received specialist semantic validation. Python
+had separate standalone/candidate guidance, no root-unit support and deferred
+dependency setup.
+
+#### Design Details
+
+Use scaffold-project as creation coordinator and Python as bounded producer
+and readiness owner. Task intent authorizes apply; expected-digest remains an
+integrity binding. Allow a sole Python root unit using a directory-only dot
+sentinel, preserving strict file paths and per-file integration owners. Add
+closed versioned offline Python render/validate plus post-apply bootstrap.
+Support package/library, CLI, API and systemd profiles. Bootstrap serializes
+against cooperating target mutations, constrains the project environment, resolves a real
+uv lock, runs checks and records digest-bound readiness separately from static
+apply. Every candidate receives Python validation; app-stack additionally
+checks technology and supported capability selections. Preserve authored bytes
+on replay and exclude generated version files, environments and locks from
+static ownership. Reject parent uv workspaces and unsafe generated output
+links before setup; unsupported workspace integration requires its own design.
+
+#### Selected Option
+
+One creation coordinator with specialist implementation and readiness phases;
+implicit selection and existing task authority replace repeated approval.
+
+#### Alternatives Considered
+
+Metadata-only changes retain conflicting routing and incomplete integration.
+A separate standalone Python creation writer duplicates ownership. Broad
+all-profile generation increases scope beyond the selected core profiles.
+
+#### Implementation Boundaries
+
+Both skills, their schemas/templates/tests, direct app-stack/design/frontend entry routing,
+source catalog and portability documentation, CI, and canonical specs. No
+personal skill installation, unrelated dirty changes or Git publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: Real Python candidate integration rejects forged or unsupported
+  inputs for direct and stack-handoff origins before target writes.
+- TDD-002: Root/nested core profiles bootstrap and replay without altering
+  authored files; setup failure remains applied but not ready.
+- TDD-003: Routing has one coordinator entry and no repeated apply approval.
+
+#### Validation Plan
+
+Use Python 3.11-3.13 contract CI, scoped source lint, skill structure/evals,
+real uv bootstrap and isolated wheel checks; align-skill and align finish work.
+
+#### Test Plan
+
+Cover ownership, dot paths, stack selections, CLI/API behavior, service resources,
+metadata references, malformed JSON, concurrency, environment overrides, drift,
+interrupted readiness and generated artifacts on replay.
+
+#### Evaluation Plan
+
+Extend canonical trigger and output-quality cases; native runtime evidence
+requires a fresh isolated host and is not inferred from static definitions.
+
+#### Rollout And Rollback
+
+Update source and test disposable destinations first. Unsupported older Python
+candidate contracts require regeneration. Failures preserve target files and
+private recovery/readiness evidence; no automatic rollback or live install.
+
+#### Done Definition
+
+Contracts, implementation, source documentation and validation agree; remaining
+runtime or platform limitations are explicit.
+
+#### Implementation Evidence
+
+Implemented closed Python render/validate/bootstrap scripts, mandatory Python
+content and semantic bindings for all origins, sole-root-unit support and shared
+apply/setup locking. Brownfield ignore merges accept only existing allowlisted
+rules or exact rules derived from validated Python candidates; literal paths
+are escaped and unrelated additions remain rejected. Implicit coordinator entry, maintenance routing, native
+metadata, trigger/output cases, README/ownership guidance and CI agree. Bootstrap
+records private digest-bound readiness and preserves static authored content on
+replay. Existing personal skill installations were not changed.
+
+#### Verification Evidence
+
+106 focused tests passed on Python 3.12: producer 13, bootstrap 7, executor 51,
+frontend integration 7, specialist templates 7, existing Python contracts 9 and
+rendered template behavior 12. The real bootstrap lane exercised a root library,
+root CLI and nested CLI/API/systemd component, including repeat setup, lock
+preservation, lint, behavioral tests and isolated installed-wheel checks. The
+producer suite also passed on Python 3.11 and 3.13. CI now includes these suites
+and real bootstrap in its existing Python 3.11-3.13 matrix; remote CI was not run.
+
+Changed-scope Ruff, Markdown and Actionlint checks passed. The existing duplicate
+Changed heading in the changelog was reproduced at HEAD and excluded from that
+file's Markdown check. Skill structure and canonical eval definitions passed for
+Codex and Claude across the five affected skills. Real pinned npx installation,
+repeat installation, copied-resource parity and isolation passed in disposable
+destinations. Nested code/security review findings were fixed and independently
+rechecked.
+
+Native model routing and comparative output quality remain UNAVAILABLE because
+clean runners have no environment authentication; static definitions and
+installation proof do not establish those results. Systemd resource/import
+checks passed, while Linux unit activation and personal installed-host behavior
+remain unverified. REQ-044 remains active pending fresh-host routing evidence.
+
+<!-- /FEATURE: FEAT-043 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

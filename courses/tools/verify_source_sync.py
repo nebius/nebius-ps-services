@@ -87,6 +87,8 @@ def main():
                     required += [
                         course / "tools/course_bootstrap/cli.py",
                         course / "tools/course_bootstrap/support.py",
+                        course / "tools/course_publication_state.py",
+                        course / "tools/publish_results.py",
                     ]
                     if all(
                         "sha256" in manifest["files"].get(path.as_posix(), {})

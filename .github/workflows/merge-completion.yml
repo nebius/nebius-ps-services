@@ -1,7 +1,7 @@
 name: Merge completion
 on:
   workflow_run:
-    workflows: ["Protected merge", "Merge automation CI", "vpngw-ci", "nebius-cxcli-ci", "nebius-cxcli-nsight", "github-report-ci", "Skills project specs CI"]
+    workflows: ["Protected merge", "Merge automation CI", "vpngw-ci", "nebius-cxcli-ci", "nebius-cxcli-nsight", "github-report-ci", "Skills project specs CI", "courses-ci"]
     types: [completed]
   schedule:
     - cron: '12,27,42,57 * * * *'

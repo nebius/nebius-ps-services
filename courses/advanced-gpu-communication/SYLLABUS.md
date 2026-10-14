@@ -5,6 +5,15 @@ before practical work, then complete shared environment setup once. Keep these i
 
 For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 
+For the full lab route below, complete Fundamentals, Optimization and the relevant
+training or inference foundations, or bring equivalent readiness to launch Slurm
+jobs, produce a correct unprofiled result and interpret its GPU timeline. Begin
+with Lab 01. For Fundamentals Lesson 12, reading through that lesson prepares you
+to enter at Lab 02, verify its placement and correctness, then run Lab 08 and return
+to Fundamentals. Optimization, a specialization, Lab 01 and Labs 03–07 are not
+prerequisites for that assignment. Both entry points require shared preparation
+and the qualified two-worker, sixteen-H100 fabric.
+
 ## Qualify placement and fabric
 
 - [Lab 01: Verify the GPU fabric and rank placement](reference/labs/01_fabric_topology.md)

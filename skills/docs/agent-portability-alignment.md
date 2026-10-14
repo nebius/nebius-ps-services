@@ -277,3 +277,10 @@ separate evidence states. Preserve this separation when repeating them; a file
 copy or declared source list cannot prove that a fresh native session loaded
 and followed a skill. The remaining verification step is an authenticated
 native session and proportionate model-quality evaluation on each host.
+
+## Subsequent scaffold routing revision
+
+The historical counts and evidence above describe the original alignment.
+The current scaffold-project contract now permits implicit invocation on both
+hosts and uses task-authorized creation, including Python-only projects. Python
+maintenance remains direct; source and fresh-runtime evidence stay separate.

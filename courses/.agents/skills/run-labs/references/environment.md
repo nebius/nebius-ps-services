@@ -35,6 +35,12 @@ without arguments; specialized scripts select a lab, a launcher or default labs
 with `--all`. Their `--plan` mode is read-only. Preparation does not qualify GPU,
 fabric, profiling or monitoring behavior.
 
+All five setup scripts initialize automatic publication when private worker
+monitoring settings are present in the prepared root. Copy those settings before
+setup; if they arrive later, rerun the owning setup command outside the campaign.
+Missing settings allow local-only preparation. Existing publication identity and
+ordering state are reused; campaign workspaces share that prepared authority.
+
 The dry-run plan's per-unit `preparation` entries resolve every actual recipe
 launcher to its runtime, script and arguments, including dependencies and
 profiling. Use those selections instead of inferring one group per course.

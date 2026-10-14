@@ -109,9 +109,7 @@ def validate_lesson_structure(parser: Parser) -> None:
         "mental-model",
     ]
     for number, (order, diagrams) in enumerate(
-        zip(
-            parser.lesson_field_orders, parser.lesson_core_diagrams, strict=True
-        ),
+        zip(parser.lesson_field_orders, parser.lesson_core_diagrams, strict=True),
         1,
     ):
         if order not in (expected, [*expected, "lesson-references"]):
@@ -131,9 +129,7 @@ def glossary_entries(content: str) -> list[tuple[str, str]]:
         if not match or not all(value.strip() for value in match.groups()):
             fail("Glossary entries must use '- **Term** — Definition'")
         entries.append(match.groups())
-    keys = [
-        re.sub(r"[`*_]", "", term).strip().casefold() for term, _ in entries
-    ]
+    keys = [re.sub(r"[`*_]", "", term).strip().casefold() for term, _ in entries]
     if not keys or keys != sorted(set(keys)):
         fail("Glossary must contain unique terms in A–Z order")
     return entries
@@ -251,10 +247,7 @@ def validate_course_glossary(document: str, source: str) -> None:
     body = rendered[0]
     pairs = re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>", body, re.S)
     if (
-        "".join(
-            f"<dt>{term}</dt><dd>{definition}</dd>"
-            for term, definition in pairs
-        )
+        "".join(f"<dt>{term}</dt><dd>{definition}</dd>" for term, definition in pairs)
         != body
     ):
         fail("Course Glossary has invalid definition markup")
@@ -268,9 +261,7 @@ def validate_course_glossary(document: str, source: str) -> None:
             visible = VisibleText()
             visible.feed(actual)
             plain = re.sub(r"[`*]", "", canonical)
-            if " ".join("".join(visible.parts).split()) != " ".join(
-                plain.split()
-            ):
+            if " ".join("".join(visible.parts).split()) != " ".join(plain.split()):
                 fail("Course Glossary content does not match source")
 
 
@@ -429,12 +420,9 @@ class Parser(html.parser.HTMLParser):
             self.course_navigation_links.append(href)
         elif (
             (
-                (
-                    tag == "link"
-                    and values.get("rel") == "icon"
-                    and (href == "data:," or (href or "").startswith("data:image/"))
-                )
-
+                tag == "link"
+                and values.get("rel") == "icon"
+                and (href == "data:," or (href or "").startswith("data:image/"))
             )
             or tag == "a"
             and re.fullmatch(
@@ -852,10 +840,16 @@ def validate_preparation_referral(guide: str) -> None:
     """Each lab refers once to shared preparation, without a second installer path."""
     if re.search(r"\[[^\]]+\]\([^)]*lab-guide\.html[^)]*\)", guide):
         fail("shared preparation belongs at the course entry, not repeated per lab")
-    if re.search(r"(?:[\w-]+-lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh)", guide):
+    if re.search(
+        r"(?:[\w-]+-lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh)",
+        guide,
+    ):
         fail("dependency preparation commands belong only to the shared Lab Guide")
     for command in re.findall(r"```(?:bash|sh)\n(.*?)```", guide, re.S):
-        if re.search(r"\b(?:pip(?:3)? install|apt(?:-get)? install|conda (?:create|install)|python(?:3(?:\.12)?)? -m (?:pip install|venv))\b", command):
+        if re.search(
+            r"\b(?:pip(?:3)? install|apt(?:-get)? install|conda (?:create|install)|python(?:3(?:\.12)?)? -m (?:pip install|venv))\b",
+            command,
+        ):
             fail("manual dependency installation belongs to the shared Lab Guide")
 
 
@@ -966,7 +960,9 @@ def validate_lab_guides(
         if tuple(re.findall(r"<h4>(.*?)</h4>", article)) != ("Check your results",):
             fail(f"lab {source.name} rendered sections differ from its guide")
         visible = VisibleText()
-        visible.feed(re.sub(r'<details class="lab-source".*?</details>', "", article, flags=re.S))
+        visible.feed(
+            re.sub(r'<details class="lab-source".*?</details>', "", article, flags=re.S)
+        )
         rendered_text = " ".join("".join(visible.parts).split())
         for paragraph in prose_paragraphs(markdown):
             if paragraph.strip() in {"## Run", "## Diagram"}:
@@ -985,7 +981,13 @@ def validate_lab_guides(
         sections = dict(zip(pieces[1::2], pieces[2::2], strict=True))
         commands = re.findall(r"```bash\n(.*?)\n```", sections["Run"], re.DOTALL)
         expected = f"sbatch slurm/{source.stem}.sbatch "
-        if len(commands) != 1 or len(submissions := re.findall(r"^sbatch .+$", commands[0], re.M)) != 2 or any(not cmd.startswith(expected) for cmd in submissions) or "--profiler" in submissions[0] or not submissions[1].endswith(" --profiler all"):
+        if (
+            len(commands) != 1
+            or len(submissions := re.findall(r"^sbatch .+$", commands[0], re.M)) != 2
+            or any(not cmd.startswith(expected) for cmd in submissions)
+            or "--profiler" in submissions[0]
+            or not submissions[1].endswith(" --profiler all")
+        ):
             fail(f"lab {source.name} requires normal and optional profiling commands")
         batch = ROOT / "slurm" / f"{source.stem}.sbatch"
         if not batch.is_file() or "course_stage" not in batch.read_text():
@@ -1000,7 +1002,12 @@ def validate_lab_guides(
         result_position = article.index('class="lab-results"')
         if not source_position < run_position < result_position:
             fail(f"lab {source.name} has incorrect source/submission/result order")
-        if 'class="lab-diagram"' in article and not source_position < article.index('class="lab-diagram"') < run_position:
+        if (
+            'class="lab-diagram"' in article
+            and not source_position
+            < article.index('class="lab-diagram"')
+            < run_position
+        ):
             fail(f"lab {source.name} diagram must follow its source")
         for command in commands:
             result = subprocess.run(
@@ -1037,7 +1044,10 @@ def validate_lab_evidence(
         or (systems["target"] != "none") != systems["applicable"]
     ):
         fail("Systems command disagrees with applicability")
-    if command and (not isinstance(recipe.get("learner_systems_command"), str) or "--profiler nsys" not in command):
+    if command and (
+        not isinstance(recipe.get("learner_systems_command"), str)
+        or "--profiler nsys" not in command
+    ):
         fail("Systems must select the canonical native launcher")
     compute = recipe.get("learner_compute_command")
     if bool(compute) != bool(recipe.get("compute_command")):
@@ -1091,10 +1101,47 @@ def validate_lab_evidence(
     ):
         fail("dashboard identity differs from assigned lab")
     serialized = json.dumps(dashboard)
+    rows = {
+        panel["title"]: panel for panel in dashboard["panels"] if panel["type"] == "row"
+    }
+    if set(rows) != {
+        "Latest results",
+        "Diagnostics and run status",
+        "Selected comparison",
+        "GPU and node telemetry",
+    }:
+        fail(
+            "dashboard must separate automatic results, diagnostics, comparison and telemetry"
+        )
+    variables = {item["name"]: item for item in dashboard["templating"]["list"]}
+    if (
+        variables.get("publisher_id", {}).get("multi") is not False
+        or "configuration" not in variables
+    ):
+        fail("dashboard requires a single installation and configuration selector")
+
+    def leaves(panels):
+        for panel in panels:
+            yield panel
+            yield from leaves(panel.get("panels", []))
+
+    for panel in leaves(dashboard["panels"]):
+        for target in panel.get("targets", []):
+            expression = target.get("expr", "")
+            if "course_latest_" in expression or "course_diagnostic_" in expression:
+                if (
+                    'publisher_id="$publisher_id"' not in expression
+                    or 'configuration=~"${configuration:regex}"' not in expression
+                ):
+                    fail(
+                        "automatic dashboard query loses installation or configuration scope"
+                    )
     has_gpu = "DCGM_FI_DEV_" in serialized
     if has_gpu != recipe["gpu_telemetry"]:
         fail("dashboard GPU telemetry disagrees with lab applicability")
-    prerequisites = re.search(r"^## Before you start\n(.*?)(?=^## |\Z)", guide, re.M | re.S)
+    prerequisites = re.search(
+        r"^## Before you start\n(.*?)(?=^## |\Z)", guide, re.M | re.S
+    )
     validate_preparation_referral(guide)
     if prerequisites and "../grafana/" in prerequisites[1]:
         fail("dashboard installation belongs to the shared Lab Guide")
@@ -1114,7 +1161,9 @@ def validate_lab_evidence(
         fail("guide contains a removed Grafana CLI command")
     for metric in recipe["metrics"]:
         matches = [
-            panel for panel in dashboard["panels"] if panel["title"] == metric["title"]
+            panel
+            for panel in leaves(dashboard["panels"])
+            if panel["title"] == metric["title"]
         ]
         if len(matches) != 1:
             fail("dashboard measurement panel or unit differs from recipe")
@@ -1143,6 +1192,12 @@ def validate_lab_evidence(
 
 
 def validate_observability_assets(document: str, metadata: dict) -> None:
+    from course_publication_evidence import validate_policies
+
+    try:
+        validate_policies(ROOT)
+    except (KeyError, ValueError) as exc:
+        fail(f"Invalid automatic publication policy: {exc}")
     for name in ("COURSE.md", "README.md"):
         if (ROOT / name).read_text().splitlines()[0] != "# " + metadata["title"]:
             fail(f"{name} title must match canonical metadata")
@@ -1175,15 +1230,24 @@ def validate_observability_assets(document: str, metadata: dict) -> None:
         document,
     )
     expected_links = {
-        (f"{metadata['slug']}-lab-results.zip", "lab-results",
-         f"reference/{metadata['slug']}-lab-results.zip")
+        (
+            f"{metadata['slug']}-lab-results.zip",
+            "lab-results",
+            f"reference/{metadata['slug']}-lab-results.zip",
+        )
     }
-    if len(assets) != 1 or set(assets) != expected_links or "data:application/" in document:
+    if (
+        len(assets) != 1
+        or set(assets) != expected_links
+        or "data:application/" in document
+    ):
         fail("downloadable lab assets must be exactly one external course results ZIP")
     if (ROOT / "reference" / f"{metadata['slug']}-lab-kit.zip").exists():
         fail("lab-kit archives must not be published; sync original sources instead")
-    introduction = re.search(r'<div id="course-downloads">(.*?)</div>', document, re.DOTALL)
-    if not introduction or '<h2>Practical labs</h2>' not in document:
+    introduction = re.search(
+        r'<div id="course-downloads">(.*?)</div>', document, re.DOTALL
+    )
+    if not introduction or "<h2>Practical labs</h2>" not in document:
         fail("Practical labs must include the course download introduction")
     visible = VisibleText()
     visible.feed(introduction[1])
@@ -1193,18 +1257,26 @@ def validate_observability_assets(document: str, metadata: dict) -> None:
     )
     if (
         " ".join("".join(visible.parts).split()) != expected_intro
-        or '<h3>Download results</h3>' not in introduction[1]
-        or not re.search(r'<a\b[^>]*\shref="\.\./lab-guide\.html"[^>]*>Lab setup guide</a>', introduction[1])
+        or "<h3>Download results</h3>" not in introduction[1]
+        or not re.search(
+            r'<a\b[^>]*\shref="\.\./lab-guide\.html"[^>]*>Lab setup guide</a>',
+            introduction[1],
+        )
     ):
-        fail("course download introduction must separate results and setup labels from their links")
+        fail(
+            "course download introduction must separate results and setup labels from their links"
+        )
 
 
 def validate_shared_setup_link(document: str, metadata: dict) -> None:
     if "setup_guide" in metadata or 'class="setup-guide"' in document:
         fail("numbered setup guides are not part of the publication contract")
-    introduction = re.search(r'<div id="course-downloads">(.*?)</div>', document, re.DOTALL)
+    introduction = re.search(
+        r'<div id="course-downloads">(.*?)</div>', document, re.DOTALL
+    )
     if not introduction or not re.search(
-        r'<a\b[^>]*\shref="\.\./lab-guide\.html"[^>]*>Lab setup guide</a>', introduction[1]
+        r'<a\b[^>]*\shref="\.\./lab-guide\.html"[^>]*>Lab setup guide</a>',
+        introduction[1],
     ):
         fail("course must link to the shared setup guide in its download introduction")
     if 'class="shared-setup"' in document:
@@ -1282,12 +1354,12 @@ def validate_student_results() -> None:
             if path.suffix == ".png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
                 fail("invalid evidence screenshot")
             expected[f"{profile}/{lab}/{name}"] = content
-        expected[f"{profile}/{lab}/manifest.json"] = (
-            manifest.read_bytes()
-        )
+        expected[f"{profile}/{lab}/manifest.json"] = manifest.read_bytes()
     if (root.exists() and not expected) or not archive.is_file():
         fail("student evidence needs complete manifests and its separate ZIP")
-    dashboards = {"reference/grafana/environment_readiness.json"} | {row["dashboard"] for row in catalog["labs"]}
+    dashboards = {"reference/grafana/environment_readiness.json"} | {
+        row["dashboard"] for row in catalog["labs"]
+    }
     for relative in dashboards:
         path = ROOT / relative
         if not path.is_file() or any(p.is_symlink() for p in (path, *path.parents)):
@@ -1373,7 +1445,9 @@ def validate_figures(
                     or match[1] != "A measured optimization loop"
                     or "tools-measurement-loop" in expected
                 ):
-                    fail("measurement-loop figure has an invalid or duplicate placement")
+                    fail(
+                        "measurement-loop figure has an invalid or duplicate placement"
+                    )
                 expected["tools-measurement-loop"] = ("tools", "how-it-works")
                 continue
             if section != "How it works" or not re.fullmatch(
@@ -1489,8 +1563,12 @@ def validate_course_navigation(parser: Parser, course_name: str) -> None:
         f"../{name}/index.html" for name in COURSE_NAMES if name != course_name
     }
     expected_order = [("link", "../index.html")] + [
-        ("current", name) if name == course_name else
-        ("link", "../lab-guide.html" if name == "lab-guide" else f"../{name}/index.html")
+        ("current", name)
+        if name == course_name
+        else (
+            "link",
+            "../lab-guide.html" if name == "lab-guide" else f"../{name}/index.html",
+        )
         for name in CATALOG_ENTRIES
     ]
     if (
@@ -1499,7 +1577,9 @@ def validate_course_navigation(parser: Parser, course_name: str) -> None:
         or parser.current_courses != [course_name]
         or parser.course_navigation_order != expected_order
     ):
-        fail("course navigation needs the catalog and eight ordered resources with one current course")
+        fail(
+            "course navigation needs the catalog and eight ordered resources with one current course"
+        )
 
 
 def validate_labs_only() -> None:

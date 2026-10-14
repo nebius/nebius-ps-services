@@ -137,7 +137,7 @@ for trial in 1 2 3; do
     "${executable_resolved}" \
     --workload "$workload" "$@" --variant-order "${order}" >"${trial_log}"
   ended=$(date +%s)
-  "${COURSE_PYTHON}" tools/cuda_result.py --input "$trial_log" --started "$started" --ended "$ended" "$executable_resolved" --workload "$workload" "$@" --variant-order "$order"
+  COURSE_TRIAL_INDEX=${trial} "${COURSE_PYTHON}" tools/cuda_result.py --input "$trial_log" --started "$started" --ended "$ended" "$executable_resolved" --workload "$workload" "$@" --variant-order "$order"
   if ! grep -qx 'schema=gpu-course-result/v1' "${trial_log}" || \
      ! grep -qx 'lab_id=12_capstone' "${trial_log}" || \
      ! grep -qx 'trial_kind=one-fresh-process' "${trial_log}" || \

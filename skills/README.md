@@ -142,7 +142,7 @@ measuring performance.
 | `project-agent-instructions` | Explicit only | Conditionally render and terminally seal concise selected-project rules from shared-owner specs, including explicit existing-user compatibility intent, with nearest-marker discovery, registry-backed managed-tail ownership, guarded retirement, and fail-closed recovery. |
 | `prompt-session-intake` | Explicit only (hook-routed) | Capture eligible direct prompts from a bound Task Implementer or Agentic SDLC objective as a non-blocking sidecar, preserve private provenance, and coordinate lossless exact-once prompt updates without invoking either workflow. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with one uv and `pyproject.toml`/`uv.lock` workflow, profile-selected dependencies, `src/` layout, tests, and locked CI. |
-| `scaffold-project` | Explicit only | Own repository topology, exact technology-to-unit binding, per-path routing, candidate approval, digest locking, validation, and guarded scaffold apply after architecture approval. |
+| `scaffold-project` | Implicit allowed | Own repository topology, exact technology-to-unit binding, per-path routing, candidate validation, digest integrity, validation, and guarded scaffold apply after architecture approval. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
 | `task-implementer` | Explicit only | Create persistent per-project lanes, run durable dependency waves with fail-closed current-schema recovery, integrate pending generations, and explicitly remove idle lanes. |
@@ -597,7 +597,7 @@ owners.
 
 ### `scaffold-project`
 
-`scaffold-project` is the explicit-only composition layer between an approved
+`scaffold-project` is the implicit creation coordinator between an approved
 design or stack and specialist-owned project artifacts. It separates logical
 capabilities, physical materialization units, and runtime units; materializes
 only required items; assigns one owner to every normalized path; and gathers
@@ -619,14 +619,18 @@ candidates must additionally remain below a frontend-owned React/Vite root and
 match the app-stack-approved package manager, versions, runtime, and declared
 frontend capability selections. Unsupported required frontend profiles fail
 closed. Brownfield merges are exact additive suffixes on approved integration
-files only. The guarded executor is the only target writer. Known conflicts
+files only. The guarded executor is the only static scaffold target writer. Known conflicts
 block all writes,
 interrupted applies retain a private journal with created-directory identities,
 and reruns classify each path as before, after, or conflict without automatic
-rollback. Schema-v1 bundles are rejected rather than translated. It never
+rollback. Schema-v1 bundles are rejected rather than translated. Its static executor never
 deletes files, runs native generators, installs dependencies, initializes Git,
 provisions, deploys, publishes, commits, pushes, opens a PR, or starts Agentic
 SDLC.
+
+Python-only creation also uses this coordinator, followed by Python bootstrap
+within the original task. Existing Python maintenance stays direct. See
+[creation routing](scaffold-project/references/creation-routing.md).
 
 ### `frontend-project`
 
@@ -636,9 +640,9 @@ explicitly assigned component-local lint/format tooling, and component
 documentation. Its React/TypeScript/Vite producer validates a closed assigned
 path set and emits exact deterministic candidates with input, file, and
 validation provenance. `.env.example` contains names only and `src/env.ts`
-enforces the allowlisted public `VITE_*` contract. Standalone scope owns the
-selected frontend root; coordinated-candidate scope writes only to the private
-bundle for `scaffold-project`. Root CI, ignore rules, Docker, infrastructure,
+enforces the allowlisted public `VITE_*` contract. Standalone maintenance owns the
+existing frontend root; new creation routes through `scaffold-project` and
+coordinated-candidate scope writes only to its private bundle. Root CI, ignore rules, Docker, infrastructure,
 deployment, and agent instructions remain with their specialist owners.
 The deterministic renderer accepts only npm, pnpm, Yarn, or Bun and rejects
 secret-like public names, including compact API-key and access-key markers.

@@ -73,16 +73,16 @@ def test_preparation_skips_reading_profile_without_lab_inventory(tmp_path, profi
         "results/01_example/jobs",
     ],
 )
-@pytest.mark.parametrize("defect", ["public", "file", "symlink", "dangling"])
+@pytest.mark.parametrize("defect", ["shared-write", "file", "symlink", "dangling"])
 def test_preparation_rejects_unsafe_existing_components(tmp_path, relative, defect):
     path = course(tmp_path)
     bad = path / relative
     for ancestor in reversed(bad.parents):
         if ancestor.is_relative_to(path) and ancestor != path:
             ancestor.mkdir(mode=0o700, exist_ok=True)
-    if defect == "public":
-        bad.mkdir(mode=0o755)
-        bad.chmod(0o755)
+    if defect == "shared-write":
+        bad.mkdir(mode=0o777)
+        bad.chmod(0o777)
     elif defect == "file":
         bad.write_text("keep")
     else:
@@ -193,9 +193,46 @@ def test_fifo_metadata_cannot_hang_preparation(tmp_path):
 
 def test_unsafe_later_course_prevents_partial_catalog_preparation(tmp_path):
     first = course(tmp_path, "a")
+    (first / "results").mkdir(mode=0o755)
     last = course(tmp_path, "z")
-    (last / "results").mkdir(mode=0o755)
+    (last / "results").mkdir(mode=0o777)
+    (last / "results").chmod(0o777)
     with pytest.raises(ValueError):
         setup.prepare(courses_root=tmp_path)
-    assert not (first / "results").exists()
+    assert (first / "results").stat().st_mode & 0o777 == 0o755
     assert not (tmp_path / ".runtime").exists()
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o750, 0o705])
+def test_prepare_repairs_owned_results_and_preserves_history(tmp_path, mode):
+    path = course(tmp_path)
+    directories = [path / name for name in (
+        "results", "results/01_example", "results/01_example/logs",
+    )]
+    for directory in directories:
+        directory.mkdir(mode=mode)
+        directory.chmod(mode)
+    old_log = directories[-1] / "96.err"
+    old_log.write_text("preserve previous failure\n")
+    old_job = directories[1] / "jobs/95"
+    old_job.mkdir(parents=True, mode=0o700)
+    old_result = old_job / "result.json"
+    old_result.write_text('{"preserve": true}\n')
+    assert setup.prepare(course_root=path) == {"example": 1}
+    for directory in (*directories, old_job.parent):
+        assert directory.stat().st_mode & 0o777 == 0o700
+    assert old_log.read_text() == "preserve previous failure\n"
+    assert old_result.read_text() == '{"preserve": true}\n'
+    assert setup.prepare(course_root=path) == {"example": 1}
+
+
+@pytest.mark.parametrize("relative", [".runtime", ".profiling-tools"])
+def test_preparation_does_not_repair_nonprivate_runtime_state(tmp_path, relative):
+    path = course(tmp_path)
+    state = path / relative
+    state.mkdir(mode=0o755)
+    state.chmod(0o755)
+    with pytest.raises(ValueError, match="mode-700"):
+        setup.prepare(course_root=path)
+    assert state.stat().st_mode & 0o777 == 0o755
+    assert not (path / "results").exists()

@@ -1,12 +1,18 @@
 id,should_trigger,prompt
 scaffold-positive-01,true,Use $scaffold-project to plan a new repository from this approved component graph without applying it yet.
 scaffold-positive-02,true,Use $scaffold-project to add the approved React and Vite component to this existing Python monorepo while preserving every existing file and showing brownfield merges first.
-scaffold-positive-03,true,"Use $scaffold-project to finalize this reviewed private scaffold bundle, then apply exactly the approved digest to the selected disposable target."
+scaffold-positive-03,true,"Create and apply the validated repository scaffold under my current request, then finish Python setup without another approval prompt."
 scaffold-negative-01,false,Choose whether this application should use React or server-rendered HTML.
-scaffold-negative-02,false,Create a Python CLI project with Typer.
+scaffold-python-creation,true,Create a Python CLI project with Typer.
 scaffold-negative-03,false,Add a Dockerfile to this established service.
 scaffold-negative-04,false,Implement the next product feature in this repository.
 scaffold-negative-05,false,Run the Agentic SDLC workflow with feature-prompt.md.
 scaffold-project-codex-portability,true,$scaffold-project Use $scaffold-project to plan a new repository from this approved component graph without applying it yet.
 scaffold-project-claude-portability,true,/scaffold-project Use $scaffold-project to plan a new repository from this approved component graph without applying it yet.
 scaffold-project-quoted-command,false,"Treat ""/skills:scaffold-project"" as sample text in this punctuation exercise; count its punctuation characters only."
+scaffold-natural-monorepo,true,Create the repository for this selected Python API and React frontend architecture.
+scaffold-python-plan,true,Plan a new Python CLI project without writing files or installing anything.
+scaffold-component-add,true,Add a new Python API component in apps/api and preserve the existing repository.
+scaffold-python-maintenance,false,Update a dependency in this existing uv Python project.
+scaffold-existing-build,false,Build a wheel from this existing Python package.
+scaffold-python-tests,false,Improve the fixtures and coverage for this existing Python library.

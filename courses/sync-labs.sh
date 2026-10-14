@@ -187,13 +187,13 @@ build_manifest() {
     pathspecs+=(":(literal)$name/")
   done
   [[ ${#courses[@]} -gt 0 ]] || die 'No courses found beside this script (expected reference/course.json and COURSE.md).'
-  for relative in index.html README.md lab-guide.html docs/grafana.png tools/regular-lab-setup.py tools/cuda-lab-setup.py tools/communication-lab-setup.py tools/serving-lab-setup.py tools/transformer-engine-lab-setup.py tools/verify_source_sync.py tools/ensure_python312.sh tools/course_bootstrap/catalog.json; do
+  for relative in index.html README.md lab-guide.html docs/grafana.png tools/regular-lab-setup.py tools/cuda-lab-setup.py tools/communication-lab-setup.py tools/serving-lab-setup.py tools/transformer-engine-lab-setup.py tools/verify_source_sync.py tools/course_publication_state.py tools/publish_results.py tools/course_execution.py tools/ensure_python312.sh tools/course_bootstrap/catalog.json; do
     [[ -f $source_root/$relative && ! -L $source_root/$relative ]] || die "Missing regular shared file: $relative"
   done
   git -C "$source_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'The script must be located in the courses directory of a Git clone.'
   # Check Git before consuming the list; process substitution would hide failures.
   git -C "$source_root" ls-files --cached --others --exclude-standard -z -- \
-    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/regular-lab-setup.py' ':(literal)tools/cuda-lab-setup.py' ':(literal)tools/communication-lab-setup.py' ':(literal)tools/serving-lab-setup.py' ':(literal)tools/transformer-engine-lab-setup.py' ':(literal)tools/verify_source_sync.py' ':(literal)tools/course_job_cache.sh' ':(literal)tools/course_runtime.py' ':(literal)tools/course_env.sh' ':(literal)tools/ensure_python312.sh' ':(literal)tools/course_bootstrap/' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
+    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/regular-lab-setup.py' ':(literal)tools/cuda-lab-setup.py' ':(literal)tools/communication-lab-setup.py' ':(literal)tools/serving-lab-setup.py' ':(literal)tools/transformer-engine-lab-setup.py' ':(literal)tools/verify_source_sync.py' ':(literal)tools/course_publication_state.py' ':(literal)tools/publish_results.py' ':(literal)tools/course_job_cache.sh' ':(literal)tools/course_runtime.py' ':(literal)tools/course_execution.py' ':(literal)tools/course_env.sh' ':(literal)tools/ensure_python312.sh' ':(literal)tools/course_bootstrap/' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
   : > "$work_dir/files"
   while IFS= read -r -d '' relative; do
     [[ -e $source_root/$relative || -L $source_root/$relative ]] || continue

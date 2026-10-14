@@ -7,6 +7,7 @@ import argparse
 import ctypes
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -365,6 +366,77 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
     )
 
 
+def _source_module(relative: str, name: str):
+    source = Path(__file__).resolve().parents[2] / relative
+    spec = importlib.util.spec_from_file_location(name, source)
+    if spec is None or spec.loader is None:
+        _error(f"required specialist source is missing: {relative}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def target_lock(target: Path):
+    return _source_module(
+        "scaffold-project/scripts/scaffold_runtime.py", "scaffold_runtime"
+    ).target_lock(target)
+
+
+def _validate_python_candidates(manifest_path: Path) -> dict[str, Any]:
+    try:
+        return _source_module(
+            "python-project/scripts/python_project.py", "python_candidate"
+        ).validate_candidate_manifest(manifest_path)
+    except (ValueError, OSError) as error:
+        _error(f"invalid Python candidate: {error}")
+
+
+def _bind_python_candidate(
+    document: dict, candidate_set: dict, manifest_path: Path
+) -> None:
+    verified_inputs = _validate_python_candidates(manifest_path)
+    unit = next(
+        (
+            unit
+            for unit in document["materialization_units"]
+            if unit["id"] == candidate_set["materialization_unit_id"]
+        ),
+        None,
+    )
+    if (
+        unit is None
+        or unit["owner"] != "python-project"
+        or verified_inputs["component_root"] != unit["path"]
+    ):
+        _error("Python candidate must bind its exact Python-owned component root")
+    expected_framework = (
+        "fastapi"
+        if "api" in verified_inputs["profiles"]
+        else "typer"
+        if "cli" in verified_inputs["profiles"]
+        else None
+    )
+    if unit["framework"] != expected_framework:
+        _error("Python materialization framework differs from producer")
+    capability = next(
+        (
+            item
+            for item in document["capabilities"]
+            if item["id"] == verified_inputs["component_id"]
+        ),
+        None,
+    )
+    if (
+        capability is None
+        or capability["status"] != "required"
+        or unit["id"] not in capability["materialization_unit_ids"]
+    ):
+        _error("Python candidate must bind its required logical component")
+    readme = (PurePosixPath(unit["path"]) / "README.md").as_posix()
+    if readme not in {operation["path"] for operation in document["operations"]}:
+        _error("Python package metadata requires an owned README operation")
+
+
 def _normalize_relative_path(value: Any, label: str) -> str:
     raw = _require_string(value, label)
     if any(ord(character) < 32 or ord(character) == 127 for character in raw):
@@ -372,7 +444,7 @@ def _normalize_relative_path(value: Any, label: str) -> str:
     if "\\" in raw:
         _error(f"{label} contains an unsafe path character")
     path = PurePosixPath(raw)
-    if path.is_absolute() or raw.startswith("/") or raw.endswith("/"):
+    if not path.parts or path.is_absolute() or raw.startswith("/") or raw.endswith("/"):
         _error(f"{label} must be a normalized repository-relative path")
     if any(part in {"", ".", ".."} for part in path.parts):
         _error(f"{label} must not contain empty, dot, or parent segments")
@@ -411,6 +483,10 @@ def _validate_owner_artifact_path(
         elif owner == "helmchart":
             allowed = allowed or name == ".helmignore"
         elif owner == "python-project":
+            if path in {"README.md", "Makefile", "LICENSE"}:
+                _error(
+                    f"positive artifact contract reserves root integration for scaffold-project: {path}"
+                )
             allowed = allowed or name in {
                 ".pre-commit-config.yaml",
                 ".python-version",
@@ -458,7 +534,12 @@ def _validate_owner_artifact_path(
     elif owner == "gitignore":
         allowed = path == ".gitignore"
     elif owner == "scaffold-project":
-        allowed = path in {"README.md", "Makefile", "docs/scaffold-plan.json"}
+        allowed = path in {
+            "README.md",
+            "Makefile",
+            "LICENSE",
+            "docs/scaffold-plan.json",
+        }
 
     if not allowed:
         _error(f"{label} is outside the positive artifact contract for {owner}: {path}")
@@ -841,9 +922,14 @@ def _validate_common_draft(draft: dict[str, Any]) -> None:
         unit_ids.add(unit_id)
         unit_by_id[unit_id] = unit
         _require_string(unit["kind"], f"materialization_units[{index}].kind")
-        unit_path = _normalize_relative_path(
-            unit["path"], f"materialization_units[{index}].path"
-        )
+        unit_path = unit["path"]
+        if unit_path == ".":
+            if len(units) != 1 or unit["owner"] != "python-project":
+                _error("root materialization is supported only for a sole Python unit")
+        else:
+            unit_path = _normalize_relative_path(
+                unit_path, f"materialization_units[{index}].path"
+            )
         unit_paths.append(unit_path)
         for field in ("language", "framework"):
             value = unit[field]
@@ -883,7 +969,7 @@ def _validate_common_draft(draft: dict[str, Any]) -> None:
                 _error(f"materialization_units[{index}].technologies must be unique")
     if not unit_ids:
         _error("at least one required materialization unit is required")
-    _validate_path_set(unit_paths, set())
+    _validate_path_set([path for path in unit_paths if path != "."], set())
     if required_unit_ids != unit_ids:
         missing = sorted(required_unit_ids - unit_ids)
         orphaned = sorted(unit_ids - required_unit_ids)
@@ -1175,7 +1261,7 @@ def _validate_common_draft(draft: dict[str, Any]) -> None:
         containing_units = [
             unit_id
             for unit_id, unit in unit_by_id.items()
-            if path.startswith(f"{unit['path']}/")
+            if unit["path"] == "." or path.startswith(f"{unit['path']}/")
         ]
         materialization_unit_id = operation["materialization_unit_id"]
         materialization_unit = None
@@ -1504,6 +1590,8 @@ def _validate_candidate_manifests(
         )
         if _sha256_bytes(_canonical_bytes(inputs)) != manifest["input_sha256"]:
             _error(f"candidate set {candidate_set_id} input digest mismatch")
+        if candidate_set["owner"] == "python-project":
+            _bind_python_candidate(document, candidate_set, manifest_path)
         inputs_by_set[candidate_set_id] = inputs
 
         operations = operations_by_set.get(candidate_set_id, {})
@@ -1658,7 +1746,11 @@ def _validate_app_stack_bindings(
                 f"app-stack technology mismatch for {component_id}: "
                 "scaffold capability selection differs"
             )
-        if component["component_class"] != "frontend" and component["capabilities"]:
+        if (
+            component["component_class"] != "frontend"
+            and technology["language"] != "python"
+            and component["capabilities"]
+        ):
             _error(
                 "non-frontend capability selections are unsupported for "
                 f"app-stack component {component_id}"
@@ -1709,6 +1801,88 @@ def _validate_app_stack_bindings(
                 f"app-stack technology mismatch for {component_id}: "
                 "runtime selection differs"
             )
+
+    python_components = {}
+    for candidate_set in document["candidate_sets"]:
+        if candidate_set["owner"] != "python-project":
+            continue
+        component_id = inputs_by_set[candidate_set["id"]]["component_id"]
+        component = components.get(component_id)
+        if (
+            component is None
+            or component["status"] != "required"
+            or component["component_class"] != "application"
+            or component["technology"]["language"] != "python"
+        ):
+            _error("Python candidate is not a required app-stack application")
+        if component_id in python_components:
+            _error("duplicate Python candidate component")
+        python_components[component_id] = candidate_set
+
+    for component_id, component in components.items():
+        technology = component["technology"]
+        if (
+            component["status"] != "required"
+            or component["component_class"] != "application"
+            or technology["language"] != "python"
+        ):
+            continue
+        capability = scaffold_capabilities[component_id]
+        sets = [
+            item
+            for item in document["candidate_sets"]
+            if item["owner"] == "python-project"
+            and item["materialization_unit_id"]
+            in capability["materialization_unit_ids"]
+        ]
+        if not sets:
+            _error("required Python component has no validated producer")
+        for item in sets:
+            inputs = inputs_by_set[item["id"]]
+            supported = {
+                "package-kind": inputs["project_kind"],
+                "cli": "typer",
+                "api": "fastapi",
+                "systemd": "systemd",
+            }
+            expected_framework = (
+                "fastapi"
+                if "api" in inputs["profiles"]
+                else "typer"
+                if "cli" in inputs["profiles"]
+                else None
+            )
+            versions = {"python": inputs["python_requires"], **inputs["dependencies"]}
+            if (
+                inputs["component_id"] != component_id
+                or technology["package_manager"] != "uv"
+                or technology["profile"] != "python-package"
+                or technology["framework"] != expected_framework
+            ):
+                _error("app-stack Python technology inputs differ from producer")
+            if any(
+                versions.get(key) != value
+                for key, value in technology["versions"].items()
+            ):
+                _error("app-stack Python versions differ from producer inputs")
+            declared_profiles = {
+                selection["id"]
+                for selection in component["capabilities"]
+                if selection["status"] == "required"
+                and selection["id"] != "package-kind"
+            }
+            if set(inputs["profiles"]) - declared_profiles:
+                _error("undeclared Python profile was materialized")
+            for selection in component["capabilities"]:
+                key = selection["id"]
+                if key not in supported:
+                    _error("unsupported Python capability selection")
+                active = key == "package-kind" or key in inputs["profiles"]
+                if selection["status"] == "required":
+                    if not active or selection["selection"] != supported[key]:
+                        _error("required Python capability differs from producer")
+                elif active:
+                    _error("non-required Python capability was materialized")
 
     approved_frontend: dict[str, dict[str, Any]] = {}
     for component_id, component in components.items():
@@ -1998,12 +2172,33 @@ def _read_bound_regular_file(path: Path, expected: dict[str, Any]) -> bytes:
         os.close(descriptor)
 
 
+def _bound_gitignore_rules(bundle: Path, document: dict[str, Any]) -> set[str]:
+    rules = set(SAFE_GITIGNORE_RULES)
+    if not any(
+        op["path"] == ".gitignore" and op["action"] == "semantic_merge"
+        for op in document["operations"]
+    ):
+        return rules
+    for candidate in document["candidate_sets"]:
+        if candidate["owner"] == "python-project":
+            inputs = _validate_python_candidates(bundle / candidate["manifest"])
+            producer = _source_module(
+                "python-project/scripts/python_project.py", "python_ignore"
+            )
+            rules.update(
+                producer.integration_files(inputs)[".gitignore"].decode().splitlines()
+            )
+    return rules
+
+
 def _validate_semantic_merge_bytes(
     operation_path: str,
     before: dict[str, Any],
     original_bytes: bytes,
     candidate_bytes: bytes,
     candidate_mode: str,
+    *,
+    gitignore_rules: set[str] | None = None,
 ) -> None:
     if PurePosixPath(operation_path).name not in SEMANTIC_MERGE_BASENAMES:
         _error(
@@ -2052,7 +2247,10 @@ def _validate_semantic_merge_bytes(
             for line in suffix_text.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-        unsupported = sorted(set(appended_rules) - SAFE_GITIGNORE_RULES)
+        unsupported = sorted(
+            set(appended_rules)
+            - (gitignore_rules if gitignore_rules is not None else SAFE_GITIGNORE_RULES)
+        )
         duplicate = sorted(set(appended_rules) & existing_rules)
         if unsupported:
             _error(
@@ -2104,6 +2302,8 @@ def _validate_semantic_merge_candidate(
     before: dict[str, Any],
     candidate_bytes: bytes,
     candidate_mode: str,
+    *,
+    gitignore_rules: set[str] | None = None,
 ) -> None:
     original_bytes = _read_bound_regular_file(target_path, before)
     _validate_semantic_merge_bytes(
@@ -2112,6 +2312,7 @@ def _validate_semantic_merge_candidate(
         original_bytes,
         candidate_bytes,
         candidate_mode,
+        gitignore_rules=gitignore_rules,
     )
 
 
@@ -2171,6 +2372,7 @@ def finalize_bundle(target: Path, bundle: Path) -> dict[str, Any]:
     architecture["sources"] = _validate_architecture_sources(architecture)
     architecture["handoff"], handoff_data = _validate_architecture_handoff(architecture)
     _validate_app_stack_bindings(draft, handoff_data, candidate_inputs)
+    gitignore_rules = _bound_gitignore_rules(bundle, draft)
     _validate_architecture_operation_disjoint(
         canonical_target,
         architecture["sources"],
@@ -2242,6 +2444,7 @@ def finalize_bundle(target: Path, bundle: Path) -> dict[str, Any]:
                 before,
                 candidate_bytes,
                 operation["mode"],
+                gitignore_rules=gitignore_rules,
             )
         if action == "unchanged":
             if (
@@ -2587,6 +2790,7 @@ def _validate_payloads(bundle: Path, manifest: dict[str, Any]) -> None:
 def _validate_operation_payload_relations(
     bundle: Path, manifest: dict[str, Any]
 ) -> None:
+    gitignore_rules = _bound_gitignore_rules(bundle, manifest)
     for operation in manifest["operations"]:
         if operation["action"] != "semantic_merge":
             continue
@@ -2600,6 +2804,7 @@ def _validate_operation_payload_relations(
             original_bytes,
             payload,
             operation["after"]["mode"],
+            gitignore_rules=gitignore_rules,
         )
 
 
@@ -3228,6 +3433,8 @@ def _write_semantic_merge(
     mode: int,
     before: dict[str, Any],
     bundle: Path,
+    *,
+    gitignore_rules: set[str] | None = None,
 ) -> None:
     if fcntl is None:  # pragma: no cover - apply is blocked before this on Windows.
         _error("semantic merge apply requires POSIX file locking")
@@ -3268,6 +3475,7 @@ def _write_semantic_merge(
             original_bytes,
             payload,
             _mode_string(mode),
+            gitignore_rules=gitignore_rules,
         )
 
         backup_directory = _private_subdirectory(bundle, "backups", create=True)
@@ -3398,12 +3606,13 @@ def apply_bundle(
     canonical_bundle = _private_bundle_path(bundle, supplied_target, create=False)
     lock_descriptor = _acquire_bundle_apply_lock(canonical_bundle)
     try:
-        return _apply_bundle_locked(
-            target,
-            canonical_bundle,
-            expected_digest,
-            before_operation=before_operation,
-        )
+        with target_lock(supplied_target):
+            return _apply_bundle_locked(
+                target,
+                canonical_bundle,
+                expected_digest,
+                before_operation=before_operation,
+            )
     finally:
         if fcntl is not None:
             fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
@@ -3515,6 +3724,7 @@ def _apply_bundle_locked(
                         mode,
                         operation["before"],
                         bundle,
+                        gitignore_rules=_bound_gitignore_rules(bundle, manifest),
                     )
                 elif operation["action"] == "unchanged":
                     pass
@@ -3591,7 +3801,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.expected_digest,
             )
             exit_code = 0
-    except ScaffoldError as error:
+    except (ScaffoldError, ValueError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True))
         return 2
     except OSError as error:

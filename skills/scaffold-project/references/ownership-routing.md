@@ -4,7 +4,7 @@ Read this reference before assigning materialization units or operations.
 
 | Concern | Content owner |
 | --- | --- |
-| Root topology, integration docs, aggregate Makefile | `scaffold-project` |
+| Root topology, integration docs, aggregate Makefile, selected root LICENSE | `scaffold-project` |
 | Python package, tests, local configuration | `python-project` |
 | React, TypeScript, Vite package and component tests | `frontend-project` |
 | Dockerfile/Containerfile, `.dockerignore`, approved Compose variants, Docker Bake | `container` |
@@ -28,7 +28,7 @@ Read this reference before assigning materialization units or operations.
 - Reserve root cross-cutting files before invoking component specialists.
 - Give every specialist explicit exclusions for files owned elsewhere.
 - Bind every specialist invocation to one candidate-set ID, materialization
-  unit (or `null` for a root cross-cutting set), profile, normalized input
+  unit (or `null` for a root cross-cutting set without a sole root unit), profile, normalized input
   digest, closed manifest, exact operation paths, and validation IDs.
 - Require `frontend-project` candidate sets and operations to bind to a
   frontend-owned React/Vite materialization unit. Frontend suffixes at the
@@ -51,3 +51,8 @@ Read this reference before assigning materialization units or operations.
 
 Do not call `linter`, `code-review`, or `apply-security` directly from the
 scaffold workflow. Audit-only `align` owns those changed-scope lanes.
+
+For a sole Python root unit, bind every operation to that unit while retaining
+its file-specific owner. The Python producer returns root integration needs,
+not root candidates. Post-apply Python bootstrap owns generated dependency and
+environment artifacts; this does not transfer ownership of authored files.

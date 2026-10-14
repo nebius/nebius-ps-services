@@ -215,7 +215,7 @@
             "$ref": "#/$defs/owner"
           },
           "path": {
-            "$ref": "#/$defs/relativePath"
+            "anyOf": [{"const": "."}, {"$ref": "#/$defs/relativePath"}]
           },
           "technologies": {
             "items": {

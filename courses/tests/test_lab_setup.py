@@ -426,7 +426,7 @@ def test_shared_guide_embeds_existing_monitoring_diagram():
 
     source = cb_metadata.shared_guide_source()
     document = cb_pages.render_shared_guide()
-    assert source.index("### Publish a measured comparison") < source.index(
+    assert source.index("### Publish lab results") < source.index(
         "![Course measurements"
     )
     assert source.index("![Course measurements") < source.index(

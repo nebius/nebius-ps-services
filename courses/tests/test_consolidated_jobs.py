@@ -306,6 +306,21 @@ def test_detached_group_ownership_survives_leader_exit(monkeypatch, leader_obser
     assert (200, signal.SIGTERM) not in signals
 
 
+def test_process_tree_ignores_dead_processes_but_keeps_live_workers(monkeypatch):
+    import course_job
+
+    snapshot = """100 1 100 Ss Mon Oct 12 12:00:00 2026
+200 100 200 Z Mon Oct 12 12:00:01 2026
+201 100 200 S Mon Oct 12 12:00:02 2026
+202 100 202 X Mon Oct 12 12:00:03 2026
+"""
+    monkeypatch.setattr(course_job.subprocess, "check_output", lambda *args, **kwargs: snapshot)
+    assert course_job.process_tree() == {
+        100: (1, 100, "Mon Oct 12 12:00:00 2026"),
+        201: (100, 200, "Mon Oct 12 12:00:02 2026"),
+    }
+
+
 @pytest.mark.parametrize("leader_delay", [0, 1.2])
 def test_linux_cleans_detached_worker_after_group_leader_exit(tmp_path, leader_delay):
     import shlex
@@ -355,6 +370,39 @@ def test_linux_adopts_detached_server_before_early_stage_exit(tmp_path):
     assert not subprocess.run(
         ["ps", "-o", "stat=", "-p", pid], capture_output=True, text=True
     ).stdout.strip()
+
+
+def test_linux_completed_adopted_child_does_not_fail_successful_stage(tmp_path):
+    import shlex
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("Requires Linux child adoption")
+    program = """
+import os, time
+from pathlib import Path
+pid = os.fork()
+if pid == 0:
+    os._exit(0)
+deadline = time.monotonic() + 5
+while Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1][0] != 'Z':
+    if time.monotonic() >= deadline:
+        raise RuntimeError('Child did not terminate')
+    time.sleep(.01)
+# Leave an already-dead child for the job subreaper to collect.
+os._exit(0)
+"""
+    child = lifecycle_fixture(
+        tmp_path,
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(program)}; return 0",
+        timeout=10,
+    )
+    stdout, stderr = child.communicate(timeout=15)
+    assert child.returncode == 0, (stdout, stderr, result(tmp_path))
+    document = result(tmp_path)
+    assert document["status"] == "completed"
+    assert [row["status"] for row in document["stages"]] == ["completed", "completed"]
+    assert all("cleanup_error" not in row for row in document["stages"])
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 # Lab 02: Verify the two-node H100 platform
 
-Before interpreting GPU timings, establish that the program is running on the platform you think it is. This lab checks process placement, device visibility, and communication using one rank on each of the two eight-GPU workers.
+Before interpreting GPU timings, establish that the program is running on the platform you think it is. This lab checks process placement, device visibility, and communication using one rank on each of the two eight-GPU workers. For the Fundamentals assignment, read through Lesson 12 and complete shared preparation and fabric qualification; Optimization, a specialization, Lab 01 and Labs 03–07 are not prerequisites. The supplied launcher still checks the sixteen-H100 fabric. Verify this lab's placement and correctness results before continuing to Lab 08.
 
 ## Run
 

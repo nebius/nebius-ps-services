@@ -30,7 +30,7 @@ Agentic SDLC retains its separate authorization and workflow.
 6. Verify ordinary and fork `Required CI` without a local review attestation.
    PR events, CI starts/completions and schedules report CI but produce no merge
    candidates. Only trusted explicit dispatch can initiate a new merge.
-7. Keep `.github/merge-policy.json` aligned with all six CI/path mappings, the
+7. Keep `.github/merge-policy.json` aligned with all configured CI/path mappings, the
    unfiltered CI workflow, broker/completion filenames and Pages configuration.
 
 All write-enabled workflows share github-actions[bot]. Removing the empty push

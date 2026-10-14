@@ -18,7 +18,13 @@ def prepare_job(root, course, lab):
     shutil.copyfile(
         ROOT / "tools/course_job_cache.sh", root / "tools/course_job_cache.sh"
     )
-    for name in ("course_job.py", "course_execution.py"):
+    for name in (
+        "course_job.py",
+        "course_execution.py",
+        "course_publication.py",
+        "course_publication_state.py",
+        "course_publication_evidence.py",
+    ):
         shutil.copyfile(ROOT / "tools" / name, root / "tools" / name)
     (root / "reference").mkdir(exist_ok=True)
     capabilities = json.loads((ROOT / course / "reference/execution.json").read_text())
@@ -113,7 +119,15 @@ def run_job(root, course, lab, mode="", arguments=(), environment=None):
     prepare_job(root, course, lab)
     env = {**os.environ, **local_commands(root), **(environment or {})}
     job = ROOT / course / "slurm" / (lab + ".sbatch")
-    selection = ["--profiler", mode] if mode in {"nsys", "ncu", "all"} else ["--device", "cuda"] if mode == "cuda" else ["--experiment", mode.replace("two_node", "two-node")] if mode else []
+    selection = (
+        ["--profiler", mode]
+        if mode in {"nsys", "ncu", "all"}
+        else ["--device", "cuda"]
+        if mode == "cuda"
+        else ["--experiment", mode.replace("two_node", "two-node")]
+        if mode
+        else []
+    )
     return subprocess.run(
         ["bash", str(job), *selection, *arguments],
         cwd=root,
@@ -128,8 +142,6 @@ def worker_prefix(lab="32_dynamo_disaggregation"):
     """Extract the literal native prefix students can inspect in their job."""
     import shlex
 
-    source = (
-        ROOT / "advanced-gpu-communication/slurm" / (lab + ".sbatch")
-    ).read_text()
+    source = (ROOT / "advanced-gpu-communication/slurm" / (lab + ".sbatch")).read_text()
     tail = source.split("--worker-prefix ", 1)[1].split("\n\n", 1)[0]
     return shlex.split(tail.replace("\\\n", " "))

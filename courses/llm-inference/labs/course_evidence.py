@@ -148,6 +148,11 @@ def enrich_result(payload: dict[str, Any]) -> dict[str, Any]:
         "slurm_job_id": int(os.environ.get("SLURM_JOB_ID", "0")),
         "rank": int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0"))),
     }
+    trial = os.environ.get("COURSE_TRIAL_INDEX")
+    if trial is not None:
+        if trial not in {"1", "2", "3"}:
+            raise ValueError("COURSE_TRIAL_INDEX must be 1, 2 or 3")
+        result["experiment"]["trial_index"] = int(trial)
     return result
 
 

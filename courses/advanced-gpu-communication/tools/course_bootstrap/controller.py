@@ -52,6 +52,15 @@ def reconcile(script, prepare, *, plan):
         prepare(courses_root=root)
     runtime_root = private_dir(root / ".runtime")
     with setup_lock(runtime_root):
+        from course_publication_state import authority, initialize, settings
+
+        _, publication_binding = settings(root)
+        publication_directory = runtime_root / "publications"
+        publication_exists = (
+            publication_directory.exists() or publication_directory.is_symlink()
+        )
+        if publication_binding is not None and publication_exists:
+            authority(root)
         state = State(root)
         installer = Installer(root, courses, catalog, state)
         if images:
@@ -133,6 +142,17 @@ def reconcile(script, prepare, *, plan):
             raise RuntimeError(
                 "Some software could not be installed. Completed components were preserved; rerun the same command after resolving the reported errors"
             )
+        if settings(root)[1] != publication_binding:
+            raise ValueError("Monitoring settings changed during preparation; rerun the same setup command")
+        if publication_binding is None:
+            print(
+                "Automatic publication unconfigured: results remain local. "
+                "Install private monitoring settings, then rerun the same setup command."
+            )
+        else:
+            identity = initialize(root)
+            status = "already initialized" if publication_exists else "initialized"
+            print(f"Automatic publication {status}: installation {identity['publisher_id']}.")
         print(
             "Setup complete: applicable software installed and configured. GPU, profiler and fabric qualification remain in the labs."
         )

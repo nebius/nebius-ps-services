@@ -3509,5 +3509,57 @@ Use disposable repositories and mocked GitHub APIs for identity, admission, CI, 
 Separate static, installed, native and live evidence. Live acceptance uses a protected bootstrap followed by ordinary and real Dependabot PRs, including Docker when an eligible update exists. Fixtures do not prove live Dependabot results. Verify workflow-file success or the permission handoff separately.
 
 <!-- /REQUIREMENT: REQ-043 -->
+
+<!-- REQUIREMENT: REQ-044 status=active priority=P1 type=feature -->
+### REQ-044: Coordinate implicit project creation and complete Python readiness
+
+#### User Story
+
+Project authors need ordinary creation requests to coordinate specialists once,
+produce safe repeatable scaffolds, and finish a usable Python environment.
+
+#### Acceptance Criteria
+
+- AC-001: Repository and component creation, including Python-only creation,
+  routes through implicitly selectable scaffold-project. Existing Python
+  maintenance remains direct. Plan-only requests do not mutate targets.
+- AC-002: Creation intent authorizes bounded apply and Python setup without a
+  second digest approval. Digest integrity, one owner per path, drift checks,
+  target serialization and resumable non-destructive application remain enforced.
+- AC-003: A closed versioned Python producer supports package/library, CLI, API
+  and systemd candidates at the repository root or in nested components.
+  Every Python candidate receives content validation, with additional stack
+  binding when a handoff exists. Unsupported profiles fail clearly.
+- AC-004: Default creation resolves dependencies using uv, prepares the owned
+  environment, and checks lint, behavior and the installed wheel. Applied and
+  ready are separate outcomes. Repeated setup preserves valid dependency locks.
+- AC-005: Root integration ownership, selected-profile entrypoints, referenced
+  metadata files and generated artifacts are explicit and tested. Runtime
+  discovery evidence is separate from source and executable fixture evidence.
+
+#### Negative Criteria
+
+- NC-001: No recursive routing, legacy candidate fallback, silent overwrite,
+  unrelated package-manager migration, deployment, publication or Git action.
+- NC-002: Never template uv.lock, start systemd services, trust stale readiness,
+  or claim optional unsupported profiles have executable producer support.
+
+#### Validation Method
+
+Run producer/executor contracts, real disposable bootstrap checks, scoped lint,
+skill metadata/evals validation and installation parity checks.
+
+#### Test Method
+
+Exercise all core profiles, root and nested units, malformed inputs, forged
+candidates, concurrent setup, drift, interruption, environment isolation and
+idempotent replay after generated artifacts exist.
+
+#### Evaluation Method
+
+Use realistic creation, planning, maintenance and near-miss routing cases;
+report static, executable and fresh-host runtime evidence independently.
+
+<!-- /REQUIREMENT: REQ-044 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -1,0 +1,17 @@
+{
+  "skill_name": "scaffold-project",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a new Python CLI project ready to develop in a disposable directory.",
+      "expected_output": "One implicit coordinator entry, closed Python candidates, internally supplied digest, no second apply approval, successful bootstrap and repeat without authored changes.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Plan a Python API and frontend repository, then explain how maintenance routes. Do not create anything.",
+      "expected_output": "No target or environment writes; assigned owners and direct maintenance routing explained.",
+      "files": []
+    }
+  ]
+}

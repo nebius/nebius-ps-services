@@ -14,7 +14,10 @@ from .support import monitoring, organize_history, prepare
 
 def main(script, group):
     parser = argparse.ArgumentParser(
-        description=f"Prepare {group} labs with Python 3.12; jobs never install dependencies."
+        description=(
+            f"Prepare {group} labs with Python 3.12 and initialize automatic publication "
+            "when private monitoring settings are installed; jobs never install dependencies."
+        )
     )
     parser.add_argument(
         "--plan",
@@ -45,21 +48,28 @@ def main(script, group):
         )
         history.add_argument("--course-root", required=True, type=Path)
     choices = parser.add_mutually_exclusive_group()
+    choices.add_argument("--lab", help="Lab ID, optionally qualified by course slug.")
     choices.add_argument(
-        "--lab", help="Lab ID, optionally qualified by course slug."
-    )
-    choices.add_argument(
-        "--launcher", help="Canonical launcher filename; use selection flags for optional stages."
+        "--launcher",
+        help="Canonical launcher filename; use selection flags for optional stages.",
     )
     choices.add_argument(
         "--all",
         action="store_true",
         help="Prepare every default lab in this group; exclude optional containers.",
     )
-    parser.add_argument("--experiment", choices=("default", "trials", "two-node", "aiperf", "trtllm", "sanitizer"), default="default")
-    parser.add_argument("--profiler", choices=("none", "nsys", "ncu", "all"), default="none")
+    parser.add_argument(
+        "--experiment",
+        choices=("default", "trials", "two-node", "aiperf", "trtllm", "sanitizer"),
+        default="default",
+    )
+    parser.add_argument(
+        "--profiler", choices=("none", "nsys", "ncu", "all"), default="none"
+    )
     parser.add_argument("--device", choices=("cpu", "cuda"))
-    parser.add_argument("--sanitizer", choices=("memcheck", "racecheck", "initcheck", "synccheck"))
+    parser.add_argument(
+        "--sanitizer", choices=("memcheck", "racecheck", "initcheck", "synccheck")
+    )
     args = parser.parse_args()
     try:
         if group == "regular" and args.action:
@@ -83,7 +93,10 @@ def main(script, group):
             definitions,
             lab=getattr(args, "lab", None),
             launcher=getattr(args, "launcher", None),
-            experiment=args.experiment, profiler=args.profiler, device=args.device, sanitizer=args.sanitizer,
+            experiment=args.experiment,
+            profiler=args.profiler,
+            device=args.device,
+            sanitizer=args.sanitizer,
         )
         if args.plan:
             print(json.dumps(plan, indent=2))

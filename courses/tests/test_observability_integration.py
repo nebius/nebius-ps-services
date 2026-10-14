@@ -114,8 +114,10 @@ def test_invalid_acceptance_comparisons_fail(defect):
 def test_clean_callable_has_no_annotation_wrapper(monkeypatch):
     module = load("course_evidence")
     monkeypatch.delenv("COURSE_CAPTURE", raising=False)
+
     def fn():
         return 4
+
     assert module.annotated_operation(fn, "course_measure") is fn
 
 
@@ -235,9 +237,16 @@ def test_selected_results_ignore_historical_dashboard_end_time():
         )
         for recipe in [inventory["setup"], *inventory["labs"].values()]:
             board = generator.dashboard(course, recipe)
-            for panel in board["panels"]:
+            for panel in generator.walk_panels(board["panels"]):
                 for target in panel.get("targets", []):
-                    if "course_lab_" in target["expr"]:
+                    if any(
+                        prefix in target["expr"]
+                        for prefix in (
+                            "course_lab_",
+                            "course_latest_",
+                            "course_diagnostic_",
+                        )
+                    ):
                         assert target["instant"]
                         assert "@ now()" in target["expr"], (
                             course,
@@ -269,10 +278,19 @@ def test_result_units_do_not_format_case_labels_or_metadata():
     board = generator.dashboard(
         "gpu-fundamentals", inventory["labs"]["01_cpu_gpu_crossover"]
     )
-    for panel in board["panels"]:
-        if not panel["targets"][0].get("instant"):
+    for panel in generator.walk_panels(board["panels"]):
+        if not panel.get("targets") or not panel["targets"][0].get("instant"):
             continue
         assert panel["fieldConfig"]["defaults"]["unit"] == "none"
+        if panel["title"].endswith(" / publication"):
+            assert panel["transformations"][0] == {
+                "id": "joinByField",
+                "options": {"byField": "configuration", "mode": "outerTabular"},
+            }
+            assert panel["fieldConfig"]["overrides"][0]["properties"] == [
+                {"id": "unit", "value": "dateTimeAsIso"}
+            ]
+            continue
         if panel["type"] == "barchart":
             overrides = {
                 item["matcher"]["options"]: item["properties"]
@@ -282,7 +300,13 @@ def test_result_units_do_not_format_case_labels_or_metadata():
             assert {"id": "unit", "value": "s"} in overrides["Value #A"]
         else:
             fields = panel["transformations"][0]["options"]["include"]["names"]
-            assert fields == ["slot", "case", "Value", "Value #A"]
+            if panel["id"] >= 1000:
+                names = ["configuration", "role", "trial", "case"]
+                if panel["title"].endswith((" / measurements", " / workload controls")):
+                    names += ["measurement", "unit"]
+                assert fields == names + ["Value", "Value #A"]
+            else:
+                assert fields == ["slot", "case", "Value", "Value #A"]
             if panel["title"] in ("Experiment start", "Experiment end"):
                 assert panel["fieldConfig"]["overrides"][0]["properties"] == [
                     {"id": "unit", "value": "dateTimeAsIso"}
@@ -300,8 +324,11 @@ def test_dashboard_validator_checks_value_units_separately_from_labels(
     recipe = json.loads((ROOT / course / "reference/observability.json").read_text())[
         "labs"
     ][lab]
-    board = load("build_observability").dashboard(course, recipe)
-    panel = next(p for p in board["panels"] if p["type"] == "barchart")
+    generator = load("build_observability")
+    board = generator.dashboard(course, recipe)
+    panel = next(
+        p for p in generator.walk_panels(board["panels"]) if p["type"] == "barchart"
+    )
     if defect == "default":
         panel["fieldConfig"]["defaults"]["unit"] = "s"
     elif defect:
@@ -333,7 +360,7 @@ def test_context_legends_identify_nodes_and_local_gpu_indices():
         for recipe in [inventory["setup"], *inventory["labs"].values()]:
             board = generator.dashboard(course, recipe)
             node_targets = []
-            for panel in board["panels"]:
+            for panel in generator.walk_panels(board["panels"]):
                 for target in panel.get("targets", []):
                     if "node_cpu_seconds_total" in target["expr"] or (
                         "node_memory_MemAvailable_bytes" in target["expr"]
@@ -349,7 +376,9 @@ def test_context_legends_identify_nodes_and_local_gpu_indices():
             assert len(node_targets) == 2
 
 
-@pytest.mark.parametrize("workload", ["small", "large", "prefix-cache", "chunked-prefill"])
+@pytest.mark.parametrize(
+    "workload", ["small", "large", "prefix-cache", "chunked-prefill"]
+)
 def test_workload_parameter_preserves_its_original_serialized_meaning(workload):
     from argparse import Namespace
 

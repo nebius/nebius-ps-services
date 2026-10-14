@@ -12,7 +12,7 @@ in practice and prepare you for GPU Performance Optimization and the specialized
 training, inference and kernel courses.
 
 Local exercises use one full H100, and operational exercises are read-only.
-Distributed concepts lead to practical work in
+Lesson 12 applies distributed concepts in Labs 02 and 08 of
 [Advanced Labs](../advanced-gpu-communication/index.html).
 Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
 before running experiments.
@@ -665,7 +665,7 @@ A fast local kernel cannot improve a step dominated by synchronization or networ
 
 **Practice**
 
-On the separate sixteen-H100 fabric cluster, complete Advanced Lab 02 before Lab 08. Explain the placement and collective evidence without extrapolating from the base cluster.
+After reading through this lesson, complete Advanced Lab 02 on the prepared sixteen-H100 fabric cluster. Check its placement and correctness results before running Advanced Lab 08. These two labs complete this lesson's distributed practice; GPU Performance Optimization, a training or inference specialization, and Advanced Labs 01 and 03–07 are not prerequisites for this assignment. Explain the placement and collective evidence without extrapolating from the base cluster, then return here to complete Fundamentals.
 
 - [Lab 02: Verify the two-node H100 platform](../advanced-gpu-communication/reference/labs/02_collective_readiness.md)
 - [Lab 08: Measure a two-node NCCL all-reduce](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md)

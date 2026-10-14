@@ -206,7 +206,7 @@ logical owner for each layer, migration, deployment action, and validation
 expectation. When `scaffold-project` owns the foundation step, it assigns the
 authoritative per-path content owners.
 
-When the user has explicitly requested repository scaffolding, pass the
+When requested implementation creates a repository or component, pass the
 approved handoff to `scaffold-project` as a bounded foundation step.
 `scaffold-project` owns topology and initial component candidates, returns its
 validation result, and does not route back into `app-stack`. Resume the active

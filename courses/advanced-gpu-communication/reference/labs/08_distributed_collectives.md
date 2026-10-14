@@ -1,6 +1,6 @@
 # Lab 08: Measure a two-node NCCL all-reduce
 
-Distributed work cannot progress faster than its required data exchanges allow. This lab reduces a known tensor across two nodes and measures how message size affects completion time.
+Distributed work cannot progress faster than its required data exchanges allow. This lab reduces a known tensor across two nodes and measures how message size affects completion time. For the Fundamentals assignment, read through Lesson 12 and complete Lab 02's placement and correctness checks on the prepared, qualified sixteen-H100 fabric before running this lab. Optimization, a specialization, Lab 01 and Labs 03–07 are not prerequisites. The supplied launcher reserves the fabric while two ranks participate; afterward, return to Fundamentals to complete Lesson 12.
 
 ## Run
 

@@ -184,6 +184,11 @@ jobs:
           set -euo pipefail
           "$RUNNER_TEMP/python-testing-venv/bin/python" -B python-project/scripts/test_python_project_contract.py
           "$RUNNER_TEMP/python-testing-venv/bin/python" -B python-project/scripts/test_testing_templates.py
+          "$RUNNER_TEMP/python-testing-venv/bin/python" -B python-project/scripts/test_python_project.py
+          RUN_PYTHON_BOOTSTRAP_TESTS=1 "$RUNNER_TEMP/python-testing-venv/bin/python" -B python-project/scripts/test_python_bootstrap.py
+          "$RUNNER_TEMP/python-testing-venv/bin/python" -B scaffold-project/scripts/test_scaffold_project.py
+          "$RUNNER_TEMP/python-testing-venv/bin/python" -B scaffold-project/scripts/test_frontend_scaffold_e2e.py
+          "$RUNNER_TEMP/python-testing-venv/bin/python" -B scaffold-project/scripts/test_specialist_templates.py
           "$RUNNER_TEMP/python-testing-venv/bin/python" -B optimize-pytest/scripts/test_measurement_examples.py
 
   runtime-security:

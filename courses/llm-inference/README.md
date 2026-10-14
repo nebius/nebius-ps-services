@@ -55,9 +55,11 @@ preparation does not build a GPU engine or qualify serving performance.
 
 Keep mechanics and serving evidence separate. Use Lab 32's trials experiment
 for at least three equivalent-work, unprofiled runs and a quality/latency/memory
-decision. Qualify real engines independently. Distributed serving belongs to
-[Advanced Labs](../advanced-gpu-communication/index.html); optional Dynamo
-experiments are not a core completion gate.
+decision. Qualify real engines independently. Lesson 17's Advanced Lab 25
+compares synthetic recurrent projections, not a complete model server or
+pipeline-parallel layouts. Distributed serving belongs to
+[Advanced Labs](../advanced-gpu-communication/index.html); optional real-model
+and Dynamo experiments are not a core completion gate.
 
 Use [Where to Go Next](NEXT-STEPS.md) for optional reading after the core route.
 

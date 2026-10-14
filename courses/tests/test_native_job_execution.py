@@ -74,7 +74,7 @@ def test_native_job_preserves_workload_argv_and_private_outputs(
     assert app["workload"] == workload
     job = tmp_path / "results" / LAB / "jobs/123"
     assert Path(app["results"]) == job / "stages" / (mode or "normal") / "results"
-    assert sorted(p.name for p in job.iterdir()) == ["result.json", "stages"]
+    assert sorted(p.name for p in job.iterdir()) == ["publication-registration.json", "result.json", "stages"]
     assert all(p.stat().st_mode & 0o777 == (0o700 if p.is_dir() else 0o600) for p in job.rglob("*"))
     if mode:
         flags = json.loads((tmp_path / "profiler.json").read_text())

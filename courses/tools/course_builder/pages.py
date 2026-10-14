@@ -329,7 +329,7 @@ def render_catalog() -> str:
             if name == "soperator"
             else "Use before running labs; no setup needed to read the courses"
             if guide
-            else "Fundamentals + Optimization + relevant training or inference foundations, or equivalent readiness; 16 H100 GPUs"
+            else "Full route: Fundamentals + Optimization + relevant training or inference foundations, or equivalent readiness. Fundamentals Lesson 12: Lab 02, then Lab 08. Both require 16 H100 GPUs"
             if name == "advanced-gpu-communication"
             else "Read before GPU Fundamentals and practical labs; no cluster required"
             if name == "gpu-performance-tools"
@@ -397,7 +397,7 @@ def render_catalog() -> str:
 <div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">{len(CATALOG_ENTRIES)} resources</span></div>
 <h2 id="path-title">A foundation.<br>Then your direction.</h2>
 {"".join(path_groups)}
-<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. Read GPU Performance Tools for command and profiler explanations, then PyTorch for GPU Performance Engineering for tensor operations and GPU execution. Continue directly to Fundamentals and the practical labs. The three specializations are independent. Start any of them after Fundamentals and Optimization. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
+<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. Read GPU Performance Tools for command and profiler explanations, then PyTorch for GPU Performance Engineering for tensor operations and GPU execution. Continue directly to Fundamentals and the practical labs. The three specializations are independent. Start any of them after Fundamentals and Optimization. Fundamentals Lesson 12 enters the <a href="#advanced-gpu-communication">advanced communication labs</a> at Lab 02, then Lab 08 after Lab 02 passes, on a prepared, qualified sixteen-H100 cluster. The full Advanced route follows Fundamentals, Optimization and the relevant training or inference foundations, or equivalent readiness, and begins with Lab 01.</p></aside>
 </header>
 <div class="catalog-facts" aria-label="Catalog overview"><p><strong>{len(COURSES) - 1}</strong> courses</p><p><strong>1</strong> Advanced Labs collection</p><p><strong>1</strong> Lab Guide</p><p class="fact-note">{lab_count} practical labs.<br>Free to read.</p></div>
 <section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>

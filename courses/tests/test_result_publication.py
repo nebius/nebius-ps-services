@@ -2,6 +2,7 @@
 
 import copy
 import json
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -58,6 +59,42 @@ def samples(document):
     return [
         s for family in text_string_to_metric_families(document) for s in family.samples
     ]
+
+
+def test_explicit_comparison_cli_does_not_require_prepared_monitoring(
+    publisher, monkeypatch
+):
+    from course_bootstrap import runtime
+
+    module, args, requests = publisher
+    monkeypatch.setattr(
+        runtime,
+        "context",
+        lambda *a: pytest.fail("explicit settings need no runtime lookup"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "publish_results.py",
+            "--lab",
+            args.lab,
+            "--baseline",
+            str(args.baseline),
+            "--candidate",
+            str(args.candidate),
+            "--workspace",
+            args.workspace,
+            "--gateway",
+            args.gateway,
+            "--metrics-url",
+            args.metrics_url,
+            "--expected-generation",
+            "0",
+        ],
+    )
+    module.main()
+    assert len(requests) == 1
 
 
 def test_atomic_pair_put_and_repeatable_republication_after_cache_restart(publisher):

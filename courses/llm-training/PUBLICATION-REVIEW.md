@@ -1,5 +1,17 @@
 # Publication review
 
+## Catalog correctness and navigation — 2026-10-13
+
+Current HTML SHA-256: `981b1dea395cc8a8da9c95b9b3ca73790bfffb1a5264c23379ae383189f3ec6d`.
+The full-catalog source/build checks and three-width browser review pass for
+this artifact. Native instant navigation resolves the reproduced scroll race;
+the shared navigation regression passes twice across all ten course/guide pages.
+See the [catalog review](../docs/course-format-validation.md#catalog-correctness-and-navigation--2026-10-13)
+for the 845-test result, 33 full-page and 60 repeated navigation cases, causal
+controls, screenshots, cleanup, preservation and remaining limits. Dense phone
+diagrams and applicable installed/runtime/live-target qualification remain
+separate; no external publication was performed. Earlier entries are historical.
+
 ## Complete catalog review and alignment — 2026-10-13
 
 Reviewed `index.html` SHA-256: `fc2a0f42b3c07838aafbc450a72332b12b9b728107f9e350ff5cfdfee95cc904`.
