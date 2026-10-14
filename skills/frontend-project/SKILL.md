@@ -45,7 +45,9 @@ repo-owned templates and clear standalone versus coordinated ownership.
 
 Determine scope before generating files:
 
-- `standalone`: own the frontend repository root and its component artifacts.
+- New repository or component: hand creation to `scaffold-project` once, then
+  return in `coordinated-candidate` scope. Do not route a bounded assignment back.
+- `standalone`: maintain the existing frontend root and its component artifacts.
   Use `gitignore` and `github-workflows` separately for root cross-cutting files.
 - `coordinated-candidate`: receive exact assigned paths and exclusions from
   `scaffold-project`; write exact candidates only into the private bundle and
@@ -105,7 +107,8 @@ choosing versions, package managers, ports, routes, or API origins.
 9. Validate the candidate manifest, file permissions, digests, JSON, and
    placeholder completeness offline.
 10. Run dependency-backed lint, format, typecheck, tests, and build only when
-    dependency installation is already available or separately authorized.
+    the existing task covers dependency installation and execution. Honor
+    files-only and offline constraints; ask only for effects outside that scope.
 
 ## Output Contract
 
@@ -142,8 +145,9 @@ Return:
 - The supported materialization profile is React, TypeScript, and Vite only.
 - No Node backend, Next.js, Remix, Vue, Svelte, Angular, mobile, or Electron
   scaffolding.
-- No dependency installation, native generator, dev server, network access, or
-  browser launch unless separately authorized.
+- Dependency installation, dev server, network access and browser checks require
+  coverage by the existing task. A files-only or offline request excludes them.
+  Native generators remain outside the deterministic candidate workflow.
 - No secret, private endpoint, production credential, or machine-local path in
   source or examples.
 - Keep API origins configurable and do not enable wildcard production CORS.

@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path, PurePosixPath
 from unittest import mock
 
-
 SKILLS_ROOT = Path(__file__).resolve().parents[2]
 SCAFFOLD_PATH = SKILLS_ROOT / "scaffold-project/scripts/scaffold_project.py"
 FRONTEND_PATH = SKILLS_ROOT / "frontend-project/scripts/frontend_project.py"
@@ -30,6 +29,9 @@ def _load_module(name: str, path: Path):
 
 SCAFFOLD = _load_module("scaffold_project_e2e", SCAFFOLD_PATH)
 FRONTEND = _load_module("frontend_project_e2e", FRONTEND_PATH)
+PYTHON = _load_module(
+    "python_project_e2e", SKILLS_ROOT / "python-project/scripts/python_project.py"
+)
 
 
 class FrontendScaffoldEndToEndTest(unittest.TestCase):
@@ -325,12 +327,19 @@ class FrontendScaffoldEndToEndTest(unittest.TestCase):
                         "name": "fastapi",
                         "language": "python",
                         "framework": "fastapi",
-                        "profile": "api-service",
+                        "profile": "python-package",
                         "runtime": "python",
                         "package_manager": "uv",
-                        "versions": {"python": "3.13.5"},
+                        "versions": {"python": ">=3.11,<3.14"},
                     },
-                    "capabilities": [],
+                    "capabilities": [
+                        {
+                            "id": "api",
+                            "status": "required",
+                            "selection": "fastapi",
+                            "revisit_trigger": None,
+                        }
+                    ],
                     "constraints": [],
                     "validation_expectations": [],
                     "revisit_trigger": None,
@@ -338,7 +347,13 @@ class FrontendScaffoldEndToEndTest(unittest.TestCase):
             ],
         }
         document = {
-            "candidate_sets": [],
+            "candidate_sets": [
+                {
+                    "id": "python-api",
+                    "owner": "python-project",
+                    "materialization_unit_id": "api",
+                }
+            ],
             "capabilities": [
                 {
                     "id": "api",
@@ -365,7 +380,14 @@ class FrontendScaffoldEndToEndTest(unittest.TestCase):
             "external_services": [],
         }
 
-        SCAFFOLD._validate_app_stack_bindings(document, handoff, {})
+        request = PYTHON.default_request(root="apps/api", profiles=("api",))
+        request.update(
+            candidate_set_id="python-api",
+            component_id="api",
+            materialization_unit_id="api",
+        )
+        inputs = {"python-api": PYTHON.normalize(request)}
+        SCAFFOLD._validate_app_stack_bindings(document, handoff, inputs)
 
         mismatches = {
             "selection": lambda value: value["capabilities"][0].update(
@@ -416,7 +438,7 @@ class FrontendScaffoldEndToEndTest(unittest.TestCase):
                     SCAFFOLD._validate_app_stack_bindings(
                         mismatched,
                         handoff,
-                        {},
+                        inputs,
                     )
 
         capability_selection = copy.deepcopy(handoff)
@@ -430,12 +452,12 @@ class FrontendScaffoldEndToEndTest(unittest.TestCase):
         ]
         with self.assertRaisesRegex(
             SCAFFOLD.ScaffoldError,
-            "non-frontend capability selections are unsupported",
+            "undeclared Python profile|unsupported Python capability",
         ):
             SCAFFOLD._validate_app_stack_bindings(
                 document,
                 capability_selection,
-                {},
+                inputs,
             )
 
     def test_app_stack_external_service_technology_drift_is_rejected(self) -> None:

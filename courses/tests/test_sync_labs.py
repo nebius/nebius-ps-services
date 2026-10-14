@@ -4,8 +4,8 @@ import json
 import os
 import pty
 import re
-import signal
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -43,7 +43,7 @@ def workspace(tmp_path):
         shutil.copy2(ROOT / "tools" / f"{group}-lab-setup.py", source / "tools" / f"{group}-lab-setup.py")
     shutil.copy2(ROOT / "tools/verify_source_sync.py", source / "tools/verify_source_sync.py")
     shutil.copy2(ROOT / "tools/ensure_python312.sh", source / "tools/ensure_python312.sh")
-    for name in ("course_runtime.py", "course_env.sh", "course_job_cache.sh"):
+    for name in ("course_runtime.py", "course_execution.py", "course_env.sh", "course_job_cache.sh", "course_publication_state.py", "publish_results.py"):
         shutil.copy2(ROOT / "tools" / name, source / "tools" / name)
     shutil.copytree(ROOT / "tools/course_bootstrap", source / "tools/course_bootstrap",
                     ignore=shutil.ignore_patterns("__pycache__"))
@@ -178,7 +178,9 @@ env['SHELL'] = os.environ['TEST_REMOTE_SHELL']
 if interactive:
     if os.environ.get('TEST_LOGIN_BAD_HOME'):
         env['HOME'] += '/missing'
-    os.execve('/bin/sh', ['sh', '-c', command], env)
+    # Preserve fixture process identity without relying on a shell's optional
+    # final-command exec optimization (dash and macOS sh differ here).
+    os.execve('/bin/sh', ['sh', '-c', 'exec ' + command], env)
 if os.environ.get('TEST_NO_REMOTE_RSYNC'):
     env['PATH'] = os.environ['TEST_REMOTE_BIN']
 sys.exit(subprocess.call(['/bin/sh', '-c', command], env=env))
@@ -376,7 +378,7 @@ def test_incremental_local_wins_and_remote_only_survives(workspace):
     assert transferred(repeated) == []
     assert snapshot(workspace.remote) == settled
     dest = workspace.remote / "courses" / COURSES[0]
-    (dest / "results").mkdir()
+    (dest / "results").mkdir(mode=0o700)
     result_file = dest / "results/result.json"
     result_file.write_text("valuable remote result\n")
     (dest / "labs/remote-experiment.py").write_text("# remote experiment\n")
@@ -398,11 +400,73 @@ def test_incremental_local_wins_and_remote_only_survives(workspace):
     assert (dest / "labs/common.py").is_file()
     assert (dest / "labs/remote-experiment.py").is_file()
     assert result_file.read_text() == "valuable remote result\n"
+    assert stat.S_IMODE((dest / "results").stat().st_mode) == 0o700
     settled = snapshot(workspace.remote)
     repeated = workspace.run("192.0.2.10")
     assert_ok(repeated)
     assert transferred(repeated) == []
     assert snapshot(workspace.remote) == settled
+
+
+def test_synced_preparation_plans_have_complete_shared_imports(workspace):
+    for course in COURSES:
+        (workspace.source / course / "slurm/run.sbatch").unlink()
+        shutil.copytree(ROOT / course / "slurm", workspace.source / course / "slurm",
+                        dirs_exist_ok=True)
+        for name in ("course.json", "execution.json", "runtime.json"):
+            shutil.copy2(ROOT / course / "reference" / name,
+                         workspace.source / course / "reference" / name)
+    for course in READING_COURSES:
+        shutil.copy2(ROOT / course / "reference/course.json",
+                     workspace.source / course / "reference/course.json")
+    assert_ok(workspace.run("--sync-only", "host", terminal=False))
+    for group in ("regular", "cuda", "communication", "serving", "transformer-engine"):
+        plans = []
+        for tree in (workspace.source, workspace.remote / "courses"):
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", str(tree / "tools" / f"{group}-lab-setup.py"), "--plan"],
+                check=False, cwd=workspace.remote, capture_output=True, text=True, timeout=10,
+            )
+            assert result.returncode == 0, result.stderr
+            plans.append(json.loads(result.stdout))
+        assert plans[0] == plans[1]
+
+    # Exercise the lazy setup imports from only the transferred tree. Plans alone
+    # never import the initializer and can hide an incomplete root tools payload.
+    tree = workspace.remote / "courses"
+    settings = tree / ".course-environment.sh"
+    settings.write_text(
+        "export COURSE_WORKSPACE=learner\n"
+        "export COURSE_PUSHGATEWAY=http://127.0.0.1:9091\n"
+        "export COURSE_METRICS_URL=http://127.0.0.1:8428\n"
+    )
+    settings.chmod(0o600)
+    program = """
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / 'tools'))
+from course_bootstrap import controller
+controller.ubuntu = lambda: {}
+controller.capacity = lambda: []
+controller.install_packages = lambda *args, **kwargs: None
+controller.setup(
+    root / 'tools/regular-lab-setup.py',
+    lambda **kwargs: (root / '.runtime').mkdir(mode=0o700, exist_ok=True),
+    plan={'group': 'regular', 'runtimes': []},
+)
+import course_publication_state, publish_results
+for module in (controller, course_publication_state, publish_results):
+    assert Path(module.__file__).is_relative_to(root)
+"""
+    for expected in ("publication initialized", "publication already initialized"):
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", "-c", program, str(tree)],
+            cwd=workspace.remote, capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert expected in result.stdout
+    assert not (workspace.source / ".runtime/publications").exists()
 
 
 def test_removed_local_course_is_excluded_and_remote_copy_survives(workspace):

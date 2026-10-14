@@ -7,15 +7,18 @@ exposed communication costs and justify a change using correctness, measurements
 and traces.
 
 Read [GPU Performance Tools](../gpu-performance-tools/index.html) before practical work.
-Complete GPU Fundamentals, GPU Performance Optimization and the relevant training
-or inference foundations first. Experienced learners can begin if they can launch
-Slurm jobs, produce a correct unprofiled result and interpret its GPU timeline.
+For the full lab route, complete GPU Fundamentals, GPU Performance Optimization
+and the relevant training or inference foundations, or bring equivalent readiness
+to launch Slurm jobs, produce a correct unprofiled result and interpret its GPU timeline.
+For Fundamentals Lesson 12, enter at Lab 02, then run Lab 08 after Lab 02 passes;
+reading Fundamentals through that lesson supplies this assignment's concepts.
 This is a labs-only course: each guide contains its own explanation and practice.
 
 Practice requires two eight-H100 workers, sixteen GPUs in total, with local
 NVLink/NVSwitch and inter-worker InfiniBand. Prepare through the shared Lab Guide's
-[environment setup](../lab-guide.html#lab-preparation-scripts), then qualify placement and
-fabric in Labs 01–07. Bounded experiments support scoped decisions; they do not
+[environment setup](../lab-guide.html#lab-preparation-scripts). The full route begins
+with Lab 01 and qualifies placement and fabric in Labs 01–07. The Fundamentals
+assignment uses Lab 02's readiness checks before Lab 08. Bounded experiments support scoped decisions; they do not
 establish production convergence or large-model scaling.
 
 For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.

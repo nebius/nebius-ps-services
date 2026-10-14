@@ -27,6 +27,9 @@ TOOLS = (
     "course_runtime",
     "course_execution",
     "course_job",
+    "course_publication",
+    "course_publication_state",
+    "course_publication_evidence",
     "verify_monitoring",
     "readiness",
 )

@@ -1,7 +1,6 @@
 ---
 name: scaffold-project
-description: "Use only when the user explicitly asks to plan, create, merge, or standardize a complete repo scaffold after architecture/stack approval using path ownership and an approved plan. Not for stack selection, feature work, SDLC, or destructive rewrites."
-disable-model-invocation: true
+description: "Coordinate creation of repositories and components, including Python-only projects, with specialist-owned candidates, idempotent apply, and Python readiness. Use for scaffold creation or topology changes; route existing-project maintenance to its specialist. Not for stack selection, feature logic, builds of existing packages, or SDLC."
 ---
 
 # Scaffold Project
@@ -37,36 +36,46 @@ deployment, CI, ignore-rule, or shell specialist ownership.
 
 ## When To Use
 
-- The user explicitly invokes `$scaffold-project` for a new repository.
-- The user explicitly asks it to add a component to an existing repository.
-- The user explicitly asks it to standardize a brownfield repository without
-  deleting or blindly overwriting existing content.
-- `app-stack` or `design` returns an approved scaffold handoff and the user
-  explicitly authorizes this bounded foundation step.
+- A natural-language or explicit skill request creates a repository or component,
+  including a Python-only package, CLI, API, or systemd service scaffold.
+- The user requests additive repository topology standardization.
+- An existing design/app-stack decision is ready to materialize within the
+  user's creation task. A separate skill invocation is unnecessary.
 
 ## When Not To Use
 
-- Material architecture, component-boundary, or technology choices remain
-  undecided. Return the missing decisions to the active `design` or `app-stack`
-  workflow; do not invoke either workflow recursively.
-- The request is isolated Python, frontend, Docker, Terraform, Helm, GitHub
-  Actions, `.gitignore`, or shell work. Use its specialist directly.
-- The request implements product features or business logic.
-- An Agentic SDLC workflow is active. Do not invoke or modify any `sdlc-*`
-  phase, Task Implementer, or `project-agent-instructions`.
-- A required materialization unit has no supported specialist owner.
+- Existing-project dependency, test, packaging, lint, or configuration work:
+  use the matching specialist directly. Building an existing wheel is not
+  creating a new project.
+- Material architecture or technology choices remain undecided: return the
+  missing decisions to the owning design/app-stack workflow without recursion.
+- Product feature implementation, destructive restructuring, or Agentic SDLC.
+- A required artifact lacks a supported specialist producer contract.
 
 ## Invocation Policy
 
-Require explicit `$scaffold-project` invocation. Planning is the default and
-does not authorize target writes. Apply only when the user explicitly names
-the finalized bundle and expected digest, or clearly approves that exact
-digest in the current turn.
+Implicit and explicit invocation are supported. Interpret intent before effects:
+
+- Plan, explain, review, help, and quoted examples do not authorize target or
+  environment changes. Host Plan Mode also prohibits private plan writes.
+- A create/build-new/apply request authorizes bounded candidate generation,
+  validation, guarded apply, and required Python setup in the same task. Do not
+  ask for a second approval, magic phrase, or user-supplied digest.
+- Preserve an explicit files-only or offline constraint; report readiness as
+  pending. Ask only about material missing decisions or effects outside scope.
+- Finalize and pass the exact digest internally as an integrity binding. A
+  digest is not an authorization receipt.
+- For Python creation, use its established defaults for routine unspecified
+  choices; do not invent an extra architecture-approval step.
+
+Check invocation scope before intent routing. Python creation hands ownership
+here once; calls to its coordinated-candidate and bootstrap phases never route
+back to this entrypoint. See [routing](references/creation-routing.md).
 
 ## Inputs
 
 - Target project directory.
-- Approved architecture or direct-user approval reference.
+- Selected architecture or direct-user creation reference.
 - Project identity and repository shape.
 - Logical capabilities with `required`, `conditional`, `deferred`, or
   `rejected` status.
@@ -99,7 +108,9 @@ digest in the current turn.
   candidate, payload, manifest, journal, and backup files.
 - Coordinated specialists may write exact candidate bytes only into that
   private bundle.
-- The guarded executor is the only writer to the target repository.
+- The guarded executor is the only writer of scaffold content. After apply,
+  Python bootstrap may write declared dependency/environment/build artifacts
+  within the same creation task; it never rewrites authored scaffold files.
 - A sanitized `docs/scaffold-plan.json` may be proposed only when the user
   explicitly requests an auditable committed copy. It is never the executable
   plan and must not contain secrets, local absolute paths, or private context.
@@ -136,8 +147,8 @@ digest in the current turn.
   through a scaffold capability or external-service binding. Required
   materialized components also bind the canonical technology name and language
   to every assigned unit, and bind every runtime unit to one capability.
-  Reject non-frontend capability selections until their specialist exposes a
-  closed candidate-input contract. Derive repository topology locally; do not
+  Accept the closed Python and frontend capability contracts; reject other
+  non-frontend capability selections until their specialist exposes a contract. Derive repository topology locally; do not
   accept physical paths or owners from that handoff.
 
 ### 3. Assign Ownership
@@ -168,8 +179,8 @@ those normalized inputs with the logical technology decision.
 
 Do not run native generators, package managers, dependency installation,
 provider downloads, image builds, Git initialization, or network tools during
-candidate generation. The user may separately authorize a future allowlisted
-tool adapter; the current contract has no native-generator fallback.
+candidate generation. Python bootstrap runs only after static application. No native generator
+may bypass the candidate producer or guarded executor.
 
 ### 5. Review Brownfield Merges
 
@@ -183,7 +194,8 @@ tool adapter; the current contract has no native-generator fallback.
 - Schema v2 enforces these as an exact byte-preserving, non-empty suffix append to
   `.gitignore`, `README.md`, or `Makefile`, with the original mode unchanged.
   `.gitignore` additions must be unique rules from the reviewed `gitignore`
-  baseline/add-on allowlist. README and Makefile additions must contain one
+  baseline/add-on allowlist or the exact rules derived from validated Python
+  candidates in this bundle. README and Makefile additions must contain one
   matching named `scaffold-project:begin`/`end` marker block. Structured-key
   merges are unsupported until an owner-specific parser and preservation
   validator exists.
@@ -213,15 +225,16 @@ canonicalizes operation order, and emits the digest-bound `manifest.json`. If
 any candidate, candidate set, path, owner, architecture source, or precondition
 is invalid, stop without target writes.
 
-### 7. Obtain Apply Approval
+### 7. Review The Concrete Operations
 
 Return the proposed tree, owner routing, exact operations, semantic merge
 diffs, bundle digest, validation commands, commands not run, and all pending
-network or external evidence. Apply only after approval of the exact digest.
+network or external evidence. For an authorized creation task, continue directly with that exact digest.
+For plan-only requests, stop with the proposed operations; do not apply.
 
 ### 8. Apply And Resume
 
-Apply only with:
+Apply the internally finalized digest with:
 
 ```bash
 python3 scaffold-project/scripts/scaffold_project.py apply \
@@ -249,15 +262,20 @@ python3 scaffold-project/scripts/scaffold_project.py status \
 On interruption, rerun `status`. Resume only when every path is still at its
 recorded before or after state. Never auto-rollback a partial apply.
 
-### 9. Validate The Result
+### 9. Complete And Validate The Result
 
 - Confirm the actual tree matches required materialization units.
 - Confirm conditional, deferred, and rejected items were not created.
 - Run owner-provided static validation and local tests.
-- Report dependency resolution, lockfiles, provider downloads, Docker builds,
-  and runtime integration as pending unless separately authorized and run.
-- Invoke `$align` in audit-only mode. If it proposes a content change, create a
-  new candidate bundle and obtain approval for its new digest.
+- For each core Python component, run its bootstrap action after apply under
+  the same creation authorization. It resolves a real uv.lock, syncs the owned
+  environment, runs lint/tests and installed-wheel checks, and records separate
+  readiness. A failure means applied but not ready; revalidate and resume setup.
+- Provider downloads, Docker builds, provisioning and service activation stay
+  outside default creation. Report platform checks separately.
+- Invoke `$align` in audit-only mode. If it proposes an in-scope content change, regenerate the affected
+  bundle and validate its new digest under existing task authority; never patch
+  authored scaffold bytes behind the executor.
 - Never automatically start Agentic SDLC. The user may invoke it separately
   after scaffold validation.
 

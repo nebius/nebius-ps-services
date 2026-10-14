@@ -307,12 +307,12 @@ def reap_orphans():
 def process_tree():
     """Observe identities only, never process arguments or environment values."""
     output = subprocess.check_output(
-        ["ps", "-eo", "pid=,ppid=,pgid=,lstart="], text=True, timeout=5
+        ["ps", "-eo", "pid=,ppid=,pgid=,stat=,lstart="], text=True, timeout=5
     )
     return {
-        int(fields[0]): (int(fields[1]), int(fields[2]), " ".join(fields[3:]))
+        int(fields[0]): (int(fields[1]), int(fields[2]), " ".join(fields[4:]))
         for line in output.splitlines()
-        if len(fields := line.split()) >= 8
+        if len(fields := line.split()) >= 9 and fields[3][0] not in {"Z", "X"}
     }
 
 
@@ -460,6 +460,19 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
             + FINALIZATION_SECONDS
         )
         scheduler_budget(job, required)
+        # Optional monitoring must never change experiment execution or status.
+        from course_publication import supervise
+
+        try:
+            document["publication"] = supervise(
+                course, path, register_only=True, cancelled=lambda: bool(interrupted)
+            )
+        except (OSError, ValueError, KeyError):
+            document["publication"] = {
+                "status": "failed",
+                "reason": "Publication registration unavailable",
+            }
+        atomic_write(path, document)
         for row in stages:
             if row["status"] == "skipped":
                 continue
@@ -542,6 +555,10 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
                         break
                     time.sleep(0.1)
                 code = child.returncode
+                # The direct child was collected by poll/wait. Reap already-dead
+                # adopted children before deciding whether live work remains.
+                if subreaper:
+                    reap_orphans()
                 owned_groups(os.getpid() if subreaper else child.pid, observed_groups)
                 # A successful shell exit is insufficient when an owned server
                 # or step is still alive. Cleanup failure stops the job.
@@ -624,6 +641,26 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
                     )
         document["finished_at"] = timestamp()
         atomic_write(path, document)
+        try:
+            from course_publication import supervise
+
+            document["publication"] = supervise(
+                course,
+                path,
+                document.get("publication"),
+                cancelled=lambda: bool(interrupted),
+            )
+        except (OSError, ValueError, KeyError):
+            document["publication"] = {
+                **document.get("publication", {}),
+                "status": "failed",
+                "reason": "Publication finalization unavailable",
+            }
+        atomic_write(path, document)
+        print(
+            f"Publication: {document['publication']['status']} (details in result.json)",
+            flush=True,
+        )
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 

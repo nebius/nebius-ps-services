@@ -98,7 +98,7 @@ for trial in 1 2 3; do
   order=baseline-first
   if ((trial % 2 == 0)); then order=candidate-first; fi
   trial_run_id=$("${course_python}" -c 'import secrets; print(secrets.token_hex(6))')
-  COURSE_RUN_ID=${trial_run_id} srun --nodes=1 --cpus-per-task=16 --ntasks=1 --gpus-per-task=1 \
+  COURSE_TRIAL_INDEX=${trial} COURSE_RUN_ID=${trial_run_id} srun --nodes=1 --cpus-per-task=16 --ntasks=1 --gpus-per-task=1 \
     "${course_python}" "${course_dir}/labs/31_training_capstone.py" \
     "$@" --seed "$((16 + trial))" --variant-order "${order}" \
     --output-dir "${campaign_dir}"

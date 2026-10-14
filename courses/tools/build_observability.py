@@ -21,6 +21,13 @@ COURSES = (
 DATASOURCE = {"type": "prometheus", "uid": "course-soperator-metrics"}
 
 
+def walk_panels(panels):
+    """Include collapsed row children when validating generated dashboards."""
+    for item in panels:
+        yield item
+        yield from walk_panels(item.get("panels", []))
+
+
 def selected_expression(selector: str) -> str:
     # Resolve the selection at wall time before applying any unit conversion.
     # An @ modifier on outer arithmetic can produce an empty implicit rollup.
@@ -377,13 +384,217 @@ def dashboard(course: str, recipe: dict) -> dict:
         for target in entry["targets"]:
             if target.get("instant"):
                 target["editorMode"] = "code"
+    automatic = "publication" in recipe
+    extra_variables = []
+    if automatic:
+        automatic_selector = (
+            selected
+            + ',publisher_id="$publisher_id",configuration=~"${configuration:regex}"'
+        )
+        intrinsic = all(
+            p["view"] == "diagnostic"
+            for p in recipe["publication"]["policies"].values()
+        )
+        rows = []
+        position = 0
+
+        def row(title, children, number, collapsed):
+            nonlocal position
+            header = {
+                "id": number,
+                "type": "row",
+                "title": title,
+                "collapsed": collapsed,
+                "description": title
+                + ". Results and sampled telemetry have independent time semantics.",
+                "gridPos": {"x": 0, "y": position, "w": 24, "h": 1},
+                "panels": children if collapsed else [],
+            }
+            position += 1
+            for index, child in enumerate(children):
+                child["gridPos"] = {"x": 0, "y": position + index * 7, "w": 24, "h": 7}
+            rows.append(header)
+            if not collapsed:
+                rows.extend(children)
+                position += len(children) * 7
+
+        for channel, title, base in (
+            ("latest", "Latest results", 1000),
+            ("diagnostic", "Diagnostics and run status", 2000),
+        ):
+            entries = []
+
+            def automatic_panel(
+                name, label, unit="none", condition="", *, expression=None
+            ):
+                item = panel(
+                    base + len(entries) + 1,
+                    label,
+                    expression or f"course_{channel}_{name}{{{automatic_selector}}}",
+                    unit,
+                    "Completed job evidence. Original JSON retains full parameters and distributions.",
+                )
+                if name == "ended_at_seconds":
+                    item["targets"][0]["expr"] += " * 1000"
+                item["targets"][0]["expr"] += condition
+                item["targets"][0]["editorMode"] = "code"
+                item["fieldConfig"]["defaults"]["custom"] = {"minWidth": 50}
+                if expression:
+                    for field, width in (("configuration", 220), ("measurement", 250)):
+                        item["fieldConfig"]["overrides"].append(
+                            {
+                                "matcher": {"id": "byName", "options": field},
+                                "properties": [{"id": "custom.width", "value": width}],
+                            }
+                        )
+                fields = ["configuration", "role", "trial", "case"] + (
+                    ["measurement", "unit"] if expression else []
+                )
+                item["transformations"] = [
+                    {
+                        "id": "filterFieldsByName",
+                        "options": {
+                            "include": {"names": [*fields, "Value", "Value #A"]}
+                        },
+                    }
+                ]
+                for field in ("trial", "case"):
+                    item["fieldConfig"]["overrides"].append(
+                        {
+                            "matcher": {"id": "byName", "options": field},
+                            "properties": [{"id": "unit", "value": "string"}],
+                        }
+                    )
+                entries.append(item)
+
+            label = "Latest" if channel == "latest" else "Diagnostic"
+            metadata = panel(
+                base + 1,
+                label + " / publication",
+                "",
+                "none",
+                "Source Slurm job, completion time and publication generation for each configuration.",
+            )
+            metadata["targets"] = [
+                {
+                    "refId": ref,
+                    "expr": selected_expression(
+                        f"course_{channel}_{name}{{{automatic_selector}}}"
+                    )
+                    + (" * 1000" if name == "ended_at_seconds" else ""),
+                    "instant": True,
+                    "range": False,
+                    "format": "table",
+                    "editorMode": "code",
+                }
+                for ref, name in (
+                    ("A", "job_id"),
+                    ("B", "ended_at_seconds"),
+                    ("C", "generation"),
+                )
+            ]
+            metadata["transformations"] = [
+                {
+                    "id": "joinByField",
+                    "options": {"byField": "configuration", "mode": "outerTabular"},
+                },
+                {
+                    "id": "filterFieldsByName",
+                    "options": {
+                        "include": {
+                            "names": [
+                                "configuration",
+                                "Value #A",
+                                "Value #B",
+                                "Value #C",
+                            ]
+                        }
+                    },
+                },
+                {
+                    "id": "organize",
+                    "options": {
+                        "renameByName": {
+                            "Value #A": "Slurm job",
+                            "Value #B": "Completed at",
+                            "Value #C": "Generation",
+                        }
+                    },
+                },
+            ]
+            metadata["fieldConfig"]["overrides"] = [
+                {
+                    "matcher": {"id": "byName", "options": "Completed at"},
+                    "properties": [{"id": "unit", "value": "dateTimeAsIso"}],
+                }
+            ]
+            entries.append(metadata)
+            if channel == "diagnostic":
+                automatic_panel("stage_status", "Stage outcomes", condition=" == 1")
+                automatic_panel("native_reports", "Completed native reports")
+            if (channel == "latest" and not intrinsic) or (
+                channel == "diagnostic" and recipe["kind"] == "diagnostic"
+            ):
+                if recipe["metrics"]:
+                    names = "|".join(metric["name"] for metric in recipe["metrics"])
+                    automatic_panel(
+                        "measurements",
+                        label + " / measurements",
+                        expression=f'{{__name__=~"course_{channel}_({names})",{automatic_selector}}}',
+                    )
+                automatic_panel("correctness", label + " / correctness")
+                if recipe["publication"].get("controls"):
+                    names = "|".join(recipe["publication"]["controls"])
+                    automatic_panel(
+                        "controls",
+                        label + " / workload controls",
+                        expression=f'{{__name__=~"course_{channel}_control_({names})",{automatic_selector}}}',
+                    )
+            row(
+                title,
+                entries,
+                base,
+                intrinsic if channel == "latest" else not intrinsic,
+            )
+        comparison = [p for p in panels if all(t.get("instant") for t in p["targets"])]
+        telemetry = [
+            p for p in panels if not all(t.get("instant") for t in p["targets"])
+        ]
+        row("Selected comparison", comparison, 3000, True)
+        row("GPU and node telemetry", telemetry, 4000, False)
+        panels = rows
+        lookup = f'{{__name__=~"course_(latest|diagnostic)_generation",{selected}}}'
+        extra_variables = [
+            {
+                "name": "publisher_id",
+                "label": "Course installation",
+                "type": "query",
+                "datasource": DATASOURCE,
+                "query": f"label_values({lookup}, publisher_id)",
+                "includeAll": False,
+                "multi": False,
+                "refresh": 1,
+            },
+            {
+                "name": "configuration",
+                "label": "Experiment configuration",
+                "type": "query",
+                "datasource": DATASOURCE,
+                "query": f'label_values({lookup[:-1]},publisher_id="$publisher_id"}}, configuration)',
+                "includeAll": True,
+                "allValue": ".*",
+                "multi": False,
+                "current": {"text": "All", "value": "$__all"},
+                "refresh": 1,
+            },
+        ]
     return {
         "uid": "course-"
         + hashlib.sha256((course + "/" + lab).encode()).hexdigest()[:24],
         "title": recipe["title"],
         "tags": ["gpu-course", course, lab],
         "schemaVersion": 39,
-        "version": 3,
+        "version": 4 if automatic else 3,
         "editable": False,
         "timezone": "utc",
         "time": {"from": "now-1h", "to": "now"},
@@ -410,6 +621,7 @@ def dashboard(course: str, recipe: dict) -> dict:
                     "query": "small,large",
                     "current": {"text": "small", "value": "small"},
                 },
+                *extra_variables,
                 {
                     "name": "node",
                     "type": "query",
@@ -466,7 +678,11 @@ def main() -> None:
             **recipes["labs"],
         }.items():
             target = path.parent / "grafana" / (lab + ".json")
-            content = json.dumps(dashboard(course, recipe), indent=2) + "\n"
+            # Course folders are imported as bounded ConfigMap data. Whitespace
+            # adds no dashboard behavior and would exhaust the large-course budget.
+            content = (
+                json.dumps(dashboard(course, recipe), separators=(",", ":")) + "\n"
+            )
             if args.check:
                 if not target.is_file() or target.read_text() != content:
                     raise SystemExit(f"Stale dashboard: {target}")

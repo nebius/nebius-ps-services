@@ -6,7 +6,7 @@ For the tensor foundation, read [PyTorch for GPU Performance Engineering](../pyt
 
 The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
 
-Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
+Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. Reading Fundamentals through Lesson 12 prepares learners to complete Advanced Lab 02, verify its placement and correctness, then run Lab 08. This assignment does not require Optimization, a specialization, Advanced Lab 01 or Labs 03–07; shared preparation and fabric qualification remain required.
 
 Lab preparation creates private log directories before any `sbatch` submission; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
@@ -49,7 +49,7 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | 9 | Numerical precision and accelerated arithmetic | Choose numerical formats and identify actual Tensor Core execution | Lab 02 |
 | 10 | Arithmetic intensity and performance limits | Derive arithmetic intensity and an independent roofline performance bound | Lab 05 full roofline experiment |
 | 11 | GPU sharing and operational health | Distinguish supported sharing and health observations from configuration changes | Lab 12 |
-| 12 | GPU communication and distributed execution | Combine placement, network and collective evidence without scale overclaims | [Advanced Lab 02](../advanced-gpu-communication/reference/labs/02_collective_readiness.md); [Advanced Lab 08](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md) |
+| 12 | GPU communication and distributed execution | Combine placement, network and collective evidence without scale overclaims | Complete [Advanced Lab 02](../advanced-gpu-communication/reference/labs/02_collective_readiness.md) and verify success, then run [Advanced Lab 08](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md) |
 
 ## Readiness checkpoints
 
@@ -57,4 +57,4 @@ After Lesson 3, draw the CPU-to-device execution path and explain a trustworthy 
 
 ## Completion
 
-Complete the single-GPU labs through their supplied launchers. For distributed practice, move to [Advanced Lab 02: Verify the two-node H100 platform](../advanced-gpu-communication/reference/labs/02_collective_readiness.md), then [Advanced Lab 08: Measure a two-node NCCL all-reduce](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md). Keep observation, inference and unverified hypothesis separate.
+Complete the single-GPU labs through their supplied launchers. For Lesson 12's distributed practice, complete [Advanced Lab 02: Verify the two-node H100 platform](../advanced-gpu-communication/reference/labs/02_collective_readiness.md) successfully before [Advanced Lab 08: Measure a two-node NCCL all-reduce](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md), then return to complete Fundamentals. Keep observation, inference and unverified hypothesis separate.

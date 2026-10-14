@@ -12,9 +12,10 @@ project/
 `-- .gitignore
 ```
 
-Use the language specialist in standalone scope when no cross-language or
-cross-platform composition is needed. Do not invoke `scaffold-project` merely
-to wrap a single specialist.
+Use `scaffold-project` for new repositories or components, including a single
+language. For Python-only creation, assign a sole root unit at `.` and call the
+Python producer and readiness phase. Existing component maintenance stays with
+the language specialist.
 
 ## Modular Monolith
 
@@ -63,3 +64,9 @@ top-level directory.
 - Do not create empty directories; Git does not preserve them.
 - Do not create root `LICENSE`, `CHANGELOG.md`, Makefile, or editor configuration
   unless the approved lifecycle requires them.
+
+## Python-Only Root
+
+Use one Python materialization unit at `.` for ordinary root pyproject/src
+layout. It must be the sole unit. Do not create an artificial apps directory
+for a Python-only project. Multiple units remain disjoint nested directories.

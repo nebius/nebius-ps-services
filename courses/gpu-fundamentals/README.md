@@ -30,10 +30,15 @@ sbatch slurm/10_compatibility_stack.sbatch --workload small
 sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small
 ```
 
-At Lesson 12, use [Advanced Lab 02](../advanced-gpu-communication/reference/labs/02_collective_readiness.md)
-then [Advanced Lab 08](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md)
-for distributed practice. They require the advanced course's qualified
+After reading through Lesson 12, complete
+[Advanced Lab 02](../advanced-gpu-communication/reference/labs/02_collective_readiness.md),
+check its placement and correctness results, then run
+[Advanced Lab 08](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md).
+This assignment requires shared preparation and the advanced course's qualified
 sixteen-H100 fabric; two one-GPU TCP workers do not qualify that path.
+Optimization, a training or inference specialization, and Advanced Labs 01 and
+03–07 are not prerequisites for these two labs. Return here afterward to complete
+Fundamentals.
 
 ## Completion
 

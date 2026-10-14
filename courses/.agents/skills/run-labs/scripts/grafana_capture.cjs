@@ -83,6 +83,8 @@ async function captureComparison(session, config, q, capture) {
   assert.equal(live.dashboard.templating.list.find(x => x.name === 'profile').query, 'small,large');
   const query = new URLSearchParams({'var-workspace': q.workspace, 'var-profile': q.profile, 'var-gpu_node': '$__all', 'var-gpu': '$__all', from: q.from_ms, to: q.to_ms});
   await page.goto(origin + '/d/' + expected.uid + '?' + query, {waitUntil: 'domcontentloaded'});
+  const comparisonRow = expected.panels.find(p => p.type === 'row' && p.title === 'Selected comparison');
+  if (comparisonRow?.collapsed) await page.getByText('Selected comparison', {exact: true}).click();
   await page.getByText('Selected comparison generation', {exact: true}).waitFor({timeout: 30000});
   async function panel(title) {
     const loc = page.locator('section').filter({has: page.getByText(title, {exact: true})});

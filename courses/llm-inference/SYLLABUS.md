@@ -34,7 +34,7 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | Targeted local optimization | 11–13 | Compare attention, quantization and speculation |
 | Distributed placement | 14 | Explain model partitioning and its communication boundaries |
 | Integrated evaluation | 15–16 | Design benchmark campaigns and deliver a causal report |
-| Advanced parallel serving | 17 | Compare parallel generation and full sixteen-GPU server layouts |
+| Advanced parallel serving | 17 | Compare replicated and tensor-partitioned recurrent projections; explain the limits of this serving model |
 
 ## Lesson-by-lesson route
 

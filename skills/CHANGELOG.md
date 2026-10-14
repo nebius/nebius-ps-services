@@ -4,6 +4,14 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Route project/component creation, including Python-only projects, through
+  implicitly selectable scaffold-project under the original task authorization.
+  Keep existing Python maintenance direct and digest checks internal.
+- Add closed Python package/library, CLI, API and systemd candidate generation,
+  root-unit support, semantic binding and post-apply uv readiness with target
+  serialization, environment isolation and repeatable installed-wheel checks.
+  Keep static application distinct from dependency/environment readiness.
+
 - Use independent, fixed 10,800-second budgets for PR readiness, merge settlement,
   post-merge verification and release execution. Persist release verification
   deadlines across repeated checks and reruns; only explicit resume renews them.

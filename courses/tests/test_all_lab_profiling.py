@@ -67,13 +67,21 @@ def test_evidence_validator_rejects_misleading_wiring(defect, monkeypatch):
     elif defect == "wrong-dashboard":
         dashboard["uid"] = "another-lab"
     elif defect == "wrong-query":
-        dashboard["panels"][1]["targets"][0]["expr"] = (
-            'course_lab_duration_seconds{lab="other"}'
-        )
+        next(
+            p
+            for p in __import__("build_observability").walk_panels(dashboard["panels"])
+            if p["title"] == recipe["metrics"][0]["title"]
+        )["targets"][0]["expr"] = 'course_lab_duration_seconds{lab="other"}'
     elif defect == "wrong-unit":
-        dashboard["panels"][1]["fieldConfig"]["defaults"]["unit"] = "bytes"
+        next(
+            p
+            for p in __import__("build_observability").walk_panels(dashboard["panels"])
+            if p["title"] == recipe["metrics"][0]["title"]
+        )["fieldConfig"]["defaults"]["unit"] = "bytes"
     elif defect == "missing-command":
-        recipe["systems_command"] = recipe["systems_command"].replace("--profiler nsys", "")
+        recipe["systems_command"] = recipe["systems_command"].replace(
+            "--profiler nsys", ""
+        )
     elif defect == "false-exception":
         recipe["systems"]["applicable"] = False
     elif defect == "missing-view":
@@ -94,9 +102,7 @@ def test_evidence_validator_rejects_misleading_wiring(defect, monkeypatch):
     validator = load("validate_course_template")
     monkeypatch.setattr(validator, "ROOT", ROOT / course)
     with pytest.raises(SystemExit):
-        validator.validate_lab_evidence(
-            recipe, guide, dashboard, course
-        )
+        validator.validate_lab_evidence(recipe, guide, dashboard, course)
 
 
 @pytest.mark.parametrize("tool", ["none", "nsys"])
@@ -188,7 +194,9 @@ def test_goodput_capture_reaches_owned_server_and_is_not_published(
 
 
 def test_moved_nccl_launcher_uses_existing_lab():
-    launcher = (ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch").read_text()
+    launcher = (
+        ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch"
+    ).read_text()
     assert "labs/18_nccl_tests_report.py" not in launcher
     assert "labs/10_nccl_tests_report.py" in launcher
     assert (ROOT / "advanced-gpu-communication/labs/10_nccl_tests_report.py").is_file()

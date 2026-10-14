@@ -109,7 +109,7 @@ second writer. Preserve its advisory status and any enclosing workflow's gates.
   not need a complete solution design and `/plan`; use `ai-agent-design`,
   `app-stack`, or `ai-stack` directly according to the undecided layer.
 - Do not create repository or component scaffolding directly. A completed
-  design may emit an optional handoff for explicit `scaffold-project` use.
+  design may emit an optional handoff for `scaffold-project` under existing creation authority.
 - Do not use inside an active Agentic SDLC workflow unless the coordinator
   routes here explicitly. Use `sdlc-create-design` and `sdlc-create-plan` for
   SDLC-owned `docs/design.md` and locked feature plans.

@@ -21,33 +21,12 @@ or [Custom CUDA Kernels](custom-cuda-kernels/index.html); these specializations
 are independent. [Advanced Labs](advanced-gpu-communication/index.html)
 owns the multi-GPU, multi-node experiments.
 
-Where a course includes diagrams, they appear immediately after the passage
-they explain, within the owning lesson or practical guide.
-Practice identifies what the supplied experiment measures and labels conceptual
-comparisons or source extensions separately; each course glossary collects its
-taught terms and abbreviations.
-
-In the HTML editions, links to other courses, the Lab Guide and reference sites
-open in a new tab so you keep your place. Section links stay on the current page;
-results ZIP links download the file.
-
-Code comments appear in saturated burnt orange throughout the HTML editions, including
-complete lab sources. Selecting and copying code preserves the original text.
-
-Every course ends with one Where to Go Next, one A–Z Glossary, and then
-Official references when sources are used. Lessons and performance-tool guides share these course-wide
-sections; optional lesson References follow Mental model and come last.
-
-Practical Course guides collect getting started, environment, readiness checks,
-lab interpretation, a benchmark worksheet and safe-sharing guidance in the same
-order. Setup and submission procedures live in this shared Lab Guide; detailed
-commands stay with each lab. Reading-only courses keep their existing appendices.
-
 [Browse the courses catalog](index.html)
 
-Each practical course offers one combined Grafana dashboards, Small and Large
-results ZIP for comparison, plus a link to this lab setup guide. Use
-`sync-labs.sh` to copy the original lab scripts and runtime files to the cluster.
+Each practical course provides complete lab sources, commands and a combined
+Grafana dashboards, Small and Large results ZIP. Use the ZIP for comparison;
+use `sync-labs.sh` to copy runnable sources to the cluster. This guide owns shared
+setup, submission and access; each lab explains its experiment and results.
 
 ## How to set up the lab
 
@@ -55,8 +34,14 @@ results ZIP for comparison, plus a link to this lab setup guide. Use
 
 The browser edition is generated from this README and contains the same instructions.
 **Workstation** means your computer; **Login node** means after SSH. Slurm allocates
-GPU workers to execute workloads. Prepare the cluster once, then each course runtime
-you need. Commands below use Bash.
+GPU workers to execute workloads. Commands below use Bash and the default
+`$HOME/courses` destination on the login node; adjust that path if you selected
+another sync destination.
+
+For a new environment, follow setup in order. If the cluster and tools are
+already installed, [synchronize the sources](#synchronize-the-sources), prepare
+only the runtimes you need, then [run a lab](#how-to-run-the-labs). Optional
+Grafana publication needs its connection settings before preparation.
 
 ### Prepare your workstation
 
@@ -82,9 +67,9 @@ export COURSES_ROOT="$PWD"
 
 ### Create or select Soperator
 
-Soperator runs Slurm on Kubernetes. The five ordinary GPU courses use one full,
-non-MIG H100 per allocation. Prepare two one-H100 workers, or reuse the advanced
-cluster with one-GPU allocations. Advanced communication needs two eight-H100
+Soperator runs Slurm on Kubernetes. The five ordinary GPU courses use one full
+H100 per allocation, with Multi-Instance GPU (MIG) partitioning disabled. Prepare
+two one-H100 workers, or reuse the advanced cluster with one-GPU allocations. Advanced communication needs two eight-H100
 SXM workers, local NVLink/NVSwitch and active InfiniBand. TCP/IP alone does not
 qualify that route. Check quota and hardware availability before provisioning.
 
@@ -157,8 +142,8 @@ nebius-cxcli grafana import ./reference/grafana --recursive \
 
 In the wizard, select the installed local metrics datasource for
 `course-soperator-metrics`. The import saves dashboard declarations in the deployment
-project and installs them immediately. Add `--overwrite` only for an intentional
-update. Open the imported dashboards to inspect their contents. Repeat for other
+project and installs them immediately. After syncing changed dashboards, repeat
+the import with `--overwrite` for an intentional update. Open the imported dashboards to inspect their contents. Repeat for other
 courses with a separate `course-<course-name>` folder. Publishing measured values
 is a later step; empty panels do not prevent the first GPU check.
 
@@ -177,32 +162,61 @@ kubectl config current-context
 
 Use `./sync-labs.sh 'user@<login address>'` for another account or an explicit
 endpoint. See `./sync-labs.sh --help` for SSH key, port and sync-only options.
-Synchronization verifies transferred source before retiring known old setup
-entrypoints; locally modified old files and historical results are preserved.
 
-After SSH opens, continue with [Lab Preparation Scripts](#lab-preparation-scripts)
-to install the runtimes needed by your labs.
+After SSH opens, configure automatic publication below if you want Grafana results,
+then continue with [Lab Preparation Scripts](#lab-preparation-scripts) on the login node.
+
+### Configure automatic result publication
+
+For automatic Grafana results, configure monitoring before running the lab
+preparation scripts. This is optional: without these settings, setup succeeds
+and labs save their results locally.
+
+**Workstation, in a second terminal after synchronization:** the `regular-lab-setup.py monitoring`
+action discovers and verifies
+cxcli-owned monitoring services, datasource and routing. It installs nothing and
+writes private connection settings and a verification receipt. Choose a persistent
+lowercase learner identifier and a fresh output directory. Restore `COURSES_ROOT`,
+`CLUSTER_CONFIG`, `CLUSTER_TARGET`, `KUBECONFIG` and `CLUSTER_CONTEXT` from your
+setup notes in this new terminal before running the block.
+
+```bash
+export COURSE='gpu-fundamentals' # use the course you are preparing
+cd "$COURSES_ROOT/$COURSE"
+export COURSE_WORKSPACE='<persistent lowercase learner identifier>'
+export COURSE_SETUP_DIR="$(dirname "$CLUSTER_CONFIG")/course-monitoring/$CLUSTER_TARGET"
+uv venv --python 3.12 --seed "$HOME/.gpu-course-tools"
+"$HOME/.gpu-course-tools/bin/pip" install -r tools/profiling-requirements.txt
+"$HOME/.gpu-course-tools/bin/python" tools/regular-lab-setup.py monitoring \
+  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
+  --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
+  --workspace "$COURSE_WORKSPACE" --output-dir "$COURSE_SETUP_DIR"
+source "$COURSE_SETUP_DIR/laptop-environment.sh"
+scp "$COURSE_SETUP_DIR/environment.sh" '<user>@<login address>:courses/.course-environment.sh'
+```
+
+Match the sync account and SSH key/port overrides. If installation changes,
+rediscover into a fresh directory and replace the copied worker environment.
+Keep connection files private.
+
+**Login node:** run the appropriate [lab preparation script](#lab-preparation-scripts).
+All five scripts initialize publication after successful preparation when these
+settings are present; otherwise they report **unconfigured** and keep local results.
+Initialization does not verify live Grafana health. If you copy settings later,
+rerun the same preparation command with the same lab and variant selections.
+Reruns preserve installations, publication identity, ordering and results;
+invalid settings fail without resetting history.
 
 ## Lab Preparation Scripts
 
-A **lab runtime** is the Python environment, libraries, tools and model files a
-lab needs to execute. The preparation scripts build these runtimes for you on
-the **login node**, before you submit work to Slurm. You do not need to assemble
-a separate package-installation recipe for each lab. Jobs later load the saved
-runtime automatically; they never install their own dependencies.
+A **lab runtime** contains the Python environment, libraries, tools and model
+files needed by a lab. Prepare it on the **login node** before submitting work;
+jobs restore the saved runtime and never install dependencies.
 
-Start with regular preparation, then prepare the specialized labs you intend
-to run. You do not need to run all five scripts to begin the courses. The table
-shows software preparation groups across the complete catalog, not a required
-learning order or a promise that your cluster can run every lab.
-
-| Preparation group | Default labs | When to use it |
-| --- | ---: | --- |
-| [Regular labs](#regular-labs) | 79 | Ordinary Python experiments across the practical courses |
-| [CUDA labs](#cuda-labs) | 13 | Compiling and running the Custom CUDA Kernels labs |
-| [Communication labs](#communication-labs) | 10 | Specialized fabric, collective and distributed serving experiments |
-| [Serving labs](#serving-labs) | 7 | Running real inference engines and their benchmark clients |
-| [Transformer Engine lab](#transformer-engine-lab) | 1 | Training Lab 22's floating-point 8-bit experiments |
+Use the lookup below, then select the lab you intend to run. Regular preparation
+covers 79 default labs; CUDA, communication, serving and Transformer Engine
+preparation cover 13, 10, 7 and 1 respectively. These are software groups, not a
+learning order or a guarantee that your hardware supports every lab.
 
 ### Find your course and lab number
 
@@ -234,157 +248,26 @@ activity in the lab. Default preparation does not include these containers.
 
 Use the synchronized sources on the supported **Ubuntu 24.04 x86_64 login
 node**, with Python 3.12 and storage shared with workers at the same path.
-Normal `sync-labs.sh` prepares Python and opens this shell. If you used
-`--sync-only`, Python has not been bootstrapped by that command.
-Downloads need network access and enough shared storage for packages, model
-weights and builds. Missing selected operating-system packages require root
-or passwordless sudo; ask the cluster owner to provide those prerequisites if
-your account cannot install them.
+Normal `sync-labs.sh` prepares Python and opens SSH; `--sync-only` does neither.
+Downloads and builds need network access and enough shared storage for packages,
+model weights and temporary files. Missing selected operating-system packages
+require root or passwordless sudo; otherwise ask the cluster owner to install them.
 
-The scripts install only the prerequisites needed by the selected, applicable
-runtimes. Cluster drivers, system CUDA, Slurm, Nsight and Grafana are managed
-through the earlier cluster setup. Native preparation does not require
-Apptainer, the container runtime used for optional exercises.
-
-Preparation inspects configured Slurm capacity without allocating workers.
-Unsupported subsets are reported as **skipped**; unknown hardware remains
-unverified. A real installation or configuration error returns a nonzero exit
-status. **Setup complete means software is installed and configured.** It does
-not mean a GPU workload, model warmup, network fabric or profiler capture has
-passed. The scripts submit no GPU jobs; those checks happen later inside lab
-allocations.
-
-### Regular labs
-
-`regular-lab-setup.py` prepares the 79 labs that use the ordinary course Python
-runtimes. This includes the regular experiments in GPU Fundamentals,
-GPU Performance Optimization, LLM Training and LLM Inference, plus the
-communication-course labs that do not need specialized builds.
-
-It installs isolated Python environments and their pinned dependencies,
-including PyTorch where required, shared result-publication utilities and the
-pinned Qwen2.5-0.5B model snapshot used by the small-model exercises. A snapshot
-is one fixed revision of the model files; `0.5B` means about half a billion
-parameters. It also creates private result and log directories for practical
-labs, including the directories Slurm must open before a batch script starts.
-It does not install a CUDA compiler, container images or specialized
-communication, serving or Transformer Engine runtimes.
-
-**Login node — no arguments are needed:**
-
-```bash
-python3.12 "$HOME/courses/tools/regular-lab-setup.py"
-```
-
-Run this after synchronization before beginning regular labs. Its separate
-`monitoring` action discovers existing monitoring connections from the
-workstation; `organize-history` makes verified copies of older results.
-Those actions are explained in [publishing a comparison](#publish-a-measured-comparison)
-and [keeping existing results](#keep-existing-results).
-
-### CUDA labs
-
-`cuda-lab-setup.py` prepares all 13 Custom CUDA Kernels labs. These exercises
-compile CUDA C++ source into GPU executables, so they need a compiler and
-native libraries in addition to Python. The script installs a managed native
-CUDA **13.3.0** toolkit, the pinned CUTLASS source used for library comparisons,
-Python support and build tools, then compiles the selected lab targets.
-CUTLASS supplies reusable GPU linear-algebra building blocks.
-
-```bash
-python3.12 "$HOME/courses/tools/cuda-lab-setup.py" --all
-```
-
-The toolkit lives in the course-managed installation and does not replace the
-cluster driver or system CUDA. Compilation occurs during preparation without
-GPU jobs. Correctness, device compatibility and sanitizer checks still run in
-the labs. After editing a kernel, rerun preparation for that lab to rebuild it.
-The optional CUDA container teaching exercise needs a separate explicit
-selection below.
-
-### Communication labs
-
-`communication-lab-setup.py` prepares the 10 advanced labs that need native
-communication or distributed-serving components. Communication libraries move
-data among GPUs and nodes; their benchmarks also depend on the interconnect
-between those devices. The other 24 labs in Advanced Labs belong to regular
-preparation, so the course name alone does not determine the script to use.
-
-Depending on the selected lab, the script prepares bandwidth/fabric tools,
-NVIDIA Collective Communications Library (NCCL) tests for coordinated GPU
-transfers, NVIDIA Inference Xfer Library (NIXL) for inference data movement,
-Megatron Bridge for distributed training, or Dynamo for distributed serving.
-It includes supporting communication libraries and coordination services only
-where needed. Selecting one lab avoids unrelated specialized builds.
-
-```bash
-python3.12 "$HOME/courses/tools/communication-lab-setup.py" --all
-```
-
-The relevant Dynamo labs share one pinned Qwen3-8B snapshot, about eight billion
-parameters; it is not downloaded for unrelated communication labs. These labs
-need the advanced cluster described earlier. Preparation can report hardware
-skips on a smaller cluster. Installing software does not establish active
-InfiniBand links, GPU-to-GPU transfer paths or multi-node correctness; follow
-the owning lab's fabric and runtime checks.
-
-### Serving labs
-
-`serving-lab-setup.py` prepares seven LLM Inference labs that run an actual
-inference engine. A **serving engine** loads model weights and executes token
-generation; a **benchmark client** sends requests and measures the service's
-responses. These need different dependencies from the simpler mechanics labs.
-
-The script installs native **vLLM 0.28.0** with its matching vendor dependencies,
-**AIPerf 0.12.0** where the selected benchmark uses it, and the required client
-and model files. vLLM and AIPerf use separate isolated environments. The job
-launchers select the correct executables and give each job private writable
-caches, so you do not need to activate or merge these environments yourself.
-
-```bash
-python3.12 "$HOME/courses/tools/serving-lab-setup.py" --all
-```
-
-Serving reuses the same pinned Qwen2.5-0.5B snapshot as regular preparation.
-Only the real speculative-serving lab, `33_speculative_engine_client`, adds
-the 1.5B model needed for its larger-model comparison. Inference Lab 16,
-`16_model_artifact_audit`, belongs to regular preparation: the lab retrieves
-model metadata without downloading weights and needs Hub connectivity when run.
-The default serving route is native; the optional TensorRT-LLM variant requires
-its own container selection. Server startup, warmup, request correctness and
-performance measurement happen in the allocated lab job.
-
-### Transformer Engine lab
-
-`transformer-engine-lab-setup.py` prepares LLM Training Lab 22,
-`22_transformer_engine_fp8`. Transformer Engine provides accelerated neural
-network layers and manages lower-precision execution. The lab studies
-**floating-point 8-bit (FP8)** arithmetic and compares its numerical behavior
-with a higher-precision reference.
-
-The script installs an isolated **Transformer Engine 2.19.0** runtime with its
-matching PyTorch environment and the native CUDA/build dependencies needed by
-the extension. Keeping it isolated allows ordinary training labs to retain
-their own environment.
-
-```bash
-python3.12 "$HOME/courses/tools/transformer-engine-lab-setup.py" --all
-```
-
-Run the lab afterward to check supported hardware, FP8 execution and numerical
-agreement. Installation alone does not establish those results.
+Preparation checks configured Slurm capacity without allocating workers. It
+reports unsupported subsets as **skipped** and leaves unknown hardware unverified.
+Installation or configuration errors return a nonzero exit status. **Setup
+complete means software preparation, not a passed GPU, model, fabric or profiler
+check.** Those checks run later in lab allocations. Drivers, Slurm, Nsight and
+Grafana remain cluster-managed; native preparation needs no Apptainer containers.
 
 ### Choose one lab or preview the work
 
-A specialized script run **without arguments lists its supported labs and
-installs nothing**. Choose one selector: `--lab <lab-id>`,
-`--launcher <filename.sbatch>`, or `--all`. Lab IDs omit the `.py` extension;
-launcher names include `.sbatch`. Use a course-qualified ID such as
-`custom-cuda-kernels/01_vector_add` if needed to distinguish identical names.
-The counts above apply to the complete catalog; a standalone course copy lists
-and prepares only its available labs, using its own `tools/` paths.
+Choose `--lab <lab-id>`, `--launcher <filename.sbatch>` or `--all`. Lab IDs omit
+the source extension; launcher names include `.sbatch`. Use a course-qualified
+ID such as `custom-cuda-kernels/01_vector_add` if names overlap.
 
-For example, list the CUDA labs, preview Lab 01's dependencies, then prepare it:
+A specialized script with **no arguments lists supported labs and installs
+nothing**. For example, list CUDA labs, preview Lab 01, then prepare it:
 
 ```bash
 python3.12 "$HOME/courses/tools/cuda-lab-setup.py"
@@ -392,43 +275,125 @@ python3.12 "$HOME/courses/tools/cuda-lab-setup.py" --lab 01_vector_add --plan
 python3.12 "$HOME/courses/tools/cuda-lab-setup.py" --lab 01_vector_add
 ```
 
-`--plan` is read-only: it shows selected dependencies without installation or
-platform checks. Regular preparation also supports `--plan`. A plan therefore
-does not prove storage, permissions or hardware readiness. `--all` selects the
-group's normal default experiments; it excludes optional experiments. Select a
-lab with the same `--experiment`, `--profiler` and `--device` choices you intend
-to run. For `--profiler all`, preparation unions the supported diagnostic
-runtimes without installing unrelated optional experiments. Use the course and
-lab number in the lookup above to choose the preparation group.
+`--plan` is read-only and performs no platform checks; it does not prove readiness.
+Regular preparation also supports selectors and `--plan`, but **no arguments
+prepares its whole group**. `--all` selects default experiments and excludes
+optional containers. A standalone course copy uses its own `tools/` directory
+and lists only its available labs.
+
+Match preparation to the job's `--experiment`, `--profiler` and `--device`
+selections; sanitizer experiments also need `--sanitizer`. For example:
+
+```bash
+python3.12 "$HOME/courses/tools/regular-lab-setup.py" \
+  --lab gpu-fundamentals/01_cpu_gpu_crossover --profiler all
+```
+
+Here `--profiler all` prepares the supported diagnostic runtimes. It does not
+run a capture or install unrelated optional experiments.
+
+### Regular labs
+
+Prepares ordinary Python experiments across the practical courses, including
+24 Advanced Labs that need no specialized build. It installs isolated pinned
+dependencies, PyTorch where required, shared publication tools and the fixed
+Qwen2.5-0.5B model snapshot used by small-model exercises. `0.5B` means about
+half a billion parameters.
+
+**Login node — prepare the whole regular group:**
+
+```bash
+python3.12 "$HOME/courses/tools/regular-lab-setup.py"
+```
+
+All preparation groups create private result and log directories before Slurm
+needs them. Reruns preserve existing files, tighten safe owned directories to
+`0700`, and reject symlinks, foreign ownership or shared-write directories.
+Regular preparation does not install specialized compilers or engines. Its
+separate `monitoring` and `organize-history` actions are covered under
+[publication setup](#configure-automatic-result-publication) and
+[keeping results](#keep-existing-results).
+
+### CUDA labs
+
+Prepares all 13 Custom CUDA Kernels labs: a managed native CUDA toolkit,
+build tools, Python support and pinned CUTLASS GPU linear-algebra sources.
+It compiles selected CUDA C++ targets without GPU jobs and does not replace
+the cluster driver or system CUDA.
+
+```bash
+python3.12 "$HOME/courses/tools/cuda-lab-setup.py" --all
+```
+
+Prefer `--lab` for one exercise. Rerun it after editing a kernel to rebuild;
+correctness, device compatibility and sanitizer checks still run in the lab.
+The optional container exercise needs its explicit selection below.
+
+### Communication labs
+
+Prepares 10 specialized Advanced Labs. Depending on the selection, it builds
+fabric/bandwidth tools, NVIDIA Collective Communications Library (NCCL) tests,
+NVIDIA Inference Xfer Library (NIXL), Megatron Bridge distributed-training tools,
+or Dynamo distributed serving with its coordination services.
+
+```bash
+python3.12 "$HOME/courses/tools/communication-lab-setup.py" --all
+```
+
+Prefer `--lab` to avoid unrelated builds. Relevant Dynamo labs share one pinned
+Qwen3-8B model snapshot, about eight billion parameters. Advanced experiments
+need the two eight-H100 workers described above; a smaller cluster may produce
+hardware skips. Software installation does not qualify InfiniBand, GPU transfer
+paths or multi-node correctness.
+
+### Serving labs
+
+Prepares seven LLM Inference labs with native vLLM for model execution,
+AIPerf where benchmarking requires it, and the required clients and model files.
+The engine and benchmark tools use separate pinned environments; launchers choose
+their executables and private caches automatically.
+
+```bash
+python3.12 "$HOME/courses/tools/serving-lab-setup.py" --all
+```
+
+Serving reuses regular preparation's Qwen2.5-0.5B snapshot; Lab 33 adds the 1.5B
+model for speculative serving. Lab 16's metadata audit belongs to **regular**
+preparation and needs Hub access at execution time, without downloading weights.
+Server startup, warmup and request correctness are checked in the allocated job.
+TensorRT-LLM is an optional container variant, not part of `--all`.
+
+### Transformer Engine lab
+
+Prepares Training Lab 22, `22_transformer_engine_fp8`, with an isolated
+Transformer Engine/PyTorch runtime and its native CUDA build dependencies.
+The lab compares floating-point 8-bit (FP8) execution with a higher-precision
+reference; ordinary training labs keep their own environment.
+
+```bash
+python3.12 "$HOME/courses/tools/transformer-engine-lab-setup.py" --all
+```
+
+Run the lab afterward to verify hardware support, FP8 execution and numerical
+agreement. Installation alone does not establish those results.
 
 ### Repeat or repair preparation
 
-All five scripts share one installation store, download cache and lock under
-`$HOME/courses/.runtime`. Identical pinned model snapshots are shared rather
-than downloaded for each environment. Installation records let the scripts
-validate and reuse completed components. Run one preparation command at a time;
-a concurrent setup reports that another setup holds the lock.
+All five scripts share `.runtime` under the synchronized root: an installation
+store, download/model cache and one setup lock. Run one preparation command at a
+time. Valid completed components are reused, including shared model snapshots.
 
-Rerun the relevant command after synchronizing changed labs, editing compiled
-source, moving the checkout or repairing an interrupted installation. Results,
-logs and previous complete installations are preserved. Running regular setup
-also preserves specialized installations. Jobs restore their own Python and
-library paths, including when switching between independent checkouts; no shell
-profile edits are needed.
+Rerun the relevant command after syncing changes, editing compiled source,
+moving the checkout or repairing an interrupted installation. Existing results,
+logs and other runtimes are preserved; no shell profile edits are needed.
+If a job reports a missing or stale runtime, run the exact preparation command
+in its error on the login node, then submit a new job.
 
-Private installation logs are under `.runtime/setup-logs/`. If package planning
-fails, inspect the named `system-packages-plan.log` or `apptainer-plan.log` for
-the package manager's dependency or repository error. A development package
-may require a different library version from the one already installed; ask
-the cluster administrator to align the package sources. Setup does not silently
-downgrade libraries or replace repository snapshots. Remove private repository
-addresses and credentials before sharing an error excerpt.
-
-Cancellation stops ordinary downloads and builds, but waits for an active
-system-package transaction to finish before releasing the lock. Rerun the same
-command after the interruption is resolved. If a job reports a missing or stale
-runtime, run the exact preparation command in that error on the login node,
-then submit a new job.
+Inspect the named log in `.runtime/setup-logs/` on failure. Package dependency
+or repository conflicts need the cluster owner's repair; setup does not silently
+downgrade libraries. Cancellation waits for an active system-package transaction
+to finish before releasing the lock. Remove credentials and private addresses
+before sharing an error excerpt.
 
 ### Optional container exercises
 
@@ -445,191 +410,150 @@ python3.12 "$HOME/courses/tools/communication-lab-setup.py" --launcher dynamo_di
 ```
 
 Only these selections prepare Apptainer and cached images. Image creation runs
-without GPUs on the login node; the lab runner later resolves the recorded
-immutable image identity and enables GPU access inside an allocation. Container
-execution, device isolation and profiler access still need the optional lab's
-checks.
-
-In a privileged root Soperator jail, setup uses a private mount namespace rooted
-at the existing jail, preserving shared paths and leaving other sessions unchanged.
-It requires existing `CAP_SYS_ADMIN` and `CAP_SYS_CHROOT` capabilities and Linux
-namespace/pivot support; it grants no privileges and retains Apptainer's isolation
-checks. A constrained jail needs an administrator-provided supported session.
-Image-build scratch files use `.runtime/cache/apptainer-tmp` on shared storage,
-which needs room for uncompressed images. Compression is limited to a 1 GiB
-buffer budget and two processors to fit smaller login containers.
+on the login node without GPUs; jobs use the recorded immutable image identity.
+Allow shared storage for uncompressed images. A privileged root Soperator jail
+needs existing mount-namespace and chroot capabilities; a constrained jail needs
+an administrator-provided supported session. Preparation grants no privileges.
+Worker device isolation, nested-container support and profiler access still
+require the optional lab's checks.
 
 ## How to run the labs
 
 ### Check basic GPU execution
 
-**Login node:** inspect the real partitions. An asterisk marks the default;
-partition membership does not itself request a GPU. Allocate one GPU explicitly.
-Add `--partition=<name>` if your site needs it.
+**Login node:** inspect the partitions and request one GPU explicitly. An asterisk
+marks the default partition; add `--partition=<name>` to `srun` or `sbatch` if
+required by your site.
 
 ```bash
 sinfo --format='%P %a %D %G'
 srun --nodes=1 --ntasks=1 --gres=gpu:1 nvidia-smi
-source /etc/profile.d/99-nsight.sh
-nsys --version
-ncu --version
 ```
 
-`nvidia-smi` shows the NVIDIA driver and the CUDA level it supports.
-`nvcc --version`, when installed, shows the **compiler toolkit**. PyTorch has its
-own CUDA build version. These need compatibility, not identical numbers. A missing
-compiler does not prevent a prebuilt PyTorch wheel from running. Do not upgrade
-Soperator's CUDA/driver stack with a generic toolkit install; it belongs to the
-supported cluster images. See [NVIDIA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
-and [Soperator limitations](https://github.com/nebius/soperator/blob/main/docs/limitations.md).
-
-With the Fundamentals runtime prepared, run its compatibility script.
-`labs/10_compatibility_stack.py` records:
-
-- PyTorch's version and the CUDA version it was built against.
-- The NVIDIA driver version from `nvidia-smi`.
-- The CUDA compiler release from `nvcc`, if installed.
-- GPU architectures supported by the PyTorch build.
-
-It executes a tiny GPU tensor operation and prints the result JSON path. It does
-not compile an extension or prove profiler, container or fabric readiness.
+With regular preparation complete, submit the compatibility lab through its
+normal launcher:
 
 ```bash
 cd "$HOME/courses/gpu-fundamentals"
-srun --nodes=1 --ntasks=1 --gres=gpu:1 bash -c '
-  source tools/course_env.sh 10_compatibility_stack --lab
-  exec "$COURSE_PYTHON" labs/10_compatibility_stack.py --workload small
-'
+sbatch slurm/10_compatibility_stack.sbatch --workload small
 ```
 
-A successful operation and passing correctness fields establish basic GPU execution
-in this runtime. Full qualification appears below when you need profiling or
-monitored comparisons.
+Use the returned job ID and the [inspection steps below](#select-a-course-and-submit-a-job),
+with `10_compatibility_stack` as the lab ID. The lab records PyTorch, driver,
+CUDA build/compiler versions and supported GPU architectures, then checks a tiny
+GPU tensor operation. Passing correctness establishes basic GPU execution in
+that runtime; it does not qualify profilers, containers or the fabric.
+
+`nvidia-smi` reports the driver's supported CUDA level; `nvcc --version` reports
+the compiler toolkit, when installed; PyTorch has its own CUDA build version.
+They need compatibility, not identical numbers. A prebuilt PyTorch wheel does
+not require a compiler. Do not replace Soperator's CUDA/driver stack with a
+generic toolkit install; see [NVIDIA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
+and [Soperator limitations](https://github.com/nebius/soperator/blob/main/docs/limitations.md).
 
 ### Select a course and submit a job
 
-**Login node:** select the course directory. Lab numbers identify files; follow
-the syllabus for their order. Each launcher restores its own prepared runtime.
+**Login node:** work from the course directory. Follow the course's learning
+route; lab numbers identify files rather than prerequisite order.
 
 ```bash
 export COURSE='gpu-fundamentals'
 cd "$HOME/courses/$COURSE"
 ```
 
-Each lab shows its complete source, an optional teaching diagram, and two short
-submission commands. Submit from the course directory selected above. Slurm
-inherits that directory; the launcher's `#SBATCH` directives supply output/error
-paths and reserve its largest supported allocation. Each `srun` step uses only
-its declared resources, so a small execution can leave some allocated GPUs idle.
-Preparation creates the private parent directories before submission.
+Each lab shows its complete source and normal/profiling submissions. Launchers
+restore the prepared runtime; their `#SBATCH` directives select logs and reserve
+the largest supported allocation. Each `srun` step uses its declared resources,
+so some allocated GPUs can remain idle. Preparation creates log directories
+before submission.
 
 ```bash
-# Normal experiment
+# Normal experiment: use its unprofiled measurements
 sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small
-# Supported diagnostics, Systems then Compute
+# Separate diagnostic run: supported Systems then Compute captures
 sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small --profiler all
 ```
 
-`<JOB_ID>` in each lab means the number returned by its corresponding submission.
-Wait for that job to finish before reading results. Submission alone is not
-completion; `sacct` is authoritative for scheduler state.
+`--workload small|large` chooses the lab's workload preset. `--profiler all`
+runs supported diagnostic stages, **not the normal benchmark**; an inapplicable
+profiler is recorded as skipped. Use `--profiler nsys` or `--profiler ncu` for a
+single supported capture. Inspect the normal run before investigating it, then
+repeat an unprofiled run to evaluate a change.
+
+Each submission returns its own job ID. Submission is not completion: use
+`squeue` for queue progress and `sacct` for job/step state and exit codes.
+After the selected job finishes, inspect its summary:
 
 ```bash
-sacct -j <JOB_ID> --format=JobID,State,ExitCode
-cat results/01_cpu_gpu_crossover/jobs/<JOB_ID>/result.json
+JOB_ID='<job ID returned by sbatch>'
+sacct -j "$JOB_ID" --format=JobID,State,ExitCode
+cat "results/01_cpu_gpu_crossover/jobs/$JOB_ID/result.json"
 ```
 
-The JSON records the requested selection, actual scope, stage outcomes,
-correctness, measured data and native-report paths. Stages can be completed,
-failed, skipped or unstarted. An interrupted job can leave an incomplete record.
-Invalid JSON or JSON larger than the reader's 8 MiB limit fails the stage and
-preserves the original file. Fabric stages that use every allocated node report
-their actual node/task counts; fixed-size stages retain their own scope.
-Inspect `results/LAB/logs/JOB_ID.out` and `.err`, then the affected stage's logs
-when a run fails. Retry with a fresh job ID after fixing the reported cause.
+Use the matching lab ID for another job. `result.json` records requested and
+actual scope, stage outcomes, correctness, measurements, report paths and separate
+publication status. Require successful scheduler completion **and** passing lab
+checks. Missing or incomplete results are not a pass.
 
-Original measurement JSON, raw output and reports remain under
-`results/LAB/jobs/JOB_ID/stages/STAGE/`. The combined `result.json` is a reading
-summary. For publication, select eligible original unprofiled measurements;
-profiling timings and the combined document are not benchmark evidence.
-The [GPU Performance Tools reference](gpu-performance-tools/index.html) explains
-profiler selection, report inspection and diagnostic scope.
+On failure, inspect `results/LAB/logs/JOB_ID.out` and `.err`, then the affected
+stage under `results/LAB/jobs/JOB_ID/stages/STAGE/`. Keep those files and submit
+a fresh job after repair. Original measurement JSON and native reports remain
+in the stage directories; the combined summary and profiler timings are not
+benchmark-publication inputs.
 
-Optional workflows use `--experiment`: `trials` for the three capstones,
-`two-node` for distributed scaling, `aiperf` for streaming-client benchmarking,
-`trtllm` for the engine-profile container, and `sanitizer` for CUDA checks.
-Only the owning labs accept these values. Sanitizer also requires
-`--sanitizer memcheck|racecheck|initcheck|synccheck` and cannot combine with Nsight.
-Learning/inference basics retain `--device cpu|cuda`. Put overlapping program
-options after `--`; explicit device or topology choices must match the capture.
+Use optional selections only where the lab documents them:
 
-Some fabric experiments require qualified NIC names or a same-workload reference
-checkpoint. Supply the named variables used by their commands (`SERVER_HCA`,
-`CLIENT_HCA`, `TRAINING_REFERENCE` or `CONTEXT_REFERENCE`) from the prepared
-experiment. Reference checkpoints come from the same lab's `--reference-only`
-run, with its printed `final-weights.pt` path; they are not arbitrary model
-weights. Missing inputs fail clearly. Preparation and troubleshooting belong
-here; the source listing describes each experiment's checks.
+| Selection | Purpose |
+| --- | --- |
+| `--experiment trials` | Independent trials in the three capstones |
+| `--experiment two-node` | Distributed-scaling variant |
+| `--experiment aiperf` | Streaming-client benchmark |
+| `--experiment trtllm` | Engine-profile container variant |
+| `--experiment sanitizer --sanitizer memcheck` | CUDA check; alternatives are `racecheck`, `initcheck`, `synccheck`; cannot combine with Nsight |
+| `--device cpu` or `--device cuda` | Learning/inference basics where supported |
+
+Put program options after `--` when they overlap launcher options, and match
+explicit device/topology choices to the capture. Fabric labs may also require
+qualified `SERVER_HCA`/`CLIENT_HCA` interfaces or `TRAINING_REFERENCE`/`CONTEXT_REFERENCE`
+checkpoints. Follow the owning lab: a checkpoint must come from its matching
+`--reference-only` run and printed `final-weights.pt`, not arbitrary model weights.
 
 ### Keep existing results
 
-New jobs write to `results/LAB/jobs/JOB_ID/`, with scheduler logs under
-`results/LAB/logs/`. Existing results, reports, screenshots and published bundles
-remain unchanged. To organize attributable older runtime files, run this from
-the course directory:
+New jobs use `results/LAB/jobs/JOB_ID/` and `results/LAB/logs/`; earlier results,
+reports and published bundles remain unchanged. Optional history organization,
+run from the course directory, makes verified copies without moving originals:
 
 ```bash
 python3.12 tools/regular-lab-setup.py organize-history --course-root "$PWD"
 ```
 
-It creates verified copies under `results/history/`, leaves every original in
-place, reports files whose lab/job cannot be established, and refuses conflicting
-copies. History is never selected as evidence of a fresh run.
-Reports are copied and hashed in chunks. JSON metadata inspection is limited to
-8 MiB; larger files need filename-based attribution or remain unresolved.
+Copies go under `results/history/`. The command reports unattributed files and
+rejects conflicts. History never counts as evidence of a fresh run.
 
-### Publish a measured comparison
+### Publish lab results
 
-Original result JSON files retain the measurements. `publish_results.py` validates
-an allowed pair of unprofiled results, serializes its selection to Pushgateway and
-verifies the published generation. VMAgent scrapes those metrics and native GPU/node
-exporters into local VictoriaMetrics; Grafana queries that datasource. Sampled
-telemetry provides context; unprofiled benchmark timers measure the experiment.
+With [monitoring configured](#configure-automatic-result-publication) before
+preparation, normal `sbatch` jobs publish eligible results automatically.
+`publish_results.py` validates original records and sends declared metrics to
+Pushgateway; VMAgent scrapes them into local VictoriaMetrics for Grafana.
+Unprofiled benchmark timers measure the experiment; sampled GPU/node telemetry
+provides context.
 
 ![Course measurements and GPU telemetry flowing to Grafana](docs/grafana.png)
 
 Arrows show data flow. VMAgent initiates scrapes; Grafana initiates queries.
 
-**Workstation, once before publishing:** the `regular-lab-setup.py monitoring`
-action discovers and verifies
-cxcli-owned monitoring services, datasource and routing. It installs nothing and
-writes private connection settings and a verification receipt. Choose a persistent
-lowercase learner identifier and a fresh output directory.
+The job's `result.json` records publication separately from execution. Missing
+monitoring or failed publication does not invalidate a benchmark. Acknowledged
+writes may appear later if readback was not confirmed. Set `COURSE_AUTO_PUBLISH=0`
+in the submitted environment to disable automatic publication. All courses in
+one prepared root share an installation identity and ordering state.
 
-```bash
-export COURSE='gpu-fundamentals' # use the course you are preparing
-cd "$COURSES_ROOT/$COURSE"
-export COURSE_WORKSPACE='<persistent lowercase learner identifier>'
-export COURSE_SETUP_DIR="$(dirname "$CLUSTER_CONFIG")/course-monitoring/$CLUSTER_TARGET"
-uv venv --python 3.12 --seed "$HOME/.gpu-course-tools"
-"$HOME/.gpu-course-tools/bin/pip" install -r tools/profiling-requirements.txt
-"$HOME/.gpu-course-tools/bin/python" tools/regular-lab-setup.py monitoring \
-  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
-  --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
-  --workspace "$COURSE_WORKSPACE" --output-dir "$COURSE_SETUP_DIR"
-source "$COURSE_SETUP_DIR/laptop-environment.sh"
-scp "$COURSE_SETUP_DIR/environment.sh" '<user>@<login address>:courses/.course-environment.sh'
-```
-
-Match the sync account and SSH key/port overrides. If installation changes,
-rediscover into a fresh directory and replace the copied worker environment.
-Keep connection files private.
-
-`verify_monitoring.py` checks current services against the receipt, requires one
-healthy results scrape and fresh telemetry for all GPUs on both workers. It briefly
-opens local forwards; it does not install or repair monitoring.
-In a new workstation terminal, restore the connection settings and select the
-course's checkout directory before verification. Use the same course you prepared:
+**Workstation, when checking monitoring:** `verify_monitoring.py` checks services
+against the receipt, one healthy results scrape and fresh telemetry for all GPUs
+on both workers. It opens temporary local forwards but installs or repairs
+nothing. Restore the settings and course directory in a new terminal:
 
 ```bash
 export COURSE_SETUP_DIR='<absolute setup directory>'
@@ -642,20 +566,49 @@ cd "$COURSES_ROOT/$COURSE"
   --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT"
 ```
 
-**Login node:** publication dependencies were installed by runtime preparation.
-The lab's command loads its runtime and the existing private
-`$HOME/courses/.course-environment.sh` worker settings. The no-argument preparation command does not
-discover monitoring services or transfer workstation credentials.
+**Login node, to retry publication for a registered job:** select the matching
+course, restore its runtime and use the exact original job ID.
 
-Use the lab's publication command and two exact JSON paths. The expected generation
-is `0` initially; afterward use the reviewed current selection generation. Keep
-original files if publication fails and inspect its cause. The publisher rejects
-invalid comparisons, failed correctness and unqualified runtimes.
+```bash
+cd "$HOME/courses/gpu-fundamentals"
+source tools/course_env.sh 01_cpu_gpu_crossover --lab
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_cpu_gpu_crossover --job JOB_ID
+```
+
+Retries preserve run order and cannot replace a newer successful result. Keep
+the originals and private publication journal. Jobs from before initialization
+cannot be replayed as new latest runs.
+
+For a deliberate baseline/candidate selection, use two eligible original,
+unprofiled JSON files from the same lab. The generation is `0` initially;
+afterward use the reviewed current selection generation:
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_cpu_gpu_crossover \
+  --baseline '<original baseline JSON>' --candidate '<original candidate JSON>' \
+  --expected-generation '<reviewed generation>'
+```
+
+Invalid comparisons, failed correctness and unqualified runtimes are rejected.
+If delivery is uncertain, the configuration pauses publication while jobs keep
+saving results. Do not delete state or repeatedly retry. An operator must stop
+outstanding publishers and establish that queued requests have drained or been
+cleared through the monitoring owner before using the reported key/generation:
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py \
+  --resume-publication KEY --expected-generation N --attest-quiescent
+```
+
+The flag records that operator attestation; metrics readback alone cannot prove
+quiescence. Recovery revalidates the newest eligible saved candidate, and another
+uncertain write keeps publication paused.
 
 ### Capture and qualify profiling
 
-A version check establishes command availability, not usable worker captures.
-Before profiling claims, qualify both workers in the actual execution runtime.
+Before claiming usable profiling, qualify both workers in the actual execution
+runtime. Nsight Systems (`nsys`) traces application activity; Nsight Compute
+(`ncu`) collects kernel counters. A version check proves only availability.
 `readiness.py` runs a tiny canary, captures Systems/Compute, checks matching
 kernels, NVTX and counters, and prints JSON/report paths.
 
@@ -731,12 +684,6 @@ follow the owning lab to establish that its runtime works on allocated hardware:
 - [Advanced runtime preparation](advanced-gpu-communication/README.md#runtime-preparation):
   fabric, collective and vendor runtime qualification.
 
-For explicitly selected container exercises, the Apptainer runners resolve
-recorded immutable identities to cached images and mount the installed Nsight
-resources. Successful image creation does not prove worker device isolation,
-nested-container support, driver compatibility or usable profiler captures;
-those remain explicit checks in the optional exercise.
-
 ### Optional agent-assisted runs
 
 From the workstation's `courses/` directory, install the project-scoped skill:
@@ -748,10 +695,9 @@ npx --yes skills add ./skills/run-labs -a codex --yes
 This optional command requires Node.js/npm. The first `--yes` skips npm's prompt;
 the last skips the skill wizard. Do not add `--global`; use `-a claude-code` for
 Claude. On a fully qualified environment, `$run-labs run --course gpu-fundamentals`
-runs both profiles and collects verified evidence. The
+runs both workload presets and collects verified evidence. The
 [run-labs skill](skills/run-labs/SKILL.md) validates prepared runtimes and owns recovery, resume and
-lab-specific recipes. Its submission/inspection helpers remain for automation;
-the learner commands above expose those operations directly.
+lab-specific recipes. Use that workflow for campaign selection and recovery details.
 
 ## Browsing Grafana and Nsight Profilers
 
@@ -786,15 +732,21 @@ ends when the selected Pod terminates. See the
 
 ### Browse Grafana
 
-Sign in using the username and password obtained above. During first-time setup,
-create the course folder and [import its dashboards](#import-course-dashboards).
-For completed runs, open **Dashboards**, choose `course-<course-name>`, and open
-the lab's dashboard or **Environment readiness**.
+Open **Dashboards → course-<course-name>**, then the lab dashboard or
+**Environment readiness**. If missing, [import the current dashboards](#import-course-dashboards).
+Select your workspace, course installation, workload and experiment configuration.
 
-Select workspace and profile, verify both
-correctness slots and the publication generation, then set the telemetry window
-to the experiment interval. Select GPU worker and local GPU index together.
-Sampled telemetry provides context; unprofiled measurements determine performance.
+- **Latest results**: newest successful clean run for each supported configuration;
+  independent trials remain separate.
+- **Diagnostics and run status**: stage outcomes and declared diagnostic measurements.
+- **Selected comparison**: the explicitly chosen baseline and candidate; check both
+  correctness slots and the publication generation.
+
+Check the source job and completion time, and set the telemetry window to its
+experiment interval. Select GPU worker and local GPU index together. Configuration
+suffixes identify nodes (`n`), tasks (`t`), GPUs per task (`g`), CPUs per task (`c`)
+and, where applicable, workers per node (`w`). Sampled telemetry supplies context;
+unprofiled measurements determine performance.
 
 ### Browse Nsight Compute and Systems
 

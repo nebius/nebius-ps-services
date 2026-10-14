@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish explicitly selected completed lab comparisons outside benchmark timing."""
+"""Publish a native job, recover paused automatic publication, or select a comparison."""
 
 from __future__ import annotations
 
@@ -381,38 +381,117 @@ def publish(args) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--lab", required=True)
-    parser.add_argument("--baseline", type=Path, required=True)
-    parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--lab")
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--baseline", type=Path)
+    modes.add_argument(
+        "--job", help="Retry a registered native job without changing its run order."
+    )
+    modes.add_argument(
+        "--resume-publication",
+        metavar="KEY",
+        help="Resume a paused configuration after operator-established transport quiescence.",
+    )
+    parser.add_argument("--candidate", type=Path)
+    parser.add_argument(
+        "--attest-quiescent",
+        action="store_true",
+        help="Record operator attestation that earlier clients and queued transport are quiescent; readback alone is insufficient.",
+    )
     parser.add_argument(
         "--workspace",
         default=os.environ.get("COURSE_WORKSPACE"),
-        required=not bool(os.environ.get("COURSE_WORKSPACE")),
     )
     parser.add_argument(
         "--gateway",
         default=os.environ.get("COURSE_PUSHGATEWAY"),
-        required=not bool(os.environ.get("COURSE_PUSHGATEWAY")),
     )
     parser.add_argument(
         "--metrics-url",
         default=os.environ.get("COURSE_METRICS_URL"),
-        required=not bool(os.environ.get("COURSE_METRICS_URL")),
     )
     parser.add_argument(
         "--expected-generation",
         type=int,
-        required=True,
         help="0 for a new comparison; otherwise use the reviewed current generation.",
     )
     parser.add_argument("--readback-timeout", type=int, default=90)
     args = parser.parse_args()
-    if not 1 <= args.readback_timeout <= 300 or args.expected_generation < 0:
+    if not 1 <= args.readback_timeout <= 300 or (
+        args.expected_generation is not None and args.expected_generation < 0
+    ):
         parser.error(
             "readback timeout must be 1..300 seconds and generation nonnegative"
         )
     try:
-        publish(args)
+        from course_bootstrap.runtime import context, monitoring
+
+        if args.job or args.resume_publication:
+            from course_publication import authority, atomic, publish_job, read, resume
+
+            _, identity = authority(ROOT)
+            for name in ("workspace", "gateway", "metrics_url"):
+                if (
+                    getattr(args, name) is not None
+                    and getattr(args, name) != identity["binding"][name]
+                ):
+                    parser.error(
+                        "Job publication uses the initialized installation endpoints and workspace"
+                    )
+            if args.candidate or args.baseline:
+                parser.error("Automatic and comparison selections cannot be combined")
+            if args.job:
+                if (
+                    not args.lab
+                    or not LABEL.fullmatch(args.lab)
+                    or not re.fullmatch(r"[1-9][0-9]*", args.job)
+                ):
+                    parser.error("--job requires --lab and an exact numeric job ID")
+                if args.attest_quiescent or args.expected_generation is not None:
+                    parser.error("Use --resume-publication for an attested recovery")
+                path = ROOT / "results" / args.lab / "jobs" / args.job / "result.json"
+                outcome = publish_job(ROOT, path, timeout=args.readback_timeout)
+                document = read(path)
+                document["publication"] = outcome
+                atomic(path, document)
+            else:
+                outcome = resume(
+                    ROOT,
+                    args.resume_publication,
+                    args.expected_generation,
+                    args.attest_quiescent,
+                    timeout=args.readback_timeout,
+                )
+            print(json.dumps(outcome, indent=2))
+        else:
+            if (
+                not args.lab
+                or not args.candidate
+                or args.expected_generation is None
+                or args.attest_quiescent
+            ):
+                parser.error(
+                    "Comparison requires --lab, --baseline, --candidate and --expected-generation"
+                )
+            values = {}
+            if any(
+                getattr(args, name) is None
+                for name in ("workspace", "gateway", "metrics_url")
+            ):
+                root, _, _ = context(ROOT)
+                values = monitoring(root)
+            for name, key in (
+                ("workspace", "COURSE_WORKSPACE"),
+                ("gateway", "COURSE_PUSHGATEWAY"),
+                ("metrics_url", "COURSE_METRICS_URL"),
+            ):
+                if getattr(args, name) is None:
+                    setattr(args, name, values.get(key))
+                if getattr(args, name) is None:
+                    parser.error(
+                        f"Missing --{name.replace('_', '-')} or prepared monitoring setting"
+                    )
+            publish(args)
     except (ValueError, RuntimeError, OSError, KeyError, ImportError) as exc:
         raise SystemExit(
             f"Publication failed separately from benchmark execution: {exc}"

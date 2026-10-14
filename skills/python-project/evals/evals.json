@@ -4,12 +4,14 @@
     {
       "id": 1,
       "prompt": "Scaffold a new deployable Python CLI application with Ruff, pytest, and GitHub Actions.",
-      "expected_output": "A uv-first scaffold with profile-selected runtime dependencies, a generated committed lockfile, and matching locked local and CI commands.",
+      "expected_output": "One scaffold-project creation handoff, a validated Python candidate, and complete locked readiness under the existing request.",
       "files": [],
       "assertions": [
         "Uses pyproject.toml as dependency intent and uv.lock as the generated reviewed install graph",
         "Uses uv lock --check, uv sync --locked, and uv run --locked without a parallel pip install path",
-        "Reports lock generation as pending instead of hand-authoring uv.lock when resolution was not run"
+        "Reports lock generation as pending instead of hand-authoring uv.lock when resolution was not run",
+        "Hands new creation to scaffold-project once and returns as its bounded producer",
+        "Completes apply and Python setup without requesting a second approval or magic phrase"
       ]
     },
     {
@@ -95,6 +97,17 @@
         "Tests zero, valid and invalid counts without escalating a parser bug to deployed E2E",
         "Preserves the existing package manager and does not add compatibility wrappers",
         "Uses parametrization without redundant cases and asserts observable results"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use python-project as the coordinated candidate producer for a library at the repository root. Return candidates only; the coordinator will apply them.",
+      "expected_output": "A closed validated library candidate with exact Python-owned paths and pending readiness.",
+      "files": [],
+      "assertions": [
+        "Produces no uv.lock, .venv, generated _version.py, root README, root Makefile or root CI candidates",
+        "Emits no console entrypoints or CLI/API dependencies for the unselected profiles",
+        "Does not route the bounded producer call back to scaffold-project or install dependencies"
       ]
     }
   ]

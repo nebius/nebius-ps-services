@@ -4,8 +4,10 @@
 excluding provisioning and queue time.
 
 Follow communication from fabric paths and collectives to distributed training,
-inference and serving. Read GPU Fundamentals and GPU Performance Optimization
-first; choose the training or inference specialization for your investigation.
+inference and serving. For the full lab route, complete GPU Fundamentals and GPU
+Performance Optimization, then the relevant training or inference foundations,
+or bring equivalent readiness to launch Slurm jobs, produce a correct unprofiled
+result and interpret its GPU timeline.
 Use [GPU Performance Tools](../gpu-performance-tools/index.html) for profiling
 and [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
 for a tensor-reading refresher.
@@ -19,7 +21,13 @@ Sixteen GPUs are allocated; some mechanics use only two participating ranks.
 Complete the [Lab Guide](../lab-guide.html#lab-preparation-scripts), check
 [Versions and environment](VERSIONS.md), then follow the
 [readiness checks](reference/cluster-smoke-test.md) on the qualified cluster.
-Begin with Lab 01's topology and rank-placement check.
+For the full route, begin with Lab 01's topology and rank-placement check.
+For Fundamentals Lesson 12, read through that lesson, complete
+[Lab 02](reference/labs/02_collective_readiness.md), verify its placement and
+correctness results, then run [Lab 08](reference/labs/08_distributed_collectives.md).
+Optimization, a specialization, Lab 01 and Labs 03–07 are not prerequisites for
+this assignment. Both entry points require the same prepared, qualified fabric.
+After Lab 08, return to Fundamentals to complete the course.
 
 ## Runtime preparation
 
@@ -35,7 +43,7 @@ lab with its small workload before performance comparisons.
 
 ## Learning route
 
-Follow the groups below. Keep each lab's identity when selecting commands,
+For the full route, follow the groups below. Keep each lab's identity when selecting commands,
 dashboards and results.
 
 ### Qualify placement and fabric

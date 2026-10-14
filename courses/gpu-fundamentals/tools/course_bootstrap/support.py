@@ -608,11 +608,17 @@ def open_directory(path):
         raise
 
 
-def private_directory(info, label):
+def private_directory(info, label, *, allow_readable=False):
+    mode = stat.S_IMODE(info.st_mode)
+    # Preparation may only remove read/search access from owned result paths.
+    # Never adopt shared-write directories or relax runtime-state protection.
+    permitted_mode = mode == 0o700 or (
+        allow_readable and mode & 0o700 == 0o700 and mode & 0o7022 == 0
+    )
     if (
         not stat.S_ISDIR(info.st_mode)
         or info.st_uid != os.geteuid()
-        or stat.S_IMODE(info.st_mode) != 0o700
+        or not permitted_mode
     ):
         raise ValueError(f"Use an owned mode-700 directory, without symlinks: {label}")
 
@@ -704,7 +710,7 @@ def prepare(courses_root=None, course_root=None):
             info = path.lstat()
         except FileNotFoundError:
             continue
-        private_directory(info, path)
+        private_directory(info, path, allow_readable=relative.startswith("results"))
     for root, relative in paths:
         parent_fd = open_directory(root)
         try:
@@ -718,6 +724,12 @@ def prepare(courses_root=None, course_root=None):
                 )
                 os.close(parent_fd)
                 parent_fd = child_fd
+                private_directory(
+                    os.fstat(parent_fd), root / relative,
+                    allow_readable=relative.startswith("results"),
+                )
+                if stat.S_IMODE(os.fstat(parent_fd).st_mode) != 0o700:
+                    os.fchmod(parent_fd, 0o700)
                 private_directory(os.fstat(parent_fd), root / relative)
         finally:
             os.close(parent_fd)

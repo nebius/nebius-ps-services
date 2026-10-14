@@ -22,8 +22,8 @@ sources.
 
 In `coordinated-candidate` scope, do not run uv, create a lock candidate, or add
 a `uv.lock` template. Return dependency resolution and lock generation as a
-pending post-integration step. The coordinator may run it only through a
-separately authorized workflow after final root integration.
+pending post-integration step. After final root integration, Python bootstrap completes it under the same
+creation request. A files-only, offline or plan-only request leaves it pending.
 
 ## Inspect the Installed CLI
 

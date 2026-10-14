@@ -13,7 +13,8 @@ Read this reference before finalization or apply.
 - No symlinks, FIFOs, sockets, devices, or non-regular target files.
 - No `AGENTS.md`, `AGENTS.override.md`, configured reserved paths, or
   case-folded `.git`, `.hg`, or `.svn` repository-control paths.
-- Apply holds one nonblocking private bundle lock across validation, journal
+- Apply holds a target-scoped lock shared with Python bootstrap and one
+  nonblocking private bundle lock across validation, journal
   mutation, and target writes. A concurrent apply fails before changing the
   target or journal.
 - One supported content owner per operation.
@@ -74,3 +75,12 @@ New-root publication requires macOS `renameatx_np(RENAME_EXCL)` or Linux
 no-replace operation. Apply fails closed when that primitive is unavailable.
 Other platforms may plan, finalize, validate, and inspect status but must block
 apply until equivalent no-follow and atomic-publication semantics exist.
+
+## Task Authority and Readiness
+
+Creation intent authorizes bounded application and Python setup without a
+second digest approval. expected-digest binds integrity, not user identity.
+Advisory target locks serialize cooperating apply/bootstrap processes across
+bundles, never unrelated writers. Bootstrap rechecks authored source between
+commands. Only readiness checks can establish ready-to-develop status; static
+journal completion is insufficient.

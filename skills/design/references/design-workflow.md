@@ -462,8 +462,8 @@ ownership, new platform, or costly rollback.
 - Canonical design persistence or documentation drift: return decisions and
   corrections to `maintain-project-specs`, the sole canonical document writer.
 - Approved design needs a complete or multi-component repository skeleton:
-  include the optional scaffold handoff and let the user explicitly invoke
-  `scaffold-project`. Do not scaffold directly or start Agentic SDLC.
+  include the scaffold handoff and route the authorized creation through
+  `scaffold-project`, including single-component creation. Do not scaffold directly or start Agentic SDLC.
 - Design needs substantial topic, feature-requirement, product, standard, or
   technology due diligence: use `research`, then return to `design` for
   synthesis and `/plan` handoff.

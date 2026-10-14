@@ -1,5 +1,112 @@
 # Lab Guide publication review
 
+## Catalog correctness and navigation — 2026-10-13
+
+Current HTML SHA-256: `2fda4862875918e7f188333767bd6c462011f70dc27f65fe533b64c619453c29`.
+The source-owned shared stylesheet now uses native instant scrolling. The
+original heading-arrival criterion passes for every Lab Guide TOC destination
+at 1440px, 390px and 320px; the committed regression also passes twice at each
+width. This supersedes the navigation gap for this artifact, while preserving
+the failed earlier trials below. See the [catalog review](../course-format-validation.md#catalog-correctness-and-navigation--2026-10-13)
+for the CSS-only causal comparison, full-page checks, repeated regressions,
+exact artifacts and remaining evidence limits. No runtime or live-target
+qualification or external publication was performed.
+
+## Alignment follow-up — 2026-10-13
+
+Rechecked the exact README and HTML hashes recorded in the next section. All
+427 focused tests passed in one run (25.23 seconds). All nine native course
+validators, shared-helper parity, generated freshness, 33 Bash-block syntax
+checks, 12 documented preparation commands in read-only plan mode, scoped
+Markdown/Ruff lint, whitespace and canonical-spec validation passed. The ten
+other HTML outputs still match the authoring task's baseline. Changed-scope
+command, code and security reviews found no new blocking issue; no further
+source or runtime repair was justified.
+
+Browser qualification remains open. The full Playwright interaction run passed
+at 1440px and 390px, then failed at 320px: the first preparation-section link
+changed the fragment but left its heading outside the viewport. A separate
+probe passed all 30 heading/fragment checks across the same widths. These passing
+observations do not supersede the reproduced failure or establish its cause.
+The guide, stylesheet and original viewport criterion were unchanged.
+
+A bounded eight-case 320px experiment compared viewport initialization and URL
+assertions, with two trials per combination. Seven passed and one reproduced
+the same failure; neither test-setup hypothesis was established as the cause.
+
+The same local evidence group retains `align-browser-results.json`,
+`align-browser-artifacts/`, `align-navigation-diagnostic.json` and the
+`align-navigation-matrix-*` results. Owned browser contexts were closed. Requirement
+REQ-029 remains active and FEAT-045 remains implemented, with full browser
+verification pending. No installation, cluster operation, GPU execution or
+external publication was performed.
+
+## Concise shared workflow and current commands — 2026-10-13
+
+Scope: the shared `README.md` and generated `lab-guide.html`, the directly
+related maintainer initialization paragraph, and the existing setup-order test.
+The guide is a workflow reference, not a numbered course. It now puts selective
+preparation before group installation, uses the compatibility lab's native batch
+launcher, separates benchmark and diagnostic runs, and explains automatic
+publication without repeated initialization instructions. All 110 lab mappings,
+four main topics, 26 subsection targets and distinct safety boundaries remain.
+Word count fell from 5,809 to 4,690 (about 19%). Runtime implementations, the
+catalog and all nine course pages were unchanged by this revision.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `README.md` | `2ea7447f558831696446c2145afb6c6346a635ede4f0aa898484db9fe616739b` |
+| `lab-guide.html` | `0f3cab1be0ba0ae9770ab0148fc351550800fbc4f82e342cbd53965af0671016` |
+
+| Review lane | Result and scope |
+| --- | --- |
+| Source/static | Pass: native preflight/atomic guide build and exact source parity; all nine course validators, aggregate helper parity and full generated freshness; 33 Bash-block syntax checks; 12 documented preparation selections in read-only plan mode; scoped Markdown, Ruff and whitespace checks. |
+| Regression tests | 426 of 427 focused cases passed initially. The remaining assertion expected the old direct-Python compatibility command and monitoring order; it now checks monitoring, runtime preparation, then native compatibility submission. All 39 cases in that module passed afterward, covering 427 distinct cases in total. |
+| Semantic and changed-scope review | Current setup, job, publication and cxcli implementations support the examples. Independent read-only review found no serious issue; the final assertion update was also reviewed. No security attestation is implied. |
+| Browser/visual | Mixed: a complete basic three-width assertion run and settled visual captures passed, but stricter rapid keyboard navigation/viewport checks were intermittent. Full interaction qualification remains pending; see below. |
+| Installed environment | Pending/not rerun: no dependencies were installed or upgraded. Existing local CLI help confirms the documented uv and Nebius flags. |
+| Runtime activation and live target | Pending/not rerun: no compiler, server, Slurm job, GPU workload, monitoring connection or deployment was exercised. |
+
+Playwright Test 1.57.0 used owned, isolated headless Chrome 155.0.8059.40 at
+1440×1000, 390×1000 and 320×1000, with page JavaScript disabled. Basic assertions
+passed all three widths: exact topic/subsection navigation, unique IDs and real
+fragment targets, skip link, keyboard TOC toggling, fragment changes, native code
+scrolling, loaded images, page containment, doubled-text reflow and no external
+requests or page errors. Additional passing mobile cases cover keyboard scrolling
+of both tables. Settled desktop/mobile screenshots show readable prose, contained
+code/tables and no overlapping navigation; wide tables intentionally scroll.
+
+The stronger checks require each keyboard-selected heading to reach the viewport.
+They sometimes observed the correct fragment while the viewport remained near
+the navigation or a previous section. A focused 390px replay and a separate
+20-navigation mobile probe passed, but later multi-width runs reproduced failures.
+The last run passed desktop, failed 390px and was interrupted at 320px. The cause
+is not established; neither passing replays nor screenshots resolve that gap.
+No product, stylesheet or browser-foreground change was made to obtain a pass.
+Earlier fixture failures (an invented heading, screenshot stability waiting and
+subpixel rounding) remain separate from this unresolved interaction result.
+
+Local evidence group `lab-guide-refresh-0fmvs4i4` retains the basic passing run
+under `browser-first-pass-*`, successive assertion results, the final
+`browser-results.json`, scripts and per-width facts. Settled images are under
+`visual-captures/`; enlarged-text captures are in the passing assertion artifacts.
+Traces were not collected. Owned contexts and browser processes were closed.
+
+The generic full-course skill checker reports the same 12 diagnostics for the
+before/after guide with explicit companion-link manifests. These include course
+structure expectations and existing shell/image markup; it is not a passing
+shared-guide gate. Native guide/profile checks pass. Initial checker calls with
+unresolved temporary-directory paths were invalid-input fixture attempts, not
+content validation. No external publication or publication-readiness claim is made.
+
+Command review used current source, local help, and official references for
+[Slurm submission](https://slurm.schedmd.com/sbatch.html),
+[job accounting](https://slurm.schedmd.com/sacct.html),
+[uv tools](https://docs.astral.sh/uv/concepts/tools/),
+[Nebius cluster access](https://docs.nebius.com/kubernetes/connect) and
+[kubectl forwarding](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/).
+Earlier reviews retain their original scope and artifact identities.
+
 ## Shared burnt-orange comments — 2026-10-13
 
 Scope: the shared stylesheet used by all nine course HTML pages and the Lab

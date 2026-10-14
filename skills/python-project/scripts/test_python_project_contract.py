@@ -26,8 +26,10 @@ class PythonProjectContractTests(unittest.TestCase):
         self.assertIn("Use one canonical uv project workflow for new scaffolds", skill)
         self.assertIn("retain their current package manager", skill)
         self.assertIn("unless the user requests migration", skill)
-        self.assertIn("Never generate, template, or hand-edit `uv.lock`", skill)
-        self.assertRegex(skill, r"pending\s+post-integration step")
+        self.assertIn("Never generate, template, or hand-edit", skill)
+        self.assertIn("uv.lock in a candidate bundle", skill)
+        self.assertIn("post-integration step", skill)
+        self.assertIn("same authorized creation workflow", skill)
 
     def test_pyproject_separates_development_tools_from_consumer_extras(self) -> None:
         template = read("assets/pyproject.toml.template")

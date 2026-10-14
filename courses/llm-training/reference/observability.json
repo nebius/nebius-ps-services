@@ -101,6 +101,32 @@
         "run": "slurm/01_tiny_transformer_train.sbatch",
         "nsys": "slurm/01_tiny_transformer_train.sbatch",
         "ncu": "slurm/01_tiny_transformer_train.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "01_tiny_transformer_train",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "01_tiny_transformer_train",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "01_tiny_transformer_train",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "model_shape",
+          "parameters",
+          "precision",
+          "tokens",
+          "zero_grad_fill"
+        ]
       }
     },
     "02_gradient_accumulation": {
@@ -182,6 +208,29 @@
         "run": "slurm/02_gradient_accumulation.sbatch",
         "nsys": "slurm/02_gradient_accumulation.sbatch",
         "ncu": "slurm/02_gradient_accumulation.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "02_gradient_accumulation",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "02_gradient_accumulation",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "02_gradient_accumulation",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "microbatch",
+          "total_batch"
+        ]
       }
     },
     "05_lora_sft": {
@@ -283,6 +332,32 @@
         "run": "slurm/05_lora_sft.sbatch",
         "nsys": "slurm/05_lora_sft.sbatch",
         "ncu": "slurm/05_lora_sft.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "05_lora_sft",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "05_lora_sft",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "05_lora_sft",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "model",
+          "revision",
+          "total_parameters",
+          "trainable_parameters",
+          "zero_grad_fill"
+        ]
       }
     },
     "06_grpo_objective": {
@@ -365,6 +440,28 @@
         "run": "slurm/06_grpo_objective.sbatch",
         "nsys": "slurm/06_grpo_objective.sbatch",
         "ncu": "slurm/06_grpo_objective.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "06_grpo_objective",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "06_grpo_objective",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "06_grpo_objective",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "group_size"
+        ]
       }
     },
     "07_grpo_trainer": {
@@ -447,6 +544,28 @@
         "run": "slurm/07_grpo_trainer.sbatch",
         "nsys": "slurm/07_grpo_trainer.sbatch",
         "ncu": "slurm/07_grpo_trainer.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "07_grpo_trainer",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "07_grpo_trainer",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "07_grpo_trainer",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "steps"
+        ]
       }
     },
     "13_loss_masking": {
@@ -526,6 +645,24 @@
       "jobs": {
         "run": "slurm/13_loss_masking.sbatch",
         "nsys": "slurm/13_loss_masking.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "13_loss_masking",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "13_loss_masking",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "ignored_tokens",
+          "trained_tokens"
+        ]
       }
     },
     "14_activation_checkpointing": {
@@ -615,6 +752,28 @@
         "run": "slurm/14_activation_checkpointing.sbatch",
         "nsys": "slurm/14_activation_checkpointing.sbatch",
         "ncu": "slurm/14_activation_checkpointing.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "14_activation_checkpointing",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "14_activation_checkpointing",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "14_activation_checkpointing",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "shape"
+        ]
       }
     },
     "21_mixed_precision_training": {
@@ -687,6 +846,30 @@
         "run": "slurm/21_mixed_precision_training.sbatch",
         "nsys": "slurm/21_mixed_precision_training.sbatch",
         "ncu": "slurm/21_mixed_precision_training.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "21_mixed_precision_training",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "21_mixed_precision_training",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "21_mixed_precision_training",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "model_shape",
+          "numerical_thresholds",
+          "vocab_size"
+        ]
       }
     },
     "22_transformer_engine_fp8": {
@@ -771,6 +954,32 @@
         "run": "slurm/22_transformer_engine_fp8.sbatch",
         "nsys": "slurm/22_transformer_engine_fp8.sbatch",
         "ncu": "slurm/22_transformer_engine_fp8.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "22_transformer_engine_fp8",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "22_transformer_engine_fp8",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "22_transformer_engine_fp8",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "amax_history_len",
+          "fp8_format",
+          "hidden_size",
+          "recipe",
+          "rows"
+        ]
       }
     },
     "24_checkpoint_resume": {
@@ -837,6 +1046,21 @@
       "jobs": {
         "run": "slurm/24_checkpoint_resume.sbatch",
         "nsys": "slurm/24_checkpoint_resume.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "24_checkpoint_resume",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "24_checkpoint_resume",
+            "view": "latest"
+          }
+        },
+        "controls": []
       }
     },
     "25_sequence_packing": {
@@ -927,6 +1151,25 @@
       "jobs": {
         "run": "slurm/25_sequence_packing.sbatch",
         "nsys": "slurm/25_sequence_packing.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "25_sequence_packing",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "25_sequence_packing",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "capacity",
+          "lengths",
+          "valid_tokens"
+        ]
       }
     },
     "26_input_pipeline": {
@@ -1011,6 +1254,31 @@
         "run": "slurm/26_input_pipeline.sbatch",
         "nsys": "slurm/26_input_pipeline.sbatch",
         "ncu": "slurm/26_input_pipeline.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "26_input_pipeline",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "26_input_pipeline",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "26_input_pipeline",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "batch_size",
+          "prefetch",
+          "sequence_length",
+          "workers"
+        ]
       }
     },
     "27_fused_graph_trace": {
@@ -1083,6 +1351,30 @@
         "run": "slurm/27_fused_graph_trace.sbatch",
         "nsys": "slurm/27_fused_graph_trace.sbatch",
         "ncu": "slurm/27_fused_graph_trace.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "27_fused_graph_trace",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "27_fused_graph_trace",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "27_fused_graph_trace",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "compile_fullgraph_required",
+          "cuda_graph_scope",
+          "shape"
+        ]
       }
     },
     "30_training_profiler": {
@@ -1131,6 +1423,26 @@
         "run": "slurm/30_training_profiler.sbatch",
         "nsys": "slurm/30_training_profiler.sbatch",
         "ncu": "slurm/30_training_profiler.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "30_training_profiler",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "30_training_profiler",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-diagnostic",
+            "result_lab": "30_training_profiler",
+            "view": "diagnostic"
+          }
+        },
+        "controls": []
       }
     },
     "31_training_capstone": {
@@ -1225,6 +1537,43 @@
         "run": "slurm/31_training_capstone.sbatch",
         "nsys": "slurm/31_training_capstone.sbatch",
         "ncu": "slurm/31_training_capstone.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "31_training_capstone",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "31_training_capstone",
+            "view": "diagnostic"
+          },
+          "trials_none_cuda": {
+            "kind": "three-trials",
+            "result_lab": "31_training_capstone",
+            "view": "latest",
+            "trials": [
+              1,
+              2,
+              3
+            ]
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "31_training_capstone",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "input_requires_grad",
+          "iterations",
+          "minimum_step_flops",
+          "peak_tflops_reference",
+          "shape",
+          "warmup"
+        ]
       }
     },
     "32_learning_basics": {
@@ -1319,6 +1668,26 @@
       "jobs": {
         "run": "slurm/32_learning_basics.sbatch",
         "nsys": "slurm/32_learning_basics.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "32_learning_basics",
+            "view": "latest"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "32_learning_basics",
+            "view": "diagnostic"
+          },
+          "default_none_cpu": {
+            "kind": "single-original",
+            "result_lab": "32_learning_basics",
+            "view": "latest"
+          }
+        },
+        "controls": []
       }
     }
   },

@@ -325,7 +325,7 @@ run_trial() {
     exit 2
   fi
 
-  "${course_python}" labs/33_speculative_engine_client.py \
+  COURSE_TRIAL_INDEX=${trial} "${course_python}" labs/33_speculative_engine_client.py \
     --base-url "http://127.0.0.1:${port}" --model "${target_model}" \
     --target-revision "${target_revision}" --draft-model "${draft_model}" \
     --draft-revision "${draft_revision}" --variant "${variant}" --requests 4 \

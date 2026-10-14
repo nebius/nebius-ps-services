@@ -9,6 +9,120 @@ declared profiles. Each course closes with one Where to Go Next, one Glossary
 and final Official references.
 The earlier counts, field order and hashes below apply to their original revisions.
 
+## Catalog correctness and navigation — 2026-10-13
+
+Reviewed all nine course packages: 105 lesson/reference chapters, the Advanced
+Labs route and 110 lab guide identities and source associations. Preserved the
+text-only, reference-only, lessons-only, practical and labs-only profiles.
+
+Two corrections restore the existing course contract:
+
+- Inference Lesson 17, its syllabus and completion guide now identify Advanced
+  Lab 25 as replicated versus tensor-partitioned recurrent projections. Its
+  reported tokens are modeled request-steps; batch timing does not establish
+  client TTFT or inter-token latency. Real-model TP/PP serving comparisons are
+  explicitly optional, separately implemented and qualified extensions.
+- The shared course stylesheet uses native instant section navigation. Forced
+  smooth scrolling allowed a focus-triggered trip toward the TOC to overtake
+  keyboard fragment activation, leaving the right hash with the wrong viewport.
+  All course pages and the Lab Guide were regenerated from canonical sources.
+  The catalog retains its independent stylesheet.
+
+### Verification and limits
+
+| Lane | Result |
+| --- | --- |
+| Source/static | Full build and HTML/archive freshness, all nine native validators, shared-helper parity and 845 focused tests pass. Scoped Markdown lint, JavaScript syntax, whitespace and paired spec validation pass. |
+| Semantic/code/security | Two read-only catalog reviews covered all 105 chapters and 110 guide identities. The identified Inference scope mismatch was corrected and independently rechecked. Final changed-scope review found no serious issue. This is not full runtime or security qualification. |
+| Preservation | All 3,511 task-start lab, launcher and reference files retain their bytes, including all six result archives. Existing unrelated edits are preserved. |
+| Browser/visual | 33 complete-page cases and 33 doubled-text reflow cases pass at 1440×1000, 390×1000 and 320×1000. The committed navigation regression passes all 30 course/guide cases twice: 60 passes. |
+| Installed environment/runtime/live target | Not rerun: no dependency installation, GPU/Slurm workload, serving activation, monitoring connection or external publication. Applicable target qualification remains pending. |
+
+Browser assertions cover catalog/menu order, unique IDs, valid fragments,
+appendix placement, glossary order, keyboard controls and heading arrival,
+local scrollers, passive resources and root-relative style enlargement. Lab Guide checks
+every TOC destination. Computed body/H2/H3 typography agrees across all nine
+courses at each width. The 33 fact records match the final hashes below.
+
+Final review found that root-size enlargement alone left fixed-size body text
+unchanged. A separate 33-case reflow trial therefore doubles each HTML element's
+original computed font size and asserts that body, representative paragraph and
+code text actually double. All eleven pages remain contained at 1440px, 390px
+and 320px, with no page-level horizontal overflow. Selected enlarged-text
+captures were visually checked. This verifies text-resize reflow; it does not
+simulate browser chrome zoom or enlarge SVG-internal text independently of its
+image geometry. Evidence is `reflow.log`, `reflow.spec.cjs`, and per-page/width
+PNG/JSON files under `reflow/`, bound to the same final HTML hashes.
+
+Playwright Test 1.62.1 used owned, isolated headless Chrome 155.0.8059.40 with
+page JavaScript disabled and default motion preferences. Mobile captures across
+all eleven pages and selected desktop/320px figures were visually inspected.
+No page overflow or desktop SVG label overflow was found. Existing dense
+multi-column figures still have small phone labels; visible prose/captions
+explain their relationships. This is not universal mobile diagram-readability
+or full publication-readiness approval.
+
+### Navigation failure and causal check
+
+The initial unmodified full-page trial passed 29 cases and failed four keyboard
+heading-arrival checks. A failed trace shows the fragment changing correctly,
+then the viewport travelling back toward the recently focused TOC. A separate
+minimal sequencing probe passed all six rapid and six settled trials; it did
+not reproduce the full interaction sequence and is not the repair proof.
+Its first animation-frame observer could not complete with page JavaScript
+disabled; it was stopped and replaced by bounded host-side position sampling.
+
+A controlled comparison used identical temporary HTML fixtures, differing only
+in the root scroll behavior, with the same rapid interaction sequence. Smooth
+scrolling failed three of 18 cases; instant scrolling passed all 18. The new
+repository regression also failed two of 12 cases against the original CSS.
+After repairing the authoritative shared stylesheet and rebuilding, the original
+33-case acceptance sequence and all 60 repeated regression cases pass. No navigation test
+scrolls a destination into view to satisfy navigation, changes the page CSS,
+forces reduced motion, or waits before Enter to hide the race. Screenshot
+positioning follows interaction assertions and is separate visual evidence.
+The repair removes the course's asynchronous scrolling trigger; it does not
+claim a change to the browser engine.
+
+Local evidence group `course-alignment-g02n2o0z` retains `browser.log`, initial
+failure traces under `traces/`, `navigation-probe.json`, `scroll-smooth.log`,
+`scroll-auto.log`, `regression-negative.log`, `browser-final.log`,
+`regression-final.log`, `tests-final.log` and `native-final.log`.
+Final captures and artifact facts are in `browser-final/<page>-<width>/`:
+`entry.png`, `glossary.png`, applicable `first-figure.png`, and selected figure
+captures. Final full-page traces use `traces-final/` with retain-on-failure;
+passing cases retain no traces. Regression traces use isolated
+`course-navigation-*` temporary directories. Test-owned contexts and Chrome
+processes closed; no personal browser profile or local web server was used.
+
+The unmodified generic skill checker was run on initial and final snapshots of
+all nine courses. Its diagnostics are unchanged: shared shell/CSS/listing rules,
+relative navigation and explicit nonstandard profiles. It is not claimed passing;
+repository-native profile-aware and source-parity checks remain authoritative.
+The build's publication-size estimate remains below its configured limits.
+
+The source-owned browser regression and its maintainer command are documented
+in [Maintaining the courses](maintaining-courses.md#offline-validation).
+Browser configuration follows [Playwright's use options](https://playwright.dev/docs/test-use-options);
+scrolling semantics were checked against the [CSSOM View scrolling model](https://drafts.csswg.org/cssom-view/#scrolling).
+Earlier review entries retain their original artifact identities and limitations.
+
+### Reviewed artifacts
+
+| Page | SHA-256 |
+| --- | --- |
+| `index.html` | `2c16552fd34bde21a579686d62f7b261608f5d4a16e2ea382ada3b4fa79fabf9` |
+| `lab-guide.html` | `2fda4862875918e7f188333767bd6c462011f70dc27f65fe533b64c619453c29` |
+| `soperator/index.html` | `54e89e117f6cb04a5c5ca0c780aca1aaf943d7c9ebd17f3b1b6fde02f7d7c527` |
+| `gpu-performance-tools/index.html` | `d297fca3ac0d4ba2e91974ff38fc844e5bbea49be9bfe93d74bcd7c85a0b8820` |
+| `pytorch-gpu-performance-engineering/index.html` | `0b489d1a0ee84a721ece109f266714dd294d7b3623a7a44b530ec0c06d19a38a` |
+| `gpu-fundamentals/index.html` | `5ddfd53a9f3b70f978ced127f0020ebc1beb0c3ef6b6052c966728daf4efe859` |
+| `gpu-optimizations/index.html` | `c8c4ee2b10cc80cfc8c0b0816466b8c59562ddf7342216afb894b312731d095d` |
+| `llm-training/index.html` | `981b1dea395cc8a8da9c95b9b3ca73790bfffb1a5264c23379ae383189f3ec6d` |
+| `llm-inference/index.html` | `c629552ca12c40666f0c2dcdc8ea292ffd61cb1e272849f9c98f6c25a31bfd51` |
+| `custom-cuda-kernels/index.html` | `6f2e1b8201cfd512ae456ca2a03a49f043305518a592f15a7a8bfc5c7769ebb8` |
+| `advanced-gpu-communication/index.html` | `3cc56860dda58bbce01f081af7a002d2eac0461b4c922bf87f0b883385d08bcb` |
+
 ## Full-branch PR review repairs — 2026-10-13
 
 The PR review covers the complete branch, including the earlier compact-guide,

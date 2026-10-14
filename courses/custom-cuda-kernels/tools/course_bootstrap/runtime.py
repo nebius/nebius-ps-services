@@ -169,7 +169,9 @@ def monitoring(root):
 
 def shell(course, selector, launcher=False, **selection):
     root, record = load(course, selector, launcher=launcher, **selection)
-    environment = {**record["environment"], **monitoring(root)}
+    # Monitoring is optional and belongs to the publisher. Bad connection
+    # settings must not prevent a correctly prepared workload from starting.
+    environment = dict(record["environment"])
     # Clear only runtime selectors, not job identity or command-local capture/workload controls.
     managed = {
         key

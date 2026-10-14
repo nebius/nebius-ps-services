@@ -6,7 +6,7 @@ structure or candidate bytes.
 ## Ask When Missing
 
 - Target directory and plan/add/apply intent.
-- Architecture approval reference.
+- Selected architecture or direct creation-task reference.
 - Repository shape and required materialization boundaries.
 - Component paths and package/module/workspace identities.
 - Runtime or deployment target when it changes generated files.
@@ -16,7 +16,7 @@ structure or candidate bytes.
   provider, chart, and service versions consumed by templates.
 - Whether optional Git initialization, dependency installation, network use,
   or external validation should remain reported only. These remain disabled
-  unless separately authorized.
+  outside the task scope.
 
 ## Do Not Ask
 
@@ -31,3 +31,7 @@ structure or candidate bytes.
 Return a stable list of missing JSON field paths and stop. Do not select a
 technology, version, package manager, base image, port, health endpoint,
 backend, provider, service image, or deployment model by guessing.
+
+Do not ask for another execute phrase or digest approval after a creation
+request. Use routine Python defaults where appropriate. Discover existing
+values first; ask only about choices that materially change the result.

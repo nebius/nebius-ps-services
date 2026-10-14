@@ -72,6 +72,30 @@
         "run": "slurm/08_kv_cache.sbatch",
         "nsys": "slurm/08_kv_cache.sbatch",
         "ncu": "slurm/08_kv_cache.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "08_kv_cache",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "08_kv_cache",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "08_kv_cache",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "generated_tokens",
+          "key_value_cache_mib",
+          "prompt_tokens"
+        ]
       }
     },
     "09_hf_prefill_decode": {
@@ -177,6 +201,35 @@
         "run": "slurm/09_hf_prefill_decode.sbatch",
         "nsys": "slurm/09_hf_prefill_decode.sbatch",
         "ncu": "slurm/09_hf_prefill_decode.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "09_hf_prefill_decode",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "09_hf_prefill_decode",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "09_hf_prefill_decode",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "decode_steps_per_request",
+          "generated_new_tokens_per_request",
+          "model",
+          "new_tokens",
+          "prompt_tokens",
+          "requested_new_tokens_per_request",
+          "requests",
+          "revision"
+        ]
       }
     },
     "10_vllm_offline": {
@@ -263,6 +316,33 @@
         "run": "slurm/10_vllm_offline.sbatch",
         "nsys": "slurm/10_vllm_offline.sbatch",
         "ncu": "slurm/10_vllm_offline.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "10_vllm_offline",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "10_vllm_offline",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "10_vllm_offline",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "enforce_eager",
+          "model",
+          "output_tokens_total",
+          "prompt_tokens_total",
+          "requests",
+          "revision"
+        ]
       }
     },
     "11_serving_client": {
@@ -344,6 +424,24 @@
       "jobs": {
         "run": "slurm/11_serving_client.sbatch",
         "nsys": "slurm/11_serving_client.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "11_serving_client",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "11_serving_client",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "concurrency",
+          "server_layout"
+        ]
       }
     },
     "15_streaming_client": {
@@ -434,6 +532,29 @@
       "jobs": {
         "run": "slurm/15_streaming_client.sbatch",
         "nsys": "slurm/15_streaming_client.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "aiperf_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "15_streaming_client",
+            "view": "latest"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "15_streaming_client",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "15_streaming_client",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "concurrency",
+          "server_layout"
+        ]
       }
     },
     "16_model_artifact_audit": {
@@ -517,6 +638,16 @@
       "gpu_telemetry": false,
       "jobs": {
         "run": "slurm/16_model_artifact_audit.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "16_model_artifact_audit",
+            "view": "latest"
+          }
+        },
+        "controls": []
       }
     },
     "17_sampling_semantics": {
@@ -599,6 +730,28 @@
         "run": "slurm/17_sampling_semantics.sbatch",
         "nsys": "slurm/17_sampling_semantics.sbatch",
         "ncu": "slurm/17_sampling_semantics.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "17_sampling_semantics",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "17_sampling_semantics",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "17_sampling_semantics",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "max_new_tokens"
+        ]
       }
     },
     "18_padding_bucketing": {
@@ -691,6 +844,31 @@
         "run": "slurm/18_padding_bucketing.sbatch",
         "nsys": "slurm/18_padding_bucketing.sbatch",
         "ncu": "slurm/18_padding_bucketing.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "18_padding_bucketing",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "18_padding_bucketing",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "18_padding_bucketing",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "model",
+          "prompt_token_lengths",
+          "revision",
+          "true_prompt_tokens"
+        ]
       }
     },
     "20_prefix_cache_client": {
@@ -778,6 +956,37 @@
       "jobs": {
         "run": "slurm/20_prefix_cache_client.sbatch",
         "nsys": "slurm/20_prefix_cache_client.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "20_prefix_cache_client",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "paired-performance-trials",
+            "result_lab": "20_prefix_cache_client",
+            "view": "latest",
+            "roles": [
+              "disabled",
+              "enabled"
+            ],
+            "probe_lab": "34_policy_equivalence_client",
+            "probe_workload": "prefix-cache",
+            "trials": [
+              1,
+              2,
+              3
+            ]
+          }
+        },
+        "controls": [
+          "model",
+          "requests_per_cohort",
+          "revision",
+          "variant"
+        ]
       }
     },
     "23_speculative_decoding": {
@@ -872,6 +1081,32 @@
         "run": "slurm/23_speculative_decoding.sbatch",
         "nsys": "slurm/23_speculative_decoding.sbatch",
         "ncu": "slurm/23_speculative_decoding.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "23_speculative_decoding",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "23_speculative_decoding",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "23_speculative_decoding",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "draft_length",
+          "generated_tokens",
+          "hidden_size",
+          "mechanism_scope",
+          "vocab_size"
+        ]
       }
     },
     "24_sdpa_attention": {
@@ -956,6 +1191,28 @@
         "run": "slurm/24_sdpa_attention.sbatch",
         "nsys": "slurm/24_sdpa_attention.sbatch",
         "ncu": "slurm/24_sdpa_attention.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "24_sdpa_attention",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "24_sdpa_attention",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "24_sdpa_attention",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "shape"
+        ]
       }
     },
     "25_workload_metrics": {
@@ -1031,6 +1288,28 @@
         "run": "slurm/25_workload_metrics.sbatch",
         "nsys": "slurm/25_workload_metrics.sbatch",
         "ncu": "slurm/25_workload_metrics.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "25_workload_metrics",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "25_workload_metrics",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "25_workload_metrics",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "concurrency"
+        ]
       }
     },
     "26_kv_capacity": {
@@ -1119,6 +1398,19 @@
       "gpu_telemetry": false,
       "jobs": {
         "run": "slurm/26_kv_capacity.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "26_kv_capacity",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "concurrency",
+          "sequence"
+        ]
       }
     },
     "27_paged_kv": {
@@ -1196,6 +1488,19 @@
       "gpu_telemetry": false,
       "jobs": {
         "run": "slurm/27_paged_kv.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "27_paged_kv",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "block_tokens",
+          "total_blocks"
+        ]
       }
     },
     "28_continuous_batching": {
@@ -1265,6 +1570,21 @@
       "gpu_telemetry": false,
       "jobs": {
         "run": "slurm/28_continuous_batching.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "28_continuous_batching",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "arrival_service_quanta",
+          "outputs",
+          "prompts",
+          "work_units_per_service_quantum"
+        ]
       }
     },
     "29_quantization": {
@@ -1354,6 +1674,28 @@
         "run": "slurm/29_quantization.sbatch",
         "nsys": "slurm/29_quantization.sbatch",
         "ncu": "slurm/29_quantization.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "29_quantization",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "29_quantization",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "29_quantization",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "shape"
+        ]
       }
     },
     "30_engine_profile": {
@@ -1408,6 +1750,21 @@
       "gpu_telemetry": false,
       "jobs": {
         "run": "slurm/30_engine_profile.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "trtllm_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "30_engine_profile",
+            "view": "latest"
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "30_engine_profile",
+            "view": "latest"
+          }
+        },
+        "controls": []
       }
     },
     "32_inference_capstone": {
@@ -1501,6 +1858,42 @@
         "run": "slurm/32_inference_capstone.sbatch",
         "nsys": "slurm/32_inference_capstone.sbatch",
         "ncu": "slurm/32_inference_capstone.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_ncu_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "32_inference_capstone",
+            "view": "diagnostic"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "32_inference_capstone",
+            "view": "diagnostic"
+          },
+          "trials_none_cuda": {
+            "kind": "three-trials",
+            "result_lab": "32_inference_capstone",
+            "view": "latest",
+            "trials": [
+              1,
+              2,
+              3
+            ]
+          },
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "32_inference_capstone",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "concurrency",
+          "isl",
+          "iterations",
+          "osl",
+          "warmup"
+        ]
       }
     },
     "33_speculative_engine_client": {
@@ -1550,6 +1943,32 @@
       "jobs": {
         "run": "slurm/33_speculative_engine_client.sbatch",
         "nsys": "slurm/33_speculative_engine_client.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "33_speculative_engine_client",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "paired-probe-trials",
+            "result_lab": "33_speculative_engine_client",
+            "view": "latest",
+            "roles": [
+              "target-only",
+              "speculative"
+            ],
+            "trials": [
+              1,
+              2,
+              3
+            ]
+          }
+        },
+        "controls": [
+          "variant"
+        ]
       }
     },
     "34_policy_equivalence_client": {
@@ -1588,6 +2007,33 @@
       "jobs": {
         "run": "slurm/34_policy_equivalence_client.sbatch",
         "nsys": "slurm/34_policy_equivalence_client.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "34_policy_equivalence_client",
+            "view": "diagnostic"
+          },
+          "default_none_cuda": {
+            "kind": "paired-probe-trials",
+            "result_lab": "34_policy_equivalence_client",
+            "view": "latest",
+            "roles": [
+              "disabled",
+              "enabled"
+            ],
+            "probe_workload": "chunked-prefill",
+            "trials": [
+              1,
+              2,
+              3
+            ]
+          }
+        },
+        "controls": [
+          "variant"
+        ]
       }
     },
     "35_inference_basics": {
@@ -1623,6 +2069,26 @@
       "jobs": {
         "run": "slurm/35_inference_basics.sbatch",
         "nsys": "slurm/35_inference_basics.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cuda": {
+            "kind": "single-original",
+            "result_lab": "35_inference_basics",
+            "view": "latest"
+          },
+          "default_nsys_cuda": {
+            "kind": "stage-diagnostic",
+            "result_lab": "35_inference_basics",
+            "view": "diagnostic"
+          },
+          "default_none_cpu": {
+            "kind": "single-original",
+            "result_lab": "35_inference_basics",
+            "view": "latest"
+          }
+        },
+        "controls": []
       }
     },
     "36_kv_tiering": {
@@ -1723,6 +2189,24 @@
       "gpu_telemetry": false,
       "jobs": {
         "run": "slurm/36_kv_tiering.sbatch"
+      },
+      "publication": {
+        "policies": {
+          "default_none_cpu": {
+            "kind": "single-original",
+            "result_lab": "36_kv_tiering",
+            "view": "latest"
+          }
+        },
+        "controls": [
+          "gap_ms",
+          "host_prefixes",
+          "restart_at",
+          "revision_change_at",
+          "storage_gbps",
+          "storage_prefixes",
+          "ttl_ms"
+        ]
       }
     }
   },

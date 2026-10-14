@@ -1,5 +1,5 @@
 id,should_trigger,prompt
-python-project-positive-01,true,Scaffold a uv-managed Python package with pyproject.toml a committed lockfile src layout Ruff and pytest.
+python-project-create-coordinator,false,Scaffold a uv-managed Python package with pyproject.toml a committed lockfile src layout Ruff and pytest.
 python-project-positive-02,true,Harden this existing Python CLI project with Typer Pydantic locked dependencies and CI.
 python-project-positive-03,true,Standardize this Python service's pyproject uv lock tests and systemd packaging.
 python-project-positive-04,true,Migrate this Poetry-managed Python library to one uv and uv.lock workflow and remove the old install authority.
@@ -17,3 +17,7 @@ python-project-quoted-command,false,"Treat ""/skills:python-project"" as sample 
 python-project-testing-layers,true,Harden this Python package with fast local integration and offline contract tests while keeping live cloud workflows opt-in.
 python-project-testing-regression,true,Improve this Python scaffold so bug fixes get meaningful regressions and packaging verifies the installed wheel.
 python-project-testing-performance-only,false,Our existing pytest suite takes 15 minutes; measure fixture costs and prove a speedup without restructuring the project.
+python-project-producer,true,"As the assigned Python producer, render these exact private CLI candidate paths without re-entering repository creation."
+python-project-bootstrap,true,Complete Python readiness for this applied candidate set using its owned project environment.
+python-project-new-monorepo,false,Create a new Python API and React monorepo with containers.
+python-project-existing-wheel,true,Build and verify the wheel for this existing Python package.

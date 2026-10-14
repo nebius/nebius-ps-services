@@ -97,7 +97,7 @@ test('formatted numeric conversion is strict', () => {
 for (const mode of ['ready', 'blank', 'clipped', 'stale', 'incorrect']) test('qualification capture waits for visible current controls: ' + mode, async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'run-labs-capture-test-')));
   fs.chmodSync(root, 0o700);
-  const dashboard = {uid: 'example', templating: {list: [{name: 'profile', query: 'small,large'}]}};
+  const dashboard = {uid: 'example', panels: [{type: 'row', title: 'Selected comparison', collapsed: true}], templating: {list: [{name: 'profile', query: 'small,large'}]}};
   const controls = {'Selected comparison generation': [['value', '7']],
     'Correctness of selected results': [['value', 'baseline', '1'], ['value', 'candidate', '1']],
     'Slurm allocation': [['value', 'baseline', '10'], ['value', 'candidate', '11']]};
@@ -106,7 +106,7 @@ for (const mode of ['ready', 'blank', 'clipped', 'stale', 'incorrect']) test('qu
     async waitForTimeout() {waits++;},
     getByText(title) {
       assert.notEqual(title, 'No data', 'Do not inspect unrelated optional panels as required data');
-      return {title, async waitFor() {}};
+      return {title, async waitFor() {}, async click() {assert.equal(title, 'Selected comparison');}};
     },
     locator: () => ({filter: ({has}) => ({async count() {return 1;}, async scrollIntoViewIfNeeded() {if (has.title === 'Selected comparison generation') generationScrolls++;},
       getByRole: () => ({async count() {return controls[has.title].length;}, nth: i => ({async evaluate() {

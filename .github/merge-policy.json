@@ -85,6 +85,13 @@
       ]
     },
     {
+      "file": "courses-ci.yml",
+      "paths": [
+        "courses/**",
+        ".github/workflows/courses-ci.yml"
+      ]
+    },
+    {
       "file": "merge-automation-ci.yml",
       "paths": [
         "**"

@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-
 SCRIPT_PATH = Path(__file__).with_name("scaffold_project.py")
 SPEC = importlib.util.spec_from_file_location("scaffold_project", SCRIPT_PATH)
 if SPEC is None or SPEC.loader is None:
@@ -31,6 +30,16 @@ SPEC.loader.exec_module(MODULE)
 
 class ScaffoldProjectTest(unittest.TestCase):
     def setUp(self) -> None:
+        # These arbitrary byte fixtures isolate executor integrity/race behavior.
+        # Real, unmocked producer binding is covered by test_python_project.py.
+        producer = mock.patch.object(MODULE, "_bind_python_candidate")
+        producer.start()
+        self.addCleanup(producer.stop)
+        ignore_rules = mock.patch.object(
+            MODULE, "_bound_gitignore_rules", return_value=MODULE.SAFE_GITIGNORE_RULES
+        )
+        ignore_rules.start()
+        self.addCleanup(ignore_rules.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.bundle = self.root / "bundle"
@@ -287,14 +296,31 @@ class ScaffoldProjectTest(unittest.TestCase):
         self.assertEqual((self.target / "README.md").stat().st_mtime_ns, before_mtime)
 
     def test_cli_finalize_status_and_apply_wiring(self) -> None:
+        # CLI wiring uses a non-Python owner; Python producer CLI integration
+        # is exercised with real candidates in python-project tests.
+        unit = {
+            "id": "application-source",
+            "kind": "script",
+            "path": "src",
+            "language": "bash",
+            "framework": None,
+            "owner": "shell-scripting",
+            "invocation_scope": "coordinated-candidate",
+        }
         self._write_draft(
             self._draft(
                 [
                     self._operation(
                         "README.md", "# Sample\n", owner="scaffold-project"
                     ),
-                    self._operation("src/sample.py", "value = 1\n"),
-                ]
+                    self._operation(
+                        "src/sample.sh",
+                        "#!/bin/sh\nexit 0\n",
+                        owner="shell-scripting",
+                        materialization_unit_id="application-source",
+                    ),
+                ],
+                materialization_units=[unit],
             )
         )
         finalize = subprocess.run(

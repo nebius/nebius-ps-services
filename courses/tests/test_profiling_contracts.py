@@ -186,10 +186,10 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
             uids.add(dashboard["uid"])
             assets += 1
             assert len(dashboard["uid"]) <= 40
-            assert len({p["id"] for p in dashboard["panels"]}) == len(
-                dashboard["panels"]
-            )
-            for panel in dashboard["panels"]:
+            assert len(
+                {p["id"] for p in generator.walk_panels(dashboard["panels"])}
+            ) == len(list(generator.walk_panels(dashboard["panels"])))
+            for panel in generator.walk_panels(dashboard["panels"]):
                 if "targets" in panel:
                     assert panel["datasource"] == generator.DATASOURCE
                     assert (
@@ -200,7 +200,7 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
             variables = {item["name"]: item for item in dashboard["templating"]["list"]}
             gpu_panels = [
                 target["expr"]
-                for item in dashboard["panels"]
+                for item in generator.walk_panels(dashboard["panels"])
                 for target in item.get("targets", [])
                 if "DCGM_FI_DEV_" in target["expr"]
             ]
@@ -229,7 +229,10 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
                 assert "invariants" in recipe
                 guide = (root / "reference/labs" / f"{recipe['lab']}.md").read_text()
                 assert "../../../lab-guide.html#lab-preparation-scripts" not in guide
-                assert "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)" not in guide
+                assert (
+                    "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
+                    not in guide
+                )
                 assert "grafana import" not in guide
                 assert "grafana validate" not in guide
                 for obsolete in (
@@ -257,8 +260,9 @@ def test_setup_installs_profiling_before_monitoring_and_dashboard_import():
         "New → New folder",
         "export COURSE_GRAFANA_FOLDER_UID=",
         "nebius-cxcli grafana import ./reference/grafana --recursive",
-        "labs/10_compatibility_stack.py --workload small",
         "tools/regular-lab-setup.py monitoring \\",
+        'python3.12 "$HOME/courses/tools/regular-lab-setup.py"',
+        "sbatch slurm/10_compatibility_stack.sbatch --workload small",
         "tools/verify_monitoring.py \\",
         '"$COURSE_PYTHON" tools/readiness.py',
     )
@@ -360,7 +364,9 @@ def test_job_inspection_uses_throughput_units_without_grafana_format_ids(
     )
     artifact = result()
     artifact["measurements"] = {"throughput": 1250000}
-    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(artifact))
+    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(
+        json.dumps(artifact)
+    )
     report = inspector.inspect("01_example", 3)[0]
     assert f"throughput [value]: 1.25e+06 {label}" in report
     assert "count:" not in report and "reqps" not in report
@@ -384,10 +390,14 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
     (tmp_path / "reference/observability.json").write_text(
         json.dumps({"labs": {"01_example": recipe}})
     )
-    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(result()))
+    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(
+        json.dumps(result())
+    )
     # The reader document embeds originals but must never be published again.
     (tmp_path / "results/01_example/jobs/3/result.json").write_text(
-        json.dumps({"schema": "course-job-result/v1", "stages": [{"measurements": [result()]}]})
+        json.dumps(
+            {"schema": "course-job-result/v1", "stages": [{"measurements": [result()]}]}
+        )
     )
     assert inspector.inspect("01_example", 4) == []
     reports = inspector.inspect("01_example", 3)
@@ -396,7 +406,9 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
     )
     bad = result()
     bad["experiment"]["instrumented"] = True
-    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(bad))
+    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(
+        json.dumps(bad)
+    )
     assert inspector.inspect("01_example", 3) == []
 
 
@@ -427,9 +439,20 @@ def test_introductory_diagram_has_a_registered_home_without_renumbering_lessons(
     assert 'id="using-gpu-performance-tools"' not in fundamentals
 
 
-@pytest.mark.parametrize("relative", ["gpu-optimizations/labs/07_profile_workload.py", "llm-training/labs/30_training_profiler.py"])
-@pytest.mark.parametrize("external,tool,expected", [(False, "none", True), (True, "none", False), (True, "nsys", True)])
-def test_internal_profiler_results_record_actual_instrumentation(tmp_path, monkeypatch, relative, external, tool, expected):
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "gpu-optimizations/labs/07_profile_workload.py",
+        "llm-training/labs/30_training_profiler.py",
+    ],
+)
+@pytest.mark.parametrize(
+    "external,tool,expected",
+    [(False, "none", True), (True, "none", False), (True, "nsys", True)],
+)
+def test_internal_profiler_results_record_actual_instrumentation(
+    tmp_path, monkeypatch, relative, external, tool, expected
+):
     from unittest.mock import MagicMock
     from test_course_review_fixes import load_lab
 
@@ -444,12 +467,16 @@ def test_internal_profiler_results_record_actual_instrumentation(tmp_path, monke
             argv.append("--external-only")
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(lab, "load_torch", lambda: torch)
-        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {"gpu_family": "NVIDIA H100"})
+        monkeypatch.setattr(
+            lab, "require_course_gpu", lambda _: {"gpu_family": "NVIDIA H100"}
+        )
         monkeypatch.setattr(lab, "seed_everything", lambda *args: None)
         monkeypatch.setattr(lab, "annotated_operation", lambda fn, name: fn)
         if "training_profiler" in relative:
             monkeypatch.setattr(lab, "build_tiny_lm", lambda *a, **kw: MagicMock())
-            monkeypatch.setattr(lab, "make_language_batch", lambda *a, **kw: (MagicMock(), MagicMock()))
+            monkeypatch.setattr(
+                lab, "make_language_batch", lambda *a, **kw: (MagicMock(), MagicMock())
+            )
         lab.main()
     document = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert document["experiment"]["instrumented"] is expected

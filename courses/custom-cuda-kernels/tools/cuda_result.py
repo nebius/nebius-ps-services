@@ -199,6 +199,11 @@ def main():
             "parameters": parameters,
         },
     }
+    trial = os.environ.get("COURSE_TRIAL_INDEX")
+    if trial is not None:
+        if trial not in {"1", "2", "3"}:
+            raise ValueError("COURSE_TRIAL_INDEX must be 1, 2 or 3")
+        result["experiment"]["trial_index"] = int(trial)
     target = Path(os.environ["COURSE_RESULTS_DIR"]) / f"{lab}-run-{run_id}.json"
     atomic_result(target, json.dumps(result, indent=2) + "\n")
     print(f"Completed CUDA result: {target}")

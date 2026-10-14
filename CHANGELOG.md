@@ -6,6 +6,45 @@ project folder.
 
 ## [Unreleased]
 
+- Keep course and Lab Guide section navigation instant so focus-triggered
+  scrolling cannot overtake keyboard link activation. Add isolated desktop and
+  mobile Playwright navigation regressions and rebuild the course pages.
+
+- Align Inference Lesson 17, its syllabus and completion guidance with the
+  supplied recurrent-projection lab. Distinguish modeled request-steps and
+  batch timing from optional real-model serving and client latency measurements.
+
+- Condense the shared Lab Guide, put selective runtime preparation first, use
+  the compatibility lab's native batch launcher, and distinguish measurements,
+  diagnostics and automatic publication. Remove duplicate setup details and
+  the retired manual publication-initialization reference; refresh the guide.
+
+- Initialize automatic course-result publication through all five normal lab
+  setup scripts. Preserve identities on reruns, allow local-only preparation,
+  include shared initialization dependencies in source synchronization, and
+  remove the separate `publication-init` command.
+
+- Clarify the GPU Fundamentals Lesson 12 entry into Advanced Labs 02 and 08.
+  Align course, readiness and catalog guidance while retaining full-course
+  prerequisites and the sixteen-H100 fabric requirement.
+
+- Automate result publication for all practical course labs through the shared
+  native job runner. Add installation-bound ordering, separate latest/diagnostic
+  dashboards, explicit multi-trial policies and bounded failure/recovery handling;
+  preserve deliberate comparisons and original evidence.
+
+- Enforce shared-helper parity in aggregate course validation. Test all five
+  preparation commands in each isolated practical course copy and check all
+  110 labs' output paths. Add scoped Linux CI for preparation, synchronization
+  and native process cleanup, including protected merge completion wiring.
+
+- Include the shared execution helper in course synchronization so all five
+  preparation commands work on fresh destinations. Let preparation tighten
+  owned result directories to mode 0700 while preserving existing outputs
+  and rejecting unsafe ownership, symlinks and shared-write directories.
+  Reap finished child processes before cleanup so successful lab jobs do not
+  fail when Slurm leaves a terminated `srun` process to collect.
+
 - Retain ownership of detached lab workers after their process-group leader
   exits, so cleanup fails the stage before another profiler starts. Restore
   Advanced Lab 27's qualified GPU-memory comparison instructions.

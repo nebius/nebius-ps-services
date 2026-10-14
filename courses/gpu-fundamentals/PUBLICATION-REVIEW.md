@@ -1,5 +1,59 @@
 # Publication review
 
+## Catalog correctness and navigation — 2026-10-13
+
+Current HTML SHA-256: `5ddfd53a9f3b70f978ced127f0020ebc1beb0c3ef6b6052c966728daf4efe859`.
+The full-catalog source/build checks and three-width browser review pass for
+this artifact. Native instant navigation resolves the reproduced scroll race;
+the shared navigation regression passes twice across all ten course/guide pages.
+See the [catalog review](../docs/course-format-validation.md#catalog-correctness-and-navigation--2026-10-13)
+for the 845-test result, 33 full-page and 60 repeated navigation cases, causal
+controls, screenshots, cleanup, preservation and remaining limits. Dense phone
+diagrams and applicable installed/runtime/live-target qualification remain
+separate; no external publication was performed. Earlier entries are historical.
+
+## Fundamentals entry into Advanced Labs — 2026-10-13
+
+Reviewed `index.html` SHA-256: `872d85aa40eb88043622fa5effc67f5769dd5485e4dbd0f396f7414ed5043c94`.
+
+The scoped entry route is Fundamentals through Lesson 12, successful Advanced
+Lab 02 placement/correctness checks, then Lab 08 and return to Fundamentals.
+The two course orientations, READMEs and syllabuses, the two compact lab
+introductions, Advanced readiness guide and catalog now distinguish this
+assignment from the full Advanced route. Full-course prerequisites, shared
+preparation, operator qualification and the sixteen-H100 fabric remain intact.
+Lab 10 reuse and other lesson assignments were outside this change.
+
+Source/static: 215 focused catalog, link, presentation, authored-guide,
+advanced-course and lesson-sequence tests pass. Both affected native validators,
+selected HTML/archive freshness, scoped Markdown/Ruff and whitespace checks pass.
+Task-start hashes confirm 1,208 lab, launcher, metadata, dashboard, result and
+archive files are unchanged. The generic skill checker has the same baseline and
+final diagnostics (seven Fundamentals, nine Advanced); native profile-aware
+checks remain authoritative. Independent scoped review found no issues.
+
+Browser/visual: nine checks pass in Playwright Test 1.57.0 with owned headless
+Chrome 155.0.8059.40 and isolated contexts at 1440×1000, 390×844 and 320×800.
+Checks cover both Lesson 12 lab links, preserved original pages, pointer/keyboard
+navigation, Advanced guide links, catalog entry requirements, page overflow and
+200% text reflow on the Advanced page and catalog. Representative desktop and
+320px screenshots were visually reviewed with no clipping or overlap found.
+Owned browser processes and contexts closed after the run; no personal profile
+was used. The initial run timed out during cleanup with tracing enabled; the
+same assertions passed with tracing disabled. Final browser proof uses the JSON
+report and screenshots, with no completed trace claimed.
+
+Local evidence group `course-prerequisites-rfjsha1r` retains task-start sources,
+protected hashes, generic-checker comparisons, `prerequisites.spec.cjs`,
+`playwright-verified.config.cjs`, `browser-verified-report.json` and
+`browser-verified/` screenshots. Initial failed-run artifacts remain separate.
+The catalog artifact SHA-256 is
+`2c16552fd34bde21a579686d62f7b261608f5d4a16e2ea382ada3b4fa79fabf9`;
+the generated shared guide is byte-identical to the task-start artifact.
+This is documentation and local reading-route verification; no installation,
+GPU execution or external publication occurred. Existing live-target limits
+remain unchanged; earlier review entries apply to their recorded artifacts.
+
 ## Complete catalog review and alignment — 2026-10-13
 
 Reviewed `index.html` SHA-256: `9cf9b2ecb1bc4b0d05c2882c6d0deb86544f65a1bbceeb9e6c5e105ada3b1128`.

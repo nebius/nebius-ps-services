@@ -163,13 +163,13 @@ run_trial() {
   fi
   if [[ ${phase} == probe ]]; then
     control_profile start
-    "${course_python}" "${course_dir}/labs/34_policy_equivalence_client.py" \
+    COURSE_TRIAL_INDEX=${trial} "${course_python}" "${course_dir}/labs/34_policy_equivalence_client.py" \
       --base-url "http://127.0.0.1:${port}" --model "${model}" \
       --revision "${revision}" --workload prefix-cache --variant "${variant}" \
       --output "${COURSE_RESULTS_DIR}/20-prefix-cache-${variant}-trial-${trial}-digests-run-${COURSE_RUN_ID}.json"
   else
     control_profile start
-    "${course_python}" "${course_dir}/labs/20_prefix_cache_client.py" --variant "${variant}" \
+    COURSE_TRIAL_INDEX=${trial} "${course_python}" "${course_dir}/labs/20_prefix_cache_client.py" --variant "${variant}" \
       --base-url "http://127.0.0.1:${port}" \
       --model "${model}" \
       --revision "${revision}" \
@@ -348,12 +348,12 @@ run_trial() {
     exit 2
   fi
   if [[ ${phase} == probe ]]; then
-    "${course_python}" "${course_dir}/labs/34_policy_equivalence_client.py" \
+    COURSE_TRIAL_INDEX=${trial} "${course_python}" "${course_dir}/labs/34_policy_equivalence_client.py" \
       --base-url "http://127.0.0.1:${port}" --model "${model}" \
       --revision "${revision}" --workload prefix-cache --variant "${variant}" \
       --output "${COURSE_RESULTS_DIR}/20-prefix-cache-${variant}-trial-${trial}-digests-run-${COURSE_RUN_ID}.json"
   else
-    "${course_python}" "${course_dir}/labs/20_prefix_cache_client.py" --variant "${variant}" \
+    COURSE_TRIAL_INDEX=${trial} "${course_python}" "${course_dir}/labs/20_prefix_cache_client.py" --variant "${variant}" \
       --base-url "http://127.0.0.1:${port}" \
       --model "${model}" \
       --revision "${revision}" \

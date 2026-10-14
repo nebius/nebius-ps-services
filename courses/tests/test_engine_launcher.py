@@ -101,7 +101,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     assert argv[argv.index("--host") + 1] == "127.0.0.1"
     for flag in ["--revision", "--tokenizer-revision"]:
         assert argv[argv.index(flag) + 1] == "b" * 40
-    outputs = [p for p in (course / "results").rglob("*.json") if p.name != "result.json"]
+    outputs = list((course / "results").glob("*/jobs/*/stages/*/results/*.json"))
     if mode == "startup-failure":
         assert result.returncode != 0
         assert "exited before becoming ready" in result.stderr
@@ -257,7 +257,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         / f"results/30_engine_profile/jobs/{port - 20000}/stages/normal/logs/trtllm-triton-run-123456789abc.log"
     )
     assert "fixture MPI startup" in log.read_text()
-    outputs = [p for p in (course / "results").rglob("*.json") if p.name != "result.json"]
+    outputs = list((course / "results").glob("*/jobs/*/stages/*/results/*.json"))
     if mode == "startup-failure":
         assert result.returncode != 0
         assert "exited before readiness" in result.stderr

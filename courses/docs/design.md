@@ -2,7 +2,7 @@
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Project Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=implemented priority=P0 version=9 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=implemented priority=P0 version=10 -->
 ### FEAT-001: Standalone course catalog
 
 #### Requirements Covered
@@ -14,6 +14,8 @@
 The existing eight course roots include two reading profiles and six practical packages. The shared guide is generated from README. The requested PyTorch foundation adds a ninth reading/course package using the existing static renderer and diagram manifest.
 
 #### Design Details
+
+Fundamentals prerequisite clarification: keep Lesson 12 executable through Advanced Lab 02 followed by Lab 08. Reading Fundamentals through Lesson 12 supplies this assignment's concepts; Lab 08 follows a successful Lab 02 on the prepared fabric. Scope the broader course prerequisites and Lab 01-first readiness sequence to the full Advanced route. Align both courses' overview/README/syllabus, the two compact lab introductions, Advanced readiness guide and catalog prerequisite/path copy. Preserve sixteen allocated H100 GPUs, two participating ranks, operator fabric qualification, launcher checks, lab identities and runtime sources. Rebuild the two course pages plus the generated catalog/shared guide. Verify the selected route and full route semantically, with native static/parity checks and isolated desktop/390px/320px browser navigation. No Lab 10 reuse changes, installation, live jobs or external publication are included.
 
 Present ten reader resources: Soperator, Lab Guide, GPU Performance Tools, PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, Advanced Labs. PyTorch is resource 04 and Fundamentals becomes 05. Keep Lab Guide outside the course-package registry. Derive all cards, learning-path positions and menus from the shared catalog registry; align README, preparation lookup, prerequisite/onward links and independent navigation expectations. Preserve existing technical prerequisites and numbered labs.
 
@@ -57,6 +59,8 @@ Nine course roots, ten ordered reader resources, correct prerequisites and share
 
 #### Implementation Evidence
 
+Fundamentals prerequisite clarification (2026-10-13): aligned both course orientations, READMEs and syllabuses, Lesson 12 Practice, Advanced Labs 02/08 introductions, the readiness guide and catalog copy around immediate Lesson 12 entry through Lab 02 to Lab 08. Broader prerequisites and Lab 01-first qualification are scoped to the full Advanced route. The compact guide format, operational gates, course/lab identities and all 1,208 protected lab/evidence/archive files remain unchanged. Rebuilt the selected course pages and catalog; the shared guide retained identical bytes. Publication reviews record the final artifact identities and bounded evidence.
+
 PyTorch foundation revision: added resource 04 and a ninth course package. Rebuilt the eleven publications and aligned every catalog/menu, guide and practical entry reference while preserving numbered labs and runtime preparation registries.
 
 Catalog consistency: the canonical registry contains eight course packages and nine reader resources. The catalog, README-derived Lab Guide and all course menus share the same order, with LLM Training, LLM Inference, Custom CUDA Kernels and Advanced Labs numbered 06 through 09. Build help points to the canonical registry; six standalone validator copies and independent catalog expectations agree.
@@ -68,6 +72,8 @@ Catalog-navigation revision: Implemented the shared eight-resource registry, gui
 The renderer registry, catalog entry link, learning path, numbered cards, all seven course switchers, standalone-validator registry, course/root READMEs and root landing page now use the Soperator-first route. README tables and destination trees include all seven courses. Prerequisite labels use course identity; technical prerequisites and lesson/lab identities are unchanged. All eight course/catalog HTML outputs were rebuilt; task-owned deltas were reviewed against pre-existing working files.
 
 #### Verification Evidence
+
+Fundamentals prerequisite clarification (2026-10-13): 215 existing focused tests, both affected native validators, selected build/freshness checks and scoped Markdown/Ruff/whitespace checks pass. Independent review found no issues. Nine isolated headless Chrome 155.0.8059.40 cases pass at desktop, 390px and 320px, covering pointer/keyboard lab and catalog navigation, preserved reading context, prerequisites, overflow and Advanced/catalog 200% text reflow; representative screenshots were visually reviewed. The initial traced run timed out during cleanup; the unchanged assertions passed with tracing disabled, retaining separate evidence. Generic skill-checker diagnostics match task-start artifacts (seven Fundamentals, nine Advanced); native profile-aware checks are authoritative. No live execution or external publication was performed; broader feature delivery remains implemented rather than newly claiming full-course qualification.
 
 PyTorch foundation revision: 306 focused tests, all nine native validators, build/freshness and 33 isolated browser cases pass. All ten resources have exact order, destinations and current identity at desktop, 390px and 320px widths. The no-lab reading route and every new diagram were reviewed. See docs/catalog-navigation-validation.md for current artifact hashes and limits; historical broader feature delivery status remains unchanged.
 
@@ -81,7 +87,7 @@ All seven standalone validators, HTML/helper parity and 69 focused catalog/text-
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=19 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=20 -->
 ### FEAT-002: Shared authoring and publication contract
 
 #### Requirements Covered
@@ -93,6 +99,8 @@ All seven standalone validators, HTML/helper parity and 69 focused catalog/text-
 The packages contain long-form lessons, runnable labs and self-contained HTML.
 
 #### Design Details
+
+Use native instant fragment navigation in the shared course stylesheet. Forced smooth scrolling can race a newly focused TOC link and its Enter activation, leaving the correct hash with the wrong viewport. Preserve native links, focus outlines, sidebar controls, static HTML and every destination; add a headless keyboard regression at 1440, 390 and 320 pixels without corrective scrolling or animation overrides. Retain the catalog's separate presentation unless its navigation reproduces the defect.
 
 The current alignment pass checks all nine course packages and eleven generated reading pages after the PyTorch route changed to sixteen lessons. Restore the existing shared style, heading, appendix, glossary and exact-TOC contracts through targeted source corrections. Read complete lesson teaching and inspect glossary coverage, current prerequisite/readiness language, practical-guide section references and authoring metadata. Preserve declared text-only, reference-only, lessons-only and labs-only exceptions, all practical implementations and prior edits. Regenerate through the shared builder and independently verify source/HTML parity, canonical order, local destinations, alphabetical glossary keys, passive resources and desktop/390px/320px interaction/reflow. Report diagram readability and GPU/runtime limits separately; do not turn this presentation audit into installation, live execution, Git publication or broad teaching rewrites.
 
@@ -153,6 +161,8 @@ One coherent authoring/presentation contract applies to every course.
 
 #### Implementation Evidence
 
+Catalog correctness and navigation (2026-10-13): corrected Inference Lesson 17, its syllabus and README to distinguish the supplied recurrent projection, modeled request-steps and batch timing from optional qualified real-model TP/PP serving. Replaced forced smooth scrolling with native instant navigation in the shared course stylesheet and regenerated all ten course/guide pages. Added the isolated three-width keyboard regression and maintainer instructions. Lab/runtime source, all 3,511 protected lab/launcher/reference files and all six result archives retain their task-start bytes.
+
 Complete-catalog review (2026-10-13): reviewed all 105 lesson/reference chapters and 110 compact guides under the existing profiles. Added the missing Advanced runtime-support TOC entry, corrected three syllabus summary orders and five compact-guide descriptions, added 11 glossary terms and local tensor/operator definitions, clarified two diagram labels, and repaired CUDA capstone/preflight and AIPerf route directions. Lab 09 now illustrates prefill plus one continuation pass with two output tokens; its guide, observability and source/installed campaign recipes agree. Lab algorithms, identities and historical results remain unchanged. Maintainer guidance, changelog and all nine publication reviews reflect the same sources.
 
 Current text/format alignment (2026-10-12): restored the existing all-nine-course contract after the sixteen-lesson PyTorch revision. Added 46 taught-term definitions, consistent glossary sentence casing, accurate course-ending README guidance and the missing Tools operator-profiling diagram. Corrected the supplied two-kernel fusion example, supported normalization widths, optional CUDA Graph/Tile wording, Advanced readiness framing, TTFT proxy terminology and the Lab 05 onward reference. All lesson identities and declared profiles remain intact; practical implementations are unchanged.
@@ -182,6 +192,8 @@ validation and lab-guide maintenance for course maintainers. The Fundamentals
 README labels its publication instruction, including in the generated HTML.
 
 #### Verification Evidence
+
+Current catalog check (2026-10-13): full build/freshness, all nine native validators, shared-helper parity and 845 focused tests pass. A CSS-only counterfactual failed three of 18 smooth-scroll cases versus zero of 18 instant-scroll cases; the committed regression failed two of 12 original-style cases. After source repair, the unchanged 33-case full-page acceptance sequence and 60 repeated navigation cases pass in isolated headless Chrome at 1440, 390 and 320px. Artifact hashes, initial failures, controls, visual review, cleanup and limits are recorded in [the catalog review](course-format-validation.md#catalog-correctness-and-navigation--2026-10-13). Generic checker diagnostics are unchanged. Dense mobile diagram labels and applicable installed/runtime/live-target qualification remain separate; no external publication occurred.
 
 Complete-catalog review (2026-10-13): all nine native validators, full build/freshness and 748 focused tests pass, with three unavailable-Torch skips and one Linux-only skip. A failing-first regression exercises the existing pure generation scheduler for 21 guide/recipe commands. After the AIPerf repair, 113 focused tests pass with three Torch skips. Final read-only review has no remaining concrete finding. Thirty-three isolated Playwright 1.62.1/headless Chrome 155.0.8059.40 cases cover all eleven pages at desktop/390px/320px; the final Inference prose has a separate three-case rerun and every fact record matches the current artifact hash. Computed typography agrees across all courses, source/installed recipes match, all six archives retain their hashes and all 3,249 tracked lab/launcher/environment/dashboard/result/archive files are unchanged. See docs/course-format-validation.md for exact artifact identities, baseline generic-checker diagnostics, earlier harness failures and remaining dense-diagram/mobile and live-target limitations. Broader feature delivery stays implemented; no installation, live execution or publication is claimed.
 
@@ -5316,7 +5328,7 @@ The README generates the shared Lab Guide. Six practical courses contain 110 lab
 
 #### Design Details
 
-The five preparation entrypoints invoke course_bootstrap.support.prepare internally with the discovered catalog or standalone root. This standard-library function uses metadata to create private results/lab/logs and profiles directories plus shared runtime/tool directories, rejects unsafe components without repairing existing permissions, and is idempotent. regular-lab-setup.py retains the explicit monitoring and organize-history actions; monitoring imports optional dependencies only within that path. Synchronization delivers all five entrypoints. Explain preparation once in the Lab Guide and rerun the relevant command after new labs are synchronized; FEAT-041 owns dependency installation and selection.
+The five preparation entrypoints invoke course_bootstrap.support.prepare internally with the discovered catalog or standalone root. This standard-library function uses metadata to create private results/lab/logs and jobs directories plus shared runtime/tool directories. Validate the complete catalog before mutation. For owned result directories with full owner access and no special bits or group/world write permission, tighten the opened no-follow directory descriptor to mode 0700 and revalidate it; preserve files and historical job directories. Reject symlinks, foreign ownership, non-directories and group/world-writable components. Keep runtime/tool-state directories strictly private. Preparation remains idempotent. regular-lab-setup.py retains the explicit monitoring and organize-history actions; monitoring imports optional dependencies only within that path. Synchronization delivers all five entrypoints and their shared course_execution import dependency; an isolated synchronized-tree plan must work without the source checkout on the import path. Explain preparation once in the Lab Guide and rerun the relevant command after new labs are synchronized; FEAT-041 owns dependency installation and selection.
 
 Remove repeated preparation and learner umask commands. Every lab-guide Practice contains a source-verified concise program explanation and one baseline sbatch invocation with capture disabled. Training Lab 32 and Inference Labs 35/36 use CPU-only launchers, preserving their original introductory/deterministic-model paths; optional CUDA diagnostics remain separate. Keep variations and diagnostics in Investigate and necessary builds in prerequisites. Lesson Practice remains its existing context/link presentation.
 
@@ -5363,9 +5375,13 @@ All 110 labs follow the agreed preparation/baseline/diagnostic workflow, focused
 
 #### Implementation Evidence
 
+Result-preparation repair (2026-10-13): synchronization now includes the shared course_execution dependency required by all five entrypoints. Preparation tightens safe owned result directories through no-follow descriptors, creates missing job directories, and preserves historical files. Shared runtime/tool protection and unsafe-path rejection remain strict; all six standalone copies and the Lab Guide are aligned.
+
 Implemented the one-time stdlib preparation and explicit monitoring actions, synchronized root/standalone setup delivery, 110 source-verified program summaries and single baseline Practice commands. Removed 498 repeated shell preparation blocks across learner sources. Added CPU submission, native learner capture metadata, rank/server shell lifecycles and explicit advanced worker-prefix argv. Retained maintainer recipes, domain validation and historical evidence. Updated validators, fixtures, maintainer guidance, changelog and generated publications. The earlier dirty working tree was preserved as the task baseline.
 
 #### Verification Evidence
+
+Both regressions failed against the original implementation. The 400 focused preparation, synchronization, native-runner and bootstrap/selection/learner/campaign checks pass. All five synchronized preparation plans execute; selected native preparation independently established mode-0700 directory sets for all 110 labs and preserved the earlier failure log. Source/helper parity, generated-guide freshness, scoped lint, shell checks and paired-spec validation pass. Only GPU Fundamentals lab 01 received live workload qualification.
 
 Setup, monitoring, native argv, server cleanup, CPU/rank allocation, malformed input, no-clobber output and maintainer regression checks pass locally. All seven native course validators and helper/HTML/archive parity pass. Owned isolated headless Chrome 154.0.8037.93 passes 24 full-page cases at 1440, 390 and 320 pixels, including keyboard controls, fragment targets, local scrolling, no automatic network requests and 200% text reflow; representative views were visually reviewed. The generic skill checker retains only its task-start diagnostics. Scoped shell/Markdown and introduced Python lint checks pass; nine unchanged Python lint findings remain in pre-existing code. PyTorch-dependent tests and actual Slurm/H100/Nsight execution remain unverified in this environment; no target run, install or publication was performed.
 
@@ -5460,7 +5476,7 @@ A subsequent changed-scope alignment passes 2165 tests, all eight course validat
 
 <!-- /FEATURE: FEAT-040 -->
 
-<!-- FEATURE: FEAT-041 reqs=REQ-025 status=ready delivery=verified priority=P1 version=8 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-025 status=ready delivery=verified priority=P1 version=9 -->
 ### FEAT-041: Selective native preparation through five Python scripts
 
 #### Requirements Covered
@@ -5489,6 +5505,8 @@ Centralize learner dependency installation in the shared guide. Add an explicit 
 
 Campaign integration: resolve preparation from actual frozen launcher bindings, not course labels or inherited environment variables. Keep isolated per-lab/profile copies with the canonical course slug as the leaf. A private .course-runtime-source.json binding selects the existing prepared catalog root; runtime loading validates original receipts with the copied course component inputs and current shared implementation, preserving original root and generations. Validate all selected default, dependency and optional launcher runtimes during sync before accepting preflight. Missing runtimes report their existing exact setup command; campaigns never install or forge receipts. Freeze native-jobs/v2 and reject earlier execution contracts while preserving inspection/cancellation and old evidence. Install the reviewed skill using the README project-local npx command and check full payload parity.
 
+Copy-regression prevention: make aggregate validation run canonical-to-standalone helper parity before publication validators. Test all five setup plans in each independently copied practical course with isolated Python and no repository imports. Derive launcher identities and scheduler output parents from all 110 lab records and exercise private directory preparation and preservation. Add a courses-scoped Ubuntu CI workflow with Python 3.12, rsync and process tools; run aggregate validation and focused preparation, synchronization, copied-course and native lifecycle regressions. Register the workflow in the existing CI inventory and completion triggers, preserving trusted checkout validation and exact-result evidence. Retain offline-versus-live evidence boundaries and reading-course profiles.
+
 #### Selected Option
 
 Five explicit preparation groups with a shared selective engine, native defaults and opt-in teaching containers.
@@ -5508,13 +5526,15 @@ Preparation modules/catalog, five scripts, monitoring consumers, native launcher
 - TDD-003: Reruns, interruption and locking preserve data and selected generations; unrelated changes and regular runs preserve specialized runtimes.
 - TDD-004: Native activation, optional containers, metadata-only audit, snapshot sharing and safe retirement have focused regression coverage.
 
+- TDD-005: Stale copied helpers fail aggregate validation; all six isolated copies support every preparation plan; declared launcher output paths match private prepared parents; Linux CI executes zombie and live-worker regressions.
+
 #### Validation Plan
 
 Run focused tests then complete validators, native command tests, helper parity and generated HTML/archive builds. Finish with align code review, lint/syntax, security and wiring gates. Verify vendor-version contracts against official sources before implementation.
 
 For the guide revision, validate ordered H2/H3 navigation against real rendered targets, no links for fenced-code headings, all five current commands and native qualification examples. Rebuild and run freshness/link checks; inspect the complete guide in isolated headless Chrome at desktop, 390px and 320px, including keyboard TOC use, reflow and local scrollers. Record browser evidence separately from earlier installed/live proof.
 
-For catalog alignment, audit all eight course packages and 110 lab guides. Test the guide lookup against actual preparation bindings, exact one-link lab referrals, absence of duplicated setup commands and rejection of stale procedures. Rebuild every publication, run native validators and focused source tests, and check changed browser links and layouts at desktop/mobile sizes. Runtime and historical result hashes must remain unchanged.
+For catalog alignment, audit all nine course packages and 110 lab guides. Test the guide lookup against actual preparation bindings, exact one-link lab referrals, absence of duplicated setup commands and rejection of stale procedures. Rebuild every publication, run native validators and focused source tests, and check changed browser links and layouts at desktop/mobile sizes. Runtime and historical result hashes must remain unchanged.
 
 #### Test Plan
 
@@ -5534,6 +5554,8 @@ Five-script behavior, native dependency selection, preservation and delivery are
 
 #### Implementation Evidence
 
+Added aggregate helper-parity enforcement, isolated six-course/five-command plan tests, all-lab launcher/output-parent repair and preservation checks, and missing/stale-copy rejection tests. Added courses-ci with scoped Ubuntu checks and existing protected merge identity/evidence integration. Updated maintainer guidance and removed its stale launcher-identity and reading-package counts. The test SSH transport now uses explicit exec so process-identity assertions work on both Linux dash and macOS sh.
+
 Implemented launcher-derived preparation inventories, private prepared-root bindings for course-slug campaign copies, native activation proof before preflight, source-owned adapter rebasing, explicit optional container course mounts and native-jobs/v2 rejection of earlier executable plans. Updated guidance, evals, focused tests, README, changelog and six shared runtime copies. The documented npx command installs the aligned project-local skill; public actions, native jobs, claims, recovery and evidence ownership remain.
 
 Implemented the catalog-wide single-referral alignment across all eight courses and 110 labs: each lab links once from Before you start to the shared Lab Guide; a complete course/lab-number table selects the preparation group. Current course introductions, runbooks and version notes use the shared route, with duplicate installers and competing manual setup removed. Native validation rejects missing/duplicate referrals and embedded installers. Source/rendered tests, six validator copies, HTML, publication reviews and changelog are aligned. Runtime-engine source and historical results remain unchanged.
@@ -5543,6 +5565,8 @@ The README-derived Lab Guide now has a dedicated preparation topic with prerequi
 Implemented the five thin entrypoints and shared selective engine, exact 110-lab grouping, native CUDA/vLLM/AIPerf/Transformer Engine recipes, conditional system and container prerequisites, scoped component/runtime fingerprints, shared digest-validated model snapshots, isolated activation and per-job caches. Updated native launchers, monitoring imports, retirement/sync verification, all six standalone copies, learner guides and generated publications. Removed the old filename without an alias. Live CUDA diagnosis proved that a rejected no-op archive ownership change skipped executable permissions; the installer now retains current ownership and fails on extraction errors, and a product-created fresh toolkit generation compiled all selected CUDA targets. Historical files and previous generations remain preserved.
 
 #### Verification Evidence
+
+Copy-prevention alignment: 38 new distribution tests pass; the full offline suite passes 2,623 tests with four Linux-only skips on macOS. After correcting the fixture shell portability defect, the CI-equivalent Linux commands pass all nine validators and 267 tests; two kubectl integration tests skip because kubectl is absent in the disposable container. The final macOS sync suite passes all 110 tests. Merge admission and completion contract suites pass 47 and 29 tests. Actionlint, scoped Markdown, shell syntax/ShellCheck, helper parity, generated freshness and whitespace checks pass; changed Python introduces no Ruff diagnostics relative to baseline. Nested code/security review finds no actionable issues. Hosted GitHub execution and activation await publication; no workflow dispatch, commit or push occurred. Prior live lab 01 job acceptance remains separate; other GPU labs were not rerun for this alignment.
 
 452 focused tests pass, including all 110 recipe selections, optional launcher coverage, real local remote-sync execution, repeated sync, missing/stale/skipped records, source drift, unsafe bindings, adapter rebasing, exact container bind arguments and installed payload parity. All eight native course validators, generated build/freshness, helper parity and scoped lint pass. Portable/Codex/Claude structure and strict frontmatter pass with only the intentional docs-folder warning. Canonical evals contain 18 trigger and 22 quality definitions. Disposable pinned npx installation passes both hosts; the README command using skills 1.7.0 installs 27 matching payload files. Read-only code/security review found no blocker. Clean native trigger/model-quality runs are unavailable without isolated runner API credentials; no live cluster or preparation installation was run. See docs/run-labs-preparation-alignment.md in the enclosing courses project for evidence and limits.
 
@@ -5846,6 +5870,8 @@ All requested surfaces and local checks are aligned; original evidence is unchan
 
 #### Implementation Evidence
 
+Native-stage completion repair (2026-10-13): reap adopted finished children after collecting the direct stage process, and exclude zombie/dead states from process liveness snapshots. Preserve process-group identity checks and failure on actual surviving workers. Apply the same helper to all six practical courses.
+
 Full-branch PR review repair: track verified living process-group members, including Linux-adopted workers, after the detached leader exits. Surviving workers fail the stage and prevent the next profiler stage; recycled member identities cannot authorize signalling. Restore the qualified GPU-memory comparison direction in Advanced Lab 27.
 
 Implemented all 110 compact guides and canonical launchers, twelve retained diagrams, source comments, selection/runtime metadata, atomic reader JSON with native adapters, fresh stage processes, explicit step resources and execution budgets. Linux child adoption retains detached server ownership across early shell exit; forced cleanup fails the stage. Preparation, campaign recipes, original-measurement filtering and copied helpers use the same selectors. Historical evidence remains separate.
@@ -5853,6 +5879,8 @@ Implemented all 110 compact guides and canonical launchers, twelve retained diag
 The alignment follow-up resolves actual fabric scope from validated allocation node counts for the nine existing one-/two-node labs while preserving fixed-step scope and truthful allocation metadata. Oversized JSON produces an explicit data error and failed stage with its original file retained. Host-copy evidence validation consumes the canonical sbatch/nsys recipe and rejects contradictory selections.
 
 #### Verification Evidence
+
+A controlled Linux orphan-zombie fixture failed before the fix; a bounded live diagnostic independently captured a terminated srun zombie as the sole falsely reported survivor. All 66 Linux lifecycle/native tests pass, including rejection and termination of genuinely live detached workers. After removing diagnostics and verifying the installed candidate, a fresh GPU Fundamentals lab 01 normal small job completed with Slurm and batch/step exit 0:0. Independent original-versus-reader verification confirms completed status, no cleanup/data errors, and allclose correctness for 1024 and 1000000 elements on an H100 with PyTorch 2.14.0+cu130. Earlier failed jobs remain unchanged. This verifies normal lab 01 execution and shared directory preparation; other GPU workloads, profiling and publication were not exercised.
 
 Full-branch PR review repair: both ownership regressions fail before the repair and pass afterward; 83 isolated Linux native-job/capture/lifecycle tests pass, including detached leader exit before and after observation. Independent real-subprocess review confirms termination. All nine native validators, build/freshness, helper parity and 33 fresh responsive browser cases pass. See the full-branch PR review entry in docs/course-format-validation.md for current artifacts and retained limitations.
 
@@ -5862,7 +5890,7 @@ Fresh alignment verification: 2,528 tests passed with one Linux-only skip on mac
 
 <!-- /FEATURE: FEAT-044 -->
 
-<!-- FEATURE: FEAT-045 reqs=REQ-029 status=ready delivery=verified priority=P1 version=2 -->
+<!-- FEATURE: FEAT-045 reqs=REQ-029 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-045: Course guide organization and editorial cleanup
 
 #### Requirements Covered
@@ -5874,6 +5902,8 @@ Fresh alignment verification: 2,528 tests passed with one Linux-only skip on mac
 The practical renderer embeds complete READMEs. Five repeat an obsolete lesson/guide template; Advanced Labs embeds extensive implementation detail before its route. The labs-only renderer duplicates guide ordering and omits guide submenu entries. Three reading profiles do not render supporting guides.
 
 #### Design Details
+
+Shared Lab Guide revision: retain README.md as the only authored source and the four existing main topics. Reduce repeated catalog/layout prose; order preparation as lookup, prerequisites, selection, then concise group instructions. Verify examples against current setup selectors, execution manifests, publisher and cxcli sources. Use the compatibility lab's canonical sbatch launcher and exact-job record, with normal measurements separate from profiler-only stages. Explain optional monitoring configuration before preparation, automatic initialization once, and result inspection/retry/comparison afterward. Preserve selected-report privacy, hardware isolation, optional containers and operator recovery boundaries. Correct directly related maintainer references to retired publication initialization. Regenerate only the shared guide through existing preflight/atomic builder APIs; preserve all other current pages and runtime changes.
 
 Condense course READMEs into orientation, prerequisites, first activity, learning route and completion. Preserve distinct evidence limits in existing lab interpretation, version and readiness documents; remove repeated authoring/layout commentary and stale distributed-gate references. Keep worked examples, executable source and declared profiles. Define one shared practical-guide order and display-label mapping for both practical renderers. Keep existing source-derived anchors and glossary placement; no aliases. Rebuild through the existing deterministic builder.
 
@@ -5895,6 +5925,8 @@ Course orientation and supporting Markdown, shared guide presentation, affected 
 
 #### Validation Plan
 
+For the shared-guide revision, run existing command, setup, publication, link and navigation checks, all Bash-block syntax checks, native build freshness and available course validators. Inspect the guide with isolated headless Playwright at 1440px, 390px and 320px, including keyboard navigation, local scrolling and enlarged-text reflow. Bind review evidence to the final HTML digest and compare other pages with the task-start snapshot. No installation, cloud change or GPU execution is authorized.
+
 Run focused tests, all native validators, complete build/freshness and isolated desktop/390px/320px browser review. Apply align for changed-scope code, lint and security review.
 
 #### Test Plan
@@ -5915,9 +5947,15 @@ All nine guides are reviewed, affected publications are current and evidence lim
 
 #### Implementation Evidence
 
+Shared Lab Guide refresh (2026-10-13): condensed the README by about 19%, retained all 110 preparation mappings and four main topics, moved selective setup before group installations, replaced the direct compatibility execution with its canonical sbatch launcher, and consolidated automatic-publication setup, inspection and retry. Kept hardware/isolation, private reports, original results, optional-container and operator-recovery boundaries. Rebuilt only lab-guide.html through the native preflight/atomic builder. Corrected the retired initialization reference in maintainer documentation and the existing setup-order assertion. Runtime implementations were not edited; ten other HTML outputs retain their task-start bytes.
+
 Simplified all nine READMEs and five syllabus template paragraphs; reorganized the six practical guide sections with common titles, ordering and navigation. Retained useful interpretation in four lab-mechanisms guides, corrected five readiness runbooks and the tooling introduction, and preserved shared-guide runtime anchors. Advanced Labs now has matching submenu entries and an onward link. Updated renderer consumers, focused regressions, README, changelog and publication reviews.
 
 #### Verification Evidence
+
+The later catalog correctness/navigation pass resolves the recorded shared-guide heading-arrival gap for the new HTML artifact through the authoritative stylesheet repair. All Lab Guide TOC destinations pass the original viewport criterion at 1440, 390 and 320px, plus two repeated regression passes per width. The failed original artifact trials remain historical evidence. See [the current catalog review](course-format-validation.md#catalog-correctness-and-navigation--2026-10-13); installed/runtime/live qualification remains outside this local check.
+
+Shared Lab Guide refresh: 427 distinct focused tests passed across the initial run and repaired assertion-module rerun; all nine native validators, aggregate helper parity, full generated freshness, 33 Bash syntax checks, 12 read-only preparation plans, scoped lint and whitespace pass. Independent read-only command/security review and final assertion review found no serious issue. Basic three-width Playwright checks and settled visual review passed for the exact final artifact, but stronger rapid keyboard navigation/viewport assertions remain intermittent; the final run passed desktop, failed 390px and was interrupted at 320px. The cause is unestablished, so this revision remains implemented rather than fully verified. Generic course-checker diagnostics match the before artifact and are not a passing gate. See docs/lab-guide/PUBLICATION-REVIEW.md for exact hashes, preserved trial evidence and limitations. No installation, live target or external publication was performed. Earlier evidence below retains its original revision scope.
 
 All nine native validators, complete build/freshness, 353 focused tests and six final exact-order checks pass; three Torch-dependent checks were skipped in the existing test environment. Configured Markdown lint, Ruff and whitespace pass. Twenty-one isolated headless Chrome cases cover all seven changed pages at 1440, 390 and 320 pixels, with keyboard links, responsive layout, local scrolling, passive resources and visual review. Independent review's retained CUDA scope error was corrected and re-reviewed. The 1,546 protected source/lesson/diagram/version/metadata/result files retain their bytes; reading-only pages and catalog are unchanged. Generic checker diagnostics match the exact task-start artifact and remain distinct from native profile acceptance. See [the guide review](course-format-validation.md#course-guide-cleanup--2026-10-13) for identities, initial harness failures and evidence boundaries. No installation, live lab execution or external publication occurred.
 
@@ -6049,5 +6087,90 @@ recorded separately in the [shared publication review](lab-guide/PUBLICATION-REV
 No learner code, lab runtime or result archive changed; no external publication occurred.
 
 <!-- /FEATURE: FEAT-046 -->
+<!-- FEATURE: FEAT-047 reqs=REQ-030 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-047: Shared automatic lab publication
+
+#### Requirements Covered
+
+- REQ-030: Automatic publication for every practical lab.
+
+#### Context Evidence
+
+The native launcher execs course_job.py, which owns stage selection, process cleanup and terminal result collection. Existing publish_results.py accepts an explicit original baseline/candidate pair; Grafana panels and run-labs captures depend on that comparison contract. Runtime activation currently parses optional monitoring settings, so malformed monitoring can incorrectly block a workload.
+
+#### Design Details
+
+Add a shared publication module and supervised runner integration. Register a run-start sequence before execution; after all stage processes are quiescent, checkpoint terminal job evidence and launch the prepared publisher with a bounded deadline. Resolve monitoring in the publisher rather than runtime shell activation. Publication status is independent of benchmark status and originals remain unchanged.
+
+Initialize publication through the shared setup controller used by all five lab-setup scripts. Under the existing setup lock, validate private monitoring settings and, when configured, any existing publication authority before package installation; after successful reconciliation, including cached reruns, initialize or validate the same authority. Missing settings leave setup successful with an explicit unconfigured result. Malformed settings, unsafe paths, binding changes and corrupt existing state fail without resetting history. Read-only plans/help and unselected specialized scripts never initialize. Remove the separate publication-init action. Persist the existing root/workspace/endpoint-bound publisher identity and sequence journal under the canonical prepared root; frozen campaign copies share that authority. Independent installations use distinct identities and Grafana selectors. Missing state never regenerates during a job. Automatic endpoint overrides must match the binding.
+
+Keep group/variant selection catalog-owned and learner commands under "$HOME/courses/tools/". Resolve custom and standalone installations from the script path rather than cwd. Synchronize root course_publication_state.py and publish_results.py alongside the setup scripts and validate this import closure in isolated transferred-tree tests. Move optional workstation monitoring discovery and private-settings copy before login-node preparation in the shared guide; late configuration requires rerunning the owning setup command. Initialization performs only local state work and does not establish live Grafana health. Campaign preparation continues validating existing runtimes without installing dependencies.
+
+Add --job JOB_ID to the existing publisher, separate from explicit pair arguments. Freeze and revalidate original paths, digests, lab/job/profile provenance, selection policy and explicit bounded trial ordinals. Recipe policies cover every execution variant, including controller/rank-zero results, capstones, paired probes, metadata-only checks and diagnostics. Clean latest publication requires whole-job success and correct uninstrumented originals. Diagnostic status includes actual failed, skipped and not-run stages; only declared diagnostic metrics are extracted.
+
+Use independent latest, diagnostic and comparison metric groups. Configuration uses supported experiment/device and resolved topology; diagnostic identity also includes profiler/sanitizer. Metric labels exclude arbitrary run IDs, parameters, paths and hosts. Expose numeric job/time/generation and recipe-approved controls as values. Latest and diagnostic tables preserve artifact/trial/case dimensions; retain existing A/B comparison transformations and UIDs. Campaign capture explicitly opens the comparison row.
+
+Allocate at most five seconds to registration and 45 seconds to supervised finalization within the current reserve. Durable per-key journals and shared locks reject stale sequences. Record sending before PUT and acknowledged before readback. Ambiguous transport quarantines the key, accepting newer candidates without writes. Acknowledged delivery with delayed metrics visibility remains unconfirmed, without quarantine. --resume-publication KEY --expected-generation N --attest-quiescent records an operator attestation after platform-owned transport draining; under the ordinary lock it revalidates the newest candidate and republishes. Readback cannot establish quiescence. Retry retains original sequence; unregistered historical jobs cannot become new latest results.
+
+#### Selected Option
+
+One deterministic shared runner/publisher lifecycle using the existing Python, Slurm, Pushgateway, VMAgent, VictoriaMetrics and Grafana stack. No new service or AI subsystem.
+
+#### Alternatives Considered
+
+Manual-only publication does not meet the learner workflow. Commands appended separately to every launcher duplicate error handling and cannot safely select multi-artifact results. A new collector service adds unnecessary deployment ownership. Pushgateway has no conditional generation update, so uncertain writes require a pause rather than blind retries.
+
+#### Implementation Boundaries
+
+Canonical shared tools and their generated course copies, explicit recipe policies, minimal trial provenance, dashboard generator, validators/tests, shared setup/docs and run-labs source/installed consumers. Preserve unrelated dirty changes and historical evidence. No live infrastructure or Git operation is implied.
+
+#### Test-First Success Criteria
+
+- TDD-001: All catalog variants map to exactly one valid policy; invalid/missing/duplicate evidence cannot replace clean results.
+- TDD-002: Concurrent jobs/retries select the newest eligible sequence; uncertainty prevents every later PUT until attested recovery; hard deadlines and monitoring failures preserve workload status.
+- TDD-003: Generated rows keep configuration/trial identity and comparison campaigns continue to capture only their frozen selection.
+- TDD-004: Every setup group initializes automatically when configured, preserves identity and ordering on reruns, allows absent monitoring, rejects malformed or corrupt state before package installation, and creates no authority after failed preparation or read-only commands. Fresh synchronized root tools work without repository imports; standalone and campaign root ownership remains correct.
+
+#### Validation Plan
+
+Run focused publisher, bootstrap, runner, dashboard and campaign tests, then all native validators, synchronized-copy and build freshness checks, full local tests and Playwright desktop/mobile cases. Apply align. Separate Linux process proof and live cluster qualification from local macOS/static checks.
+
+#### Test Plan
+
+Include all 110 labs and declared variants, multi-trial/probe adapters, status-only recipes, instrumented and failed jobs, hash/identity corruption, missing state, isolated copies, URL overrides, stale replay, delayed PUTs, crash boundaries, recovery races, readback delays, DNS/network stalls and shutdown.
+
+#### Evaluation Plan
+
+Verify source JSON integrity and dashboard readability using isolated fixtures. Live all-variant acceptance requires a separately designated prepared non-production cluster and existing run-labs campaign; do not infer a target from history.
+
+#### Rollout And Rollback
+
+Synchronize tools and regenerated dashboards, copy optional private monitoring settings to the prepared root, then run the owning normal setup command under "$HOME/courses/tools/". Successful setup initializes publication automatically. Rerun the same selected command after late settings arrive; existing identity and ordering remain unchanged. Roll back tools without deleting private publication state. Subsequent native jobs publish automatically. Disable with COURSE_AUTO_PUBLISH=0 while preserving originals, state and explicit comparisons. No automatic history backfill.
+
+#### Done Definition
+
+Every declared practical variant has a validated publication policy and the shared execution path, generated dashboards, docs and tests agree. Report verification boundaries and any unexecuted live checks.
+
+#### Implementation Evidence
+
+Implemented the shared runner registration/finalization hooks and split publication owners: course_publication_state.py owns installation identity, private journal and short bounded locks; course_publication_evidence.py validates complete original sets and frozen hashes; course_publication.py owns ordered delivery, quarantine, supervision and attested recovery. Optional monitoring failures preserve workload status. Recovery re-reads the newest durable offer under the writer lock, without depending on superseded originals. Missing known state cannot reset ordering.
+
+All 110 practical labs and 286 declared variants have explicit policies, including capstone trials, paired serving probes, auxiliary prefix-cache equivalence, external diagnostics and status-only recipes. Six launchers and the shared evidence writers add bounded trial ordinals without changing workload algorithms. The public CLI supplies registered-job retry and explicit recovery while retaining independent selected comparisons. Normal runtime preparation now binds prepared-root identity and target settings automatically; the separate initialization action has been removed.
+
+Generated stable-UID dashboards separate latest results, diagnostics, selected comparisons and telemetry, preserving configuration/trial/role/case/unit dimensions. Updated shared/standalone tools, validators, CI, setup/help, README, maintainer guidance, changelog and source/installed campaign capture. Reading-only courses and historical originals/screenshots remain unchanged.
+
+Version-3 setup integration validates configured settings and authority before installation, initializes only after successful reconciliation, handles late settings and cached reruns, and refuses mid-setup configuration changes. All five public setup scripts share the controller. Root synchronization now delivers both initializer imports and verifies completeness; source and installed campaign guidance, CLI help, learner guide and scoped CI are aligned.
+
+#### Verification Evidence
+
+Version-2 verification: local macOS full suite: 2,708 passed and four Linux-only skips. A separate disposable Linux fixture run passed all 143 publisher, native-job, capture and cleanup tests, including the skipped process-adoption paths. The final focused publisher suite passed 46 automatic and 12 comparison checks; 12 campaign browser tests passed. Regression controls reproduced and then repaired lost-offer stale overwrite, superseded-original recovery and explicit-comparison monitoring coupling. Short-lock contention, original integrity, complete trial/probe sets, bounded supervision, opt-out and benchmark-status preservation are covered.
+
+All nine native course validators, shared-helper parity, complete generated build/freshness, scoped Ruff, configured Markdown lint, Bash syntax and whitespace checks pass. ShellCheck reports only unchanged baseline warnings for unused launcher variables and signal callbacks. The full test run has a non-failing warning about optional NumPy being absent. Explicit recipes cover all 286 variants. The largest generated dashboard bundle is 937,528 bytes. Archive comparison preserves 2,646 non-dashboard entries and changes only the 116 assigned dashboard entries; reading-only sources and historical originals/screenshots have no changes.
+
+Local Grafana 13.0.1 with synthetic metric fixtures and Playwright verified latest, empty, three-trial capstone, status-only, intrinsic diagnostic and selected-comparison views. Desktop tables retain units and provenance; 390-pixel mobile views keep document width bounded and table scrolling exposes trial/unit/value columns. No JavaScript error was observed on the final inspected page. Task-owned containers, networks and browser tab were removed. Read-only code/security review has no remaining reviewed blockers.
+
+Version-3 verification: 147 setup/bootstrap/group/publication tests passed; 344 synchronization/distribution/learner/campaign tests passed; the final standalone/setup batch passed 73 tests, including six isolated standalone/campaign authority checks; 246 focused preparation/guide/campaign alignment tests passed. These batches overlap and are not an aggregate unique count. Fresh real rsync output initialized through isolated Python imports without source-repository access. All nine native validators, shared-copy parity, generated build/freshness, scoped Ruff and Markdown lint, ShellCheck, Bash syntax, CI test selection, whitespace and final read-only code/security review passed. One test-fixture placement error was repaired before the final standalone run; it was not a product defect. Version-3 delivery is implemented and locally verified. No real GPU workload, Slurm submission, monitoring deployment or live metrics ingestion was performed for this change. REQ-030 remains active pending separately scoped live qualification on a designated prepared non-production cluster; local evidence is not all-variant GPU acceptance.
+
+<!-- /FEATURE: FEAT-047 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
