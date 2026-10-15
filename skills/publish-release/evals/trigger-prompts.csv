@@ -13,3 +13,4 @@ publish-release-resume,true,$publish-release --resume --tag 1.2.3
 publish-release-approval-wait,true,$publish-release Publish end to end and continue automatically after protected Actions approval and merge.
 publish-release-design-only,false,Design improvements to publish-release without publishing anything.
 publish-release-approval-alone,false,Approve this unrelated pull request on GitHub.
+checkout-behavior-explanation,false,"Explain how publish-release handles the final local checkout; do not run it or change anything."

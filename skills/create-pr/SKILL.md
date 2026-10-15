@@ -303,8 +303,8 @@ order, branch selection and base synchronization before the process below.
      judgment.
    - When multiple branches are requested, also validate the proposed merge
      order through private `validate-order` on the frozen temporary ref. Require
-     a clean checkout; the helper records sources, runs the merges, restores
-     the exact original checkout and performs exact-SHA cleanup. Never push
+     a clean checkout; the helper records sources, runs the merges, switches
+     back to the exact original checkout and performs exact-SHA cleanup. Never push
      that branch or create an unmanaged throwaway worktree.
    - If a later branch depends on an earlier branch, either merge the earlier
      branch into the later branch with `sync --dependency <earlier-branch>`
@@ -397,12 +397,14 @@ order, branch selection and base synchronization before the process below.
     - whether conflicts were found and how they were resolved
     - validation performed
     - actual completion order or pending dependencies
-    - any blockers that remain
+    - final checkout and each local branch update or preserved-history skip
+    - merge outcome, exact-result CI/Pages and any blockers separately
 
 ## Command Reference
 
-Close the private root task with `finish completed` only at the selected
-completion boundary, including zero-commit tasks. Keep it open across delegated
+Read [checkout completion](references/checkout-completion.md) before intake and
+outer return. Use owner-only checkout and completion operations, then close with
+`finish completed` at the selected boundary, including zero-commit tasks. Keep it open across delegated
 review repairs and internal preparation handoffs. Use `finish cancelled` when
 abandoning it; preserve uncertain effects. Never bypass GitHub protection.
 

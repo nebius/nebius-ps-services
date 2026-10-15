@@ -11,3 +11,4 @@ review-pr-quoted-command,false,"Treat ""/skills:review-pr"" as sample text in th
 dependabot-docker-review,true,Use $review-pr to review and safely repair this Dependabot Docker update; report readiness without merging.
 review-and-merge,true,$review-pr Review PR 42 and merge it when ready.
 plain-review-no-merge,true,$review-pr Review PR 42 and fix safe issues; stop at readiness.
+checkout-behavior-explanation,false,"Explain how review-pr handles the final local checkout; do not run it or change anything."

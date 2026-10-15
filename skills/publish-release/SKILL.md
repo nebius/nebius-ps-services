@@ -114,7 +114,8 @@ setup. Complete follows every step below.
    destinations, unfinished Git operations and missing required capabilities.
 2. Reconcile any existing release checkpoint before doing preparation. A
    completed record still requires fresh remote release/asset verification.
-3. For a new release, begin the canonical create-pr grant before branch changes.
+3. For a new release, begin the canonical create-pr grant with private
+   `--checkout-policy preserve` before branch changes; nested PR calls inherit it.
    Reuse the feature branch; from default, create `release/<tag>` at the captured
    head. Create missing setup assets and prepare release notes/metadata.
 4. Use the serialized content-only preparation helper, then create-pr's review,

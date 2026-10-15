@@ -457,6 +457,69 @@ class InstallationTests(unittest.TestCase):
                 self.assertEqual(receipts[0].read_bytes(), before)
 
 
+    def test_installed_pr_checkout_completion_on_both_hosts(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                project = self.base / f"checkout-{agent}"
+                project.mkdir()
+                env = {**self.env, "SKILLS_AGENT": agent, "PYTHONDONTWRITEBYTECODE": "1"}
+                env.pop("CODEX_THREAD_ID", None)
+                def git(*args):
+                    return subprocess.run(["git", "-C", str(project), *args], check=True,
+                                          capture_output=True, text=True, env=env).stdout.strip()
+                git("init", "-b", "trunk")
+                git("config", "user.name", "Fixture")
+                git("config", "user.email", "fixture@example.com")
+                (project / "tracked.txt").write_text("baseline\n")
+                git("add", "-A")
+                git("commit", "-m", "baseline")
+                seed = git("rev-parse", "HEAD")
+                tree = git("rev-parse", "HEAD^{tree}")
+                remote = self.base / f"checkout-origin-{agent}.git"
+                git("init", "--bare", str(remote))
+                git("remote", "add", "origin", str(remote))
+                git("push", "origin", "trunk")
+                git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+                pr_head = git("commit-tree", tree, "-p", seed, "-m", "PR head")
+                git("push", "origin", f"{pr_head}:refs/heads/remote-pr")
+                git("fetch", "origin")
+                git("switch", "-c", "feature")
+                session = f"checkout-{agent}-session"
+                payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(project),
+                           "session_id": session, "prompt": "merge the selected ordinary PR",
+                           "turn_id" if agent == "codex" else "prompt_id": PROMPT_ID}
+                hook = subprocess.run([sys.executable, "-B", str(self.base / agent / "hooks/hook_runtime.py"),
+                                       "--agent", agent, "--hook", "commit_intent.py"],
+                                      input=json.dumps(payload), env=env, capture_output=True, text=True)
+                self.assertEqual(hook.returncode, 0, hook.stderr)
+                receipts = [path for path in (self.base / agent / "commit-transactions").rglob("intent.json")
+                            if json.loads(path.read_text()).get("session_sha256") == hashlib.sha256(session.encode()).hexdigest()]
+                self.assertEqual(len(receipts), 1)
+                digest = hashlib.sha256(receipts[0].read_bytes()).hexdigest()
+                catalog = self.base / "home/.agents/skills" if agent == "codex" else self.base / agent / "skills"
+                helper = catalog / "commit/scripts/commit_transaction.py"
+                self.assertEqual(helper.read_bytes(), (ROOT / "commit/scripts/commit_transaction.py").read_bytes())
+                def command(action, *args, expected=0):
+                    result = subprocess.run([sys.executable, "-B", str(helper), action,
+                                             "--repo-root", str(project), "--session-id", session,
+                                             "--requested-action", "create-pr", "--intent-sha256", digest, *args],
+                                            env=env, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    return json.loads(result.stdout)
+                command("begin", "--pr-base", "trunk", "--target", "remote-pr")
+                merged = git("commit-tree", tree, "-p", seed, "-m", "Squash result")
+                git("push", "origin", f"{merged}:refs/heads/trunk")
+                command("complete-checkout", "--mode", "record-merge", "--merged-target", "remote-pr", "--result-sha", merged)
+                command("complete-checkout", "--mode", "finalize")
+                closure = command("finish", "--outcome", "completed")
+                self.assertEqual(closure["schema"], "commit-transaction.task-closure.v2")
+                self.assertEqual(git("branch", "--show-current"), "feature")
+                self.assertEqual(git("rev-parse", "feature"), merged)
+                self.assertEqual(git("rev-parse", "trunk"), merged)
+                self.assertEqual(git("for-each-ref", "--format=%(refname)", "refs/heads/remote-pr"), "")
+                self.assertEqual(git("status", "--porcelain"), "")
+                command("complete-checkout", "--mode", "finalize", expected=2)
+
     def test_every_claude_hook_entrypoint_runs_from_installed_payloads(self):
         hooks = {
             "session_start_context.py": "SessionStart", "user_prompt_context.py": "UserPromptSubmit",

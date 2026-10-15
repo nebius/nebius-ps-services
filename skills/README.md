@@ -2086,3 +2086,7 @@ PR readiness, merge settlement, post-merge verification and release execution ha
 independent budgets. Verification retains its deadline in the release checkpoint.
 Only explicit resume renews waiting budgets, and a pending direct async merge
 does not require queue membership.
+
+Ordinary PR workflows use transaction-owned [checkout completion](create-pr/references/checkout-completion.md):
+review switches back without integrating; confirmed merged results refresh only
+eligible local refs; publication callers preserve their prepared checkout.

@@ -15,3 +15,4 @@ commit-polite,true,Could you commit all current changes without pushing?
 commit-trailing,true,Please save these changes in a commit using $commit
 commit-parent-call,true,"The authorized PR workflow calls commit for its next reviewed CI repair."
 commit-parent-discussion,false,"Describe how another skill could call commit; do not commit anything."
+checkout-behavior-explanation,false,"Explain how commit handles the final local checkout; do not run it or change anything."

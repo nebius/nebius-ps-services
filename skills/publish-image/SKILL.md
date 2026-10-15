@@ -111,6 +111,9 @@ helper template, not a documentation stub. Keep it behaviorally aligned with
 the skill-owned `scripts/publish-image-doer.sh`, which remains the canonical
 doer path.
 
+Before PR intake, read the inherited checkout policy in `references/ordinary-publication.md`;
+publication uses private `preserve` policy across nested calls.
+
 ## Guardrails
 
 - Agentic SDLC is excluded; preserve its owners and exact promoted SHA.

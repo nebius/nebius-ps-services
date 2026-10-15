@@ -120,6 +120,43 @@ class CommitContractTest(unittest.TestCase):
             self.assertNotIn("disable-model-invocation: true", self.text(f"{name}/SKILL.md"))
         self.assertIn("allow_implicit_invocation: false", self.text("worktree/agents/openai.yaml"))
 
+    def test_checkout_completion_has_one_owner_and_preserves_handoffs(self):
+        contract = self.text("create-pr/references/checkout-completion.md")
+        for required in (
+            "checkout-target",
+            "complete-checkout",
+            "--mode pause",
+            "--mode record-merge",
+            "--mode finalize",
+            "after closure",
+            "without integrating",
+            "unfinished publication target",
+            "schema",
+            "already-merged observation",
+            "publication",
+            "remote-only",
+        ):
+            self.assertIn(required, contract)
+        for skill in ("create-pr", "review-pr", "merge-pr"):
+            self.assertIn(
+                "checkout-completion",
+                self.text(f"{skill}/SKILL.md").replace(
+                    "checkout completion", "checkout-completion"
+                ),
+            )
+        for skill, ref in (
+            ("publish-release", "orchestration"),
+            ("publish-helm", "ordinary-publication"),
+            ("publish-image", "ordinary-publication"),
+        ):
+            text = self.text(f"{skill}/references/{ref}.md")
+            self.assertIn("--checkout-policy preserve", text)
+            self.assertIn("no child finalizes", text)
+        merge = self.text("merge-pr/references/completion-verification.md")
+        self.assertIn("closes", merge)
+        self.assertIn("Do not switch branches or", merge)
+        self.assertIn("local branch update/skip", merge)
+
 
 if __name__ == "__main__":
     unittest.main()

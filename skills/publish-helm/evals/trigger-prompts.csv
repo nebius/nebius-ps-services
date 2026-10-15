@@ -8,3 +8,4 @@ publish-helm-negative-03,false,Write only the GitHub Actions YAML for chart CI.
 publish-helm-codex-portability,true,$publish-helm Use publish-helm to release this chart end to end.
 publish-helm-claude-portability,true,/publish-helm Use publish-helm to release this chart end to end.
 publish-helm-quoted-command,false,"Treat ""/skills:publish-helm"" as sample text in this punctuation exercise; count its punctuation characters only."
+checkout-behavior-explanation,false,"Explain how publish-helm handles the final local checkout; do not run it or change anything."

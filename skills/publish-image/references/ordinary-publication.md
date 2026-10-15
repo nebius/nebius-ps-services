@@ -45,3 +45,15 @@ Observe the workflow identified by tag, result and configured workflow filename.
 Existing publication environment approvals remain authoritative. Verify the exact
 image tag/digest or OCI chart pull/version/digest and report source, workflow and
 registry evidence separately. A green workflow alone is not registry proof.
+
+## Inherited checkout policy
+
+At canonical create-pr intake explicitly select private `--checkout-policy preserve`.
+The prepared feature checkout and existing local refs remain the publication
+owner's policy throughout nested create/review/merge calls; no child finalizes
+independently. Return authoritative merge evidence for owner recording immediately,
+then keep exact-result CI/Pages and publication checkpoints separate from local
+completion. The publication owner invokes `complete-checkout --mode finalize`
+and closes only at its selected boundary. Timeouts retain the grant; merged
+continuations only observe the existing result, never repair or merge again.
+See create-pr's [checkout completion](../../create-pr/references/checkout-completion.md).

@@ -1816,7 +1816,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=8 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=9 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -2067,6 +2067,24 @@ commits the complete reviewed repository tree across project folders with one
 user action, while casual mentions and raw Git remain denied, workflow owners
 remain isolated, recovery is idempotent, and installation plus fresh-session
 behavior are reported as separate proof gates.
+
+#### Predictable Checkout Completion
+
+The existing deterministic commit transaction owns local checkout completion through create-pr; review-pr coordinates review and merge-pr supplies the authoritative merged result. No separate Git mutation implementation, mandatory worktree, new runtime or public skill flag is introduced. Immutable policy selects ordinary outer completion or publication-preserving checkout. Capture original/default identities and intended final ref at begin, separately from publication scope; resume reuses them and saved targets.
+
+Private checkout-target materializes a selected target only when checkout-dependent work is required. Private complete-checkout distinguishes temporary switch-back, recording a confirmed merge, and terminal finalization. Persist merged result evidence before any fetch; independently verify destination containment before local updates. A failed fetch/result verification still allows switch-back with explicit skipped updates. Once merged, the target cannot reenter repair/sync/publication. Pending CI or resumable interruption keeps its grant open.
+
+Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
+
+Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+
+Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
+
+Implementation evidence: this revision adds strict task, checkpoint and closure v2 schemas, immutable completion policy, journaled private checkout-target and complete-checkout operations, separate completion ref outcomes, merged-target guards and enforced final checkout to the existing commit transaction owner. PR orchestration and bounded publication handoffs inherit that policy. Runtime instructions, READMEs, evaluation cases and Unreleased changelog are aligned. No legacy parser or compatibility shim was introduced.
+
+Verification evidence (2026-10-14): the remote-only squash regression failed against the previous owner and passes with the implementation. All 90 transaction cases passed (86 in the complete run and four subsequent focused additions), together with 6 contract, 95 merge/completion/publication-helper and 57 release tests. Disposable installation passed all 28 tests, including the new Codex/Claude installed-hook and installed-owner lifecycle; that lifecycle was also rerun against the final helper. The rollout regressions preserve terminal old task/closure bytes and archive terminal claims unchanged, while rejecting unfinished old ownership. Strict paired-spec validation, scoped Ruff/syntax/Markdown checks, 21 portable/Codex/Claude skill profile checks, and actual isolated npx discovery, copy parity, repeat installation and isolation checks passed. Changed-scope code and security review found no remaining blocker after repairing and testing a shared FETCH_HEAD race with exact advertised destination fetching.
+
+Native-agent comparative quality probes on Codex and Claude were authentication-unavailable; native trigger/output behavior remains unverified. No personal installation, live GitHub merge, result CI/Pages run, repository commit or push was performed. Delivery remains implemented, not verified; earlier evidence below describes prior revisions only.
 
 #### Implementation Evidence
 
@@ -7683,7 +7701,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=5 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=6 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -7754,6 +7772,24 @@ Capture current repository settings and reconcile old broker effects before reti
 #### Done Definition
 
 Code, instructions, templates and tests agree; independent review passes. Report local implementation separately from Actions policy setup, bootstrap approval and live merge proof.
+
+#### Predictable Checkout Completion
+
+The existing deterministic commit transaction owns local checkout completion through create-pr; review-pr coordinates review and merge-pr supplies the authoritative merged result. No separate Git mutation implementation, mandatory worktree, new runtime or public skill flag is introduced. Immutable policy selects ordinary outer completion or publication-preserving checkout. Capture original/default identities and intended final ref at begin, separately from publication scope; resume reuses them and saved targets.
+
+Private checkout-target materializes a selected target only when checkout-dependent work is required. Private complete-checkout distinguishes temporary switch-back, recording a confirmed merge, and terminal finalization. Persist merged result evidence before any fetch; independently verify destination containment before local updates. A failed fetch/result verification still allows switch-back with explicit skipped updates. Once merged, the target cannot reenter repair/sync/publication. Pending CI or resumable interruption keeps its grant open.
+
+Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
+
+Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+
+Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
+
+Implementation evidence: this revision adds strict task, checkpoint and closure v2 schemas, immutable completion policy, journaled private checkout-target and complete-checkout operations, separate completion ref outcomes, merged-target guards and enforced final checkout to the existing commit transaction owner. PR orchestration and bounded publication handoffs inherit that policy. Runtime instructions, READMEs, evaluation cases and Unreleased changelog are aligned. No legacy parser or compatibility shim was introduced.
+
+Verification evidence (2026-10-14): the remote-only squash regression failed against the previous owner and passes with the implementation. All 90 transaction cases passed (86 in the complete run and four subsequent focused additions), together with 6 contract, 95 merge/completion/publication-helper and 57 release tests. Disposable installation passed all 28 tests, including the new Codex/Claude installed-hook and installed-owner lifecycle; that lifecycle was also rerun against the final helper. The rollout regressions preserve terminal old task/closure bytes and archive terminal claims unchanged, while rejecting unfinished old ownership. Strict paired-spec validation, scoped Ruff/syntax/Markdown checks, 21 portable/Codex/Claude skill profile checks, and actual isolated npx discovery, copy parity, repeat installation and isolation checks passed. Changed-scope code and security review found no remaining blocker after repairing and testing a shared FETCH_HEAD race with exact advertised destination fetching.
+
+Native-agent comparative quality probes on Codex and Claude were authentication-unavailable; native trigger/output behavior remains unverified. No personal installation, live GitHub merge, result CI/Pages run, repository commit or push was performed. Delivery remains implemented, not verified; earlier evidence below describes prior revisions only.
 
 #### Implementation Evidence
 

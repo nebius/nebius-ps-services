@@ -138,6 +138,7 @@ is report-only; review-pr owns repair decisions and final readiness.
 2. For ordinary work, read
    the ordinary completion reference from the installed create-pr skill and
    the commit continuation reference from that same skill.
+   Read create-pr's checkout-completion reference for the inherited policy.
    Honor report-only restrictions and externally owned/fork branch limits.
 3. Delegate complete frozen base-to-head diff analysis to nested read-only
    code-review (or reuse same-operation exact-head/base analysis). Inspect specs,
@@ -148,7 +149,8 @@ is report-only; review-pr owns repair decisions and final readiness.
    metadata and green CI never replace review. Safe repairs may include source
    changes and invalidate earlier head/base review. Review locally;
    never install or run an AI agent on GitHub Actions.
-4. Before editing, use the canonical owner to establish intake and select the
+4. Keep checkout and local refs unchanged for metadata/diff-only review.
+   Before checkout-dependent validation or editing, use the canonical owner to establish intake and select the
    correct PR checkout. Prove its HEAD matches the remote PR head and preserve
    unrelated work. Then classify findings and implement safe, supported repairs
    when authorized and writable. Stop for semantic ambiguity, unsafe changes, unresolved human
@@ -172,7 +174,9 @@ is report-only; review-pr owns repair decisions and final readiness.
    The review coordinator never issues merge effects. The calling
    create-pr/publication/merge-pr owner continues only
    within its existing completion authorization. Standalone review closes its
-   repair transaction after publication and verification. Parent-owned review
+   repair transaction after publication, verification and owner switch-back.
+   At a safe resumable pause, switch back through the owner without integrating
+   default history and keep the grant open. Parent-owned review
    preserves the original receipt, grant, targets and readiness deadline; only
    the completion owner closes at the selected final boundary.
 

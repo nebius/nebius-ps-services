@@ -27,9 +27,9 @@ own authority and do not use this root-task protocol.
    all selected local or remote-only branches, any planned feature, dependencies
    and the temporary validation ref. Fetching refs may precede intake; switching
    branches or moving HEAD must not.
-2. Call private `begin` with the original root receipt and complete frozen scope,
+2. Read [checkout completion](checkout-completion.md), then call private `begin` with the original root receipt and complete frozen scope,
    even for an initially clean branch. From the default branch, create the
-   selected feature at the receipt HEAD before synchronization with the base.
+   selected feature through `checkout-target` at the receipt HEAD before sync.
 3. Validate and review the complete repository candidate. Repeat
    `prepare`/candidate review/`execute` with the same task key for needed repairs.
    Each attempt uses a fresh token; staging remains repository-root `git add -A`
@@ -43,7 +43,8 @@ own authority and do not use this root-task protocol.
    the complete final candidate and affected callers. Renew validation/review
    after changes. Push only the reviewed target with `origin HEAD:<branch>`, inspect current-head
    checks, and continue safe repairs under the same task until complete.
-6. Call private `finish --outcome completed` only at the selected public
+6. Run outer-owner `complete-checkout --mode finalize` under the inherited policy,
+   then call private `finish --outcome completed` only at the selected public
    completion boundary, including zero-commit tasks. Never close it during a
    private preparation handoff or delegated review repairs. Use `finish --outcome cancelled` when abandoning the
    task. Actual uncertain effects remain available for exact metadata-only
@@ -51,8 +52,8 @@ own authority and do not use this root-task protocol.
 
 The immutable grant binds action, original receipt, native session, worktree,
 common directory, target refs, effective origin destinations, base and declared
-dependencies. Mutable checkpoints record only proved commits and reviewed
-synchronization. A scope change or unexplained history is a reconciliation
+dependencies and checkout policy. Mutable publication checkpoints record proved
+commits and reviewed synchronization; completion effects have a separate journal. A scope change or unexplained history is a reconciliation
 problem, not permission to mint authority from a later unrelated prompt.
 
 Disposable repository tests cover clean starts, fast-forwards, multiple targets,

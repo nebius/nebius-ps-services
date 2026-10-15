@@ -204,3 +204,15 @@ can accept a direct merge while it settles in the background. An accepted reques
 does not prove actual merge or queue membership. Additional
 [deployment review gates](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)
 remain enforced; local waiting policy cannot satisfy them.
+
+## Inherited checkout policy
+
+At canonical create-pr intake explicitly select private `--checkout-policy preserve`.
+The prepared feature checkout and existing local refs remain the publication
+owner's policy throughout nested create/review/merge calls; no child finalizes
+independently. Return authoritative merge evidence for owner recording immediately,
+then keep exact-result CI/Pages and publication checkpoints separate from local
+completion. The publication owner invokes `complete-checkout --mode finalize`
+and closes only at its selected boundary. Timeouts retain the grant; merged
+continuations only observe the existing result, never repair or merge again.
+See create-pr's [checkout completion](../../create-pr/references/checkout-completion.md).

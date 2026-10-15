@@ -59,7 +59,8 @@ Public usage: `$merge-pr [<PR-number|PR-URL|current-branch>]`
 ## Required Reads
 
 For workflow execution, read [completion verification](references/completion-verification.md)
-before the merge attempt. Also read [Actions protocol](references/actions-protocol.md)
+before the merge attempt. Read create-pr's checkout-completion reference for
+inherited checkout policy and outer-owner completion. Also read [Actions protocol](references/actions-protocol.md)
 for local review evidence, trusted dispatch and setup prerequisites. It owns the GitHub queries, evidence rules, bounded
 polling, CI conclusions, and branch cleanup. Help requests stop before this read.
 
@@ -79,6 +80,8 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    Reuse code analysis only within this root operation at unchanged exact
    head/base; always refresh GitHub identity, checks, threads, human objections
    and mergeability. An already-merged observation never starts repair work.
+   Begin the canonical create-pr grant before effects, including zero-repair
+   remote-only merges; do not materialize a local PR branch without need.
    Delegate safe repairs to create-pr's private preparation handoff; do not
    mutate branch history here. Unsafe findings and human objections stop.
 3. Wait for applicable current-head CI, synchronize/review again when default
@@ -102,6 +105,8 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    polls; retain the caller grant on timeout and return the exact resume identity.
    Externally queued PRs may be observed read-only, never enqueued by this skill.
 6. After actual merge, preserve known success even if later verification fails.
+   Immediately return the authoritative result to create-pr's owner for private
+   merge recording; merged continuations cannot repair, push or merge again.
    Use the trusted completion helper to verify exact-result CI artifacts and
    configured Pages publication. The completion workflow owns explicit dispatch
    and Pages effects; local observation is read-only. Observe for at most 10,800
@@ -111,8 +116,11 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    timeouts and minute progress; at expiry leave GitHub work running and report
    the exact resume identity. Do not substitute the workflow revision,
    a green feature head or a newer main tip for the tested result SHA.
-7. Delete branches only when explicitly requested and actual merge/destination
-   verification passed. Otherwise retain them. Return exact evidence/blocker.
+7. Return merge/CI/Pages evidence to the outer owner for guarded local completion,
+   including failed or timed-out verification; pending work keeps its grant open.
+   Nested calls never finalize independently. Delete branches only after closure,
+   when explicitly requested and actual merge/destination verification passed.
+   Retain checked-out branches. Return exact evidence/blocker.
 
 ## Guardrails
 
@@ -157,7 +165,8 @@ Return:
 - Post-merge CI and configured Pages outcomes, exact checked SHA, applicable checks/run links and
   actual conclusions, skipped/neutral disclosures, outstanding checks, and
   observation start/deadline when waiting or timing out.
-- Whether branch deletion was requested and performed.
+- Final checkout and each local branch update or explicit preserved-history skip.
+- Whether the grant remains open and branch deletion was requested/performed.
 
 For example, `merged; destination verified; CI failed` is a valid report.
 `queued` is not a completed merge for release-publishing callers. Incomplete

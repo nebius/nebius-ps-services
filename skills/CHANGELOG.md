@@ -4,6 +4,13 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Enforce predictable PR checkout completion through the canonical transaction:
+  preserve remote-only reviews, switch back after local review, fast-forward only
+  eligible original/default refs after verified merge, and retain publication
+  checkout policy. Journal resumable effects separately from publication heads;
+  report local completion independently of exact-result CI/Pages and deletion.
+  Upgrade strict task/checkpoint/closure schemas together without legacy replay.
+
 - Make Grafana MCP setup fail closed on unreadable or malformed registration
   discovery, reject unapproved drift before identity/token writes, and require
   executable equivalent wrappers. Cover repeated setup, one-time renewal,

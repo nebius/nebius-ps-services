@@ -48,7 +48,7 @@ def git(root: Path, *arguments: str) -> str:
     return completed.stdout.strip()
 
 
-class CommitTransactionTest(unittest.TestCase):
+class TransactionFixture(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name).resolve()
@@ -169,6 +169,8 @@ class CommitTransactionTest(unittest.TestCase):
         return result
 
     def finish(self, action="create-pr", outcome="completed"):
+        if action == "create-pr" and outcome == "completed":
+            self.run_helper(*self.task_args("complete-checkout"), "--mode", "finalize")
         return self.run_helper(
             "finish",
             "--repo-root",
@@ -272,6 +274,71 @@ class CommitTransactionTest(unittest.TestCase):
             self.request_assertions["session-1"][-1],
         )
 
+
+class CommitTransactionTest(TransactionFixture):
+    def test_terminal_old_task_evidence_survives_fresh_task(self):
+        self.configure_origin()
+        for outcome in ("completed", "cancelled"):
+            with self.subTest(outcome=outcome):
+                self.authorize("create a PR")
+                self.begin("create-pr", pr_base="main")
+                (self.root / f"old-{outcome}.txt").write_text("old work\n")
+                prepared = self.pr_prepare()
+                if outcome == "completed":
+                    self.pr_execute(prepared)
+                self.finish(outcome=outcome)
+                task = Path(self.task_contexts["session-1"]["task"])
+                claim_path = Path(prepared["claim"])
+                claim = json.loads(claim_path.read_text())
+                self.assertEqual(
+                    claim["state"], "COMMITTED" if outcome == "completed" else "STALE"
+                )
+                # Historical task payloads are opaque to a fresh transaction.
+                # Retain the former strict schemas without teaching the new
+                # owner how to resume or convert them.
+                grant = json.loads(task.read_text())
+                grant["schema"] = "commit-transaction.task.v1"
+                del grant["completion"]
+                transaction._atomic_json(task, grant)
+                digest = transaction._digest_bytes(transaction._stable_json(grant))
+                for suffix, schema in (
+                    (".state.json", "commit-transaction.task-state.v1"),
+                    (".closed.json", "commit-transaction.task-closure.v1"),
+                ):
+                    path = task.with_suffix(suffix)
+                    value = json.loads(path.read_text())
+                    value.update(schema=schema, grant_sha256=digest)
+                    del value["completion"]
+                    for target in value.get("targets", {}).values():
+                        del target["materialized"]
+                        del target["merged_result"]
+                    transaction._atomic_json(path, value)
+                claim["owner_evidence_sha256"] = digest
+                transaction._atomic_json(claim_path, claim)
+                old_claim = claim_path.read_bytes()
+                evidence = {
+                    path: path.read_bytes()
+                    for path in (
+                        task,
+                        task.with_suffix(".state.json"),
+                        task.with_suffix(".closed.json"),
+                    )
+                }
+                self.authorize("create another PR")
+                self.begin("create-pr", pr_base="main")
+                (self.root / f"new-{outcome}.txt").write_text("new work\n")
+                self.pr_execute(self.pr_prepare())
+                self.finish()
+                archived = (
+                    claim_path.parent.parent
+                    / "history"
+                    / claim_path.stem
+                    / f"{transaction._digest_bytes(old_claim)}.json"
+                )
+                self.assertEqual(archived.read_bytes(), old_claim)
+                for path, before in evidence.items():
+                    self.assertEqual(path.read_bytes(), before)
+
     def test_pr_clean_start_fast_forward_first_repair_and_zero_commit_finish(self):
         self.configure_origin()
         self.authorize("create a PR")
@@ -289,6 +356,24 @@ class CommitTransactionTest(unittest.TestCase):
         self.authorize("another clean PR task")
         self.begin("create-pr", pr_base="main")
         self.assertEqual(self.finish()["status"], "completed")
+
+    def test_unfinished_old_claim_blocks_fresh_prepare(self):
+        (self.root / "old-work.txt").write_text("unfinished work\n")
+        prepared = self.pr_prepare(fresh=True)
+        task = Path(self.task_contexts["session-1"]["task"])
+        grant = json.loads(task.read_text())
+        grant["schema"] = "commit-transaction.task.v1"
+        del grant["completion"]
+        transaction._atomic_json(task, grant)
+        before = task.read_bytes()
+        claim = Path(prepared["claim"]).read_bytes()
+        self.authorize("create another PR")
+        self.begin("create-pr", pr_base="main")
+        result = self.pr_prepare(expected=2)
+        self.assertIn("another task owns the active claim", result["reason"])
+        self.assertEqual(task.read_bytes(), before)
+        self.assertEqual(Path(prepared["claim"]).read_bytes(), claim)
+        self.assertFalse(task.with_suffix(".closed.json").exists())
 
     def test_pr_multiple_targets_return_to_earlier_branch(self):
         self.configure_origin()
@@ -376,16 +461,10 @@ class CommitTransactionTest(unittest.TestCase):
             target=["feature/new", "remote-topic"],
             dependency=["remote-topic:feature/new"],
         )
-        git(self.root, "switch", "-c", "feature/new", original)
+        self.run_helper(*self.task_args("checkout-target"), "--branch", "feature/new")
         (self.root / "new.txt").write_text("new\n")
         self.pr_execute(self.pr_prepare())
-        git(
-            self.root,
-            "switch",
-            "-c",
-            "remote-topic",
-            "refs/remotes/origin/remote-topic",
-        )
+        self.run_helper(*self.task_args("checkout-target"), "--branch", "remote-topic")
         result = self.run_helper(*self.task_args("sync"), "--dependency", "feature/new")
         self.run_helper(
             *self.task_args("sync"),
@@ -2251,6 +2330,611 @@ class CommitTransactionTest(unittest.TestCase):
             "Commit exact Task Implementer worker change",
         )
         self.assertEqual(committed["status"], "committed")
+
+
+class CheckoutCompletionTest(TransactionFixture):
+    def completion_args(self, command, *extra):
+        return [
+            command,
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            "create-pr",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+            *extra,
+        ]
+
+    def remote_fixture(self, *, original="feature/test"):
+        self.remote = self.base / "origin.git"
+        git(self.root, "init", "--bare", str(self.remote))
+        git(self.root, "remote", "add", "origin", str(self.remote))
+        git(self.root, "branch", "trunk")
+        git(self.root, "push", "origin", "trunk")
+        git(
+            self.root,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        )
+        self.seed = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "switch", "-c", "remote-pr")
+        (self.root / "change.txt").write_text("PR content\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "PR work")
+        self.pr_head = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "push", "origin", "remote-pr")
+        git(self.root, "switch", original)
+        git(self.root, "branch", "-D", "remote-pr")
+        self.authorize("Review and merge the selected PR")
+        self.begin("create-pr", pr_base="trunk", target=["remote-pr"])
+
+    def squash_remote(self):
+        clone = self.base / "writer"
+        git(self.root, "clone", "--branch", "trunk", str(self.remote), str(clone))
+        git(clone, "config", "user.name", "Test")
+        git(clone, "config", "user.email", "test@example.com")
+        git(clone, "merge", "--squash", "origin/remote-pr")
+        git(clone, "commit", "-qm", "Squashed result")
+        self.result = git(clone, "rev-parse", "HEAD")
+        git(clone, "push", "origin", "trunk")
+
+    def test_remote_only_squash_completion(self):
+        self.remote_fixture()
+        self.squash_remote()
+        self.run_helper(
+            *self.completion_args(
+                "complete-checkout",
+                "--mode",
+                "record-merge",
+                "--merged-target",
+                "remote-pr",
+                "--result-sha",
+                self.result,
+            )
+        )
+        result = self.run_helper(
+            *self.completion_args("complete-checkout", "--mode", "finalize")
+        )
+        self.assertEqual(result["checkout"], "refs/heads/feature/test")
+        for branch in ("trunk", "feature/test"):
+            self.assertEqual(git(self.root, "rev-parse", branch), self.result)
+        self.assertNotIn(
+            "refs/heads/remote-pr",
+            git(self.root, "for-each-ref", "--format=%(refname)", "refs/heads"),
+        )
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        self.assertEqual(self.finish()["status"], "completed")
+
+    def complete(self, mode="finalize", expected=0):
+        return self.run_helper(
+            *self.completion_args("complete-checkout", "--mode", mode),
+            expected=expected,
+        )
+
+    def checkout(self):
+        return self.run_helper(
+            *self.completion_args("checkout-target", "--branch", "remote-pr")
+        )
+
+    def record_merge(self):
+        return self.run_helper(
+            *self.completion_args(
+                "complete-checkout",
+                "--mode",
+                "record-merge",
+                "--merged-target",
+                "remote-pr",
+                "--result-sha",
+                self.result,
+            )
+        )
+
+    def test_zero_repair_review_and_closed_grant(self):
+        self.remote_fixture()
+        self.assertEqual(self.finish()["status"], "completed")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        self.assertIsNone(transaction._local_head(self.root, "refs/heads/remote-pr"))
+        self.assertEqual(self.complete(expected=2)["code"], "task_closed")
+
+    def test_pause_switch_back_resume_reuses_saved_scope(self):
+        self.remote_fixture()
+        self.checkout()
+        self.complete("pause")
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.seed)
+        self.run_helper(*self.completion_args("begin"))
+        self.checkout()
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.pr_head)
+        self.finish()
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+
+    def test_create_from_default_keeps_new_feature_and_carries_dirty_work(self):
+        self.configure_origin()
+        git(self.root, "switch", "-c", "main")
+        (self.root / "local.txt").write_text("preserve me\n")
+        self.authorize("create a PR")
+        self.begin("create-pr", pr_base="main", target=["new-feature"])
+        self.run_helper(
+            *self.completion_args("checkout-target", "--branch", "new-feature")
+        )
+        self.assertEqual((self.root / "local.txt").read_text(), "preserve me\n")
+        self.assertEqual(self.complete(expected=2)["code"], "candidate_changed")
+        self.pr_execute(self.pr_prepare())
+        self.finish()
+        self.assertEqual(git(self.root, "branch", "--show-current"), "new-feature")
+
+    def test_original_default_alias_updates_once(self):
+        self.remote_fixture(original="trunk")
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(list(result["updates"]), ["refs/heads/trunk"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.result)
+        self.finish()
+
+    def test_diverged_original_preserves_history(self):
+        # Establish unique original history before intake.
+        (self.root / "unique.txt").write_text("unique\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "unique original")
+        unique = git(self.root, "rev-parse", "HEAD")
+        # Base and PR branch must predate the unique original commit.
+        git(self.root, "branch", "original-unique")
+        git(self.root, "switch", "--detach", "HEAD~1")
+        git(self.root, "switch", "-c", "base-start")
+        self.remote_fixture(original="original-unique")
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(
+            result["updates"]["refs/heads/original-unique"]["status"], "diverged"
+        )
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), unique)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.result)
+        self.finish()
+
+    def test_missing_default_stays_absent(self):
+        self.remote_fixture()
+        self.finish(outcome="cancelled")
+        git(self.root, "branch", "-D", "trunk")
+        self.authorize("merge remote PR")
+        self.begin("create-pr", pr_base="trunk", target=["remote-pr"])
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(result["updates"]["refs/heads/trunk"]["status"], "missing")
+        self.assertIsNone(transaction._local_head(self.root, "refs/heads/trunk"))
+        self.finish()
+
+    def test_missing_original_and_concurrent_ref_movement_block(self):
+        self.remote_fixture()
+        self.checkout()
+        git(self.root, "branch", "-D", "feature/test")
+        self.assertEqual(self.complete(expected=2)["code"], "history_changed")
+        self.assertEqual(git(self.root, "branch", "--show-current"), "remote-pr")
+        git(self.root, "branch", "feature/test", self.pr_head)
+        self.assertEqual(self.complete(expected=2)["code"], "history_changed")
+
+    def test_dirty_staged_untracked_and_active_operation_block(self):
+        self.remote_fixture()
+        self.checkout()
+        path = self.root / "project-a/tracked.txt"
+        original = path.read_text()
+        path.write_text("dirty\n")
+        self.assertEqual(self.complete(expected=2)["code"], "candidate_changed")
+        git(self.root, "add", "-A")
+        self.assertEqual(self.complete(expected=2)["code"], "candidate_changed")
+        # Test fixture cleanup, not a product recovery operation.
+        git(self.root, "reset", "--hard", "HEAD")
+        extra = self.root / "untracked.txt"
+        extra.write_text("untracked\n")
+        self.complete(expected=2)
+        self.assertEqual(extra.read_text(), "untracked\n")
+        extra.unlink()
+        marker = self.root / ".git/CHERRY_PICK_HEAD"
+        marker.write_text(self.seed + "\n")
+        self.complete(expected=2)
+        self.assertTrue(marker.exists())
+        self.assertEqual(path.read_text(), original)
+
+    def test_ignored_collision_on_checkout_preserves_file(self):
+        self.remote_fixture()
+        (self.root / ".git/info/exclude").write_text("change.txt\n")
+        (self.root / "change.txt").write_text("ignored user content\n")
+        self.run_helper(
+            *self.completion_args("checkout-target", "--branch", "remote-pr"),
+            expected=2,
+        )
+        self.assertEqual(
+            (self.root / "change.txt").read_text(), "ignored user content\n"
+        )
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+
+    def test_foreign_worktree_default_is_skipped(self):
+        self.remote_fixture()
+        foreign = self.base / "foreign"
+        git(self.root, "worktree", "add", str(foreign), "trunk")
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(
+            result["updates"]["refs/heads/trunk"]["status"], "foreign-worktree"
+        )
+        self.assertEqual(git(foreign, "rev-parse", "HEAD"), self.seed)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.result)
+
+    def test_fetch_failure_switches_back_and_records_skips(self):
+        self.remote_fixture()
+        self.checkout()
+        self.squash_remote()
+        self.record_merge()
+        self.remote.rename(self.base / "unavailable.git")
+        result = self.complete()
+        self.assertEqual(result["fetch"], "unavailable")
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        self.finish()
+
+    def test_merged_target_cannot_reenter_repairs(self):
+        self.remote_fixture()
+        self.checkout()
+        self.squash_remote()
+        self.record_merge()
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "task_consumed")
+        self.assertEqual(
+            self.run_helper(*self.task_args("sync"), expected=2)["code"],
+            "task_consumed",
+        )
+        self.assertEqual(
+            self.run_helper(
+                *self.completion_args("checkout-target", "--branch", "remote-pr"),
+                expected=2,
+            )["code"],
+            "task_consumed",
+        )
+
+    def test_partial_batch_keeps_unfinished_original_head(self):
+        self.remote_fixture()
+        self.finish(outcome="cancelled")
+        self.authorize("merge both selected PRs")
+        self.begin("create-pr", pr_base="trunk", target=["remote-pr", "feature/test"])
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(
+            result["updates"]["refs/heads/feature/test"]["status"], "unfinished-target"
+        )
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.result)
+
+    def test_publication_policy_never_updates_local_branches(self):
+        self.remote_fixture()
+        self.finish(outcome="cancelled")
+        self.authorize("publish release")
+        self.begin(
+            "create-pr",
+            pr_base="trunk",
+            target=["remote-pr"],
+            checkout_policy="preserve",
+        )
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(result["fetch"], "not-applicable")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.seed)
+        self.finish()
+
+    def test_interrupt_before_and_after_each_effect_resumes_exactly(self):
+        self.remote_fixture()
+        self.squash_remote()
+        self.record_merge()
+        args = transaction._parser().parse_args(
+            self.completion_args("complete-checkout", "--mode", "finalize")
+        )
+        original_run = transaction._run_git
+        for command in ("merge", "update-ref"):
+            for when in ("before", "after"):
+                seen = []
+
+                def crash(root, arguments, **kwargs):
+                    if arguments[0] == command and not seen:
+                        seen.append(True)
+                        if when == "after":
+                            original_run(root, arguments, **kwargs)
+                        raise RuntimeError("injected effect interruption")
+                    return original_run(root, arguments, **kwargs)
+
+                with mock.patch.object(transaction, "_run_git", side_effect=crash):
+                    # The first applicable effect is interrupted; already-finished
+                    # effects are not repeated on later replay.
+                    try:
+                        transaction.complete_checkout(args)
+                    except RuntimeError:
+                        pass
+                if seen:
+                    pending = json.loads(
+                        Path(self.task_contexts["session-1"]["task"])
+                        .with_suffix(".state.json")
+                        .read_text()
+                    )["completion"]["pending"]
+                    self.assertIsNotNone(pending)
+        result = self.complete()
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.result)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.result)
+        self.assertEqual(len(result["effects"]), 2)
+        self.finish()
+
+    def test_interrupted_target_creation_and_switch_replay(self):
+        self.remote_fixture()
+        args = transaction._parser().parse_args(
+            self.completion_args("checkout-target", "--branch", "remote-pr")
+        )
+        original_run = transaction._run_git
+        for command in ("update-ref", "switch"):
+            for when in ("before", "after"):
+                seen = []
+
+                def crash(root, arguments, **kwargs):
+                    if arguments[0] == command and not seen:
+                        seen.append(True)
+                        if when == "after":
+                            original_run(root, arguments, **kwargs)
+                        raise RuntimeError("interrupted effect")
+                    return original_run(root, arguments, **kwargs)
+
+                with mock.patch.object(transaction, "_run_git", side_effect=crash):
+                    with self.assertRaises(RuntimeError):
+                        transaction.checkout_target(args)
+                self.assertTrue(seen)
+        self.checkout()
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.pr_head)
+        self.finish()
+
+    def test_finish_requires_completion_and_rejects_post_completion_drift(self):
+        self.remote_fixture()
+        self.run_helper(
+            *self.completion_args("finish", "--outcome", "completed"), expected=2
+        )
+        self.complete()
+        git(self.root, "update-ref", "refs/heads/trunk", self.pr_head)
+        self.run_helper(
+            *self.completion_args("finish", "--outcome", "completed"), expected=2
+        )
+
+    def test_unrelated_fetch_head_cannot_select_completion_tip(self):
+        self.remote_fixture()
+        self.squash_remote()
+        self.record_merge()
+        # Make the result object locally available, then an unrelated descendant.
+        git(self.root, "fetch", "origin")
+        wrong = git(
+            self.root,
+            "commit-tree",
+            git(self.root, "rev-parse", f"{self.result}^{{tree}}"),
+            "-p",
+            self.result,
+            "-m",
+            "unrelated other branch",
+        )
+        args = transaction._parser().parse_args(
+            self.completion_args("complete-checkout", "--mode", "finalize")
+        )
+        original_run = transaction._run_git
+
+        def concurrent_fetch(root, arguments, **kwargs):
+            result = original_run(root, arguments, **kwargs)
+            if arguments[0] == "fetch":
+                (self.root / ".git/FETCH_HEAD").write_text(wrong + "\t\tother branch\n")
+            return result
+
+        with mock.patch.object(transaction, "_run_git", side_effect=concurrent_fetch):
+            transaction.complete_checkout(args)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.result)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.result)
+        self.finish()
+
+    def test_result_not_contained_allows_only_switch_back(self):
+        self.remote_fixture()
+        self.checkout()
+        self.result = self.pr_head  # Unmerged PR ancestry is not squash result proof.
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(result["fetch"], "unavailable")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.seed)
+        self.finish()
+
+    def test_original_is_squash_merged_target_preserves_unique_commits(self):
+        self.remote_fixture()
+        self.finish(outcome="cancelled")
+        git(self.root, "switch", "trunk")
+        git(self.root, "update-ref", "refs/heads/feature/test", self.pr_head, self.seed)
+        git(self.root, "switch", "feature/test")
+        git(self.root, "push", "origin", "feature/test")
+        self.authorize("merge current PR")
+        self.begin("create-pr", pr_base="trunk", target=["feature/test"])
+        self.squash_remote()
+        self.run_helper(
+            *self.completion_args(
+                "complete-checkout",
+                "--mode",
+                "record-merge",
+                "--merged-target",
+                "feature/test",
+                "--result-sha",
+                self.result,
+            )
+        )
+        result = self.complete()
+        self.assertEqual(
+            result["updates"]["refs/heads/feature/test"]["status"], "diverged"
+        )
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.pr_head)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.result)
+        self.finish()
+
+    def test_nondefault_merge_does_not_refresh_default_or_original(self):
+        self.remote_fixture()
+        self.finish(outcome="cancelled")
+        git(self.root, "push", "origin", "trunk:refs/heads/release")
+        git(self.root, "fetch", "origin")
+        self.authorize("review nondefault PR")
+        self.begin("create-pr", pr_base="release", target=["remote-pr"])
+        self.checkout()
+        self.squash_remote()
+        self.record_merge()
+        result = self.complete()
+        self.assertEqual(result["fetch"], "not-applicable")
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.seed)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+
+    def test_ref_race_is_rejected_without_overwriting_new_head(self):
+        self.remote_fixture()
+        self.squash_remote()
+        self.record_merge()
+        args = transaction._parser().parse_args(
+            self.completion_args("complete-checkout", "--mode", "finalize")
+        )
+        original_run = transaction._run_git
+        seen = []
+
+        def move_ref(root, arguments, **kwargs):
+            if (
+                arguments[:3] == ("update-ref", "--no-deref", "refs/heads/trunk")
+                and not seen
+            ):
+                seen.append(True)
+                git(
+                    self.root, "update-ref", "refs/heads/trunk", self.pr_head, self.seed
+                )
+            return original_run(root, arguments, **kwargs)
+
+        with mock.patch.object(transaction, "_run_git", side_effect=move_ref):
+            with self.assertRaises(transaction.TransactionError):
+                transaction.complete_checkout(args)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.pr_head)
+        self.complete(expected=2)
+
+    def test_registered_worktree_race_blocks_unchecked_ref_update(self):
+        self.remote_fixture()
+        self.squash_remote()
+        self.record_merge()
+        args = transaction._parser().parse_args(
+            self.completion_args("complete-checkout", "--mode", "finalize")
+        )
+        occupied = transaction._occupied_elsewhere
+        calls = []
+
+        def acquire(root, ref):
+            if ref == "refs/heads/trunk":
+                calls.append(ref)
+                if len(calls) == 2:
+                    git(
+                        self.root,
+                        "worktree",
+                        "add",
+                        str(self.base / "racing-worktree"),
+                        "trunk",
+                    )
+            return occupied(root, ref)
+
+        with mock.patch.object(transaction, "_occupied_elsewhere", side_effect=acquire):
+            with self.assertRaises(transaction.TransactionError):
+                transaction.complete_checkout(args)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.seed)
+
+    def test_old_task_schema_and_mutated_final_policy_are_rejected(self):
+        self.remote_fixture()
+        path = Path(self.task_contexts["session-1"]["task"])
+        grant = json.loads(path.read_text())
+        transaction._atomic_json(
+            path, {**grant, "schema": "commit-transaction.task.v1"}
+        )
+        self.run_helper(*self.completion_args("begin"), expected=2)
+        transaction._atomic_json(path, grant)
+        self.checkout()
+        self.complete()
+        state_path = path.with_suffix(".state.json")
+        state = json.loads(state_path.read_text())
+        state["completion"]["checkout"] = "refs/heads/remote-pr"
+        transaction._atomic_json(state_path, state)
+        git(self.root, "switch", "remote-pr")
+        self.run_helper(
+            *self.completion_args("finish", "--outcome", "completed"), expected=2
+        )
+
+    def test_switch_back_journal_survives_before_and_after_effect(self):
+        self.remote_fixture()
+        self.checkout()
+        args = transaction._parser().parse_args(
+            self.completion_args("complete-checkout", "--mode", "pause")
+        )
+        original_run = transaction._run_git
+        for when in ("before", "after"):
+
+            def crash(root, arguments, **kwargs):
+                if arguments[0] == "switch":
+                    if when == "after":
+                        original_run(root, arguments, **kwargs)
+                    raise RuntimeError("switch interruption")
+                return original_run(root, arguments, **kwargs)
+
+            with mock.patch.object(transaction, "_run_git", side_effect=crash):
+                with self.assertRaises(RuntimeError):
+                    transaction.complete_checkout(args)
+        self.complete("pause")
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+        self.run_helper(*self.completion_args("begin"))
+        self.checkout()
+        self.finish()
+
+    def test_ignored_collision_blocks_fast_forward_without_losing_content(self):
+        self.remote_fixture()
+        self.squash_remote()
+        self.record_merge()
+        (self.root / ".git/info/exclude").write_text("change.txt\n")
+        (self.root / "change.txt").write_text("ignored user content\n")
+        self.complete(expected=2)
+        self.assertEqual(
+            (self.root / "change.txt").read_text(), "ignored user content\n"
+        )
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        self.assertEqual(git(self.root, "rev-parse", "trunk"), self.seed)
+
+    def test_fetch_timeout_still_switches_back_and_keeps_grant_open(self):
+        self.remote_fixture()
+        self.checkout()
+        self.squash_remote()
+        self.record_merge()
+        args = transaction._parser().parse_args(
+            self.completion_args("complete-checkout", "--mode", "finalize")
+        )
+        original_run = transaction._run_git
+
+        def timeout(root, arguments, **kwargs):
+            if arguments[0] == "fetch":
+                raise transaction.TransactionError("injected fetch timeout")
+            return original_run(root, arguments, **kwargs)
+
+        with mock.patch.object(transaction, "_run_git", side_effect=timeout):
+            result = transaction.complete_checkout(args)
+        self.assertEqual(result["fetch"], "unavailable")
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.seed)
+        task = Path(self.task_contexts["session-1"]["task"])
+        self.assertFalse(task.with_suffix(".closed.json").exists())
+        self.run_helper(*self.completion_args("begin"))
+        self.assertEqual(
+            self.run_helper(
+                *self.completion_args("checkout-target", "--branch", "remote-pr"),
+                expected=2,
+            )["code"],
+            "effect_unknown",
+        )
 
 
 if __name__ == "__main__":

@@ -20,9 +20,9 @@ belongs only to its intake branch. Never construct private paths manually.
 
 For PR tasks add `--pr-base <base>` and one `--target <branch>` per selected
 branch. Freeze the whole target set before switching: local refs, remote-only
-refs, or a planned feature ref when starting on the default branch. Create a
-planned feature at the receipt HEAD; create a remote-only local branch at its
-captured remote SHA. The helper verifies that checkpoint before any commit.
+refs, or a planned feature ref when starting on the default branch. Use private `checkout-target` only when local work requires the selected branch.
+It creates a planned feature at the receipt HEAD or a remote-only target at its
+captured SHA; metadata/diff-only review leaves remote-only branches absent. The helper verifies that checkpoint before any commit.
 Optional repeated `--dependency <child>:<parent>` freezes an acyclic dependency
 map. `--validation-branch <new-temporary-branch>` reserves a non-publication ref
 for ordered validation. Scope cannot be expanded on retry.
@@ -68,7 +68,7 @@ helper crash; uncertain effects remain blocked for reconciliation.
 For multiple branches, use `validate-order` with the same task arguments and
 one `--branch <target>` per target in the declared dependency order. It uses
 only the reserved scratch ref and verified source checkpoints, records merge
-progress, restores the exact original checkout and deletes the scratch ref by
+progress, switches back to the exact original checkout and deletes the scratch ref by
 its expected SHA. It never publishes that ref or modifies target histories.
 Conflicts and interrupted cleanup retain ownership evidence. Unexpected
 checkout/ref changes require reconciliation, never blanket reset or cleanup.
@@ -95,3 +95,17 @@ Errors include `code`, `retryable` and `next_action`: retry only a proved
 no-commit candidate failure; reconcile review/history/ownership failures at
 their owner. Secret hazards, unknown effects, SDLC ownership and required human
 GitHub approval remain boundaries. Task metadata cannot bypass them.
+
+## Checkout completion
+
+For PR work read [checkout completion](../../create-pr/references/checkout-completion.md).
+The same owner implements private `checkout-target` and `complete-checkout`;
+no public skill flags change. Immutable ordinary/preserve policy and original/
+default ref identities remain separate from publication targets. Per-target
+materialization and merged-result state prevent false local-branch requirements
+and repairs after merge. Completion-only fast-forwards retain their own journal
+and never replace reviewed publication checkpoints. Finish requires the declared
+checkout and every completed or intentionally skipped ref update.
+
+Task/checkpoint/closure v2 is strict: old transactions must complete with their
+existing owner before installation. Do not migrate authority or reopen closures.

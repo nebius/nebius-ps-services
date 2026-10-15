@@ -116,3 +116,11 @@ Native invocation and live publication evidence must be verified separately.
 - `scripts/publish-release-doer.sh`: deterministic release primitives.
 - `assets/`: changelog, aligned runnable helper and release-workflow templates.
 - `scripts/test*.py`, `evals/`: executable and agent-evaluation coverage.
+
+### Local checkout completion
+
+The canonical commit transaction owns safe target checkout and outer completion.
+See [the completion contract](../create-pr/references/checkout-completion.md) for
+review switch-back, create-only behavior, verified-result fast-forwards, resumed
+work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
+are reported independently. No public skill flags are added.

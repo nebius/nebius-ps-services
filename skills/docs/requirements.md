@@ -1027,6 +1027,10 @@ Agentic SDLC, or transaction-owned safety.
   candidate drift, no-commit failure, unknown effects, review, scope/history
   drift and closure. Source, installed and native evidence remain separate.
 
+- AC-011: PR grants freeze a completion policy, intended final checkout and original/local-default ref identities separately from publication targets. Only the transaction owner may check out targets or complete checkout. Default remains forbidden as a publication target. Remote-only no-effect targets may remain absent locally.
+- AC-012: Completion journals effects before execution, verifies exact results, preserves publication checkpoints and supports interruption/resume without recapturing initial context. Check clean state, Git operations, origin/repository identity, expected heads, ignored collisions and worktree ownership. Unchecked-out refs use expected-old-value updates; integrate only fast-forwards. Closed grants permit no further effects.
+- AC-013: Completed closure verifies the declared checkout and each completed or explicit skipped update. Missing original refs, unexpected movement, dirt and unfinished effects block closure. Divergence preserves history. Fetch or result-verification failure permits safe switch-back without updates. Pending work retains authority; merged targets cannot be repaired, synchronized, pushed or merged again.
+
 #### Negative Criteria
 
 - NC-001: Raw `git add`, path-scoped staging, `git add .`, composed or wrapped
@@ -3494,6 +3498,10 @@ Ordinary create-pr performs complete local code review before publication and st
 - AC-012: No scheduler or unattended agent initiates work. An operator starts the same local workflow for ordinary and Dependabot PRs, including major updates; dependency metadata never replaces review or CI.
 - AC-013: CI aggregation excludes orchestration checks only through authoritative GitHub Actions app, repository, check-suite/run and configured workflow/event provenance. Names and prefixes cannot exempt checks; unknown provenance remains gated.
 - AC-014: Workflow tests locate exactly one setup-uv action by repository and require a full immutable commit SHA, while retaining tool-version, cache-input, condition and ordering assertions. Valid Dependabot SHA updates require no duplicated golden hash change.
+
+- AC-015: Review without checkout-dependent work leaves local refs and checkout alone. Checkout-dependent review switches back at completion or safe pause without integrating default history. Create-only from default leaves its new feature checked out; visiting existing targets switches back at the outer boundary.
+- AC-016: Following confirmed merge and verified destination containment, fetch that destination, fast-forward eligible existing local default/original branches and switch back to the original branch, including after CI or Pages failure/timeout. Preserve unique/diverged histories; never implicitly merge, rebase, reset or recreate missing refs. Resolve the actual default branch. Squash proof uses the authoritative result, not PR-head ancestry.
+- AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
 
 #### Negative Criteria
 
