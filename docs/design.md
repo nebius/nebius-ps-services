@@ -86,7 +86,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=5 -->
 ### FEAT-002: Shared protected merge automation
 
 #### Requirements Covered
@@ -107,6 +107,8 @@ PR, CI and scheduled events maintain the CI-only Required CI aggregate for ordin
 
 Completion schedules recover only already-authorized operator-dispatched positive-review intents. Resolve the authoritative result through GraphQL mergeCommit.oid after independently binding merged state, PR number, reviewed head and base repository/ref; the pinned REST version has no result field. Missing or inconsistent result evidence stops before completion effects. Preserve duplicate suppression, uncertain-effect journals, authoritative result ancestry, explicit result CI and Pages dispatch. Each CI execution job loads its checkout validator from the trusted workflow revision and validates receipt and authoritative result before setup/cache restoration; fetch credentials remain process-local. Release publishers tag only the verified actual merge result. Agentic SDLC, existing credentials and Dependabot scheduling/configuration stay unchanged.
 
+Candidate discovery captures the helper exit status explicitly before shell errexit can discard its stdout. On failure the workflow prints a fixed message containing the exit status and any nonempty sanitized helper output to stderr, then exits with the original status. Only successful discovery appends targets to GITHUB_OUTPUT. Keep the deployed workflow and reusable template identical after their existing path/trigger normalization. This localized repair leaves helper JSON, transport-error suppression, API deadlines, retries, receipt validation and downstream permissions unchanged.
+
 #### Selected Option
 
 Python, Bash, gh and deterministic GitHub Actions using GITHUB_TOKEN. Agentic review/repair remains local; no hosted model runtime or new cloud services.
@@ -125,6 +127,7 @@ Ordinary review/merge/create and publication owners, reusable workflows, broker/
 - TDD-002: Safe Dependabot source repairs invalidate old review; head/base changes, objections and missing/failed CI stop the operation.
 - TDD-003: Standalone review and automatic events cannot initiate merging; ordinary/fork Required CI still reports.
 - TDD-004: Interrupted completion, exact checkout, duplicate suppression, Pages and verified-result tags retain their safeguards.
+- TDD-005: Execute the actual candidate shell block with offline helper stubs: empty/populated success arrays, blocked/pending/arbitrary nonzero statuses, empty failure output, unchanged output files on failure, one invocation and no environment-secret disclosure.
 
 #### Validation Plan
 
@@ -148,9 +151,13 @@ Code, instructions, templates and tests agree; independent review passes. Report
 
 #### Implementation Evidence
 
+Implemented candidate diagnostic visibility in the deployed completion workflow and its reusable template. Both capture the helper status, print a generic exit-status message plus nonempty sanitized output on failure, preserve the status, and publish targets only on success. The helper, transport-error suppression, API deadline, receipt gates and permissions are unchanged.
+
 Implemented universal positive COMMENT review admission and explicit trusted operator dispatch. Deleted dependency metadata admission, its producer/template, policy key and obsolete check exclusion. Removed rollout controls with no replacement or compatibility path. Completion selection and CI checkout require operator-dispatched positive-review intents; immutable receipts, repeated CI/review gates, exact-result checkout, journals and publication ownership remain. Dependabot configuration is unchanged. Updated instructions, reusable assets, evaluations, READMEs and Unreleased changelogs; installed the four changed skill payloads from their verified source owners.
 
 #### Verification Evidence
+
+Candidate diagnostic visibility: the new executable shell regressions failed against the original workflow for all four failure scenarios, then passed after the repair. All 32 completion tests and 56 merge-gate tests pass, including deployed/template parity. Independent read-only code/security review found no blocking issue and separately passed the three new regression tests. Actionlint, Bash syntax, ShellCheck, Ruff lint/format, scoped Markdown and paired-spec validation pass. This proves the local logging repair only; the original API failure remains unconfirmed, and the repaired workflow has not been published or executed on GitHub.
 
 Historical foundation evidence: 179 focused tests and initial skill/workflow checks passed; the maintainer bootstrap PR passed 41 checks with 13 expected skips, and cxcli passed 8,278 tests. The bootstrap merged on 2026-10-08 and legacy Pages built that result. A later alignment passed 77 merge/completion/publication/template tests and 21 service checks with source/installed parity. These results do not verify this redesign or token-driven completion. Current source, installed, CI and live evidence must be recorded separately after implementation; delivery remains unverified until acceptance is observed.
 

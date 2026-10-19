@@ -22,9 +22,10 @@ Follow each lesson's lab links rather than numerical lab order.
 
 ## Before the first lab
 
-Prepare one full, non-MIG H100 per local lab using the
-[Lab Guide](../lab-guide.html#lab-preparation-scripts). Reuse a qualified advanced
-cluster for one-GPU allocations when available. Check
+Use one full, non-MIG H100 per local lab; a qualified advanced cluster can
+supply one-GPU allocations. Follow the [Lab Guide](../lab-guide.html#lab-preparation)
+to synchronize sources and prepare the available lab software. Check the setup
+summary for failures or hardware skips, then review
 [Versions and environment](VERSIONS.md) and the
 [readiness checks](reference/cluster-smoke-test.md), then run:
 

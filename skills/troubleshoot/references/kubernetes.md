@@ -5,7 +5,32 @@ plane ownership, container runtime, CNI, CSI, DNS, ingress or gateway, and
 workload deployment model. Verify version-sensitive behavior against the
 matching Kubernetes and vendor documentation.
 
-## Architecture And Component Inventory
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Ready object, failed workload | wrong endpoints / policy / resource limit / application fault | affected pod request, current EndpointSlice and container/namespace identity | control-plane readiness does not prove data-path success | follow request to selected endpoint then Linux/network/storage owner |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
+## Failing Path And Component Identity
 
 Map the relevant path across API server, etcd, scheduler, controller manager,
 cloud controller, admission and policy, workload controller, Service and DNS,
@@ -19,8 +44,8 @@ account, RBAC, node, topology, rollout, and recent change history.
 
 ## Component Verification
 
-For every relevant control-plane, node, add-on, workload, and external
-dependency component, verify version and existence, active configuration,
+For implicated control-plane, node, add-on, workload or external dependencies,
+select checks needed by the current explanation: version, active configuration,
 desired versus observed state, health and restart history, dependency
 reachability, authentication and authorization, CPU and memory pressure,
 ephemeral and persistent storage, PID pressure, clock sync, and recent changes.
@@ -29,7 +54,7 @@ Status is scoped evidence: a Ready pod does not prove request handling, a Ready
 node does not prove CNI or storage data paths, and a successful API read does not
 prove scheduler, admission, kubelet, or workload health.
 
-## Mandatory Logs And Events
+## Implicated Logs And Events
 
 Correlate timestamp, resource UID, pod, container, node, restart count, request
 or trace ID, and rollout revision. Examine as relevant:

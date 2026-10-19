@@ -441,18 +441,20 @@ The 317 focused sync/controller tests pass, including source/installed payload p
 
 <!-- /FEATURE: FEAT-007 -->
 
-<!-- FEATURE: FEAT-008 reqs=REQ-008 status=ready delivery=verified priority=P1 version=1 -->
+<!-- FEATURE: FEAT-008 reqs=REQ-008 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-008: Prepared runtime binding for isolated campaigns
 
 #### Requirements Covered
 
-- REQ-008: Reuse the five-script managed preparation.
+- REQ-008: Reuse unified managed preparation.
 
 #### Context Evidence
 
 scripts/prepare.py copies courses into small/large leaf directories with no runtime store. Native runtime discovery requires the course slug and validates receipts against the original prepared root. Current preflight only accepts prepared_assets as a boolean, and environment guidance still suggests runtime overrides.
 
 #### Design Details
+
+Unified preparation revision: resolve every selected stage to lab-setup.py with course-qualified --launcher arguments. Default setup already includes optional-container dependencies; missing receipts still block campaigns and require repair outside execution. Normal sync owns monitoring discovery/settings handoff. Remove five-script and --all preparation advice; retain all native campaign actions, isolated runtime bindings and evidence ownership. Earlier implementation/verification evidence below is historical; the unified consumer revision has passed local deterministic and installed-payload checks.
 
 FEAT-009 supersedes filename-only selection and native-jobs/v2 with stage-aware canonical selectors and native-jobs/v3. Freeze per-unit requirements from every actual launcher using reference/runtime.json and the shared runtime catalog. Add a private explicit prepared_root environment selection with remote courses as its default. Copy each course beneath its per-lab/profile namespace under the actual course slug, exclude local caches and runtime state, and write a private .course-runtime-source.json binding. The shared loader validates that binding and the original root receipt while calculating relevant inputs from the copied course. Sync invokes the actual read-only loader for each selected launcher and records successful fingerprints; preflight checks complete proof coverage. Native activation repeats validation. Reject old execution contracts through native-jobs/v2. Preserve native argv, dispatch receipts, claims, recovery, qualification and collection.
 
@@ -492,13 +494,23 @@ Deliver current shared runtime tools with all six copies, then install the align
 
 #### Done Definition
 
-Source and installed skill agree with the five-script interface, relevant deterministic and distribution checks pass, and static/installed/runtime evidence limits are recorded.
+Source and installed skill agree with the unified lab-setup.py interface, relevant deterministic and distribution checks pass, and static/installed/runtime evidence limits are recorded.
 
 #### Implementation Evidence
 
-Implemented launcher-derived preparation inventories, private prepared-root bindings for course-slug campaign copies, native activation proof before preflight, source-owned adapter rebasing, explicit optional container course mounts and native-jobs/v2 rejection of earlier executable plans. Updated guidance, evals, focused tests, README, changelog and six shared runtime copies. The documented npx command installs the aligned project-local skill; public actions, native jobs, claims, recovery and evidence ownership remain.
+The source catalog now emits lab-setup.py and course-qualified --launcher repair commands for every selected stage. Instructions, examples and eval expectations refer to unified default preparation and normal synchronization handoff. No five-script aliases or --all setup advice remain. Campaign execution and evidence ownership are unchanged. The installed project-local payload was refreshed through the documented npx command.
 
 #### Verification Evidence
+
+Focused deterministic campaign, native runtime, synchronization and distribution tests pass as part of local and Linux validation. All 27 source payload files match the project-local installation produced by the documented npx command. Final specification-only changes use the same installation and parity checks. Local source/installation evidence does not establish a new native model-quality result or live cluster execution. The enclosing courses FEAT-041 records final unified preparation acceptance and its live evidence limit.
+
+#### Historical Delivery Evidence
+
+##### Previous implementation evidence
+
+Implemented launcher-derived preparation inventories, private prepared-root bindings for course-slug campaign copies, native activation proof before preflight, source-owned adapter rebasing, explicit optional container course mounts and native-jobs/v2 rejection of earlier executable plans. Updated guidance, evals, focused tests, README, changelog and six shared runtime copies. The documented npx command installs the aligned project-local skill; public actions, native jobs, claims, recovery and evidence ownership remain.
+
+##### Previous verification evidence
 
 452 focused tests pass, including all 110 recipe selections, optional launcher coverage, real local remote-sync execution, repeated sync, missing/stale/skipped records, source drift, unsafe bindings, adapter rebasing, exact container bind arguments and installed payload parity. All eight native course validators, generated build/freshness, helper parity and scoped lint pass. Portable/Codex/Claude structure and strict frontmatter pass with only the intentional docs-folder warning. Canonical evals contain 18 trigger and 22 quality definitions. Disposable pinned npx installation passes both hosts; the README command using skills 1.7.0 installs 27 matching payload files. Read-only code/security review found no blocker. Clean native trigger/model-quality runs are unavailable without isolated runner API credentials; no live cluster or preparation installation was run. See docs/run-labs-preparation-alignment.md in the enclosing courses project for evidence and limits.
 

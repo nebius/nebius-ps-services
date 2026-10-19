@@ -21,7 +21,7 @@ roofline and read-only health. Lab numbers identify files, not execution order.
 
 Use one full, non-MIG H100 per local lab. A qualified advanced cluster can
 also provide these one-GPU allocations. Follow the
-[Lab Guide](../lab-guide.html#lab-preparation-scripts), check
+[Lab Guide](../lab-guide.html#lab-preparation), check
 [Versions and environment](VERSIONS.md), then run from this course directory.
 Complete Lab 10 successfully before submitting Lab 01:
 
@@ -29,6 +29,10 @@ Complete Lab 10 successfully before submitting Lab 01:
 sbatch slurm/10_compatibility_stack.sbatch --workload small
 sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small
 ```
+
+For Lab 01 diagnostics, add `--profiler all` to run Systems followed by Compute.
+Check both stage statuses and report paths in the exact job's `result.json`;
+profiled timings are diagnostic and do not replace the normal benchmark.
 
 After reading through Lesson 12, complete
 [Advanced Lab 02](../advanced-gpu-communication/reference/labs/02_collective_readiness.md),

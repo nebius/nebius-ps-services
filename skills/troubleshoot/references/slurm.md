@@ -4,9 +4,39 @@ Use this playbook when the discovered path includes Slurm. Pin the observed
 Slurm version and compare its active configuration with the matching SchedMD
 documentation before interpreting defaults or fields.
 
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined
+boundaries. The inventories and checks below are a menu: select the
+observations that separate current explanations, then expand when evidence
+crosses a boundary. They are not a mandatory whole-platform checklist.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Job pending or failed | scheduler policy / resource mismatch / launch/authentication / application | job reason and step identity, allocation and bounded controller/node/job evidence | IDLE nodes do not prove job eligibility or a successful step | separate scheduling, allocation, launch and workload transitions |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload,
+compare
+an unaffected control, and verify the implicated boundary independently.
+Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
 ## Architecture And Configuration Discovery
 
-Inventory the configured roles and flows:
+Select the configured roles and flows on the failing path:
 
 - `slurmctld` primary and backup controllers, state directory, partitions,
   scheduler and selection plugins, and configured controller addresses.
@@ -27,8 +57,8 @@ running configuration with repository, image, or management-plane intent.
 
 ## Component Verification
 
-For each controller, worker, database daemon, MUNGE daemon, and relevant plugin
-or external dependency, verify:
+For an implicated controller, worker, database, MUNGE, plugin or dependency,
+select the checks that can distinguish the remaining explanations:
 
 - expected binary or image version and compatible protocol generation;
 - process or workload health and restart history;
@@ -40,13 +70,17 @@ or external dependency, verify:
   drain events, job requeue or failure reasons, and recent changes.
 
 Use Slurm's real control or job path as evidence. A responsive `sinfo` or
-`scontrol ping` does not prove worker launch, accounting, job I/O, or GRES health.
+`scontrol ping` does not prove worker launch, accounting, job I/O, or GRES
+health.
 
-## Mandatory Log Discovery
+## Implicated Log Discovery
 
-Discover configured paths rather than assuming defaults:
+Select log owners on the failing path; discover their configured paths rather
+than assuming defaults. Expand only when evidence implicates another owner:
 
-| Evidence owner | Required sources |
+<!-- markdownlint-disable MD013 -->
+
+| Evidence owner | Relevant sources |
 | --- | --- |
 | Controller | `SlurmctldLogFile`; syslog or journal fallback; controller service events; state-save errors |
 | Worker | `SlurmdLogFile`; syslog or journal fallback; worker service events; launch and registration errors |
@@ -56,6 +90,8 @@ Discover configured paths rather than assuming defaults:
 | Job | Job stdout and stderr; submit response; job state and reason; step, launch, and I/O evidence |
 | Hooks | Prolog, epilog, task prolog/epilog, SPANK, health-check output, exit status, and timeout evidence |
 | Host | systemd journal, kernel, OOM, cgroup, filesystem, device, network, GPU, and fabric evidence |
+
+<!-- markdownlint-enable MD013 -->
 
 Filter by the incident window and correlate job ID, step ID, node, process ID,
 controller identity, restart count, and credential timestamps. Distinguish
@@ -90,7 +126,8 @@ resuming or undraining anything.
 
 Trace controller enqueue, `slurmdbd` receipt, database operation, and query
 visibility. Separate scheduler operation from accounting availability and
-record backlog, timeout, authentication, schema, capacity, and retention evidence.
+record backlog, timeout, authentication, schema, capacity, and retention
+evidence.
 
 ### GPU Or Fabric
 

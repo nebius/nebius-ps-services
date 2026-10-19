@@ -14,8 +14,9 @@ specialized courses.
 Local experiments use one full H100. Distributed concepts connect to the
 separately qualified fabric experiments in
 [Advanced Labs](../advanced-gpu-communication/index.html).
-Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
-to prepare for practice.
+Follow [Lab Preparation](../lab-guide.html#lab-preparation) in the shared Lab Guide.
+Its single command prepares the available lab software; check the completion
+summary before practice, then qualify the runtime on the allocated hardware.
 
 For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 

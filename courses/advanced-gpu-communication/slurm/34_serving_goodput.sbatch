@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=32
-#SBATCH --time=01:01:30
+#SBATCH --time=01:07:00
 #SBATCH --exclusive
 #SBATCH --no-requeue
 #SBATCH --output=results/34_serving_goodput/logs/%j.out
@@ -15,7 +15,7 @@
 course_stage() {
   set -euo pipefail
   umask 077
-  local selection=$1 workload=$2
+  local selection=$1
   shift 2
   export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
   case "$selection" in

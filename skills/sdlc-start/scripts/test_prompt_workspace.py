@@ -927,6 +927,92 @@ Independent verification predates schema v2 evidence tracking.
             )
         self.assertEqual(unsafe.exception.code, "REQUIREMENTS_REFINEMENT_REQUIRED")
 
+    def test_refinement_reads_owned_integration_delivery_before_promotion(self) -> None:
+        self.project = self.project.resolve()
+        first, run_dir, manifest, requirements, design, _state = self.refined_requirements_fixture()
+        run_id = str(first["run_id"])
+        workspace.verify_requirements_refinement_contract(manifest, run_id)
+        baseline = design.read_bytes()
+        integration = run_dir / "worktrees/FEAT-001/integration"
+
+        def git(path, *args):
+            return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
+
+        branch = "codex/sdlc/test/feat-001/integration"
+        git(self.project, "worktree", "add", "-b", branch, str(integration))
+        head = git(self.project, "rev-parse", "HEAD")
+        write_private(run_dir / "current-state.json", {"current_feature": "FEAT-001"})
+        write_private(run_dir / "execution/FEAT-001/coordinator.json", {
+            "schema": "agentic-sdlc/execution-coordinator-v7", "state_version": 7,
+            "run_id": run_id, "feature_id": "FEAT-001", "status": "integrated",
+            "project_root": str(self.project), "git_root": str(self.project),
+            "selected_project_root": str(self.project), "project_scope": ".",
+            "git_common_dir": git(self.project, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            "integration_worktree": str(integration), "integration_branch": branch,
+            "integration_head": head, "base_head": head,
+            "base_branch": git(self.project, "branch", "--show-current"),
+        })
+        from project_specs_lib.transaction import publish_spec_pair
+        publish_spec_pair(
+            integration, requirements_candidate=requirements.read_bytes(),
+            design_candidate=baseline.replace(b"delivery=unassessed", b"delivery=implemented"),
+            expected_git_head=head,
+            expected_requirements_sha256=file_sha256(requirements),
+            expected_design_sha256=file_sha256(design), operation_id="delivery-test",
+        )
+        verified = workspace.verify_requirements_refinement_contract(manifest, run_id)
+        self.assertEqual(verified["impact"]["classification"], "no_effect")
+        impact_module = sys.modules[workspace.publish_prompt_impact.__module__]
+        receipt, _digest = impact_module.load_current(run_dir, required=True)
+        self.assertEqual(receipt["design_sha256"], file_sha256(integration / "docs/design.md"))
+        self.assertEqual(design.read_bytes(), baseline)
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), head)
+        self.assertEqual(receipt["spec_transition"]["reason"], "owner_reconciliation")
+        coordinator_path = run_dir / "execution/FEAT-001/coordinator.json"
+        coordinator = json.loads(coordinator_path.read_text())
+        for field, value in (
+            ("integration_head", "0" * 40),
+            ("integration_branch", "foreign"),
+            ("integration_worktree", str(self.root / "foreign-worktree")),
+            ("project_scope", "../foreign"),
+            ("selected_project_root", str(self.root / "foreign")),
+            ("git_common_dir", str(self.root / "foreign.git")),
+            ("run_id", "foreign-run"),
+        ):
+            with self.subTest(field=field):
+                write_private(coordinator_path, {**coordinator, field: value})
+                with self.assertRaises(workspace.PromptWorkspaceError):
+                    workspace.verify_requirements_refinement_contract(manifest, run_id)
+                if field != "integration_head":
+                    with self.assertRaises(impact_module.PromptImpactError):
+                        impact_module.verify_current(run_dir, self.project)
+        write_private(coordinator_path, coordinator)
+        ledger = (run_dir / "prompt-impact/ledger.json").read_bytes()
+        git(integration, "add", "-A")
+        git(integration, "commit", "-qm", "Record observed delivery")
+        promoted = git(integration, "rev-parse", "HEAD")
+        coordinator.update(status="sealed", integration_head=promoted)
+        write_private(coordinator_path, coordinator)
+        git(self.project, "merge", "--ff-only", branch)
+        # Fast-forward may precede the coordinator write; the exact sealed tip
+        # remains readable while the promotion owner recovers its own journal.
+        impact_module.verify_current(run_dir, self.project)
+        coordinator.update(status="promoted", promoted_head=promoted)
+        write_private(coordinator_path, coordinator)
+        impact_module.verify_current(run_dir, self.project)
+        write_private(coordinator_path, {**coordinator, "status": "done"})
+        with self.assertRaises(impact_module.PromptImpactError):
+            impact_module.verify_current(run_dir, self.project)
+        write_private(coordinator_path, coordinator)
+        git(self.project, "worktree", "remove", str(integration))
+        git(self.project, "branch", "-d", branch)
+        coordinator.update(status="done")
+        write_private(coordinator_path, coordinator)
+        for _ in range(2):
+            impact_module.verify_current(run_dir, self.project)
+        self.assertEqual((run_dir / "prompt-impact/ledger.json").read_bytes(), ledger)
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), promoted)
+
     def test_legacy_unfinished_run_fails_closed_and_completed_is_readable(self) -> None:
         prompt = self.prompt_path()
         initialized = self.initialize()

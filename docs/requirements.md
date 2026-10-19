@@ -65,6 +65,7 @@ Ordinary PRs and all configured Dependabot updates, including Docker, use one lo
 - AC-008: A trusted receipt precedes merge effects; completion and CI checkout accept only trusted operator-dispatched positive-review intents. Preserve immutable receipts, duplicate suppression, exact-result CI, Pages and publication guards.
 - AC-009: PR events, CI events and schedules update Required CI but produce no merge candidates. Completion schedules recover previously authorized operations only. MERGE_OPERATOR_IDS is the only merge-specific repository variable; no rollout toggles or metadata-only admission remain.
 - AC-010: Standalone review-pr never merges. Merge-pr invokes review when needed; review-and-merge and complete publication requests authorize the entire sequence without routine reconfirmation. Preparation-only modes remain available.
+- AC-011: Completion candidate discovery must display the helper's sanitized failure reason, preserve every nonzero exit status and publish no targets on failure. Empty failure output still reports the exit status. Keep helper output contracts, API deadlines, receipt gates and effect permissions unchanged.
 
 #### Negative Criteria
 

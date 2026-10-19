@@ -28,7 +28,13 @@ jobs:
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: |
           set -euo pipefail
-          targets=$(python3 skills/merge-pr/scripts/merge_completion.py targets)
+          status=0
+          targets=$(python3 skills/merge-pr/scripts/merge_completion.py targets) || status=$?
+          if [ "$status" -ne 0 ]; then
+            printf 'Completion candidate discovery failed (exit %s).\n' "$status" >&2
+            if [ -n "$targets" ]; then printf '%s\n' "$targets" >&2; fi
+            exit "$status"
+          fi
           printf 'targets=%s\n' "$targets" >> "$GITHUB_OUTPUT"
   dispatch:
     name: dispatch-result-ci

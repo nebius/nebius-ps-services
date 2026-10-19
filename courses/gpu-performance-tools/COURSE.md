@@ -12,7 +12,7 @@ flag explanations while following the practical courses.
 
 This reference course has no labs or exercises and needs no running cluster to
 read. Use the practical courses for lab-specific commands and the
-[Lab Guide](../lab-guide.html#lab-preparation-scripts) for environment preparation. The figures use synthetic values to explain concepts;
+[Lab Guide](../lab-guide.html#lab-preparation) for environment preparation. The figures use synthetic values to explain concepts;
 they are not recorded measurements.
 
 ## 1. Choose evidence and read native jobs
@@ -206,13 +206,16 @@ Read from the counters on the left to the investigation on the right. The synthe
 | `--section MemoryWorkloadAnalysis` | Add memory traffic and cache evidence. |
 | `--section Occupancy` | Add warp-residency and limiting-resource evidence. |
 | `--clock-control none` | Do not ask Compute to lock GPU clocks; record the actual run conditions. |
-| `--force-overwrite false` | Refuse to overwrite existing reports. |
+| Omit `--force-overwrite` | Refuse existing reports (the default). |
 | `--export` | Save the `.ncu-rep` report with a unique job/step/process prefix. |
 | `--config-file off` | The local distributed-lab companion ignores user configuration files for reproducible selection. |
 | `--nvtx-push-pop-scope process` | Interpret the companion's push/pop range in process scope. |
 | `--replay-mode kernel` | Replay the selected kernel to gather required counter groups. |
 | `--kill no` | Do not terminate the application merely after collecting the selected launches. |
 | `--import` | Read an existing report without running the workload again. |
+
+Compute's `--force-overwrite` is a switch with no value. Adding `false` makes it
+the application to launch; omit the switch to protect existing reports.
 
 Open `.ncu-rep` in Nsight Compute, or use `ncu --import REPORT.ncu-rep`. Collection can require several passes and alter cache/device state. Kernel timings in the report and application wall time during replay do not replace an unprofiled benchmark. The course does not replay distributed collectives or a live server; the supported distributed example uses a separate single-process companion.
 

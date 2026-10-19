@@ -6,6 +6,31 @@ matching Soperator revision. Continue into `kubernetes.md`, `slurm.md`, and the
 relevant host, network, storage, or GPU playbooks rather than treating Soperator
 as a single component.
 
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Healthy operator, failed job/check | reconciliation / Slurm launch / active-check scheduling / workload fault | generation/status versus actual job step and check resource request | scheduled ActiveChecks differ from passive job-coupled checks and may consume exclusive GPUs | follow operator-to-Slurm boundary; do not run active diagnostics without authority |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
 ## Architecture And Dependency Flow
 
 Inventory the Soperator controllers, custom resources, generated Kubernetes
@@ -36,8 +61,8 @@ impact still require verification.
 
 ## Component Verification
 
-Verify the existence, version, active configuration, health, dependencies,
-authentication, resources, clocks, restarts, and recent changes for:
+For implicated components, select existence, version, configuration, health,
+dependency, authentication, resource, clock or change evidence as needed:
 
 - Soperator and auxiliary controllers and their leader or reconciliation state;
 - custom resources, conditions, generations, finalizers, and related events;

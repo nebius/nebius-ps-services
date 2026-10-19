@@ -90,6 +90,12 @@ their historical event base. Never broaden the exclusion to a name prefix.
 
 ## Result CI, Pages and recovery
 
+Candidate discovery preserves every nonzero helper exit status and displays its
+sanitized diagnostic. Empty failure output still reports the exit status. It
+publishes targets only on success, so a failed discovery cannot start downstream
+CI or Pages effects. The workflow does not expose raw transport errors, add
+retries, or extend the API deadline to conceal a failure.
+
 An accepted request is pending. Confirm actual merge and the authoritative
 result SHA through identity-bound GraphQL `mergeCommit.oid`, then remote
 default-branch containment. REST `2026-03-10` omits the old result field;

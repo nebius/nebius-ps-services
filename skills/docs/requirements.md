@@ -844,88 +844,95 @@ and manually edited input is not captured or auto-executed.
 <!-- /REQUIREMENT: REQ-009 -->
 
 <!-- REQUIREMENT: REQ-010 status=active priority=P0 type=feature -->
-### REQ-010: Require evidence-intensive cross-layer troubleshooting
+### REQ-010: Adaptive causal troubleshooting across code and infrastructure
 
 #### User Story
 
-Operators and developers need `$troubleshoot` to investigate the full deployed
-stack, correlated logs, infrastructure, and relevant code paths instead of
-stopping after a few status commands or passive terminal waiting.
+Operators and developers need supported diagnoses faster across compute, storage,
+networking and code, balancing accuracy, time, tool use and context consumption.
+Investigations follow the failing path and expand on evidence while preserving
+causal proof, safe repair and independent verification.
 
 #### Acceptance Criteria
 
-- AC-001: Troubleshooting discovers technologies, deployed versions,
-  deployment model, configuration authorities, components, dependencies,
-  ports, protocols, authentication, and control/data flows before hypothesis
-  testing, then compares observations with version-matched official vendor
-  architecture and configuration documentation.
-- AC-002: Every in-scope component receives an evidence-backed verification
-  record for existence, version, effective configuration, process or workload
-  health, dependency reachability, DNS or service-name resolution,
-  authentication, resource pressure, clock state, restart history, recent
-  changes, and current verdict.
-- AC-003: The explicit included and excluded system boundary, exercised paths,
-  incident-window start and end, clock offsets, correlation identities, and
-  bounded log coverage are recorded. The log ledger contains exactly one row
-  for each component, application/job, container/orchestrator,
-  service-manager, OS/kernel, network/firewall, storage, and GPU or hardware
-  layer; unavailable, unsafe, and not-applicable sources remain explicit.
-  Evidence-bearing component and log cells are substantive independently; a
-  neighboring cell or status token cannot make a placeholder count as proof.
-- AC-004: Each experiment states a hypothesis, expected evidence, timeout or
-  output bound, and next branch. Code hypotheses require reproduction,
-  execution/data-path tracing, failure artifacts, configuration/environment
-  review, focused analysis, and bounded instrumentation when needed.
-- AC-005: Temporary debug escalation is narrow, authorized, time-bounded,
-  impact-assessed, redacted, and restored with proof before completion.
-- AC-006: Technology references cover Slurm, Soperator, Kubernetes, Nebius,
-  Linux, networking, storage, GPUs, and code debugging while the main skill
-  retains one generic causal control flow.
-- AC-007: Soperator guidance distinguishes separately scheduled ActiveChecks,
-  which may require complete or exclusive GPU resources, from passive or
-  workload-coupled prolog, epilog, and `HealthCheckProgram` checks around
-  customer jobs.
-- AC-008: Every health conclusion is limited to the declared components,
-  dependencies, exercised control and data paths, and observation window.
-- AC-009: Detailed architecture, component, incident, log, hypothesis, code,
-  and completion ledgers are retained as internal decision evidence. The
-  ordinary user-visible report summarizes only decision-relevant proof and
-  gaps; it does not reproduce those ledgers unless an optional evidence
-  appendix is requested or needed for a hard boundary.
+- AC-001: Discover the implicated component, effective configuration and immediate
+  dependencies first. Expand for boundary-crossing evidence, contradictions,
+  unknown dependencies or unexplained intermittency. Verify relevant versions
+  against official documentation before version-sensitive use.
+- AC-002: Record examined and material unexamined boundaries with reasons.
+  Unexamined is unknown, never healthy or automatically not applicable. Coverage
+  must support the declared conclusion rather than inspect the entire environment.
+- AC-003: Bind evidence to target/artifact/configuration identity, observation
+  window, correlation IDs and clock uncertainty. Record failures, missing access,
+  truncation and stale sources; invalidate affected evidence after state changes.
+  Logs are selected sources, not a mandatory fixed eight-row ledger.
+- AC-004: Each consequential experiment states its question, competing predictions,
+  time/output bounds, effects and next decision. Rank discriminatory value,
+  safety, cost and availability without invented probabilities. After three
+  consecutive completed observations that neither distinguish explanations nor
+  narrow the boundary, rebuild the model without resetting any budget.
+- AC-005: Debug escalation is scoped, authorized, time-bounded, impact-assessed,
+  redacted and restored. Interrupted actions are reconciled before repetition.
+- AC-006: Shared decision guides cover code, Linux/compute/GPU, storage and network;
+  Kubernetes, Slurm, Soperator and Nebius load only when implicated. Preserve the
+  existing state names, causal confidence, report classes and clean-replay rules.
+- AC-007: Soperator distinguishes resource-consuming scheduled ActiveChecks from
+  passive or workload-coupled prolog, epilog and HealthCheckProgram checks.
+- AC-008: Health conclusions are limited to the declared path and window. Separate
+  initiating faults, contributors, symptoms and independent blockers; retain
+  contradictions. Control-plane status does not establish workload success.
+- AC-009: Detailed ledgers remain internal; concise reports state proof, fixed and
+  verified scope, material gaps and next action. Hooks validate structural state
+  and selected boundaries, not semantic causality or hypothesis novelty.
+- AC-010: Selective collection defaults to repository/platform, bounds reads and
+  subprocess lifetimes, and emits explicit incomplete statuses without partial
+  hashes. Trial schema 2 separates attempted, launched, completed, interrupted
+  and launch-error counts, with null rates when no execution completes.
+- AC-011: Preserve public budget flags and schemas, diagnosis-v1, SDLC routing,
+  trusted-loader and shared Stop ownership, and provider admission/query budgets.
+- AC-012: Compare frozen baseline/candidate payloads with twelve qualification
+  cases, real local/service fixtures in each core domain and separately labeled
+  platform replays. Use three alternating paired trials per case and host with
+  independent hidden oracles, fresh Linux containers and a 600-second deadline.
+- AC-013: Promotion requires deterministic checks, zero unauthorized actions,
+  disclosures or false verified fixes, at least 90% correct outcomes and no core
+  domain regression. Target 20% fewer median diagnostic actions on jointly
+  successful focused cases; report all-case outcomes and time/token changes
+  separately. Missing telemetry remains unavailable; small trials prove no
+  general statistical improvement.
 
 #### Negative Criteria
 
-- NC-001: A healthy CLI status, passing test suite, green Kubernetes object,
-  or recent terminal output alone must not prove system or code health.
-- NC-002: Troubleshooting must not use indefinite `tail -f`, arbitrary sleeps,
-  unfiltered log dumps, speculative observability calls, or repeated unchanged
-  commands without a new hypothesis and evidence target.
-- NC-003: Missing evidence must remain `UNKNOWN`; the workflow must not claim
-  an entire codebase is bug-free or silently mark an unavailable layer healthy.
-- NC-004: ActiveChecks, cloud changes, credential/IAM changes, production debug
-  escalation, and other resource-consuming or availability-affecting actions
-  require the existing exact authorization and live-product evidence gates.
+- NC-001: Status commands, passing tests or symptom disappearance alone do not
+  prove causal repair or unrelated health.
+- NC-002: No universal command runner, compulsory broad logs, invented hypothesis
+  count, indefinite waits, speculative patches or repeated unchanged probes.
+- NC-003: Missing evidence remains unknown. Do not expose evaluator answers,
+  host repositories or Docker sockets to scored agents, or execute their output
+  on the host. No legacy output mode or compatibility shim.
+- NC-004: Existing exact authorization and live-product evidence gates remain
+  binding for production, ActiveChecks, cloud, IAM and disruptive diagnostics.
 
 #### Validation Method
 
-Validate state-machine routing, component/log/timeline ledgers, playbook source
-quality, concise report projection, mutation classification, and debug
-restoration against the skill contract and optional Stop hook.
+Validate state/report/hook contracts, bounded helper behavior, adaptive scope,
+evidence invalidation, conditional domain routing and independent fixture checks.
+Use the declared PyYAML dependency for strict structure validation.
 
 #### Test Method
 
-Use adversarial fixtures where status appears healthy but internal evidence
-reveals configuration drift, clock or MUNGE failure, controller-worker
-connectivity, accounting errors, stale logs, GPU Xid events, resource
-exhaustion, Soperator check failures, Nebius control-plane constraints, or
-application defects. Reject unsupported internal conclusions while confirming
-that an incomplete ordinary final report remains advisory and non-blocking.
+Run helper/hook suites directly in CI. Cover oversized/newline-free streams,
+hung descendants, incomplete hashes, no launched execution, interruption,
+clusters, unsafe evidence and clean-replay contamination. Preserve cross-skill
+budget, Stop, loader and SDLC regressions.
 
 #### Evaluation Method
 
-Run fresh-session graded scenarios and require evidence-backed internal
-coverage for every applicable completion criterion plus an accurate concise
-projection; static text tests alone do not prove runtime investigation quality.
+Freeze payloads, fixtures, host/model, tools and permissions. Keep oracles outside
+runtime mounts; verify denied oracle access. Separate setup/auth failures from
+diagnostic failures, deterministic checks from causal review, and replay evidence
+from live provider qualification. Test disposable distribution and fresh hosts;
+real user installation remains a later rollout.
 
 <!-- /REQUIREMENT: REQ-010 -->
 
@@ -3502,6 +3509,7 @@ Ordinary create-pr performs complete local code review before publication and st
 - AC-015: Review without checkout-dependent work leaves local refs and checkout alone. Checkout-dependent review switches back at completion or safe pause without integrating default history. Create-only from default leaves its new feature checked out; visiting existing targets switches back at the outer boundary.
 - AC-016: Following confirmed merge and verified destination containment, fetch that destination, fast-forward eligible existing local default/original branches and switch back to the original branch, including after CI or Pages failure/timeout. Preserve unique/diverged histories; never implicitly merge, rebase, reset or recreate missing refs. Resolve the actual default branch. Squash proof uses the authoritative result, not PR-head ancestry.
 - AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
+- AC-018: Completion candidate discovery must display the helper's sanitized failure reason, preserve every nonzero exit status and publish no targets on failure. Empty failure output still reports the exit status. Keep helper output contracts, API deadlines, receipt gates and effect permissions unchanged.
 
 #### Negative Criteria
 
@@ -3573,5 +3581,53 @@ Use realistic creation, planning, maintenance and near-miss routing cases;
 report static, executable and fresh-host runtime evidence independently.
 
 <!-- /REQUIREMENT: REQ-044 -->
+
+<!-- REQUIREMENT: REQ-045 status=active priority=P1 type=constraint -->
+### REQ-045: Preserve SDLC evidence across promotion and verification
+
+#### User Story
+
+Workflow users need documentation corrections and test results to retain the
+same ownership, revision and failure boundaries as product implementation.
+
+#### Acceptance Criteria
+
+- AC-001: Post-promotion documentation assessment is read-only; necessary
+  changes use a corrective run from the exact promoted revision and fresh gates.
+- AC-002: Normal private sealing and promotion do not require the separate
+  authorization file used only for operator-visible raw Git commits.
+- AC-003: Three-tier test PASS requires owner-executed results bound to the
+  verification generation, clean promoted revision, immutable deployed image,
+  test class, executed count and artifact digest. GUI evidence derives from
+  the existing owned Playwright UAT receipts.
+- AC-004: Deterministic capability mappings reference executable current tests
+  and preserve the diagnostic handoff boundary.
+- AC-005: Canonical-spec reconciliation reads the registered integration scope
+  during execution and the exact primary revision after promotion. Delivery-only
+  evidence may retain a locked plan through owner-validated impact settlement;
+  material changes still require replanning. Interrupted promotion remains safe.
+
+#### Negative Criteria
+
+- NC-001: Failed, missing, stale, modified, skipped-only or self-declared test
+  artifacts cannot certify acceptance. A failed attempt is never overwritten.
+- NC-002: Do not reopen promoted execution, mutate its checkout for a late doc
+  correction, weaken exact-SHA publication, or add legacy command aliases.
+
+#### Validation Method
+
+Review every SDLC phase and run the offline workflow and host-policy matrix.
+
+#### Test Method
+
+Use failing-before and passing-after negatives for evidence substitution,
+incorrect routing, authorization ambiguity and capability discovery drift.
+
+#### Evaluation Method
+
+Separate deterministic source proof from actual model routing, installation,
+Docker/browser application qualification and hosted publication evidence.
+
+<!-- /REQUIREMENT: REQ-045 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

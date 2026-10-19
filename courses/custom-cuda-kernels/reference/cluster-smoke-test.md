@@ -8,7 +8,7 @@ operate inside one GPU and require their own qualification.
 Use the [course](../index.html) for lesson order. This checklist qualifies the
 local runtime and experiments; optional branches do not gate earlier lessons.
 
-Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
+Complete shared software preparation in the [Lab Guide](../../lab-guide.html#lab-preparation). Review its completion summary and follow the Lab Guide’s guidance for any failures or hardware skips before submitting. Keep runtime evidence in those private result directories.
 
 1. Record the prepared managed CUDA 13.3.0 toolkit and per-lab build receipts.
 2. Verify the prepared CUTLASS 4.6.1 source and native SM90 binaries. Setup
@@ -26,9 +26,10 @@ Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the c
 
 ## Build and correctness commands
 
-Run from this course root after CUDA preparation. The optional container teaching
-exercise below needs the optional selection in the Lab Guide and runs CTest in a unique
-`build/run-<build-job-id>` directory. Native lab jobs use their setup-managed builds.
+Run from this course root after shared preparation. Default setup includes the
+dependencies for the optional container teaching exercise below. Submitting it
+runs CTest in a unique `build/run-<build-job-id>` directory. Native lab jobs use
+their setup-managed builds.
 
 ```bash
 python3 tools/validate_course.py
@@ -86,6 +87,6 @@ distributions separately from profiling and use at least three independent
 capstone runs. Optional cluster/SM90a exercises need their own qualified build
 and architecture statement; they are excluded from the core guided-hour total.
 
-## Optional cluster configure, build, and test
+## Optional thread-block-cluster qualification
 
 [Lab 10: Qualify an optional thread-block-cluster launch](labs/10_hopper_cluster.md) qualifies the setup-managed SM90a target. Keep its execution evidence and native toolkit identity separate from the required SM90 suite.

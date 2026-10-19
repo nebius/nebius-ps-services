@@ -228,9 +228,9 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
                 )
                 assert "invariants" in recipe
                 guide = (root / "reference/labs" / f"{recipe['lab']}.md").read_text()
-                assert "../../../lab-guide.html#lab-preparation-scripts" not in guide
+                assert "../../../lab-guide.html#lab-preparation" not in guide
                 assert (
-                    "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
+                    "[Lab Guide](../../../lab-guide.html#lab-preparation)"
                     not in guide
                 )
                 assert "grafana import" not in guide
@@ -260,10 +260,9 @@ def test_setup_installs_profiling_before_monitoring_and_dashboard_import():
         "New → New folder",
         "export COURSE_GRAFANA_FOLDER_UID=",
         "nebius-cxcli grafana import ./reference/grafana --recursive",
-        "tools/regular-lab-setup.py monitoring \\",
-        'python3.12 "$HOME/courses/tools/regular-lab-setup.py"',
+        "./sync-labs.sh\n",
+        'python3.12 "$HOME/courses/tools/lab-setup.py"',
         "sbatch slurm/10_compatibility_stack.sbatch --workload small",
-        "tools/verify_monitoring.py \\",
         '"$COURSE_PYTHON" tools/readiness.py',
     )
     positions = [guide.index(command) for command in ordered]
@@ -370,6 +369,30 @@ def test_job_inspection_uses_throughput_units_without_grafana_format_ids(
     report = inspector.inspect("01_example", 3)[0]
     assert f"throughput [value]: 1.25e+06 {label}" in report
     assert "count:" not in report and "reqps" not in report
+
+
+def test_readiness_inspection_finds_flat_reports_for_the_exact_job(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))
+    inspector = load("inspect_results")
+    monkeypatch.setattr(inspector, "ROOT", tmp_path)
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "results").mkdir()
+    recipe = {
+        "kind": "diagnostic",
+        "metrics": [{"name": "duration", "path": "elapsed_ms", "unit": "ms"}],
+    }
+    (tmp_path / "reference/observability.json").write_text(json.dumps({"setup": recipe}))
+    artifact = result()
+    artifact["lab_id"] = "environment_readiness"
+    report_path = tmp_path / "results/environment_readiness-run-example.json"
+    report_path.write_text(json.dumps(artifact))
+    other = tmp_path / "results/environment_readiness-run-other.json"
+    other.write_text(json.dumps(result()))
+    (tmp_path / "results/environment_readiness-run-link.json").symlink_to(report_path)
+    assert inspector.inspect("environment_readiness", 4) == []
+    reports = inspector.inspect("environment_readiness", 3)
+    assert len(reports) == 1
+    assert str(report_path) in reports[0] and "2 ms" in reports[0]
 
 
 def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(

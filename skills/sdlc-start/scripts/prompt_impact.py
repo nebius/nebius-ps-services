@@ -37,6 +37,11 @@ from project_specs_lib.impact import (  # noqa: E402
     validate_prompt_impact as validate_shared_prompt_impact,
 )
 
+EXECUTION_SCRIPTS = Path(__file__).resolve().parents[2] / "sdlc-prepare-execution" / "scripts"
+if str(EXECUTION_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(EXECUTION_SCRIPTS))
+from sdlc_spec_checkout import SpecCheckoutError, resolve_spec_checkout  # noqa: E402
+
 
 CLAIM_SCHEMA = "agentic-sdlc/prompt-impact-claim-v1"
 RECEIPT_SCHEMA = "agentic-sdlc/prompt-impact-receipt-v1"
@@ -325,7 +330,19 @@ def publish(
     refinement: dict[str, object],
 ) -> tuple[dict[str, Any], str]:
     with _publication_lock(run_dir):
-        return _publish_locked(project_root, run_dir, binding, refinement)
+        return _publish_locked(spec_checkout(run_dir, project_root), run_dir, binding, refinement)
+
+
+def spec_checkout(
+    run_dir: Path, project_root: Path, *, feature_id: str | None = None,
+    strict_head: bool = True,
+) -> Path:
+    try:
+        return resolve_spec_checkout(
+            run_dir, project_root, feature_id=feature_id, strict_head=strict_head,
+        )
+    except SpecCheckoutError as error:
+        raise PromptImpactError(error.code, str(error)) from error
 
 
 def _publish_locked(
@@ -432,7 +449,7 @@ def _publish_locked(
 
 
 def verify_current(
-    run_dir: Path, project_root: Path
+    run_dir: Path, project_root: Path, *, feature_id: str | None = None
 ) -> tuple[dict[str, Any], str]:
     current = load_current(run_dir, required=True)
     assert current is not None
@@ -450,6 +467,9 @@ def verify_current(
         raise PromptImpactError(
             "PROMPT_IMPACT_REQUIRED", "the latest accepted prompt has no impact settlement"
         )
+    # Execution callers retain exact HEAD/journal recovery checks at each
+    # transition; this read only selects the registered spec ownership boundary.
+    project_root = spec_checkout(run_dir, project_root, feature_id=feature_id, strict_head=False)
     for kind in ("requirements", "design"):
         path = project_root / "docs" / f"{kind}.md"
         try:
@@ -478,6 +498,7 @@ def settle_execution(
 ) -> dict[str, object]:
     if SHA256_RE.fullmatch(plan_digest) is None:
         raise PromptImpactError("RUN_STATE_INVALID", "execution plan digest is invalid")
+    spec_checkout(run_dir, project_root, feature_id=feature_id)
     receipt, receipt_sha256 = verify_current(run_dir, project_root)
     path = _basis_path(run_dir, feature_id)
     existing = _read(path, "prompt impact execution basis") if path.exists() else None
@@ -524,7 +545,7 @@ def settle_execution(
 def verify_execution(
     run_dir: Path, feature_id: str, plan_digest: str, project_root: Path
 ) -> dict[str, object]:
-    receipt, receipt_sha256 = verify_current(run_dir, project_root)
+    receipt, receipt_sha256 = verify_current(run_dir, project_root, feature_id=feature_id)
     value = _read(_basis_path(run_dir, feature_id), "prompt impact execution basis")
     if (
         set(value)

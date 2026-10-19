@@ -1664,155 +1664,151 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=unassessed priority=P0 version=3 -->
-### FEAT-009: Evidence-intensive troubleshooting and technology playbooks
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=4 -->
+### FEAT-009: Adaptive troubleshooting with bounded helpers and measured qualification
 
 #### Requirements Covered
 
-- REQ-010: Discover and verify the deployed stack, layered evidence, relevant code paths, and technology-specific failure domains before completion.
+- REQ-010: Adaptive, evidence-complete diagnoses across infrastructure and code.
 
 #### Context Evidence
 
-The baseline troubleshoot workflow owns hypotheses, bounded experiments,
-earliest-divergence localization, causal proof, remediation budgets, and
-live-product evidence gates. The component matrix, timeline, layered log
-ledger, code-debugging gate, controlled escalation, and technology playbooks
-are internal decision evidence. Version 2 incorrectly coupled their complete
-rendering to the user-visible Stop report, causing report gaps to interrupt
-repair even when the missing detail did not change the next safe action.
+The prior 629-line core mandated broad discovery and eight log-layer rows.
+Existing causal proof, production boundaries, budget schemas, diagnosis-v1,
+report classes and clean replay are retained. The approved refactor changes
+investigation breadth and measurement, not the standard for a causal claim.
 
 #### Design Details
 
-Add `DISCOVERY` between intake and baseline. Discovery records deployed
-technology versions, topology, configuration sources, dependencies, ports,
-protocols, identities, and control/data flows, then compares them with
-version-matched official documentation. Keep emergency evidence preservation
-in intake so discovery cannot erase volatile incident state. Extend the
-investigation protocol with a component matrix, normalized timeline, layered
-log ledger, and experiment contract. Interpret mandatory logs as coverage
-accounting: retrieve each relevant source through bounded, filtered queries or
-record why it is unavailable, unsafe, or not applicable.
+Use one diagnostic agent and deterministic helpers. The compact core defines
+failure contract, evidence preservation, failing-path model, plausible alternatives,
+discriminating experiments, earliest divergence, proof, repair and independent
+verification. Detailed budget lifecycle, reporting and SDLC handoffs have explicit
+conditional references. No minimum hypothesis count or universal log inventory.
 
-Bind every internal conclusion to an explicit included and excluded system
-boundary, exercised control and data paths, and incident-window start and end
-with a clock basis. The generic component matrix names DNS or service-name
-resolution and restart history explicitly. The internal canonical log ledger
-contains exactly one record for each component, application/job,
-container/orchestrator, service-manager, OS/kernel, network/firewall, storage,
-and GPU or hardware layer. Missing, duplicate, unknown, or out-of-order layer
-names invalidate an internal coverage claim, and evidence-bearing cells remain
-independently substantive. The ordinary user-visible report projects only the
-root cause, fix, verification scope, material gaps, and next action. It does not
-serialize the internal ledgers or cross-validate their formatting at Stop.
+Evidence records bind identity, configuration, window, state and clock uncertainty;
+relevant changes invalidate affected observations. After three consecutive completed
+low-information observations, change the model or technique without extending
+remediation budgets. Preserve contradictions and multi-cause structure.
 
-Keep the main skill as the generic state machine and put product detail in
-`slurm.md`, `soperator.md`, `kubernetes.md`, `nebius.md`, `linux.md`,
-`network.md`, `storage.md`, `gpu.md`, and `code-debugging.md`. Product overlays
-reuse generic lower-layer playbooks instead of duplicating them. Soperator uses
-upstream terminology: ActiveChecks are separately scheduled Kubernetes or
-Slurm diagnostic jobs and commonly consume complete or exclusive GPU capacity;
-passive or workload-coupled checks execute through Slurm prolog, epilog, or
-`HealthCheckProgram` around customer jobs. Nebius guidance freezes tenant,
-project, region, resource, and service identity, then routes Compute, MK8s,
-Soperator, VPC, storage, quotas/capacity, IAM, AI services, observability, audit,
-and maintenance evidence to the exact current product documentation and
-existing Nebius skill authorities.
+Domain guides use symptom, alternatives, cheapest evidence, interpretation, next
+branch, escalation and verification. Combine resource utilization/saturation/errors
+with service latency/traffic/errors/saturation and workload-specific comparisons.
+Provider admission remains adapter-owned. Shared Stop and trusted-loader ownership
+are unchanged; hooks cannot mechanically prove causality or semantic novelty.
 
-When code is plausibly causal, require reproduction, entry/control/data/state
-tracing, stack or core evidence, effective inputs, recent-change comparison,
-focused tests/static analysis, and bounded instrumentation. Passing tests alone
-are supporting evidence, never universal correctness proof. Debug escalation
-records scope, expected decision, duration, resource and secret risk, original
-settings, rollback, and post-restoration verification.
+Collector schema 2 defaults to repository/platform with repeatable section/tool
+selection. Version probes use at most four workers, five seconds each and a
+30-second collection budget. Cap streams at 64 KiB, Git status at 2 MiB, manifests
+at 10 MiB each and 50 MiB total; no partial digest may look complete. Repeated trials
+separate launch errors and interruptions from completed executions; timeouts count
+as completed failures, empty completion rates are null, and timing/clusters retain
+outcomes. No independence assumption or compatibility output mode.
 
 #### Selected Option
 
-Use progressive disclosure through focused technology references and enforce
-causal rigor in the skill workflow. Keep criterion-level internal verdicts and
-project only decision-relevant proof into the concise outcome classification.
-The Stop hook enforces hard boundaries and report delivery, not investigative
-ledger completeness.
+Adaptive coverage with unchanged causal proof and conditional domain detail.
 
 #### Alternatives Considered
 
-Removing internal ledgers would allow aggregate health to hide component gaps.
-A universal cloud or cluster command runner would overreach authorization and
-encode stale vendor behavior. Requiring unconditional broad retrieval would
-conflict with observability admission and minimization. Keeping the full
-version-2 report as a compatibility path would retain two canonical outputs.
+A cosmetic prose rewrite would leave diagnostic behavior unchanged. A universal
+infrastructure runner would broaden authority risk and maintenance. New production
+agent frameworks, model routing and memory services are outside this refactor.
 
 #### Implementation Boundaries
 
-Owned surfaces are the troubleshoot state machine, investigation and
-verification references, technology playbooks, report hook and fallback,
-process rubric/cases/prompts, contract and hook tests, skill metadata, README,
-root catalog, project specs, and changelog. Existing authentication, marker,
-sidecar, observability-admission, design-handoff, and live-product authority
-contracts remain unchanged. Installation and fresh-runtime activation stay
-separate.
+Own the troubleshoot package, directly affected shared evaluation adapter, CI,
+metadata, catalog, README, specs and changelog. Preserve unrelated dirty edits.
+Actual user installation, runtime activation and provider redesign remain separate.
 
 #### Test-First Success Criteria
 
-- TDD-001: Contract tests require discovery, version-matched sources,
-  component/log/timeline ledgers, hypothesis-bound commands, code debugging,
-  debug rollback, and every technology reference.
-- TDD-002: Contract and process tests reject unsupported internal conclusions,
-  missing or duplicate canonical log layers, placeholder component identities
-  or evidence cells, and empty boundary or incident-window fields. Hook tests
-  accept a concise ordinary report without those tables and keep incomplete
-  ordinary output advisory.
-- TDD-003: Soperator cases distinguish resource-consuming ActiveChecks from
-  passive or workload-coupled job hooks and preserve node-local log gaps.
-- TDD-004: Nebius cases distinguish identity, quota, capacity, IAM, operation,
-  managed-control-plane, workload, and lower-layer evidence without mutating
-  cloud state during default diagnosis.
+- TDD-001: Freeze the existing payload before changing instructions. Establish
+  independently checkable local/service fixtures in code, compute, storage and
+  network, plus twelve qualification scenarios and separate platform replays.
+- TDD-002: Test bounded ingestion, deadlines, descendant cleanup, changed/incomplete
+  hashes, selective defaults, zero-completion rates, interruptions and clusters.
+- TDD-003: Preserve budget, report, Stop, loader, SDLC and provider gates while
+  replacing prose-coupled broad-coverage tests with adaptive contract checks.
+- TDD-004: Isolate scored agents in fresh Linux containers with read-only inputs,
+  writable trial state, no host repository/socket or oracle mounts; independent
+  checks and reviewers must not accept the agent's own success claim as proof.
 
 #### Validation Plan
 
-Run troubleshoot contract and hook suites, skill structure validation, Ruff,
-Markdown lint, changed-scope code and security review, adversarial process
-evaluations, `align-skill`, and project-wide alignment. Treat fresh-session
-graded scenarios as the behavioral gate beyond static contract tests.
+Run helper/hook and cross-skill suites, strict structure validation with declared
+PyYAML, lint, code/security review, align-skill and align. Add direct suites to CI.
 
 #### Test Plan
 
-Cover healthy-status hidden failures, clock skew and rotation, missing logs,
-MUNGE and controller-worker failures, Slurm accounting divergence, stale GPU
-errors, resource exhaustion, ActiveCheck contention, passive-check job impact,
-Nebius project/quota/IAM/VPC/MK8s/storage failures, misleading stack traces,
-and debug settings left enabled.
+Cover configuration precedence, intermittent concurrency, cgroup throttling,
+waiting mistaken for CPU shortage, inode/quota versus capacity, permissions/mount,
+source-namespace DNS, transport/TLS, compound cause, missing decisive evidence,
+contaminated recovery and instruction-bearing output. Label GPU, Kubernetes,
+Slurm/Soperator and cloud-control-plane replays separately from live qualification.
 
 #### Evaluation Plan
 
-In disposable or authorized read-only targets, require complete internal
-architecture, component, timeline, log, hypothesis, remediation, and validation
-evidence, then grade the accuracy and clarity of its concise projection. A
-healthy final state without causal replay remains mitigation, not a verified
-fix.
+Freeze payload/fixture hashes, host/model, tools, permissions and 600-second limit;
+run three alternating paired baseline/candidate trials per case and host. Separate
+fixture/auth failures. Measure causal accuracy/abstention, unsupported claims,
+unsafe effects, time/actions to decisive evidence, total time/actions, duplicates
+and available tokens. Independent review resolves explanation quality only.
+Promotion requires all deterministic checks, zero safety/false verified-fix events,
+90% correct outcomes and no core-domain regression. Target 20% lower median actions
+on jointly successful focused pairs; report all-case outcomes and latency/tokens
+separately without general statistical claims.
 
 #### Rollout And Rollback
 
-Land and validate source first. Installation, hook registration/trust, restart,
-and fresh-session behavior require a separate authorized rollout with parity
-checks and recoverable hook backups. Roll back only the exact installed payload
-if runtime validation fails; preserve reviewed source evidence for repair.
+Source first, then disposable distribution/fresh-host validation. Actual user
+installation is a subsequent rollout. Restore the prior reviewed payload to roll
+back; do not maintain dual old/new behavior.
 
 #### Done Definition
 
-Every troubleshooting run accounts internally for design, infrastructure,
-connectivity, configuration, runtime health, logs, and relevant code paths with
-evidence-backed verdicts. Every conclusion stays restricted to its declared
-boundary, exercised paths, and observation window. The user sees a compact,
-accurate projection of the fixed scope, material gaps, and next action rather
-than the full evidence ledger by default.
+Implemented adaptive guidance and bounded helpers preserve causal/authority
+contracts, pass deterministic validation and have honest qualification evidence.
+Missing native-host or live evidence stays explicitly unverified and cannot
+satisfy promotion criteria.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+Implemented a 288-line adaptive core with scoped evidence and conditional
+lifecycle/SDLC/report references; decision guides cover code, compute, storage,
+network and existing platform overlays. Selective collection and repeated trials
+use bounded POSIX subprocess helpers and schema 2 without compatibility shims.
+Shared hook payloads, Stop ownership, budget flags/state and diagnosis-v1 remain
+unchanged. The shared native evaluator now supports isolated paired diagnostics,
+independent repair oracles, bounded trace review, payload/evidence identity and
+fail-closed promotion. Supplemental platform replays remain separately labeled.
+Direct helper, hook and harness tests run in skills CI. Actual user installation
+and runtime activation were not performed.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+Baseline: 149 helper/hook tests passed and the pre-edit payload was frozen.
+Candidate source checks (2026-10-17): 58 helper/contract tests, 97 hook tests,
+9 diagnostic harness tests, 11 shared evaluation-adapter tests, 14 trusted-loader
+tests and 33 SDLC repair-control tests passed. Strict Codex/stateful, Claude and
+Agent Skills core structure checks passed with the declared PyYAML dependency.
+Scoped Python/Markdown checks, workflow actionlint and diff checks passed.
+All 9 hook asset files match the baseline. Read-only code/security review found
+no remaining blocker in the reviewed evaluator and helper changes.
+
+Disposable skills CLI 1.5.26 discovery, copied-file parity, repeated installation
+and isolation passed for Codex and Claude; this does not activate hooks. All 20 Linux
+fixture/oracle checks passed, covering faulty and corrected controls, serial and
+overlapping schedules, execution status and denied oracle access. The benchmark preflight reports UNAVAILABLE when the pinned fixture
+image lacks the native CLI and removes its containers and volume.
+
+Native trigger execution did not qualify: fresh Codex 0.163.0 timed out at the
+180-second limit; Claude 2.1.292 reported authentication unavailable. No reviewed
+container image with an authenticated inference route was available, so the
+paired baseline/candidate model trials and independent causal reviews were not
+run. Accuracy, action reduction, token/latency improvement and live provider
+coverage remain unproven. REQ-010 stays active and delivery stays implemented,
+not verified, pending that qualification and subsequent rollout.
 
 <!-- /FEATURE: FEAT-009 -->
 
@@ -7701,7 +7697,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=6 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=7 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -7732,6 +7728,8 @@ PR, CI and scheduled events maintain the CI-only Required CI aggregate for ordin
 
 Completion schedules recover only already-authorized operator-dispatched positive-review intents. Resolve the authoritative result through GraphQL mergeCommit.oid after independently binding merged state, PR number, reviewed head and base repository/ref; the pinned REST version has no result field. Missing or inconsistent result evidence stops before completion effects. Preserve duplicate suppression, uncertain-effect journals, authoritative result ancestry, explicit result CI and Pages dispatch. Each CI execution job loads its checkout validator from the trusted workflow revision and validates receipt and authoritative result before setup/cache restoration; fetch credentials remain process-local. Release publishers tag only the verified actual merge result. Agentic SDLC, existing credentials and Dependabot scheduling/configuration stay unchanged.
 
+Candidate discovery captures the helper exit status explicitly before shell errexit can discard its stdout. On failure the workflow prints a fixed message containing the exit status and any nonempty sanitized helper output to stderr, then exits with the original status. Only successful discovery appends targets to GITHUB_OUTPUT. Keep the deployed workflow and reusable template identical after their existing path/trigger normalization. This localized repair leaves helper JSON, transport-error suppression, API deadlines, retries, receipt validation and downstream permissions unchanged.
+
 #### Selected Option
 
 Python, Bash, gh and deterministic GitHub Actions using GITHUB_TOKEN. Agentic review/repair remains local; no hosted model runtime or new cloud services.
@@ -7752,6 +7750,7 @@ Ordinary review/merge/create and publication owners, reusable workflows, broker/
 - TDD-004: Interrupted completion, exact checkout, duplicate suppression, Pages and verified-result tags retain their safeguards.
 - TDD-005: Plain create/review stops at readiness; explicit combined intent delegates once, preserves ownership and does not recurse. Final candidate analysis precedes publication; repairs invalidate analysis.
 - TDD-006: Valid immutable setup-uv updates pass; invalid identity/pinning/inputs/conditions/order fail. Pending/cancelled orchestration checks are excluded only with authoritative provenance; same-name validation and forged/ambiguous producers still gate.
+- TDD-007: Execute the actual candidate shell block with offline helper stubs: empty/populated success arrays, blocked/pending/arbitrary nonzero statuses, empty failure output, unchanged output files on failure, one invocation and no environment-secret disclosure.
 
 #### Validation Plan
 
@@ -7793,9 +7792,13 @@ Native-agent comparative quality probes on Codex and Claude were authentication-
 
 #### Implementation Evidence
 
+Implemented candidate diagnostic visibility in the deployed completion workflow and its reusable template. Both capture the helper status, print a generic exit-status message plus nonempty sanitized output on failure, preserve the status, and publish targets only on success. The helper, transport-error suppression, API deadline, receipt gates and permissions are unchanged.
+
 Revision 5 implements PR-only create-pr defaults, complete nested code-review before publication, early one-time combined review-and-merge delegation and mandatory parent-owned review-pr for every unmerged PR. Updated instructions, metadata, evaluations, direct release/image/Helm callers and documentation preserve receipts, grants, deadlines, publication checkpoints and SDLC isolation. Removed the redundant create-pr preparation flag and check-name exclusions. CI now resolves orchestration producer provenance; cxcli workflow tests enforce structural immutable action pinning without a golden release hash. Refreshed all eight affected installed skill payloads while preserving their owners. No commit, deployment, PR update or live merge was performed.
 
 #### Verification Evidence
+
+Candidate diagnostic visibility: the new executable shell regressions failed against the original workflow for all four failure scenarios, then passed after the repair. All 32 completion tests and 56 merge-gate tests pass, including deployed/template parity. Independent read-only code/security review found no blocking issue and separately passed the three new regression tests. Actionlint, Bash syntax, ShellCheck, Ruff lint/format, scoped Markdown and paired-spec validation pass. This proves the local logging repair only; the original API failure remains unconfirmed, and the repaired workflow has not been published or executed on GitHub.
 
 Revision 5 source evidence (2026-10-14): new regression tests failed on the original code, then passed after the repairs. 182 focused tests pass: 95 merge/completion/publication-helper, 57 release, 2 workflow-asset, 9 code-review contract and 19 cxcli workflow tests. The two formerly failing cxcli contract tests also pass against read-only workflow payloads from PR #223 at 43df54d42dd416ccdf4022070fce3c7291c0e18d; this is artifact-bound local proof, not live Actions execution. Ruff check/format, changed Markdown, diff checks and paired spec validation pass. Read-only code/security review found no blocking source issue; the unknown fork-base provenance limitation remains explicit and fail-closed. Follow-up align corrected the skill picker description and clarified action requests phrased as questions versus informational questions, with paired evaluation cases. Independent final review found no authority or delegation regression; the 182-test suite, 24 profile checks, scoped lint and source/installed parity passed again. Native execution of the new semantic cases remains unverified.
 
@@ -7943,5 +7946,147 @@ checks passed, while Linux unit activation and personal installed-host behavior
 remain unverified. REQ-044 remains active pending fresh-host routing evidence.
 
 <!-- /FEATURE: FEAT-043 -->
+
+<!-- FEATURE: FEAT-044 reqs=REQ-045 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-044: Promotion-safe documentation and owner-executed test evidence
+
+#### Requirements Covered
+
+- REQ-045: Preserve SDLC evidence across promotion and verification.
+
+#### Context Evidence
+
+The coordinator routes late documentation edits to an already removed
+integration checkout. The commit phase overgeneralizes raw-commit admission.
+The verifier references a renamed troubleshooting test. The three-tier
+semantic reader accepts distinct nonempty logs as PASS without checking their
+outcome; a failing-log substitution reproduces that gap.
+
+#### Design Details
+
+Preserve the existing immutable promotion boundary. Post-UAT document review
+records no-op evidence or returns DOCUMENTATION_DRIFT through the classifier
+for a corrective run from the exact promoted SHA. Normal document writes stay
+in the new run's registered integration worktree and pass fresh gates.
+
+The generation-locked outer verifier executes each non-GUI test class once
+against the clean promoted deployment. A fixed Django DiscoverRunner adapter
+records unittest result counters directly; it never infers success from log
+text. Private receipts bind the class, dotted test label, runner digest, exact
+source/deployment identity, exit status, counters and verification ID. Missing,
+interrupted or failed attempts remain nonpassing and require a fresh trial.
+The semantic reader validates the canonical receipt digest and checks declared
+counts against observed completed tests. GUI evidence reuses the two owned
+Playwright UAT receipts and their validated test reports. No raw test output
+or credential values enter receipts or reports.
+
+#### Selected Option
+
+Use deterministic owner execution and existing image/browser provenance.
+Keep the phase graph and public workflow actions unchanged.
+
+The execution owner resolves canonical-spec reads to the registered integration
+scope during prepared execution and the exact primary checkout after promotion.
+Refinement verifies the recorded integration HEAD; execution transitions retain
+their own journal-based HEAD recovery checks. Delivery-only paired publication
+refreshes impact through refinement verification and unchanged-plan settlement.
+The primary anchor remains unchanged until promotion; unsafe records, foreign
+registration, primary spec drift and incomplete final cleanup fail closed.
+
+#### Alternatives Considered
+
+Trusting PASS strings or parsing arbitrary logs retains the false-success gap.
+Marking every test PARTIAL forever prevents legitimate qualification. Moving
+promotion after UAT or reopening completed execution would change ownership
+and recovery across the workflow without necessity.
+
+#### Implementation Boundaries
+
+Change the coordinator, document and commit instructions, private three-tier
+runner/semantic reader, test fixtures, capability mapping, trigger/quality
+cases, workflow docs and changelog. Preserve dirty working bytes and installed
+runtime. Models, agent topology and application stack are fixed. The coordinator
+remains a bounded agent; test execution, receipts and admission are deterministic.
+No AI-stack, application-stack or provider selection is needed. Design review
+focuses on ownership, immutable evidence, interrupted attempts and regression
+proof; no new service, dependency or infrastructure is introduced.
+
+#### Test-First Success Criteria
+
+- TDD-001: Failing or modified test artifacts and inflated counts fail admission.
+- TDD-002: Clean owner-produced passing results pass, while failure, zero tests,
+  skipped tests, stale revisions and replaced images cannot pass.
+- TDD-003: Post-UAT edits cannot target completed execution; private sealing
+  remains independent of raw Git authorization and capability mappings resolve.
+
+#### Validation Plan
+
+Run focused negative controls, all relevant SDLC offline suites, static
+stateful skill checks for both hosts, lint, security and final alignment.
+
+#### Test Plan
+
+Exercise runner parsing, receipt immutability, source/image drift, class and
+count binding, GUI evidence reuse, and promotion/routing contract checks.
+
+#### Evaluation Plan
+
+Compare deterministic outcomes with the captured working-byte baseline. Live
+Docker, fresh agent invocation and hosted publication are separate evidence.
+
+#### Rollout And Rollback
+
+Review source changes before installing. Start a fresh owned live trial when
+qualifying the new receipt contract; old free-form logs grant no PASS. Preserve
+historical failed trials and use their exact owner for cleanup.
+
+#### Done Definition
+
+All reproduced issues have focused proof and applicable offline gates pass;
+unobserved runtime and publication surfaces are reported explicitly.
+
+#### Implementation Evidence
+
+The coordinator and document phase preserve read-only post-promotion review.
+The failure classifier routes sealed, promoted and completed execution to a
+new corrective run; earlier documentation drift invalidates documentation,
+alignment and commit. Private sealing no longer inherits raw-commit admission.
+The three-tier lifecycle owns the fixed test runner and immutable receipts;
+semantic and partial reports validate their provenance and observed counts.
+The stale capability mapping, regression fixtures, trigger cases and workflow
+reference documents are aligned. The execution-owned canonical-spec resolver
+binds refinement and impact to the registered integration scope, then to the
+exact promoted primary, preserving delivery-only settlement and interrupted
+transition recovery.
+
+#### Verification Evidence
+
+Failing-before negative controls reproduce artifact substitution, inflated
+counts, incorrect terminal routing and authorization ambiguity. Repaired
+controls pass. Targeted offline suites pass, including 216 verifier tests,
+86 execution tests, 34 repair-control tests and 14 coordinator contract tests.
+All 21 SDLC skills pass standard-field and native host-policy checks; native
+frontmatter extensions remain intentional. Disposable skills@1.5.26 discovery,
+copy parity, repeated installation and isolation pass for Codex and Claude.
+Scoped Python/Markdown checks and independent read-only review pass.
+
+Subsequent source verification passed all 23 deterministic capability groups
+with zero failures. The disposable source-selected Docker/Django/PostgreSQL
+trial passed all 18 lifecycle phases, 17 owner-executed product tests and four
+fresh frozen headless Chrome stages. GUI/API/database correlation and restart
+persistence passed; owned runtime cleanup was independently verified. A nested
+project and its requirements follow-up passed native-worker implementation,
+local promotion, terminal UAT, steering/resume and selected-scope history checks.
+
+These are historical observations from the completed source trial. Its raw
+three-tier evidence and runtime were removed after validation; retained reports
+do not certify a new live target. Aggregate readiness remains PARTIAL because
+the lightweight semantic validator is incomplete and the full failure-category
+matrix has deterministic coverage rather than separate native live repairs.
+Delivery remains implemented: fresh-agent trigger and comparative quality
+evaluations, installed-hook activation, Claude runtime, locked-screen
+continuity and hosted publication remain unverified.
+
+<!-- /FEATURE: FEAT-044 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

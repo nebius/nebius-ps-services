@@ -111,6 +111,24 @@ def test_invalid_acceptance_comparisons_fail(defect):
         load("publish_results").comparison_payload(left, right, RECIPE)
 
 
+@pytest.mark.parametrize("check", [None, {}, [], 0, 1, "failed", {"error": 0.0}])
+def test_publication_requires_an_affirmative_correctness_check(check):
+    candidate = result()
+    candidate["correctness"] = {"reference": check}
+    with pytest.raises(ValueError, match="correctness evidence"):
+        load("publish_results").comparison_payload(result(), candidate, RECIPE)
+
+
+def test_publication_preserves_nested_checks_and_numeric_diagnostics():
+    publisher = load("publish_results")
+    candidate = result()
+    candidate["correctness"] = {"cases": [{"passed": True, "max_error": 0.0}]}
+    assert publisher.comparison_payload(result(), candidate, RECIPE)
+    candidate["correctness"]["cases"].append({"passed": False})
+    with pytest.raises(ValueError, match="correctness evidence"):
+        publisher.comparison_payload(result(), candidate, RECIPE)
+
+
 def test_clean_callable_has_no_annotation_wrapper(monkeypatch):
     module = load("course_evidence")
     monkeypatch.delenv("COURSE_CAPTURE", raising=False)

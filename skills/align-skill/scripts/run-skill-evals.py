@@ -8,17 +8,17 @@ import csv
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
-import shutil
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
-
 
 MAX_OUTPUT = 8 * 1024 * 1024
 TIMEOUT = 180
@@ -29,10 +29,13 @@ def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("skill_dir", type=Path)
     parser.add_argument("--agent", required=True, choices=("codex", "claude"))
-    parser.add_argument("--suite", required=True, choices=("triggers", "quality"))
+    parser.add_argument("--suite", required=True, choices=("triggers", "quality", "diagnostic"))
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--case-id")
     parser.add_argument("--baseline-dir", type=Path)
+    parser.add_argument("--image", help="Diagnostic suite: reviewed Linux image pinned by digest.")
+    parser.add_argument("--model", help="Diagnostic suite: frozen model identifier.")
+    parser.add_argument("--network", default="none", help="Diagnostic suite: dedicated proxy network or none.")
     return parser.parse_args()
 
 
@@ -198,6 +201,17 @@ def output_files(workspace: Path) -> list[dict]:
     return files
 
 
+def native_command(executable: str, prompt: str, *, model: str | None = None) -> list[str]:
+    command = ([executable, "--ask-for-approval", "never", "exec", "--json",
+                "--sandbox", "workspace-write", "--skip-git-repo-check"]
+               if Path(executable).name == "codex" else
+               [executable, "-p", "--output-format", "stream-json", "--verbose",
+                "--permission-mode", "default"])
+    if model:
+        command += ["--model", model]
+    return command + [prompt]
+
+
 def run_case(agent: str, root: Path, case: dict, *, judge_prompt: str | None = None,
              fixture_root: Path | None = None) -> dict:
     executable = shutil.which(agent)
@@ -217,7 +231,7 @@ def run_case(agent: str, root: Path, case: dict, *, judge_prompt: str | None = N
         if judge_prompt is None:
             validate_payload(root)
             installed = install / root.name
-            shutil.copytree(root, installed, symlinks=True, ignore=shutil.ignore_patterns(*IGNORED_PAYLOAD_NAMES))
+            shutil.copytree(root, installed, symlinks=True, ignore=shutil.ignore_patterns(*IGNORED_PAYLOAD_NAMES, "evals"))
             validate_payload(installed)
             skill_text = safe_file(installed, "SKILL.md").read_text()
         for relative in case.get("files", []):
@@ -232,11 +246,7 @@ def run_case(agent: str, root: Path, case: dict, *, judge_prompt: str | None = N
         if case.get("files") and judge_prompt is None:
             prompt += "\nFixture inputs are in this workspace: " + ", ".join(case["files"])
         prompt += "\nOperate only on disposable files in the current workspace. Do not use network services or publish."
-        command = ([executable, "--ask-for-approval", "never", "exec", "--json",
-                    "--sandbox", "workspace-write", "--skip-git-repo-check", prompt]
-                   if agent == "codex" else
-                   [executable, "-p", "--output-format", "stream-json", "--verbose",
-                    "--permission-mode", "default", prompt])
+        command = native_command(executable, prompt)
         try:
             with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
                 with subprocess.Popen(command, cwd=workspace, env=env, stdin=subprocess.DEVNULL,
@@ -325,6 +335,17 @@ def evaluate(agent: str, root: Path, case: dict, suite: str, baseline: Path | No
 
 def main() -> int:
     args = arguments()
+    if args.suite == "diagnostic":
+        if not args.image or not args.model or not args.baseline_dir:
+            print("Diagnostic suite requires --image, --model and --baseline-dir")
+            return 2
+        runner = Path(__file__).resolve().parents[2] / "troubleshoot/evals/diagnostic/runner.py"
+        command = [sys.executable, str(runner), str(args.skill_dir), "--agent", args.agent,
+                   "--baseline-dir", str(args.baseline_dir), "--output-dir", str(args.output_dir),
+                   "--image", args.image, "--model", args.model, "--network", args.network]
+        if args.case_id:
+            command += ["--case-id", args.case_id]
+        return subprocess.call(command)
     root = args.skill_dir.resolve(strict=True)
     output = args.output_dir
     try:
@@ -339,7 +360,7 @@ def main() -> int:
         output.mkdir(parents=True, exist_ok=True, mode=0o700)
         results = [{"case": index, **evaluate(args.agent, root, case, args.suite, baseline)}
                    for index, case in enumerate(selected, 1)]
-        version = subprocess.run([args.agent, "--version"], capture_output=True, text=True,
+        version = subprocess.run([args.agent, "--version"], capture_output=True, text=True, check=False,
                                  timeout=10).stdout.strip() if shutil.which(args.agent) else "UNAVAILABLE"
         report = {"schema": "skill-evaluation/v1", "agent": args.agent, "version": version,
                   "suite": args.suite, "timeout_seconds": TIMEOUT,

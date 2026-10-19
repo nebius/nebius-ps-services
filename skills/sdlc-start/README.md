@@ -30,6 +30,12 @@ Startup also publishes the private JSON `active.lock` ownership record and
 verifies that hook discovery resolves the exact selected project and run. An
 empty file or advisory lock alone does not register a workflow.
 
+Requirements refinement and prompt impact read canonical specs from the
+execution owner's registered integration scope once execution is prepared.
+Delivery-only reconciliation may retain the locked plan after a fresh impact
+settlement. Promotion switches reads to the exact clean primary checkout;
+replaying completed promotion does not require recreating integration resources.
+
 Gate failures use one private, deterministic repair-control contract.
 Already-proven mechanical causes take the shortest route to their owning
 phase. Ambiguous or persistent failures enter `troubleshoot` as a conditional

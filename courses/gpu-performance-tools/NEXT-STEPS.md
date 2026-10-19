@@ -9,7 +9,7 @@
 
 - **Apply the references**
 
-  In GPU Fundamentals or a later practical course, read the lab's native batch job, record its workload and interpret the corresponding Systems, Compute or PyTorch view. Use the shared Lab Guide for environment preparation and evidence publication.
+  In GPU Fundamentals or a later practical course, read the lab's native batch job, record its workload and interpret the corresponding Systems, Compute or PyTorch view. Use [Lab Preparation](../lab-guide.html#lab-preparation) for the single software-preparation command and its completion summary. Follow the guide's separate profiling and publication checks when collecting evidence.
 
 - **Study collection details**
 

@@ -586,7 +586,7 @@ class GitLifecycleTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.origin = self.root / "origin.git"
         git(self.root, "init", "--bare", "-q", str(self.origin))
         self.project = self.root / "project"
@@ -2536,6 +2536,7 @@ class GitLifecycleTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        state_path.chmod(0o600)
         recovered = self.prepare()
         self.assertEqual(recovered["status"], "prepared")
         self.assertTrue(integration.is_dir())
@@ -2847,6 +2848,7 @@ class GitLifecycleTests(unittest.TestCase):
                         ),
                         encoding="utf-8",
                     )
+                    state.chmod(0o600)
                     with self.assertRaises(ExecutionError) as raised:
                         self.prepare()
                     self.assertEqual(raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED")

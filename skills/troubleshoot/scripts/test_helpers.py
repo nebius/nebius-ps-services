@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib.util
-import io
 import json
 import os
 import subprocess
@@ -133,12 +132,11 @@ class CollectEvidenceTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(result.stdout)
-            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["schema_version"], 2)
             self.assertTrue(payload["repository"]["git"]["dirty"])
-            self.assertEqual(
-                payload["filesystem"]["probe_scope"],
-                "system_temporary_directory",
-            )
+            self.assertNotIn("filesystem", payload)
+            self.assertEqual(payload["tools"], {})
+            self.assertEqual(payload["sections"], ["repository", "platform"])
             self.assertNotIn(marker, result.stdout)
             self.assertNotIn("untracked private name.txt", result.stdout)
             after = subprocess.run(
@@ -167,77 +165,41 @@ class CollectEvidenceTests(unittest.TestCase):
             output = root / "evidence.json"
             result = run_script(COLLECT, "--root", str(root), "--output", str(output))
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(output.read_text())["schema_version"], 1)
+            self.assertEqual(json.loads(output.read_text())["schema_version"], 2)
             if os.name == "posix":
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
-    def test_git_status_failure_is_unknown_not_clean(self) -> None:
+    def test_incomplete_git_status_never_proves_clean(self) -> None:
         module = load_script_module(COLLECT)
-        with (
-            mock.patch.object(
-                module, "detect_git_work_tree", return_value=(True, None)
-            ),
-            mock.patch.object(module, "run_bounded", return_value="abc123"),
-            mock.patch.object(
-                module,
-                "collect_git_status",
-                return_value=(None, "git_status_failed"),
-            ),
-        ):
-            payload = module.collect_git(Path.cwd())
-        self.assertIsNone(payload["dirty"])
-        self.assertFalse(payload["status_available"])
-        self.assertEqual(payload["status_error"], "git_status_failed")
+        for status in ("timeout", "failed", "unavailable", "truncated"):
+            with self.subTest(status=status), mock.patch.object(module, "observe", side_effect=[
+                {"status": "ok", "stdout": b"true"},
+                {"status": "ok", "stdout": b"abc", "stderr": b""},
+                {"status": status, "stdout": b"", "truncated": status == "truncated"},
+            ]):
+                result = module.collect_git(Path.cwd())
+                self.assertIsNone(result["dirty"])
+                self.assertFalse(result["status_available"])
+                self.assertEqual(result["status_error"], status)
 
-    def test_git_status_timeout_is_unknown_not_clean(self) -> None:
+    def test_git_detection_failure_is_unknown(self) -> None:
         module = load_script_module(COLLECT)
-        with (
-            mock.patch.object(
-                module, "detect_git_work_tree", return_value=(True, None)
-            ),
-            mock.patch.object(module, "run_bounded", return_value="abc123"),
-            mock.patch.object(
-                module,
-                "collect_git_status",
-                return_value=(None, "git_status_timeout"),
-            ),
-        ):
-            payload = module.collect_git(Path.cwd())
-        self.assertIsNone(payload["dirty"])
-        self.assertFalse(payload["status_available"])
-        self.assertEqual(payload["status_error"], "git_status_timeout")
+        with mock.patch.object(module, "observe", return_value={"status": "unavailable", "stdout": b""}):
+            result = module.collect_git(Path.cwd())
+        self.assertIsNone(result["is_work_tree"])
+        self.assertIsNone(result["dirty"])
 
-    def test_git_detection_failure_is_unknown_not_non_repository(self) -> None:
+    def test_git_truncation_retains_complete_dirty_records(self) -> None:
         module = load_script_module(COLLECT)
-        with mock.patch.object(
-            module,
-            "detect_git_work_tree",
-            return_value=(None, "git_work_tree_detection_unavailable"),
-        ):
-            payload = module.collect_git(Path.cwd())
-        self.assertIsNone(payload["is_work_tree"])
-        self.assertFalse(payload["detection_available"])
-        self.assertIsNone(payload["dirty"])
-
-    def test_git_status_stream_counts_with_record_ceiling(self) -> None:
-        module = load_script_module(COLLECT)
-        state = {
-            "records_seen": 0,
-            "records_counted": 0,
-            "staged": 0,
-            "unstaged": 0,
-            "untracked": 0,
-            "truncated": False,
-            "stream_error": False,
-        }
-        stream = io.BytesIO(b"M  one\n M two\n?? three\n?? four\n")
-        with mock.patch.object(module, "MAX_GIT_STATUS_RECORDS", 2):
-            module.drain_git_status(stream, state)
-        self.assertEqual(state["records_seen"], 4)
-        self.assertEqual(state["records_counted"], 2)
-        self.assertTrue(state["truncated"])
-        self.assertEqual(state["staged"], 1)
-        self.assertEqual(state["unstaged"], 1)
+        with mock.patch.object(module, "observe", side_effect=[
+            {"status": "ok", "stdout": b"true"},
+            {"status": "ok", "stdout": b"abc", "stderr": b""},
+            {"status": "truncated", "stdout": b"M  a\n M b\n?? c\n?? partial", "truncated": True},
+        ]):
+            result = module.collect_git(Path.cwd())
+        self.assertTrue(result["dirty"])
+        self.assertEqual(result["status_counts"], {"staged": 1, "unstaged": 1, "untracked": 1})
+        self.assertEqual(result["status_records_counted"], 3)
 
 
 class RepeatCommandTests(unittest.TestCase):
@@ -439,7 +401,11 @@ class RepeatCommandTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             failed = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(failed["requested_runs"], 5)
-            self.assertEqual(failed["completed_runs"], 1)
+            self.assertEqual(failed["attempted_runs"], 1)
+            self.assertEqual(failed["launched_runs"], 0)
+            self.assertEqual(failed["completed_runs"], 0)
+            self.assertIsNone(failed["pass_rate"])
+            self.assertIsNone(failed["timing_seconds"]["mean"])
             self.assertEqual(failed["launch_error_count"], 1)
 
     def test_redacts_sensitive_argv_output_and_private_endpoints(self) -> None:

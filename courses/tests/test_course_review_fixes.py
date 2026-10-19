@@ -290,7 +290,7 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
         ROOT / "llm-inference/slurm/15_streaming_client.sbatch"
     ).read_text()
     assert (
-        '"${COURSE_VLLM:?run serving-lab-setup.py}" serve' in aiperf
+        '"${COURSE_VLLM:?run lab-setup.py}" serve' in aiperf
         and "--streaming" in aiperf
     )
     assert "--request-count 24" in aiperf and "--output-artifact-dir" in aiperf

@@ -2,5 +2,62 @@
   "schema": "course-retired-entrypoints/v1",
   "course_setup.py": [
     "25362bdd162ba560464efe3ce68b10cf8534dc7ba2678f2cd528576f52e6ae61"
+  ],
+  "regular-lab-setup.py": [
+    "f6301d9fad01173a0b09c819c7bed01af13eb7d6640af19b522bb1cd28a06afd"
+  ],
+  "cuda-lab-setup.py": [
+    "568cb8cec2812990992978a9f8452eefbbef9a80cf1d4bcef414ef1166df099a"
+  ],
+  "communication-lab-setup.py": [
+    "dd8e33c52acdd6187c8d71b951b1ab62430ac1e4c9359fbc6f76c02b4ec750fc"
+  ],
+  "serving-lab-setup.py": [
+    "38f3b08acbddee15d5b393316082caba686b8e96a7effac4e62bfa67357e756b"
+  ],
+  "transformer-engine-lab-setup.py": [
+    "fd2e49e55d2427686f2a79a471d1b21d5a9ef11d5aacc08d3a0b4ad67cf43c60"
+  ],
+  "replacement_files": [
+    "tools/course_bootstrap/__init__.py",
+    "tools/course_bootstrap/catalog.json",
+    "tools/course_bootstrap/catalog.py",
+    "tools/course_bootstrap/cli.py",
+    "tools/course_bootstrap/controller.py",
+    "tools/course_bootstrap/cuda.def",
+    "tools/course_bootstrap/handoff.py",
+    "tools/course_bootstrap/installer.py",
+    "tools/course_bootstrap/models.py",
+    "tools/course_bootstrap/mount_root.py",
+    "tools/course_bootstrap/orchestration.py",
+    "tools/course_bootstrap/progress.py",
+    "tools/course_bootstrap/receipts.py",
+    "tools/course_bootstrap/recipes.py",
+    "tools/course_bootstrap/retired.json",
+    "tools/course_bootstrap/retirement.py",
+    "tools/course_bootstrap/runtime.py",
+    "tools/course_bootstrap/selection.py",
+    "tools/course_bootstrap/state.py",
+    "tools/course_bootstrap/support.py",
+    "tools/course_bootstrap/sync_workstation.py",
+    "tools/course_bootstrap/system.py",
+    "tools/course_bootstrap/worker.py",
+    "tools/course_env.sh",
+    "tools/course_execution.py",
+    "tools/course_job.py",
+    "tools/course_job_cache.sh",
+    "tools/course_publication.py",
+    "tools/course_publication_evidence.py",
+    "tools/course_publication_state.py",
+    "tools/course_runtime.py",
+    "tools/ensure_python312.sh",
+    "tools/fabric_guard.py",
+    "tools/inspect_results.py",
+    "tools/install_fabric_tools.py",
+    "tools/lab-setup.py",
+    "tools/managed_profilers.py",
+    "tools/publish_results.py",
+    "tools/readiness.py",
+    "tools/verify_monitoring.py"
   ]
 }

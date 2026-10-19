@@ -512,9 +512,10 @@ remain clean and at `base_head` until `sdlc-commit` promotes the exact sealed
 integration tip under the common-Git-directory lock with
 `git merge --ff-only`.
 
-After UAT, `sdlc-start` may route back to `sdlc-update-documents` in run scope
-before final handoff when UAT or final steering changes require project-facing
-documentation updates. In a managed child, lease release enters
+After UAT, `sdlc-update-documents` may assess the promoted checkout read-only
+and record no-op evidence. Required edits return `DOCUMENTATION_DRIFT` through
+classification into a corrective run from the exact promoted commit; completed
+execution never reopens. Fresh gates and UAT precede handoff. In a managed child, lease release enters
 `outer-integration-pending`; `sdlc-start` returns the recorded primary path plus
 the exact `$worktree integrate <generated-name>` command and stops. Only a fresh
 explicit user invocation from that primary checkout may run it. After that

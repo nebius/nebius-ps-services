@@ -10,49 +10,23 @@ from test_practice_integration import load_validator
 
 
 GUIDES = sorted(ROOT.glob("*/reference/labs/*.md"))
-REFERRAL = "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
+REFERRAL = "[Lab Guide](../../../lab-guide.html#lab-preparation)"
 
 
-def test_course_number_lookup_matches_every_runtime_binding():
-    course_names = {
-        "GPU Fundamentals": "gpu-fundamentals",
-        "GPU Performance Optimization": "gpu-optimizations",
-        "LLM Training": "llm-training",
-        "LLM Inference": "llm-inference",
-        "Custom CUDA Kernels": "custom-cuda-kernels",
-        "Advanced Labs: Multi-GPUs Multi-Nodes communication optimization": "advanced-gpu-communication",
-    }
-    group_anchors = {
-        "regular-labs": "regular",
-        "cuda-labs": "cuda",
-        "communication-labs": "communication",
-        "serving-labs": "serving",
-        "transformer-engine-lab": "transformer-engine",
-    }
+def test_unified_preparation_covers_every_runtime_binding():
     source = (ROOT / "README.md").read_text()
-    lookup = source.split("### Find your course and lab number\n", 1)[1].split("### ", 1)[0]
-    documented = {}
-    for title, numbers, anchor in re.findall(
-        r"^\| ([^|]+) \| ([0-9, –]+) \| \[[^]]+\]\(#([a-z-]+)\) \|$", lookup, re.M
-    ):
-        for item in numbers.split(", "):
-            bounds = [int(number) for number in item.split("–")]
-            for number in range(bounds[0], bounds[-1] + 1):
-                identity = (course_names[title], number)
-                assert identity not in documented, identity
-                documented[identity] = group_anchors[anchor]
-    _, courses = catalog.discover(ROOT / "tools/regular-lab-setup.py")
+    _, courses = catalog.discover(ROOT / "tools/lab-setup.py")
     definitions = catalog.load_catalog()
-    labs, _ = selection.inventory(courses, definitions)
-    expected = {
-        (identity.split("/")[0], int(identity.split("/")[1][:2])):
-        definitions["runtimes"][runtime]["group"]
-        for identity, runtime in labs.items()
-    }
-    assert len(expected) == len(GUIDES) == 110
-    assert documented == expected
-    assert "Soperator, GPU Performance Tools and PyTorch for GPU Performance Engineering are reading courses" in lookup
-    assert "#optional-container-exercises" in lookup
+    plan = selection.resolve(courses, definitions)
+    labs, launchers = selection.inventory(courses, definitions)
+    assert set(plan["labs"]) == set(labs)
+    assert set(launchers.values()) <= set(plan["runtimes"])
+    assert len(labs) == len(GUIDES)
+    assert 'python3.12 "$HOME/courses/tools/lab-setup.py"' in source
+    assert "Reading courses have no executable labs" in source
+    assert "Container exercises remain optional activities" in source
+    assert "included in default preparation" in source
+    assert not re.search(r"(?:regular|cuda|communication|serving|transformer-engine)-lab-setup", source)
 
 
 @pytest.mark.parametrize("path", GUIDES, ids=lambda p: str(p.relative_to(ROOT)))
@@ -63,7 +37,7 @@ def test_preparation_is_shared_without_repeated_lab_referrals(path):
     anchor = "lab-" + path.stem.replace("_", "-")
     article = re.search(rf'<article class="lab" id="{anchor}".*?</article>', page, re.S)
     assert article, path
-    assert article[0].count('href="../lab-guide.html#lab-preparation-scripts"') == 0
+    assert article[0].count('href="../lab-guide.html#lab-preparation"') == 0
 
 
 @pytest.mark.parametrize(
@@ -71,7 +45,7 @@ def test_preparation_is_shared_without_repeated_lab_referrals(path):
     [
         REFERRAL,
         "[Another setup link](../../../lab-guide.html)",
-        '`python3.12 "$HOME/courses/tools/regular-lab-setup.py"`',
+        '`python3.12 "$HOME/courses/tools/lab-setup.py"`',
         "```bash\npython3 tools/course_setup.py\n```",
         "```bash\npip install torch\n```",
         "```bash\npython3.12 -m venv .venv\n```",
@@ -99,10 +73,10 @@ def test_current_teaching_has_no_separate_installer_commands(course):
             continue
         source = path.read_text()
         assert not re.search(
-            r"[\w-]+-lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh",
+            r"(?:[\w-]+-)?lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh",
             source,
         ), path
         preparation_links = re.findall(
-            r"\[[^\]]+\]\([^)]*lab-guide\.html#lab-preparation-scripts\)", source
+            r"\[[^\]]+\]\([^)]*lab-guide\.html#lab-preparation\)", source
         )
         assert len(preparation_links) <= 1, path

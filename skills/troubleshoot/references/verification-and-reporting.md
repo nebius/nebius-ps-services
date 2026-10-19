@@ -71,18 +71,11 @@ alternative, explicit user stop, or exhausted remediation budget.
 
 ## Internal Evidence And User Projection
 
-Maintain the detailed architecture verdict, component matrix, incident
-timeline, eight-layer log ledger, hypothesis history, code-debugging record,
-post-fix validation, and completion verdicts as working evidence. Each
-canonical log layer remains exactly once as `examined`, `unavailable`,
-`unsafe`, or `not applicable`. Missing evidence stays `UNKNOWN`; a neighboring
-status or aggregate health result cannot turn it into a pass.
-
-Keep one internal completion verdict for each of: Design, Infrastructure,
-Connectivity, Configuration, Runtime health, Logs, and Relevant code paths.
-Record each as `PASS`, `FAIL`, or `UNKNOWN` with evidence and a gap or next
-action. These verdicts constrain classification and guide continued work, but
-they are not mandatory rows in the ordinary user-visible report.
+Maintain the scoped boundary/source ledger, incident timeline, hypothesis history,
+relevant code-path evidence and post-fix validation as working evidence. Record
+examined and material unexamined boundaries with reasons. Missing evidence stays
+`UNKNOWN`; aggregate health cannot make it pass. Assess only criteria needed for
+the declared conclusion; do not require fixed component or log-layer rows.
 
 Project only decision-relevant facts into the ordinary user-visible report:
 classification, confidence, fixed scope, current state, root cause, changes

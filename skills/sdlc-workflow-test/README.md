@@ -102,7 +102,9 @@ proof; invalid ownership, publication or image identity cannot produce new proof
   admission to design and full impact settlement before planning.
 - Deterministically verifies normalized failure events, bounded diagnosis,
   authoritative repair control, positive design admission, and append-only
-  corrective-plan/wave contracts.
+  corrective-plan/wave contracts. Troubleshooting admission checks both the
+  skill's reference link and its canonical `references/workflow-handoffs.md`
+  contract, so a missing handoff rule still fails after documentation refactors.
 - Accepts a private `agentic-sdlc/verification-live-results-v3` manifest with
   `--live-evidence PATH`; see `assets/live-results.schema.json`.
 - Rejects symlinked or unowned verification roots, unknown disposable
@@ -157,6 +159,10 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 - Treats generic digest-backed artifacts and minimally shaped profile headers
   as PARTIAL only. PASS requires dedicated machine-semantic validation of both
   the assertion and its canonical source profile.
+- Requires owner-executed test-class receipts bound to the promoted source,
+  deployed image, observed result counters and artifact digest. Free-form logs
+  cannot satisfy tests, and GUI counts derive from owned Playwright UAT
+  receipts. See [test evidence](references/test-evidence.md).
 - Derives deterministic and merge-safety profiles from passing verifier
   capabilities; live manifests cannot self-assert or relabel those profiles.
 - Keeps lightweight PASS fail-closed until exact claims can be derived from

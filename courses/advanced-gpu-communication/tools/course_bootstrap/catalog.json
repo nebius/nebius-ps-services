@@ -499,6 +499,7 @@
           "env": {
             "PATH": "{toolchain}/toolkit/bin:{build-tools}/venv/bin:/usr/local/bin:/usr/bin:/bin",
             "CUDA_HOME": "{toolchain}/toolkit",
+            "CPATH": "{prefix}/venv/lib/python3.12/site-packages/nvidia/cu13/include:{prefix}/venv/lib/python3.12/site-packages/nvidia/cudnn/include:{prefix}/venv/lib/python3.12/site-packages/nvidia/nccl/include",
             "LD_LIBRARY_PATH": "{toolchain}/toolkit/lib64"
           }
         }

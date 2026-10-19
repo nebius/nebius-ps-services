@@ -206,6 +206,13 @@ manual renames preserve identity and update the run mirror when normalized
 intent is unchanged, while rename plus intent edits and stale/duplicate prompt
 copies fail closed.
 
+Once execution is prepared, the execution owner resolves canonical-spec reads
+to the registered integration scope. Delivery-only reconciliation can refresh
+impact and retain the locked plan before sealing; material changes still require
+replanning. Promotion switches reads to the exact clean primary revision.
+Foreign registration, primary spec drift and incomplete final cleanup fail
+closed, while interrupted transitions retain their existing journal recovery.
+
 An explicitly invoked init or run also binds that Codex session to this exact
 workflow and project. The separate `prompt-session-intake` UserPromptSubmit
 hook may then secret-scan and privately stage later safe direct turns with
@@ -544,8 +551,11 @@ The implementation state schema uses this phase order:
 `sdlc-auto-steering` also runs at the start of each feature loop, or whenever
 `sdlc-start` sees new steering input, stale steering fingerprints, or
 unresolved steering dispositions. `sdlc-update-documents` runs in feature scope
-after evaluation and may run again in run scope after UAT when UAT or final
-steering changes user-facing docs before PR creation.
+after evaluation. After UAT it may assess documentation read-only and record
+no-op evidence. Required edits return `DOCUMENTATION_DRIFT` through classification
+into a corrective run from the exact promoted commit, with fresh documentation,
+alignment, promotion and UAT. The removed integration checkout is never reopened,
+and the promoted checkout is never edited for a late documentation correction.
 
 `sdlc-classify-failure` is the routing mechanism for failed phases rather than
 a normal happy-path phase. Proven mechanical causes take the shortest route to
@@ -639,6 +649,8 @@ The preflight must verify and record:
   interoperability; and prompt-bound steering continuation
 - deterministic failure-event, diagnosis, repair-control, design-admission,
   corrective-plan, full task-definition digest, and Stop-hook route contracts
+- the troubleshooting skill's link to its canonical workflow-handoff reference
+  and the diagnostic authority rules in that reference
 - a composed real-Git test that selects a nested folder in a managed outer
   worktree, runs schema-v7 execution through promotion, proves the v4 outer
   lease blocks outer integration, releases after final evidence, integrates
@@ -1207,6 +1219,10 @@ alone. It records documentation evidence under the private run directory as
 `evidence/FEAT-*/documents.md` or `evidence/uat/documents.md`. It does not edit
 `docs/requirements.md` or `docs/design.md`; spec, design, or missing slice
 evidence routes back to the responsible phase.
+
+Post-promotion documentation assessment is read-only. Necessary edits return
+`DOCUMENTATION_DRIFT` through classification for a corrective run from the exact
+promoted commit; fresh gates and UAT precede publication.
 
 ### `sdlc-gui-test`
 

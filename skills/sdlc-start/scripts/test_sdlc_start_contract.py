@@ -11,6 +11,20 @@ SKILLS = Path(__file__).resolve().parents[2]
 
 
 class SdlcStartContractTests(unittest.TestCase):
+    def test_post_uat_documents_preserve_promotion_boundary(self) -> None:
+        for relative in ("sdlc-start/SKILL.md", "sdlc-update-documents/SKILL.md"):
+            text = " ".join(self.text(relative).split())
+            with self.subTest(path=relative):
+                self.assertIn("post-promotion documentation assessment is read-only", text)
+                self.assertIn("corrective run from the exact promoted commit", text)
+                self.assertIn("DOCUMENTATION_DRIFT", text)
+
+    def test_raw_commit_authorization_does_not_gate_private_sealing(self) -> None:
+        text = self.text("sdlc-commit/SKILL.md").split("## Failure Handling", 1)[1]
+        text = " ".join(text.split("## Must Not", 1)[0].split())
+        self.assertIn("For operator-visible raw `git commit` only", text)
+        self.assertIn("private sealing and promotion", text)
+
     def text(self, relative: str) -> str:
         return (SKILLS / relative).read_text(encoding="utf-8")
 

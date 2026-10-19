@@ -15,7 +15,7 @@
 course_stage() {
   set -euo pipefail
   umask 077
-  local selection=$1 workload=$2
+  local selection=$1
   shift 2
   export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
   case "$selection" in
@@ -63,7 +63,7 @@ port=$((20000 + SLURM_JOB_ID % 20000))
 server_log="${COURSE_JOB_DIR}/logs/aiperf-vllm-server-run-${COURSE_RUN_ID}.log"
 cd "${course_dir}"
 
-setsid "${COURSE_VLLM:?run serving-lab-setup.py}" serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+setsid "${COURSE_VLLM:?run lab-setup.py}" serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 --max-model-len 2048 \
   >"${server_log}" 2>&1 &
 server_pid=$!
@@ -105,7 +105,7 @@ done
 if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM did not become ready within 240 seconds.\n' >&2; exit 2; fi
 
 \
-  "${COURSE_AIPERF:?run serving-lab-setup.py}" profile --model "${model}" --tokenizer-revision "${revision}" --url "http://127.0.0.1:${port}" \
+  "${COURSE_AIPERF:?run lab-setup.py}" profile --model "${model}" --tokenizer-revision "${revision}" --url "http://127.0.0.1:${port}" \
   --endpoint-type completions --streaming \
   --synthetic-input-tokens-mean 512 --synthetic-input-tokens-stddev 0 \
   --output-tokens-mean 128 --output-tokens-stddev 0 \
@@ -174,7 +174,7 @@ setsid env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys p
   --discard-environment=true --force-overwrite=false \
   --duration=300 --kill=none --wait=all \
   --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop "${COURSE_VLLM:?run serving-lab-setup.py}" serve --profiler-config.profiler cuda "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+  --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop "${COURSE_VLLM:?run lab-setup.py}" serve --profiler-config.profiler cuda "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
   --max-model-len 2048 >"${server_log}" 2>&1 &
 server_pid=$!
@@ -297,7 +297,7 @@ mkdir -p "${COURSE_JOB_DIR}/logs" "${COURSE_RESULTS_DIR}"
 port=$((20000 + SLURM_JOB_ID % 20000))
 server_log="${COURSE_JOB_DIR}/logs/vllm-stream-server-run-${COURSE_RUN_ID}.log"
 
-setsid "${COURSE_VLLM:?run serving-lab-setup.py}" serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+setsid "${COURSE_VLLM:?run lab-setup.py}" serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
   --max-model-len 2048 >"${server_log}" 2>&1 &
 server_pid=$!

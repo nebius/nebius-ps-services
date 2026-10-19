@@ -15,8 +15,10 @@ reading Fundamentals through that lesson supplies this assignment's concepts.
 This is a labs-only course: each guide contains its own explanation and practice.
 
 Practice requires two eight-H100 workers, sixteen GPUs in total, with local
-NVLink/NVSwitch and inter-worker InfiniBand. Prepare through the shared Lab Guide's
-[environment setup](../lab-guide.html#lab-preparation-scripts). The full route begins
+NVLink/NVSwitch and inter-worker InfiniBand. Follow the shared
+[Lab Preparation](../lab-guide.html#lab-preparation) and read its completion
+summary. The single command prepares software; these labs qualify the fabric
+and workload. The full route begins
 with Lab 01 and qualifies placement and fabric in Labs 01–07. The Fundamentals
 assignment uses Lab 02's readiness checks before Lab 08. Bounded experiments support scoped decisions; they do not
 establish production convergence or large-model scaling.

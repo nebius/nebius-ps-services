@@ -11,8 +11,10 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 import zlib
@@ -43,6 +45,161 @@ def png_bytes(red: int) -> bytes:
 
 
 class ThreeTierLifecycleTests(unittest.TestCase):
+    def test_fixed_runner_captures_real_unittest_outcomes_without_product_output(self):
+        owner = lifecycle.three_tier_tests
+        for failing in (False, True):
+            runner_module = types.ModuleType("django.test.runner")
+
+            class DiscoverRunner:
+                def run_suite(self, suite, **kwargs):
+                    return unittest.TextTestRunner(stream=StringIO()).run(suite)
+
+            runner_module.DiscoverRunner = DiscoverRunner
+            django = types.ModuleType("django")
+            django.test = types.ModuleType("django.test")
+            django.test.runner = runner_module
+
+            class ProductCase(unittest.TestCase):
+                def runTest(self):
+                    print("product output must be discarded")
+                    self.assertFalse(failing)
+
+            def manage(*args, **kwargs):
+                result = runner_module.EvidenceRunner().run_suite(unittest.TestSuite([ProductCase()]))
+                raise SystemExit(0 if result.wasSuccessful() else 1)
+
+            output = StringIO()
+            with mock.patch.dict(sys.modules, {"django": django, "django.test": django.test,
+                                              "django.test.runner": runner_module}), mock.patch(
+                "runpy.run_path", side_effect=manage
+            ), mock.patch.object(sys, "argv", ["runner", "tests.unit"]), redirect_stdout(output), self.assertRaises(SystemExit) as exit_info:
+                exec(owner.RUNNER, {})
+            self.assertEqual(exit_info.exception.code, int(failing))
+            self.assertNotIn("product output", output.getvalue())
+            counts = json.loads(output.getvalue().removeprefix(owner.PREFIX))
+            self.assertEqual(counts["tests"], 1)
+            self.assertEqual(counts["failures"], int(failing))
+
+    def test_owned_test_execution_is_immutable_and_identity_bound(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        owner = lifecycle.three_tier_tests
+        target = owner.read_receipt(state, state["test_runs"][0])["target"]
+        state["test_runs"] = []
+        state["browser_stages"] = []
+        lifecycle.update_state(self.root, state)
+        counts = dict.fromkeys(owner.COUNTERS, 0)
+        counts["tests"] = 3
+        result = subprocess.CompletedProcess([], 0, owner.PREFIX + json.dumps(counts), "ignored")
+        with mock.patch.object(lifecycle, "browser_target", return_value=target), mock.patch.object(
+            lifecycle, "command", return_value=result
+        ) as command:
+            first = lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
+            second = lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
+            self.assertEqual(first["test_runs"], second["test_runs"])
+            command.assert_called_once()
+            self.assertEqual(command.call_args.args[0][-4:], ["python", "-c", owner.RUNNER, "tests.test_unit"])
+            self.assertEqual(owner.read_receipt(first, first["test_runs"][0])["counts"]["tests"], 3)
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_test_class(self.root, "unit", "tests.other")
+
+    def test_owned_test_failure_cannot_be_retried_as_passing(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        owner = lifecycle.three_tier_tests
+        target = owner.read_receipt(state, state["test_runs"][0])["target"]
+        state["test_runs"] = []
+        state["browser_stages"] = []
+        lifecycle.update_state(self.root, state)
+        with mock.patch.object(lifecycle, "browser_target", return_value=target), mock.patch.object(
+            lifecycle, "command", return_value=subprocess.CompletedProcess([], 1, "private output", "private error")
+        ) as command:
+            for _ in range(2):
+                with self.assertRaises(lifecycle.LifecycleError):
+                    lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
+            command.assert_called_once()
+        _, saved = lifecycle.load_active(self.root)
+        self.assertEqual(saved["test_runs"][0]["outcome"], "FAIL")
+        receipt = (Path(saved["run_root"]) / saved["test_runs"][0]["path"]).read_text()
+        self.assertNotIn("private output", receipt)
+        self.assertNotIn("private error", receipt)
+
+    def test_owned_test_execution_rejects_source_drift(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        owner = lifecycle.three_tier_tests
+        target = owner.read_receipt(state, state["test_runs"][0])["target"]
+        state["test_runs"] = []
+        state["browser_stages"] = []
+        lifecycle.update_state(self.root, state)
+        counts = dict.fromkeys(owner.COUNTERS, 0)
+        counts["tests"] = 1
+        with mock.patch.object(lifecycle, "browser_target", side_effect=[target, {**target, "head": "a" * 40}]), mock.patch.object(
+            lifecycle, "command", return_value=subprocess.CompletedProcess([], 0, owner.PREFIX + json.dumps(counts), "")
+        ), self.assertRaises(lifecycle.LifecycleError):
+            lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
+        _, saved = lifecycle.load_active(self.root)
+        self.assertEqual(saved["test_runs"][0]["outcome"], "FAIL")
+
+    def test_owned_test_counts_reject_failure_skips_and_empty_execution(self) -> None:
+        owner = lifecycle.three_tier_tests
+        counts = dict.fromkeys(owner.COUNTERS, 0)
+        counts["tests"] = 2
+        self.assertEqual(owner.observed_counts(owner.PREFIX + json.dumps(counts)), counts)
+        for field in owner.COUNTERS:
+            invalid = {**counts, field: 0 if field == "tests" else 1}
+            with self.subTest(field=field), self.assertRaises(owner.TestEvidenceError):
+                owner.observed_counts(owner.PREFIX + json.dumps(invalid))
+        for output in ("all tests passed", "FAILED", owner.PREFIX + "{}", owner.PREFIX + "{}\n" + owner.PREFIX + "{}"):
+            with self.subTest(output=output), self.assertRaises(owner.TestEvidenceError):
+                owner.observed_counts(output)
+
+    def test_semantic_test_evidence_rejects_wrong_class_revision_and_image(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        binding = state["test_runs"][0]
+        path = Path(state["run_root"]) / binding["path"]
+        original = json.loads(path.read_text())
+        variants = [{**original, "test_class": "api"}, {**original, "verification_id": "foreign"},
+                    {**original, "target": {**original["target"], "head": "0" * 40}},
+                    {**original, "target": {**original["target"], "deployment": {
+                        **original["target"]["deployment"], "image_id": "sha256:" + "b" * 64}}}]
+        for value in variants:
+            lifecycle.private_json(path, value)
+            binding["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.subTest(value=value), self.assertRaises(lifecycle.SemanticEvidenceError):
+                lifecycle.validate_semantic_results(state, keep=True)
+
+    def test_partial_summary_does_not_repeat_unverified_test_pass(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        path = Path(state["run_root"]) / state["test_runs"][0]["path"]
+        path.write_text("FAILED unit")
+        summary = lifecycle.summarize_semantic_results(state)
+        self.assertEqual(summary["tests"]["unit"]["status"], "PARTIAL")
+        self.assertEqual(summary["tests"]["unit"]["assertions"], 0)
+
+    def test_semantic_rejects_failed_test_artifacts(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        root = Path(state["run_root"])
+        value = json.loads((root / "evidence/three-tier-results.json").read_text())
+        for name in ("unit", "api", "database", "migration", "vertical"):
+            for relative in value["tests"][name]["evidence"]:
+                (root / relative).write_text(f"FAILED {name}: 1 test failed, 0 passed\n")
+        with self.assertRaises(lifecycle.SemanticEvidenceError):
+            lifecycle.validate_semantic_results(state, keep=True)
+
+    def test_semantic_rejects_inflated_test_counts(self) -> None:
+        state = self.prepare()
+        self.write_valid_results(state)
+        artifact = Path(state["run_root"]) / "evidence/three-tier-results.json"
+        value = json.loads(artifact.read_text())
+        value["tests"]["unit"]["assertions"] += 100
+        artifact.write_text(json.dumps(value))
+        with self.assertRaises(lifecycle.SemanticEvidenceError):
+            lifecycle.validate_semantic_results(state, keep=True)
+
     def test_claude_generation_uses_native_home_and_rejects_cross_host_resume(self):
         with mock.patch.dict(os.environ, {"SKILLS_AGENT": "claude"}):
             os.environ.pop("CODEX_THREAD_ID", None)
@@ -230,11 +387,34 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 }
             )
         self.write_browser_receipts(state, screenshots)
+        self.write_test_receipts(state, value)
         lifecycle.update_state(self.root, state)
         (run_root / "evidence" / "three-tier-results.json").write_text(
             json.dumps(value), encoding="utf-8"
         )
         (run_root / "evidence" / "three-tier-results.json").chmod(0o600)
+
+    def write_test_receipts(self, state, results):
+        """Synthetic owner receipts for offline tests, never runtime proof."""
+        owner = lifecycle.three_tier_tests
+        state["test_runs"] = []
+        target = {"path": state["project_root"], "head": state["git"]["promoted_sha"],
+                  "deployment": {"build": state["runtime_build"],
+                                 "image_id": "sha256:" + "a" * 64, "web_container": "web-id"}}
+        for index, name in enumerate(owner.TEST_CLASSES):
+            relative = f"evidence/tests/{index:032x}.json"
+            path = Path(state["run_root"]) / relative
+            counts = dict.fromkeys(owner.COUNTERS, 0)
+            counts["tests"] = 1
+            lifecycle.private_json(path, {"schema": owner.SCHEMA,
+                "verification_id": state["verification_id"], "test_class": name,
+                "label": "tests.test_" + name, "runner_sha256": owner.RUNNER_SHA256,
+                "target": target, "exit_code": 0, "counts": counts, "outcome": "PASS"})
+            state["test_runs"].append({"test_class": name, "path": relative,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "outcome": "PASS"})
+            results["tests"][name]["evidence"] = [relative]
+        results["tests"]["gui"].update(assertions=2, evidence=[
+            item["path"] for item in state["browser_stages"] if item["stage"].startswith("uat-")])
 
     def write_browser_receipts(self, state, screenshots):
         """Synthetic owned receipts for offline tests; never live evidence."""
@@ -1242,11 +1422,10 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         self.write_valid_results(state)
         run_root = Path(state["run_root"])
-        (run_root / "evidence/tests/api.txt").write_bytes(
-            (run_root / "evidence/tests/unit.txt").read_bytes()
-        )
+        (run_root / state["test_runs"][1]["path"]).write_bytes(
+            (run_root / state["test_runs"][0]["path"]).read_bytes())
         with self.assertRaisesRegex(
-            lifecycle.SemanticEvidenceError, "Identical generic evidence"
+            lifecycle.SemanticEvidenceError, "receipt changed"
         ):
             lifecycle.validate_semantic_results(state, keep=True)
 

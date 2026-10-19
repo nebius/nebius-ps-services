@@ -68,6 +68,10 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
 5. Execute every phase and test class in the scenario reference. Local ship
    means build and run the promoted clean SHA locally; it never means push,
    publish, PR creation, or PR merge.
+   Before UAT fixture reset, collect all five non-GUI classes through the
+   generation-locked `run-test-class` owner described in
+   [test evidence](test-evidence.md). Reuse owned Playwright UAT receipts for
+   GUI evidence. Generic logs or hand-written PASS/counts cannot qualify tests.
 6. Route web evaluation and UAT through `sdlc-gui-test` with
    `harness: playwright-test` and `headless: true`. Use the owned stage command
    at the matching phase; see the headless contract below.

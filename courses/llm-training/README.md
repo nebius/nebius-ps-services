@@ -23,7 +23,7 @@ distributed training, adaptation and the capstone.
 
 ## Before the first lab
 
-Follow the [Lab Guide](../lab-guide.html#lab-preparation-scripts) and
+Follow the [Lab Guide](../lab-guide.html#lab-preparation) and
 [Versions and environment](VERSIONS.md) for the approved runtime. Local GPU
 labs use one full H100; a qualified advanced cluster can supply that allocation.
 
@@ -36,8 +36,9 @@ prepared course environment. After Lessons 1–4, follow
 sbatch slurm/01_tiny_transformer_train.sbatch --workload small
 ```
 
-Lab 22 is an optional FP8 extension with its own isolated Transformer Engine
-runtime. Qualify its matching PyTorch/CUDA environment and hardware separately;
+Lab 22 is an optional FP8 extension. Default preparation includes its isolated
+Transformer Engine runtime. Qualify its matching PyTorch/CUDA environment and
+hardware separately;
 installation alone does not pass that gate.
 
 ## Completion

@@ -348,42 +348,17 @@ def test_discovery_writes_only_private_connections(owned_monitoring):
     m, args, state = owned_monitoring
     config_before = args.config.read_bytes()
     discovered = m.discover(args)
-    m.write_connections(args, discovered)
-    assert sorted(p.name for p in args.output_dir.iterdir()) == [
-        "environment.sh",
-        "laptop-environment.sh",
-        "monitoring.json",
-    ]
-    assert args.output_dir.stat().st_mode & 0o777 == 0o700
-    assert all(p.stat().st_mode & 0o777 == 0o600 for p in args.output_dir.iterdir())
     assert discovered["schema"] == "gpu-course-monitoring/v2"
     assert discovered["datasource_uid"] == "cxcli-fixture-metrics"
     assert discovered["pushgateway_service"] == state.push["metadata"]["name"]
     assert discovered["pushgateway_port"] == state.push["spec"]["ports"][0]["port"]
     assert args.config.read_bytes() == config_before
     assert all(c[0] == "get" for c in state.calls)
-    worker = (args.output_dir / "environment.sh").read_text()
+    from course_bootstrap.handoff import parse, render
+    worker = render(args.workspace, discovered)
     assert "KUBECONFIG" not in worker and "CLUSTER_CONFIG" not in worker
-    laptop = args.output_dir / "laptop-environment.sh"
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1"; printf "%s\\n%s" "$KUBECONFIG" "$COURSE_PUSHGATEWAY"; type -t nebius-cxcli || true',
-            "bash",
-            str(laptop),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert result.stdout.startswith(
-        str(args.kubeconfig.resolve()) + "\n" + discovered["pushgateway_url"]
-    )
-    assert "function" not in result.stdout
-    assert "COURSE_CATALOG" not in laptop.read_text()
-    with pytest.raises(ValueError, match="already exists"):
-        m.write_connections(args, discovered)
+    assert parse(worker)[0]["COURSE_WORKSPACE"] == args.workspace
+    assert not args.output_dir.exists()
 
 
 @pytest.mark.parametrize(
@@ -459,7 +434,7 @@ def test_invalid_installation_fails_before_outputs(owned_monitoring, fault):
     else:
         s.push["metadata"]["annotations"]["meta.helm.sh/release-name"] = "foreign"
     with pytest.raises(ValueError):
-        m.write_connections(args, m.discover(args))
+        m.discover(args)
     assert not args.output_dir.exists()
 
 
@@ -545,7 +520,7 @@ def test_removed_installer_flags_are_rejected(flag):
     result = subprocess.run(
         [
             sys.executable,
-            str(ROOT / "tools/regular-lab-setup.py"),
+            str(ROOT / "tools/lab-setup.py"),
             "monitoring",
             "--config",
             "config.yaml",
@@ -566,7 +541,7 @@ def test_removed_installer_flags_are_rejected(flag):
         text=True,
         check=False,
     )
-    assert result.returncode == 2 and "unrecognized arguments" in result.stderr
+    assert result.returncode == 2 and "invalid choice" in result.stderr
 
 
 @pytest.mark.parametrize("fault", ["service", "database", "owner", "port", "exposure"])
@@ -629,16 +604,6 @@ def test_legacy_receipt_is_rejected_before_kubernetes(tmp_path, monkeypatch):
     assert error.value.code == 2
 
 
-def test_output_symlink_is_rejected(owned_monitoring, tmp_path):
-    m, args, _state = owned_monitoring
-    elsewhere = tmp_path / "unrelated"
-    elsewhere.mkdir()
-    args.output_dir.symlink_to(elsewhere, target_is_directory=True)
-    with pytest.raises(ValueError, match="unsafe"):
-        m.write_connections(args, m.discover(args))
-    assert list(elsewhere.iterdir()) == []
-
-
 def test_native_write_is_rechecked_after_discovery(owned_monitoring):
     m, args, s = owned_monitoring
     receipt = m.discover(args)
@@ -664,3 +629,54 @@ def test_inactive_or_remotely_bound_releases_are_rejected(owned_monitoring, faul
         s.save()
     with pytest.raises(ValueError):
         m.discover(args)
+
+
+def test_grafana_headless_gossip_service_is_not_the_ui(owned_monitoring):
+    m, args, state = owned_monitoring
+    original = m.kube
+    def kube(connection, *arguments):
+        result = copy.deepcopy(original(connection, *arguments))
+        if arguments[:2] == ("get", "services"):
+            for service in list(result["items"]):
+                if service["metadata"].get("annotations", {}).get("meta.helm.sh/release-name") == "grafana":
+                    gossip = copy.deepcopy(service)
+                    gossip["metadata"]["name"] += "-headless"
+                    gossip["spec"]["clusterIP"] = "None"
+                    gossip["spec"]["ports"] = [{"name": "gossip-tcp", "port": 9094, "protocol": "TCP"}]
+                    result["items"].append(gossip)
+        return result
+    from unittest.mock import patch
+    with patch.object(m, "kube", kube):
+        result = m.discover(args)
+    assert not result["grafana_service"].endswith("-headless")
+
+
+@pytest.mark.parametrize("unrelated", [False, True])
+def test_immediate_dashboard_import_preserves_monitoring_acceptance(owned_monitoring, unrelated):
+    m, args, state = owned_monitoring
+    source = {"deployment": "course", "apps": {"charts": copy.deepcopy(state.manifest["runtime_config"]["apps"]["charts"])}}
+    state.manifest["render"]["source_config_sha256"] = m.configuration_digest(source)
+    state.save()
+    source["apps"]["charts"][0]["dashboard_imports"] = [{"uid": "course-dashboard", "sha256": "fixture"}]
+    if unrelated:
+        source["deployment"] = "changed"
+    args.config.write_text(yaml.safe_dump(source))
+    if unrelated:
+        with pytest.raises(ValueError, match="Configuration differs"):
+            m.discover(args)
+    else:
+        assert m.discover(args)["schema"] == "gpu-course-monitoring/v2"
+
+
+def test_accepted_grafana_ha_endpoints_are_supported(owned_monitoring, monkeypatch):
+    m, args, state = owned_monitoring
+    original = m.kube
+    def kube(connection, *arguments):
+        result = copy.deepcopy(original(connection, *arguments))
+        if arguments[:2] == ("get", "endpointslices") and arguments[-1] == "kubernetes.io/service-name=grafana":
+            endpoint = copy.deepcopy(result["items"][0]["endpoints"][0])
+            endpoint["addresses"] = ["10.0.0.99"]
+            result["items"][0]["endpoints"].append(endpoint)
+        return result
+    monkeypatch.setattr(m, "kube", kube)
+    assert m.discover(args)["grafana_service"] == "grafana"

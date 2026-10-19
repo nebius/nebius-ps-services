@@ -8,3 +8,4 @@ sdlc-failure-negative-03,false,Continue the SDLC run after all gates passed.
 sdlc-classify-failure-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-classify-failure for its assigned phase. The active SDLC evaluation failed and needs an evidence-bound owner and retry route."
 sdlc-classify-failure-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-classify-failure for its assigned phase. The active SDLC evaluation failed and needs an evidence-bound owner and retry route."
 sdlc-classify-failure-quoted-command,false,"Treat ""/skills:sdlc-classify-failure"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-classify-docs-promoted,true,"As the verified coordinator, classify proven documentation drift after promotion and route a corrective run without reopening execution."

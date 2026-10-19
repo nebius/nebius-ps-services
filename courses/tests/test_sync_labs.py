@@ -39,12 +39,14 @@ def workspace(tmp_path):
     (source / "README.md").write_text("shared source\n")
     (source / "lab-guide.html").write_text("shared guide\n")
     (source / "tools").mkdir()
-    for group in ("regular", "cuda", "communication", "serving", "transformer-engine"):
-        shutil.copy2(ROOT / "tools" / f"{group}-lab-setup.py", source / "tools" / f"{group}-lab-setup.py")
+    shutil.copy2(ROOT / "tools/lab-setup.py", source / "tools/lab-setup.py")
     shutil.copy2(ROOT / "tools/verify_source_sync.py", source / "tools/verify_source_sync.py")
     shutil.copy2(ROOT / "tools/ensure_python312.sh", source / "tools/ensure_python312.sh")
-    for name in ("course_runtime.py", "course_execution.py", "course_env.sh", "course_job_cache.sh", "course_publication_state.py", "publish_results.py"):
+    for name in ("course_sync.py", "workstation-requirements.txt", "course_runtime.py", "course_execution.py", "course_env.sh", "course_job_cache.sh", "course_publication_state.py", "publish_results.py"):
         shutil.copy2(ROOT / "tools" / name, source / "tools" / name)
+    from sync_course_tools import TOOLS
+    for name in TOOLS:
+        shutil.copy2(ROOT / "tools" / f"{name}.py", source / "tools" / f"{name}.py")
     shutil.copytree(ROOT / "tools/course_bootstrap", source / "tools/course_bootstrap",
                     ignore=shutil.ignore_patterns("__pycache__"))
     (source / "docs").mkdir()
@@ -110,6 +112,14 @@ context = sys.argv[1:] == ['config', 'current-context']
 if os.environ.get('TEST_KUBE_FAIL') == ('context' if context else 'services'):
     print('fixture: Kubernetes unavailable', file=sys.stderr)
     sys.exit(1)
+if not context and sys.argv[-1] == 'json':
+    lines = os.environ.get('TEST_KUBE_SERVICES', 'soperator-login-svc|LoadBalancer|TCP:22,|192.0.2.10/,').splitlines()
+    items = []
+    for line in lines:
+        name, kind, ports, endpoints = line.split('|')
+        items.append({'metadata': {'name': name}, 'spec': {'type': kind, 'ports': [dict(protocol=p.split(':')[0], port=int(p.split(':')[1])) for p in ports.split(',') if p]}, 'status': {'loadBalancer': {'ingress': [dict(ip=e.split('/')[0], hostname=e.split('/')[1]) for e in endpoints.split(',') if e]}}})
+    print(json.dumps({'items': items}))
+    sys.exit(0)
 print(os.environ.get('TEST_KUBE_CONTEXT', 'test-context') if context else
       os.environ.get('TEST_KUBE_SERVICES',
                      'soperator-login-svc|LoadBalancer|TCP:22,|192.0.2.10/,'),
@@ -190,8 +200,34 @@ sys.exit(subprocess.call(['/bin/sh', '-c', command], env=env))
     remote_bin = tmp_path / "remote-bin"
     remote_bin.mkdir()
     (remote_bin / "sh").symlink_to("/bin/sh")
+    laptop = tmp_path / "laptop"
+    laptop.mkdir()
+    (laptop / "config.yaml").write_text("fixture: true\n")
+    (laptop / "kubeconfig").write_text("fixture: true\n")
+    receipt = {"cluster_identity": {"kubernetes_uid": "cluster-one"},
+               "vmagent_uid": "agent-one", "vmsingle_uid": "metrics-one",
+               "service_uid": "metrics-service-one", "pushgateway_service_uid": "push-one",
+               "metrics_url": "http://metrics.fixture.svc:8428", "pushgateway_url": "http://push.fixture.svc:9091"}
+    uv = binaries / "uv"
+    uv.write_text(f"#!{sys.executable}\n" + r"""import os, sys
+from pathlib import Path
+if 'venv' in sys.argv:
+    base = Path(sys.argv[-1])
+    (base / 'bin').mkdir(parents=True, mode=0o700)
+    base.chmod(0o700)
+    python = base / 'bin/python'
+    python.write_text('#!' + sys.executable + '\nimport os\nprint(os.environ["TEST_MONITORING_RECEIPT"])\n')
+    python.chmod(0o700)
+""")
+    uv.chmod(0o755)
     env = {
         **os.environ,
+        "HOME": str(laptop),
+        "CLUSTER_CONFIG": str(laptop / "config.yaml"),
+        "CLUSTER_TARGET": "fixture-target",
+        "KUBECONFIG": str(laptop / "kubeconfig"),
+        "CLUSTER_CONTEXT": "test-context",
+        "TEST_MONITORING_RECEIPT": json.dumps(receipt),
         "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
         "TEST_SSH_LOG": str(log),
         "TEST_KUBE_LOG": str(kube_log),
@@ -321,6 +357,8 @@ def test_initial_complete_working_tree_transfer(workspace):
         "lab-guide.html",
         "docs",
         "tools",
+        ".runtime",
+        ".course-environment.sh",
     }
     for name in READING_COURSES:
         for relative in ("reference/course.json", "COURSE.md", "index.html"):
@@ -366,8 +404,8 @@ def test_initial_complete_working_tree_transfer(workspace):
     assert not (dest / "custom-cuda-kernels/build-debug").exists()
     assert not list(dest.rglob(".git"))
     assert "\x1b" not in result.stdout + result.stderr
-    assert [call["transfer"] for call in workspace.calls()] == [False, True, False, False]
-    assert [call["interactive"] for call in workspace.calls()] == [False, False, False, True]
+    assert [call["transfer"] for call in workspace.calls()] == [False, False, True, False, False, False, False]
+    assert [call["interactive"] for call in workspace.calls()] == [False, False, False, False, False, False, True]
 
 
 def test_incremental_local_wins_and_remote_only_survives(workspace):
@@ -408,7 +446,7 @@ def test_incremental_local_wins_and_remote_only_survives(workspace):
     assert snapshot(workspace.remote) == settled
 
 
-def test_synced_preparation_plans_have_complete_shared_imports(workspace):
+def test_synced_preparation_plans_have_complete_shared_imports(workspace, monitoring_settings):
     for course in COURSES:
         (workspace.source / course / "slurm/run.sbatch").unlink()
         shutil.copytree(ROOT / course / "slurm", workspace.source / course / "slurm",
@@ -420,11 +458,11 @@ def test_synced_preparation_plans_have_complete_shared_imports(workspace):
         shutil.copy2(ROOT / course / "reference/course.json",
                      workspace.source / course / "reference/course.json")
     assert_ok(workspace.run("--sync-only", "host", terminal=False))
-    for group in ("regular", "cuda", "communication", "serving", "transformer-engine"):
+    for script in ("lab-setup.py",):
         plans = []
         for tree in (workspace.source, workspace.remote / "courses"):
             result = subprocess.run(
-                [sys.executable, "-I", "-S", str(tree / "tools" / f"{group}-lab-setup.py"), "--plan"],
+                [sys.executable, "-I", "-S", str(tree / "tools" / script), "--plan"],
                 check=False, cwd=workspace.remote, capture_output=True, text=True, timeout=10,
             )
             assert result.returncode == 0, result.stderr
@@ -435,11 +473,7 @@ def test_synced_preparation_plans_have_complete_shared_imports(workspace):
     # never import the initializer and can hide an incomplete root tools payload.
     tree = workspace.remote / "courses"
     settings = tree / ".course-environment.sh"
-    settings.write_text(
-        "export COURSE_WORKSPACE=learner\n"
-        "export COURSE_PUSHGATEWAY=http://127.0.0.1:9091\n"
-        "export COURSE_METRICS_URL=http://127.0.0.1:8428\n"
-    )
+    settings.write_text(monitoring_settings())
     settings.chmod(0o600)
     program = """
 import sys
@@ -447,13 +481,14 @@ from pathlib import Path
 root = Path(sys.argv[1])
 sys.path.insert(0, str(root / 'tools'))
 from course_bootstrap import controller
+controller.definitions.load_catalog = lambda: {"components": {"fixture": {"kind": "commands", "artifacts": [], "commands": []}}, "runtimes": {"shared-tools": {"components": ["fixture"], "environment": {"COURSE_PUBLISH_PYTHON": sys.executable}}}}
 controller.ubuntu = lambda: {}
 controller.capacity = lambda: []
 controller.install_packages = lambda *args, **kwargs: None
 controller.setup(
-    root / 'tools/regular-lab-setup.py',
+    root / 'tools/lab-setup.py',
     lambda **kwargs: (root / '.runtime').mkdir(mode=0o700, exist_ok=True),
-    plan={'group': 'regular', 'runtimes': []},
+    plan={'runtimes': ['shared-tools']},
 )
 import course_publication_state, publish_results
 for module in (controller, course_publication_state, publish_results):
@@ -565,7 +600,7 @@ def test_target_and_ssh_settings(workspace, target, host, user):
     )
     assert_ok(result)
     calls = workspace.calls()
-    assert len(calls) == 4
+    assert len(calls) == 7
     for call in calls:
         assert call["host"] == host
         assert call["user"] == user
@@ -639,7 +674,7 @@ def test_unsafe_remote_destination_rejected(workspace, kind):
     else:
         destination.write_text("existing file\n")
     before = snapshot(workspace.remote)
-    result = workspace.run("host")
+    result = workspace.run("--sync-only", "host")
     assert result.returncode != 0
     assert "preflight failed" in result.stderr
     assert snapshot(workspace.remote) == before
@@ -647,10 +682,10 @@ def test_unsafe_remote_destination_rejected(workspace, kind):
 
 
 def test_missing_remote_rsync_and_connection_failure(workspace):
-    result = workspace.run("host", extra_env={"TEST_NO_REMOTE_RSYNC": "1"})
+    result = workspace.run("--sync-only", "host", extra_env={"TEST_NO_REMOTE_RSYNC": "1"})
     assert result.returncode != 0
     assert "rsync is required on the login node" in result.stderr
-    result = workspace.run("host", extra_env={"TEST_SSH_FAIL": "preflight"})
+    result = workspace.run("--sync-only", "host", extra_env={"TEST_SSH_FAIL": "preflight"})
     assert result.returncode != 0
     assert "preflight failed" in result.stderr
     assert not list(workspace.remote.iterdir())
@@ -665,7 +700,7 @@ def test_transfer_failure_can_be_retried(workspace):
 
 
 def test_bare_target_preflight_failure_explains_account_selection(workspace):
-    result = workspace.run("host", extra_env={"TEST_SSH_FAIL": "preflight"})
+    result = workspace.run("--sync-only", "host", extra_env={"TEST_SSH_FAIL": "preflight"})
     assert result.returncode == 255
     assert "default SSH user is root" in result.stderr
     assert "user@host" in result.stderr
@@ -704,7 +739,7 @@ def test_partial_transfer_retry_converges_and_then_changes_nothing(workspace):
         assert not remote_payload.exists()
         process.send_signal(signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=5)
-        assert process.returncode == 143
+        assert process.returncode == 143, stderr
         assert "cancelled" in stderr.lower()
         assert "Synced" not in stdout
         assert (
@@ -724,7 +759,7 @@ def test_partial_transfer_retry_converges_and_then_changes_nothing(workspace):
         relative = source.relative_to(workspace.source)
         if source.is_file() and (
             relative.parts[0] in COURSES
-            or relative.as_posix() in {"index.html", "README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"}
+            or relative.as_posix() in {"index.html", "README.md", "lab-guide.html", "docs/grafana.png", "tools/lab-setup.py"}
         ):
             destination = workspace.remote / "courses" / relative
             assert destination.read_bytes() == source.read_bytes()
@@ -759,7 +794,7 @@ def test_cancellation_stops_pending_remote_work(workspace, phase, stop_signal):
         # communicate also waits for inherited pipes to close: a surviving SSH
         # transport cannot silently outlive the parent and finish the copy.
         stdout, stderr = process.communicate(timeout=1.5)
-        assert process.returncode == 128 + stop_signal
+        assert process.returncode == 128 + stop_signal, stderr
         assert "Synced" not in stdout
         assert "cancelled" in stderr.lower()
         assert snapshot(workspace.remote) == before
@@ -789,6 +824,7 @@ def test_help_without_dependencies_and_missing_tool_error(workspace):
     result = workspace.run("--help", extra_env={"PATH": str(empty)})
     assert_ok(result)
     assert "receipt" not in result.stdout.lower()
+    assert "lab-setup.py" in result.stdout
     for option in ("--dry-run", "--sync-only", "--dest", "--port", "--identity", "IPv4/IPv6"):
         assert option in result.stdout
     result = workspace.run("host", extra_env={"PATH": str(empty)})
@@ -817,27 +853,16 @@ def test_discovers_endpoint_and_service_port(workspace, ingress, host, override)
     result = workspace.run(*args, extra_env={"TEST_KUBE_SERVICES": services})
     assert_ok(result)
     calls = workspace.calls()
-    assert len(calls) == 4
+    assert len(calls) == 7
     for call in calls:
         assert call["user"] == "root"
         assert call["host"] == host
         options = call["options"]
         assert options[options.index("-p") + 1] == ("2200" if override else "2222")
     kube = [json.loads(line) for line in workspace.kube_log.read_text().splitlines()]
-    assert kube[0] == ["config", "current-context"]
-    assert kube[1][:-1] == [
-        "--context",
-        "test-context",
-        "get",
-        "svc",
-        "-n",
-        "soperator",
-        "-l",
-        "app.kubernetes.io/component=login",
-        "--request-timeout=15s",
-        "-o",
-    ]
-    assert kube[1][-1].startswith("jsonpath=")
+    assert len(kube) == 1
+    assert kube[0][:4] == ["--kubeconfig", str(workspace.repo.parent / "laptop/kubeconfig"), "--context", "test-context"]
+    assert kube[0][-2:] == ["-o", "json"]
     assert json.loads(workspace.shell_log.read_text())["cwd"] == str(
         workspace.remote / "courses"
     )
@@ -873,7 +898,7 @@ def test_discovers_endpoint_and_service_port(workspace, ingress, host, override)
     ],
 )
 def test_discovery_failure_never_connects(workspace, services, message):
-    result = workspace.run(extra_env={"TEST_KUBE_SERVICES": services})
+    result = workspace.run("--sync-only", extra_env={"TEST_KUBE_SERVICES": services})
     assert result.returncode != 0
     assert message in result.stderr
     assert not workspace.log.exists()
@@ -887,14 +912,14 @@ def test_discovery_failure_never_connects(workspace, services, message):
 
 @pytest.mark.parametrize("phase", ["context", "services"])
 def test_kubernetes_error_never_connects(workspace, phase):
-    result = workspace.run(extra_env={"TEST_KUBE_FAIL": phase})
+    result = workspace.run("--sync-only", extra_env={"TEST_KUBE_FAIL": phase})
     assert result.returncode != 0
     assert "explicit target" in result.stderr
     assert not workspace.log.exists()
 
 
 def test_empty_context_never_connects(workspace):
-    result = workspace.run(extra_env={"TEST_KUBE_CONTEXT": ""})
+    result = workspace.run("--sync-only", extra_env={"TEST_KUBE_CONTEXT": ""})
     assert result.returncode != 0
     assert "No current kubectl context" in result.stderr
     assert not workspace.log.exists()
@@ -906,11 +931,11 @@ def test_missing_kubectl_only_blocks_discovery(workspace):
     for name in ("git", "mktemp", "find", "dirname", "cat", "chmod", "sh", "python3"):
         (workspace.binaries / name).symlink_to(shutil.which(name))
     env = {"PATH": str(workspace.binaries)}
-    result = workspace.run(extra_env=env)
+    result = workspace.run("--sync-only", extra_env=env)
     assert result.returncode != 0
     assert "Required command not found: kubectl" in result.stderr
     assert not workspace.log.exists()
-    assert_ok(workspace.run("192.0.2.10", extra_env=env))
+    assert_ok(workspace.run("--sync-only", "192.0.2.10", extra_env=env))
     assert not workspace.kube_log.exists()
 
 
@@ -1087,7 +1112,7 @@ def test_real_kubectl_projection_against_local_api(workspace, pending):
     )
     thread.start()
     try:
-        result = workspace.run(extra_env={"KUBECONFIG": str(kubeconfig)})
+        result = workspace.run("--sync-only", extra_env={"KUBECONFIG": str(kubeconfig)})
     finally:
         server.shutdown()
         server.server_close()
@@ -1134,7 +1159,7 @@ def test_ssh_configuration_stays_with_transport(workspace, sync_only):
     assert workspace.shell_log.exists() is (not sync_only)
 
 
-@pytest.mark.parametrize("name", ["README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"])
+@pytest.mark.parametrize("name", ["README.md", "lab-guide.html", "docs/grafana.png", "tools/lab-setup.py"])
 @pytest.mark.parametrize("defect", ["missing", "symlink"])
 def test_shared_guide_must_be_a_regular_file_before_transfer(workspace, name, defect):
     path = workspace.source / name
@@ -1149,7 +1174,7 @@ def test_shared_guide_must_be_a_regular_file_before_transfer(workspace, name, de
 
 def test_shared_guide_updates_incrementally_and_dry_run_preserves_it(workspace):
     assert_ok(workspace.run("host"))
-    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"):
+    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/lab-setup.py"):
         assert (workspace.remote / "courses" / name).read_bytes() == (
             workspace.source / name
         ).read_bytes()
@@ -1158,8 +1183,101 @@ def test_shared_guide_updates_incrementally_and_dry_run_preserves_it(workspace):
     assert_ok(workspace.run("--dry-run", "host", terminal=False))
     assert snapshot(workspace.remote) == before
     assert_ok(workspace.run("host"))
-    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"):
+    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/lab-setup.py"):
         assert (
             workspace.remote / "courses" / name
         ).read_text() == "updated shared content\n"
     assert transferred(workspace.run("host")) == []
+
+
+def test_normal_handoff_repeats_in_fresh_terminal_with_saved_ssh(workspace):
+    key = workspace.repo / "private key"
+    key.write_text("fixture key")
+    key.chmod(0o600)
+    result = workspace.run("--dest", "practice", "--port", "2222", "--identity", str(key), "student@host")
+    assert_ok(result)
+    assert 'python3.12 "$HOME"/practice/tools/lab-setup.py' in result.stdout
+    settings = workspace.remote / "practice/.course-environment.sh"
+    before = settings.read_bytes()
+    profile = next((workspace.repo.parent / "laptop/.gpu-course-sync").glob("*/profile.json"))
+    saved = profile.read_bytes()
+    assert profile.stat().st_mode & 0o777 == 0o600
+    offset = len(workspace.calls())
+    assert_ok(workspace.run(extra_env={"CLUSTER_CONFIG": "", "CLUSTER_TARGET": "", "KUBECONFIG": "", "CLUSTER_CONTEXT": "", "TEST_KUBE_CONTEXT": "changed-context"}))
+    assert profile.read_bytes() == saved
+    assert settings.read_bytes() == before
+    for call in workspace.calls()[offset:]:
+        assert "BatchMode=yes" not in call["options"]
+        assert call["user"] == "student" and call["host"] == "host"
+        assert call["options"][call["options"].index("-p") + 1] == "2222"
+        assert call["options"][call["options"].index("-i") + 1] == str(key)
+    assert json.loads(workspace.shell_log.read_text())["cwd"] == str(workspace.remote / "practice")
+
+
+def test_local_only_rejects_configured_before_any_changes(workspace):
+    assert_ok(workspace.run("host"))
+    before = snapshot(workspace.remote)
+    laptop_before = snapshot(workspace.repo.parent / "laptop")
+    (workspace.source / "README.md").write_text("must not be transferred")
+    result = workspace.run("--local-only", "host")
+    assert result.returncode != 0
+    assert "unconfigured destination" in result.stderr
+    assert snapshot(workspace.remote) == before
+    assert snapshot(workspace.repo.parent / "laptop") == laptop_before
+
+
+def test_local_only_needs_no_monitoring_dependencies(workspace):
+    (workspace.binaries / "uv").unlink()
+    result = workspace.run("--local-only", "host")
+    assert_ok(result)
+    assert 'python3.12 "$HOME"/courses/tools/lab-setup.py' in result.stdout
+    assert not (workspace.remote / "courses/.course-environment.sh").exists()
+    assert not (workspace.repo.parent / "laptop/.gpu-course-sync").exists()
+
+
+@pytest.mark.parametrize("mode", ["--dry-run", "--sync-only"])
+def test_source_modes_preserve_profile_and_settings(workspace, mode):
+    assert_ok(workspace.run("host"))
+    private = workspace.repo.parent / "laptop/.gpu-course-sync"
+    before = snapshot(private)
+    settings = workspace.remote / "courses/.course-environment.sh"
+    content = settings.read_bytes()
+    (workspace.binaries / "uv").unlink()
+    offset = len(workspace.calls())
+    assert_ok(workspace.run(mode, terminal=False))
+    if mode == "--sync-only":
+        assert all("BatchMode=yes" in call["options"] for call in workspace.calls()[offset:])
+    assert snapshot(private) == before
+    assert settings.read_bytes() == content
+
+
+@pytest.mark.parametrize("defect", ["missing", "omitted", "symlink"])
+def test_incomplete_setup_inventory_fails_before_ssh(workspace, defect):
+    helper = workspace.source / "tools/course_bootstrap/worker.py"
+    if defect == "missing":
+        helper.unlink()
+    elif defect == "omitted":
+        subprocess.run(["git", "rm", "--cached", str(helper)], cwd=workspace.repo, check=True,
+                       capture_output=True)
+        (workspace.repo / ".gitignore").write_text("worker.py\n")
+    else:
+        helper.unlink()
+        helper.symlink_to("controller.py")
+    result = workspace.run("--sync-only", "host")
+    assert result.returncode != 0
+    assert "Incomplete setup transfer" in result.stderr
+    assert not workspace.log.exists()
+
+
+def test_unmarked_destination_settings_block_transfer_and_preserve_state(workspace):
+    assert_ok(workspace.run("host"))
+    settings = workspace.remote / "courses/.course-environment.sh"
+    settings.write_text(settings.read_text().split("\n", 1)[1])
+    before = snapshot(workspace.remote)
+    laptop = snapshot(workspace.repo.parent / "laptop")
+    offset = len(workspace.calls())
+    result = workspace.run("host")
+    assert result.returncode != 0
+    assert not any(call["transfer"] or call["interactive"] for call in workspace.calls()[offset:])
+    assert snapshot(workspace.remote) == before
+    assert snapshot(workspace.repo.parent / "laptop") == laptop

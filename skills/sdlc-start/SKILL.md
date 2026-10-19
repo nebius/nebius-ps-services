@@ -314,8 +314,11 @@ $sdlc-start run <prompt-ref-or-file>
 - After evaluation passes, route to `sdlc-update-documents` when feature-facing
   docs, changelog, examples, or documentation steering need updates, then use
   the general `align` quality gate before commit readiness.
-- After UAT, route back to `sdlc-update-documents` before final handoff when UAT
-  or final steering requires run-level documentation updates.
+- After UAT, post-promotion documentation assessment is read-only. Route to
+  `sdlc-update-documents` only for assessment and no-op evidence. Required edits
+  return `DOCUMENTATION_DRIFT` through `sdlc-classify-failure` and start a
+  corrective run from the exact promoted commit. Preserve completed execution;
+  require fresh documentation, alignment, promotion and UAT before handoff.
 - In a managed outer worktree, invoke the private `release-outer-lease`
   transition only after final alignment, UAT, and documentation evidence are
   recorded, the exact promoted child HEAD is clean, and all Agentic SDLC

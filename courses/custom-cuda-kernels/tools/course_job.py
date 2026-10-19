@@ -20,12 +20,41 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 from course_execution import capabilities, option_values, parse, select
+import course_viewer
 
 SCHEMA = "course-job-result/v1"
 FINALIZATION_SECONDS = 60
 MAX_JSON_BYTES = 8 * 1024 * 1024
+
+
+def required_seconds(stages):
+    return (
+        sum(
+            row["timeout_seconds"] + row["teardown_seconds"]
+            for row in stages
+            if row["status"] != "skipped"
+        )
+        + course_viewer.delivery_budget(stages)
+        + FINALIZATION_SECONDS
+    )
+
+
+def viewer_summary(stages):
+    states = [
+        row.get("viewer_delivery", {}).get("status", "not_required") for row in stages
+    ]
+    status = next(
+        (
+            value
+            for value in ("unconfirmed", "failed", "publishing", "pending", "ready")
+            if value in states
+        ),
+        "not_required",
+    )
+    return {"status": status}
 
 
 def timestamp():
@@ -422,6 +451,7 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
         "status": "incomplete",
         "started_at": timestamp(),
         "stages": stages,
+        "viewer_delivery": {"status": "not_required"},
     }
     path = root / "result.json"
     atomic_write(path, document)
@@ -447,19 +477,37 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
         stages = select(course, lab, requested, program_args)
         document["stages"] = stages
         for row in stages:
+            row["viewer_delivery"] = {
+                "status": "pending" if course_viewer.eligible(row) else "not_required"
+            }
             if row["status"] != "skipped":
                 row["scope"] = runtime_scope(row["scope"], document["allocation"])
+        document["viewer_delivery"] = viewer_summary(stages)
         atomic_write(path, document)
         subreaper = adopt_orphans()
-        required = (
-            sum(
-                row["timeout_seconds"] + row["teardown_seconds"]
-                for row in stages
-                if row["status"] != "skipped"
-            )
-            + FINALIZATION_SECONDS
-        )
+        required = required_seconds(stages)
         scheduler_budget(job, required)
+        installed_viewer = None
+        delivery_failed = False
+        if any(course_viewer.eligible(row) for row in stages):
+            try:
+                installed_viewer = course_viewer.preflight(
+                    cancelled=lambda: bool(interrupted)
+                )
+            except (OSError, ValueError):
+                for row in stages:
+                    if course_viewer.eligible(row):
+                        row["viewer_delivery"] = {
+                            "status": "failed",
+                            "reason": "Installed viewer destination failed preflight",
+                        }
+                raise
+            # Persist the unique destination before any report-storage side effect.
+            document["viewer_delivery"].update(
+                run=f"{course.name}-{lab}-u{os.getuid()}-j{job}-{uuid.uuid4().hex}",
+                binding_token=installed_viewer["token"],
+            )
+            atomic_write(path, document)
         # Optional monitoring must never change experiment execution or status.
         from course_publication import supervise
 
@@ -606,12 +654,46 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
                     else f"Stage {row['id']} failed; inspect its logs"
                 )
                 return code if 0 < code < 256 else 1
+            if course_viewer.eligible(row):
+                row["viewer_delivery"] = {"status": "publishing"}
+                document["viewer_delivery"]["status"] = "publishing"
+                atomic_write(path, document)
+
+                def prepared(manifest):
+                    row["viewer_delivery"]["manifest"] = manifest
+                    atomic_write(path, document)
+
+                row["viewer_delivery"] = course_viewer.deliver(
+                    stage,
+                    row,
+                    installed_viewer,
+                    document["viewer_delivery"]["run"],
+                    prepared=prepared,
+                    cancelled=lambda: bool(interrupted),
+                )
+                document["viewer_delivery"].update(viewer_summary(stages))
+                atomic_write(path, document)
+                for report in row["viewer_delivery"].get("viewer_paths", []):
+                    print(f"Nsight report: {report}", flush=True)
+                if row["viewer_delivery"]["status"] != "ready":
+                    delivery_failed = True
+                    if row["viewer_delivery"]["status"] == "unconfirmed":
+                        document.update(
+                            status="failed",
+                            error="Viewer delivery is unconfirmed; later captures were stopped",
+                        )
+                        return 2
         document["status"] = (
             "skipped"
             if all(row["status"] == "skipped" for row in stages)
             else "completed"
         )
-        return 0
+        if delivery_failed:
+            document.update(
+                status="failed",
+                error="Viewer delivery failed; successful captures remain private",
+            )
+        return 2 if delivery_failed else 0
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         document.update(status="failed", error=str(exc))
         for row in stages:
@@ -639,6 +721,13 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
                         exit_code=child.returncode,
                         **collect(root / "stages" / row["id"], row, child.returncode),
                     )
+        for row in stages:
+            if row.get("viewer_delivery", {}).get("status") == "pending":
+                row["viewer_delivery"] = {
+                    "status": "not_required",
+                    "reason": "Capture did not complete successfully",
+                }
+        document["viewer_delivery"].update(viewer_summary(stages))
         document["finished_at"] = timestamp()
         atomic_write(path, document)
         try:
@@ -659,6 +748,10 @@ def run(lab: str, launcher: Path, arguments: list[str]) -> int:
         atomic_write(path, document)
         print(
             f"Publication: {document['publication']['status']} (details in result.json)",
+            flush=True,
+        )
+        print(
+            f"Viewer delivery: {document['viewer_delivery']['status']} (details in result.json)",
             flush=True,
         )
         for sig, handler in previous.items():

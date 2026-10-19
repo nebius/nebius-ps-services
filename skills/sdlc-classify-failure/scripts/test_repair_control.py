@@ -1436,6 +1436,19 @@ class RepairControlTests(unittest.TestCase):
             classification["invalidates"],
         )
 
+    def test_documentation_drift_respects_terminal_execution(self) -> None:
+        for lifecycle in ("sealed", "promoted", "completed"):
+            classification = repair_control._classification_from(
+                failure_payload(proposed="DOCUMENTATION_DRIFT", lifecycle=lifecycle), None)
+            with self.subTest(lifecycle=lifecycle):
+                self.assertEqual(classification["next_recommended_skill"], "sdlc-create-plan")
+                self.assertEqual(classification["corrective_mode"], "new_corrective_run_from_promoted_commit")
+                self.assertIn("documentation", classification["invalidates"])
+                self.assertIn("commit", classification["invalidates"])
+        before = repair_control._classification_from(
+            failure_payload(proposed="DOCUMENTATION_DRIFT", lifecycle="waves_completed"), None)
+        self.assertEqual(before["next_recommended_skill"], "sdlc-update-documents")
+
     def test_post_promotion_defect_starts_new_corrective_run(self) -> None:
         event = self.record_event(failure_payload(lifecycle="promoted"))
         classification = self.classify(event)

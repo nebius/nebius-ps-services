@@ -148,7 +148,7 @@ measuring performance.
 | `task-implementer` | Explicit only | Create persistent per-project lanes, run durable dependency waves with fail-closed current-schema recovery, integrate pending generations, and explicitly remove idle lanes. |
 | `task-implementer-test` | Explicit only | Run lightweight Task Implementer verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
-| `troubleshoot` | Implicit allowed | Discover deployed stacks, verify components and layered logs, causally debug difficult code and infrastructure failures, and gate completion on a canonical evidence matrix. |
+| `troubleshoot` | Implicit allowed | Adaptively trace failures across code, compute, storage and networks; choose bounded distinguishing evidence and verify causal repair. |
 
 ### Agentic SDLC Workflow
 
@@ -914,6 +914,10 @@ removes inspection edits inside the exact disposable owned run.
 
 ### `sdlc-workflow-test`
 
+Three-tier test acceptance uses owner-executed result receipts tied to the
+clean promoted image; free-form logs cannot certify PASS. Post-UAT documentation
+assessment is read-only, and required edits use a corrective run with fresh gates.
+
 `sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks `docs/agentic-sdlc-design.md`, required source-installed
 skill parity, explicit-only invocation policy, prompt/execution/worktree/
@@ -1241,9 +1245,10 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   updating its criterion ledger, and records planned slice observation when
   applicable.
 - `sdlc-update-documents`: updates project-facing README, changelog, examples,
-  usage docs, docs indexes, or generated docs after evaluated implementation or
-  UAT evidence, while routing requirements and design drift to their owner
-  skills. Multi-layer behavior docs require evaluated slice evidence.
+  usage docs, docs indexes, or generated docs after evaluated implementation
+  and before promotion, while routing requirements and design drift to their
+  owner skills. Post-UAT review is read-only; documentation drift enters a new
+  corrective run. Multi-layer behavior docs require evaluated slice evidence.
 - `align`: checks requirements, design, plans, tests, implementation, docs,
   end-to-end slice evidence, and other changed surfaces before commit.
 - `sdlc-classify-failure`: validates commit-bound failure events and optional
@@ -1679,7 +1684,7 @@ controls, examples, and CI expectations.
 
 ### `troubleshoot`
 
-`troubleshoot` causally investigates difficult code, shell, CI, installed
+`troubleshoot` uses adaptive failing-path coverage and causally investigates difficult code, shell, CI, installed
 software, service, container, network, storage, and infrastructure failures.
 It preserves evidence, maintains competing hypotheses, runs discriminating
 experiments, proves the earliest causal divergence, applies the smallest
@@ -1688,35 +1693,23 @@ Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
 
-Before diagnostics, it discovers technologies and versions, deployment model,
-active configuration sources, components and dependencies, ports, protocols,
-authentication, and control and data flows, then compares the observed system
-with matching official vendor architecture. It maintains a component
-verification matrix and incident timeline, verifies clock synchronization, and
-correlates component, application, container or orchestrator, systemd, OS,
-kernel, network, storage, GPU, and hardware logs with bounded filters. Relevant
-sources that cannot be examined are recorded as unavailable rather than
-silently treated as healthy.
+Discovery starts with the implicated component, effective configuration and immediate
+dependencies. Evidence determines expansion. Record examined and material unexamined
+boundaries, window, clock uncertainty and evidence validity; unexamined stays unknown.
+There is no mandatory global inventory or eight-row log ledger. Versions and official
+documentation are checked when commands or interpretations depend on them.
 
-Technology procedures are progressively disclosed through Slurm, Soperator,
-Kubernetes, Nebius, Linux, network, storage, GPU, and code-debugging playbooks.
-Soperator guidance distinguishes dedicated, resource-consuming ActiveChecks
-from passive prolog, epilog, and HealthCheckProgram checks around customer jobs.
-Every consequential command states its hypothesis, expected and falsifying
-evidence, timeout or output bound, and next branch; indefinite tails, arbitrary
-sleeps, passive waiting, and large unfiltered log dumps are prohibited.
+Technology procedures load only for implicated Slurm, Soperator, Kubernetes, Nebius,
+Linux, network, storage, GPU or code boundaries. Each guide separates competing
+explanations using the cheapest distinguishing evidence. ActiveChecks remain distinct
+from passive or workload-coupled checks. Experiments have predictions, bounds, effects
+and next decisions. Three consecutive low-information observations trigger a model
+revision without resetting remediation budgets.
 
-Every outcome uses one canonical report with architecture, component, timeline,
-log, hypothesis, code-debugging, root-cause, remediation, and validation
-evidence. Design, Infrastructure, Connectivity, Configuration, Runtime health,
-Logs, and Relevant code paths each receive `PASS`, `FAIL`, or `UNKNOWN` with
-evidence. `VERIFIED_FIXED` requires all seven to be `PASS`; passing tests alone
-do not prove code is bug-free.
-
-The report scopes its conclusions to explicit included and excluded system
-boundaries, exercised paths, and an incident-window start and end. Component
-proof names DNS and restart history, while the mechanically enforced log ledger
-contains each of the eight component-through-hardware layers exactly once.
+The concise canonical report states cause, repair, verified scope, material gaps and
+next action. Detailed ledgers remain internal. Hooks validate structural coordination
+and selected boundaries, not causal proof or semantic hypothesis novelty. The collector
+and trial runner use schema 2; see the target README for selective bounds and counts.
 
 For live product validation, `troubleshoot` records causal ownership, target
 recovery state, and evidence lineage separately and freezes each trial's

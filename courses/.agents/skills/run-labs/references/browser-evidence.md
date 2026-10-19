@@ -49,10 +49,15 @@ Save the resulting comparison PNG and numerical check receipt.
 
 ## Nsight Systems and Compute
 
-Stage only selected reports under a task-owned folder in the accepted reports
-submount. Verify SHA256 after copy, and give the viewer account read/traverse
-permissions on these copies only. Resolve producer and viewer paths from the
-installation receipt; do not assume an entire jail PVC is the reports mount.
+Use the selected completed stage's `viewer_delivery` manifest and exact
+`viewer_paths` from its job `result.json`. Require delivery status `ready`, then
+independently verify the manifest's report sizes and SHA256 values against both
+private originals and viewer-mounted copies. Open those existing copies; do not
+recopy reports or change permissions to complete the lab's delivery step.
+Resolve producer and viewer roots from the installed destination contract and
+check the campaign's recorded roots against it. Do not assume an entire jail PVC
+is the reports mount. A failed or unconfirmed delivery requires a fresh job after
+owner remediation; capture success alone cannot qualify viewer delivery.
 
 These viewers are streamed native desktop canvases over WebRTC, not ordinary
 DOM applications. Forward HTTP **and TURN**, log in using the existing Secret

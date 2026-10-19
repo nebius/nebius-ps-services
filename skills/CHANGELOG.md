@@ -4,6 +4,35 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Reconcile Agentic SDLC verification evidence after the completed source live
+  trial. Record observed application and nested-workflow results while keeping
+  aggregate certification PARTIAL and installed-runtime limits explicit.
+
+- Resolve SDLC canonical-spec reconciliation against the registered integration
+  scope before promotion and the exact primary revision afterward. Preserve
+  delivery-only plan settlement, interrupted promotion recovery, primary-anchor
+  safety and strict worktree identity checks.
+
+- Repair the SDLC preflight's stale troubleshooting contract lookup after the
+  handoff rules moved into their canonical reference. Check both the reference
+  link and its rules, with regressions for missing handoffs and authority limits.
+
+- Repair Agentic SDLC post-promotion documentation routing and raw-commit
+  authorization guidance. Require owner-executed three-tier test receipts
+  instead of nonempty logs, derive GUI counts from owned Playwright UAT, and
+  repair stale diagnostic capability discovery. Preserve failed attempts and
+  exact promoted source/image identities without changing public commands.
+
+- Refactor troubleshooting around adaptive failing-path evidence, conditional domain
+  guides and preserved causal/authority contracts; introduce bounded selective
+  collection and schema-v2 repeated-trial accounting, plus isolated diagnostic
+  qualification fixtures and direct helper/hook CI coverage. Native qualification
+  and actual user installation are separate from deterministic source validation.
+
+- Preserve sanitized completion-candidate diagnostics and original failure exit
+  codes in the protected-merge template. Add executable workflow regressions
+  for target output, failure propagation, and environment-secret nondisclosure.
+
 - Enforce predictable PR checkout completion through the canonical transaction:
   preserve remote-only reviews, switch back after local review, fast-forward only
   eligible original/default refs after verified merge, and retain publication

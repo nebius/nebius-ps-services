@@ -216,8 +216,8 @@ Distinguish local fixture and installed parity checks from live cluster qualific
 
 <!-- /REQUIREMENT: REQ-007 -->
 
-<!-- REQUIREMENT: REQ-008 status=satisfied priority=P1 type=feature -->
-### REQ-008: Reuse the five-script managed preparation
+<!-- REQUIREMENT: REQ-008 status=active priority=P1 type=feature -->
+### REQ-008: Reuse unified managed preparation
 
 #### User Story
 
@@ -228,7 +228,7 @@ A campaign operator can execute selected labs with the existing managed preparat
 - AC-001: Resolve all frozen executable stages through the course runtime bindings, including prerequisite, diagnostic and optional container launchers. Expose the owning preparation script and selection in dry-run plans without installing or connecting.
 - AC-002: Preserve isolated course workspaces with valid course identities. Bind an existing prepared catalog root, defaulting to the remote courses directory or an explicit prepared_root, without copying installations, changing receipts or overriding runtime isolation.
 - AC-003: Validate selected runtime receipts, status, fingerprints and artifacts before accepting preflight. Native jobs validate again on activation. Missing dependencies identify the exact preparation command and stop dispatch.
-- AC-004: Keep preparation in the five scripts and learner instructions in the Lab Guide. Monitoring discovery uses the regular script monitoring action. Preserve hardware qualification, native jobs, source freezing, recovery, evidence and independent publication gates.
+- AC-004: Keep preparation in lab-setup.py and learner instructions in the shared Lab Guide. Its default prepares all declared variants including optional containers; targeted repair hints use course-qualified identities. Normal sync owns monitoring discovery and private settings handoff. No legacy command aliases or compatibility wrappers are supported. Preserve hardware qualification, native jobs, source freezing, recovery, evidence and independent publication gates.
 - AC-005: Reject earlier executable plans without rewriting history. Install the aligned skill through the documented project-local npx command and verify resource parity, retaining native host policy and all public actions.
 
 #### Negative Criteria

@@ -1,5 +1,18 @@
 # Publication review
 
+## Unified lab preparation and TOC alignment — 2026-10-15
+
+Reviewed HTML SHA-256: `a7436ca818650f8b9c8f3e5af359b01452062117b804942cd71446933603d8d0`.
+Setup-related prose and navigation align with the single shared preparation
+command, its completion summary and separate hardware/workload qualification.
+The course's profile, TOC identities, order and lab boundaries are preserved.
+All nine native validators and 507 focused tests pass. Browser checks cover this
+artifact at 1440px, 390px and 320px, including every TOC destination, keyboard
+controls, local scrolling and 200% reflow. See the [catalog preparation review](../docs/catalog-preparation-validation.md#unified-lab-preparation-and-toc-alignment--2026-10-15)
+for exact scope, generic-checker findings, browser evidence and limitations.
+No installation, live workload or external publication occurred. Earlier entries
+remain historical evidence for their own artifacts.
+
 ## Catalog correctness and navigation — 2026-10-13
 
 Current HTML SHA-256: `c629552ca12c40666f0c2dcdc8ea292ffd61cb1e272849f9c98f6c25a31bfd51`.

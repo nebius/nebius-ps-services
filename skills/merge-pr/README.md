@@ -77,6 +77,9 @@ Read-only wait       Remote destination ancestry
   and rebase. Verification uses GitHub's GraphQL `mergeCommit.oid`, bound to the
   merged PR identity. REST `2026-03-10` has no result SHA field; missing result
   evidence stops completion without dispatching CI or Pages.
+- Completion candidate failures display the helper's sanitized reason and retain
+  its nonzero exit status without publishing targets. An already verified merge
+  remains distinct from a later recovery scan failure.
 - CI polling uses a fixed 10,800-second deadline and a 30-second interval.
   Release callers retain this deadline in their checkpoint until explicit resume;
   delayed checks, repairs and observed reruns do not reset it. Result settlement is

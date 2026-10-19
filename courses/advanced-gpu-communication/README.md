@@ -18,7 +18,7 @@ Use two eight-H100 workers with local NVLink/NVSwitch and active InfiniBand.
 The two one-GPU TCP workers used for local labs do not qualify this fabric.
 Sixteen GPUs are allocated; some mechanics use only two participating ranks.
 
-Complete the [Lab Guide](../lab-guide.html#lab-preparation-scripts), check
+Complete the [Lab Guide](../lab-guide.html#lab-preparation), check
 [Versions and environment](VERSIONS.md), then follow the
 [readiness checks](reference/cluster-smoke-test.md) on the qualified cluster.
 For the full route, begin with Lab 01's topology and rank-placement check.
@@ -31,9 +31,11 @@ After Lab 08, return to Fundamentals to complete the course.
 
 ## Runtime preparation
 
-The Lab Guide's course/lab lookup selects regular or specialized communication
-runtimes. The larger model is needed only by Dynamo labs. Preparation records
-candidate software; it does not prove GPU, fabric or serving compatibility.
+The Lab Guide's single setup command prepares the available communication
+runtimes, profiling tools and model dependencies in separate pinned environments.
+Dynamo labs use the larger model. Check the completion summary for failures or
+hardware skips before submitting a lab. Preparation records candidate software;
+it does not prove GPU, fabric or serving compatibility.
 
 NIXL and Dynamo start a private job-owned etcd process on the first worker.
 Both worker names must resolve to reachable IPv4 addresses. The prepared

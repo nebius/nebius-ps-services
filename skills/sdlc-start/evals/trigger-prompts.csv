@@ -8,3 +8,4 @@ sdlc-start-negative-03,false,Use Task Implementer for these dependency waves.
 sdlc-start-codex-portability,true,$sdlc-start Use sdlc-start workspace init for this project.
 sdlc-start-claude-portability,true,/sdlc-start Use sdlc-start workspace init for this project.
 sdlc-start-quoted-command,false,"Treat ""/skills:sdlc-start"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-start-post-uat,true,Resume the explicitly invoked SDLC run after UAT found a documentation correction; preserve completed execution and route a corrective run.

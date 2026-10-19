@@ -24,7 +24,7 @@ combining mechanisms in pipelines and RMSNorm.
 ## Before the first lab
 
 Use one full H100 and the approved CUDA runtime from the
-[Lab Guide](../lab-guide.html#lab-preparation-scripts) and
+[Lab Guide](../lab-guide.html#lab-preparation) and
 [Versions and environment](VERSIONS.md). Preparation compiles SM90 binaries and
 Lab 10's separate SM90a target without a GPU; these builds are not GPU qualified.
 Use [Lab 13](reference/labs/13_h100_preflight.md) in a GPU allocation before the

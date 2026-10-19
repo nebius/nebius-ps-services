@@ -9,21 +9,18 @@ import json
 import math
 import os
 import re
-import signal
 import statistics
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 from evidence_redaction import is_sensitive_name, redact_text
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_MAX_TAIL_BYTES = 4096
 MAX_TAIL_BYTES = 65536
 MAX_RETAINED_BYTES = 32 * 1024 * 1024
@@ -108,88 +105,6 @@ def redact_argv(argv: list[str]) -> list[str]:
     return safe
 
 
-def drain_stream(stream: BinaryIO, state: dict[str, Any], limit: int) -> None:
-    try:
-        while chunk := stream.read(8192):
-            state["bytes_seen"] += len(chunk)
-            tail = state["tail"]
-            tail.extend(chunk)
-            if len(tail) > limit:
-                del tail[: len(tail) - limit]
-    except (OSError, ValueError):
-        return
-
-
-def process_group_exists(process_group_id: int) -> bool:
-    try:
-        os.killpg(process_group_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def process_group_members(process_group_id: int) -> list[int]:
-    try:
-        result = subprocess.run(
-            ("ps", "-axo", "pid=,pgid="),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    members: list[int] = []
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if len(fields) != 2:
-            continue
-        try:
-            pid, pgid = (int(field) for field in fields)
-        except ValueError:
-            continue
-        if pgid == process_group_id:
-            members.append(pid)
-    return members
-
-
-def terminate_process(process: subprocess.Popen[bytes]) -> None:
-    if os.name == "posix":
-        process_group_id = process.pid
-        try:
-            os.killpg(process_group_id, signal.SIGTERM)
-        except ProcessLookupError:
-            if process.poll() is None:
-                process.kill()
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline and process_group_exists(process_group_id):
-            time.sleep(0.05)
-        if process_group_exists(process_group_id):
-            try:
-                os.killpg(process_group_id, signal.SIGKILL)
-            except (PermissionError, ProcessLookupError):
-                for pid in process_group_members(process_group_id):
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except (PermissionError, ProcessLookupError):
-                        continue
-    else:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                process.kill()
-    if process.poll() is None:
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
-
-
 def make_signature(
     exit_code: int | None, timed_out: bool, stdout: str, stderr: str
 ) -> str:
@@ -202,120 +117,97 @@ def make_signature(
 
 
 def run_once(argv: list[str], timeout: float, max_tail_bytes: int) -> dict[str, Any]:
+    from bounded_process import observe
+
     started = time.monotonic()
-    process: subprocess.Popen[bytes] | None = None
-    timed_out = False
-    stdout_state: dict[str, Any] = {"tail": bytearray(), "bytes_seen": 0}
-    stderr_state: dict[str, Any] = {"tail": bytearray(), "bytes_seen": 0}
-    threads: list[threading.Thread] = []
-    try:
-        kwargs: dict[str, Any] = {
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "shell": False,
+    result = observe(argv, timeout=timeout, stdout_limit=max_tail_bytes, tail=True)
+    duration = round(time.monotonic() - started, 6)
+    if result["status"] == "unavailable":
+        return {
+            "outcome": "launch_error",
+            "exit_code": None,
+            "timed_out": False,
+            "duration_seconds": None,
+            "launch_duration_seconds": duration,
+            "launch_error": "command launch unavailable",
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "signature": "launch_error",
         }
-        if os.name == "posix":
-            kwargs["start_new_session"] = True
-        elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        try:
-            process = subprocess.Popen(argv, **kwargs)
-        except OSError as error:
-            duration = time.monotonic() - started
-            error_name = type(error).__name__
-            message = f"command launch failed: {error_name} errno={error.errno}"
-            return {
-                "exit_code": None,
-                "timed_out": False,
-                "duration_seconds": round(duration, 6),
-                "signature": make_signature(None, False, "", message),
-                "stdout_tail": "",
-                "stderr_tail": "",
-                "launch_error": message,
-            }
-
-        assert process.stdout is not None
-        assert process.stderr is not None
-        for stream, state in (
-            (process.stdout, stdout_state),
-            (process.stderr, stderr_state),
-        ):
-            thread = threading.Thread(
-                target=drain_stream,
-                args=(stream, state, max_tail_bytes),
-                daemon=True,
-            )
-            thread.start()
-            threads.append(thread)
-
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            terminate_process(process)
-        for thread in threads:
-            thread.join(timeout=2)
-    finally:
-        if process is not None and process.poll() is None:
-            terminate_process(process)
-        if process is not None:
-            for stream in (process.stdout, process.stderr):
-                if stream is not None:
-                    stream.close()
-        for thread in threads:
-            thread.join(timeout=1)
-
-    duration = time.monotonic() - started
-    stdout_tail = redact_text(stdout_state["tail"].decode("utf-8", errors="replace"))
-    stderr_tail = redact_text(stderr_state["tail"].decode("utf-8", errors="replace"))
-    exit_code = process.returncode if process is not None else None
-    signature = make_signature(exit_code, timed_out, stdout_tail, stderr_tail)
+    timed_out = result["status"] == "timeout"
+    outcome = (
+        "interrupted"
+        if result["status"] == "interrupted"
+        else "timeout"
+        if timed_out
+        else "pass"
+        if result["returncode"] == 0
+        else "nonzero"
+    )
+    stdout = redact_text(result["stdout"].decode("utf-8", errors="replace"))
+    stderr = redact_text(result["stderr"].decode("utf-8", errors="replace"))
     return {
-        "exit_code": exit_code,
+        "outcome": outcome,
+        "exit_code": result["returncode"],
         "timed_out": timed_out,
-        "duration_seconds": round(duration, 6),
-        "signature": signature,
-        "stdout_tail": stdout_tail,
-        "stderr_tail": stderr_tail,
-        "stdout_bytes_seen": stdout_state["bytes_seen"],
-        "stderr_bytes_seen": stderr_state["bytes_seen"],
-        "stdout_truncated": stdout_state["bytes_seen"] > max_tail_bytes,
-        "stderr_truncated": stderr_state["bytes_seen"] > max_tail_bytes,
+        "duration_seconds": duration,
+        "signature": make_signature(result["returncode"], timed_out, stdout, stderr),
+        "stdout_tail": stdout,
+        "stderr_tail": stderr,
+        "stdout_bytes_seen": result["stdout_bytes_seen"],
+        "stderr_bytes_seen": result["stderr_bytes_seen"],
+        "stdout_truncated": result["stdout_bytes_seen"] > max_tail_bytes,
+        "stderr_truncated": result["stderr_bytes_seen"] > max_tail_bytes,
+        "output_complete": outcome not in {"interrupted", "timeout"},
     }
 
 
 def summarize(
     argv: list[str], requested_runs: int, runs: list[dict[str, Any]], interrupted: bool
 ) -> dict[str, Any]:
-    durations = [float(run["duration_seconds"]) for run in runs]
-    passes = sum(run["exit_code"] == 0 and not run["timed_out"] for run in runs)
-    timeouts = sum(bool(run["timed_out"]) for run in runs)
-    launch_errors = sum("launch_error" in run for run in runs)
-    signatures = Counter(str(run["signature"]) for run in runs)
-    completed = len(runs)
+    def timings(items: list[dict[str, Any]]) -> dict[str, float | None]:
+        values = [float(run["duration_seconds"]) for run in items]
+        return {
+            "min": min(values) if values else None,
+            "max": max(values) if values else None,
+            "mean": statistics.fmean(values) if values else None,
+            "median": statistics.median(values) if values else None,
+        }
+
+    completed = [
+        run for run in runs if run["outcome"] in {"pass", "nonzero", "timeout"}
+    ]
+    launched = [run for run in runs if run["outcome"] != "launch_error"]
+    passes = sum(run["outcome"] == "pass" for run in completed)
+    signatures = Counter((run["outcome"], str(run["signature"])) for run in runs)
     return {
         "schema_version": SCHEMA_VERSION,
         "collected_at": datetime.now(UTC).isoformat(),
         "command": redact_argv(argv),
         "requested_runs": requested_runs,
-        "completed_runs": completed,
+        "attempted_runs": len(runs),
+        "launched_runs": len(launched),
+        "completed_runs": len(completed),
+        "interrupted_runs": sum(run["outcome"] == "interrupted" for run in runs),
         "interrupted": interrupted,
         "pass_count": passes,
-        "failure_count": completed - passes,
-        "timeout_count": timeouts,
-        "launch_error_count": launch_errors,
-        "pass_rate": round(passes / completed, 6) if completed else 0.0,
-        "timing_seconds": {
-            "min": min(durations) if durations else None,
-            "max": max(durations) if durations else None,
-            "mean": statistics.fmean(durations) if durations else None,
-            "median": statistics.median(durations) if durations else None,
+        "failure_count": len(completed) - passes,
+        "timeout_count": sum(run["outcome"] == "timeout" for run in runs),
+        "launch_error_count": len(runs) - len(launched),
+        "pass_rate": round(passes / len(completed), 6) if completed else None,
+        "failure_rate": round((len(completed) - passes) / len(completed), 6)
+        if completed
+        else None,
+        "timing_seconds": timings(completed),
+        "timing_by_outcome": {
+            outcome: timings([r for r in launched if r["outcome"] == outcome])
+            for outcome in ("pass", "nonzero", "timeout", "interrupted")
         },
         "signature_clusters": [
-            {"signature": signature, "count": count}
-            for signature, count in sorted(signatures.items())
+            {"outcome": outcome, "signature": signature, "count": count}
+            for (outcome, signature), count in sorted(signatures.items())
         ],
+        "sampling_assumptions": "Consecutive runs may share caches, load and state; no independence or defect-absence claim.",
         "runs": runs,
     }
 
@@ -384,6 +276,10 @@ def main() -> int:
         for _ in range(args.runs):
             result = run_once(command, args.timeout, args.max_tail_bytes)
             runs.append(result)
+            if result["outcome"] == "interrupted":
+                interrupted = True
+                exit_status = 130
+                break
             if "launch_error" in result:
                 exit_status = 2
                 break

@@ -17,3 +17,4 @@ sdlc-workflow-test-claude-portability,true,/sdlc-workflow-test $sdlc-workflow-te
 sdlc-workflow-test-quoted-command,false,"Treat ""/skills:sdlc-workflow-test"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-workflow-test-negative-07,false,$sdlc-workflow-test --create
 sdlc-workflow-test-negative-08,false,$sdlc-workflow-test --three-tier-results /private/example.json
+sdlc-workflow-test-owned-results,true,$sdlc-workflow-test Verify that failed logs and inflated counts cannot satisfy the owned three-tier test evidence contract.

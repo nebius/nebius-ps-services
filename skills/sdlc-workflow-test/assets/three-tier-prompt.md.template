@@ -73,6 +73,13 @@ verifier-owned acceptance bundle. The frozen interface for independent checks is
   `title` (string), and `completed` (boolean).
 - PostgreSQL table `tasks_task` has `id`, `title`, and `completed` columns.
 
+Provide distinct dotted Django test labels for unit, API, database, migration
+and vertical HTTP coverage. The outer verifier executes them through its owned
+`run-test-class` helper against the promoted image before UAT fixture reset.
+Only its structured result receipts certify those classes. GUI certification
+reuses the two owned Playwright UAT receipts. Do not author passing receipts or
+substitute log text for executed test outcomes.
+
 Use headless Playwright Test with Chrome for required web acceptance. Run
 four fresh owned stages in order: `capability-discovery`, `evaluate`,
 `uat-before-restart`, and `uat-after-restart`. Each stage starts a new process

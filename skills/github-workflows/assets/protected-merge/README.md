@@ -25,6 +25,11 @@ The shared helper resolves the actual result using identity-bound GraphQL
 an older API fallback or replace the result with the current default tip.
 Missing result evidence stops recovery before dispatch or publication effects.
 
+Candidate discovery logs sanitized helper failures and preserves their exit
+status without publishing targets. If the helper produces no diagnostic, the
+workflow still reports the failed exit status. Keep this handling aligned with
+the deployed workflow; raw transport errors remain suppressed by the helper.
+
 Customize both workflow-run trigger lists and the complete CI/path policy
 inventory together. Retain at least one unfiltered PR CI workflow. The native
 `Required CI` aggregate runs independently of merge dispatch and review

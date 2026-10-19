@@ -8,9 +8,10 @@ exercise's relevant safety/setup gate before running it. Distributed and optiona
 checks qualify those paths; they are not prerequisites for earlier single-GPU
 lessons that do not use them.
 
-Run from this course root after preparing the course and lab number through the
-[Lab Guide](../../lab-guide.html#lab-preparation-scripts). Launchers restore the
-saved runtime automatically; [VERSIONS.md](../VERSIONS.md) describes its scope.
+Run from this course root after the [Lab Guide](../../lab-guide.html#lab-preparation)
+has prepared the available lab software. Check its completion summary for failures
+or hardware skips affecting the selected lab. Launchers restore the saved runtime
+automatically; [VERSIONS.md](../VERSIONS.md) describes its scope.
 Preparation creates private log directories before Slurm opens its output.
 For these read-only local dependency checks, select the ordinary lab runtime:
 

@@ -405,6 +405,10 @@ not serve concurrent worker tests.
 
 ## Completion Criteria
 
+- Three-tier test PASS uses owner-executed Django result receipts and existing
+  Playwright UAT receipts; read `references/test-evidence.md` before collecting
+  test evidence. Free-form logs and declared counts cannot certify tests.
+
 - `<agent-home>/sdlc-verification/report.md` exists.
 - Static skill discovery and hook configuration checks are recorded.
 - PreToolUse and Stop hook fixture results are recorded.

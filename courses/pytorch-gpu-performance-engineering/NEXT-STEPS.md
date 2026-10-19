@@ -2,7 +2,7 @@
 
 - **Connect code to hardware**
 
-  Continue to [GPU Fundamentals](../gpu-fundamentals/index.html) to connect tensor work with GPU execution, memory and precision. You can now read the shapes, devices and operations in its PyTorch examples; its labs own hardware setup and execution requirements.
+  Continue to [GPU Fundamentals](../gpu-fundamentals/index.html) to connect tensor work with GPU execution, memory and precision. You can now read the shapes, devices and operations in its PyTorch examples; its labs state the hardware requirements and execution checks. Shared software preparation belongs to the Lab Guide.
 
 - **Read performance evidence**
 
@@ -10,4 +10,4 @@
 
 - **Test an optimization**
 
-  After Fundamentals, take [GPU Performance Optimization](../gpu-optimizations/index.html) to measure a correct baseline, test one change and judge equivalent work. The [Lab Guide](../lab-guide.html#lab-preparation-scripts) provides preparation when you choose to run those labs.
+  After Fundamentals, take [GPU Performance Optimization](../gpu-optimizations/index.html) to measure a correct baseline, test one change and judge equivalent work. The [Lab Guide](../lab-guide.html#lab-preparation) provides preparation when you choose to run those labs.

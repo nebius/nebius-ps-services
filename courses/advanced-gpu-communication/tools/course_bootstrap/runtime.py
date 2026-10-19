@@ -34,21 +34,21 @@ def context(course):
         prepared = Path(value["root"])
         if not prepared.is_absolute() or ".." in prepared.parts or "\x00" in value["root"]:
             raise ValueError("Prepared runtime root must be an absolute canonical path")
-        root, courses = definitions.discover(prepared / "tools/regular-lab-setup.py")
+        root, courses = definitions.discover(prepared / "tools/lab-setup.py")
         if root != prepared or course.name not in courses:
             raise ValueError("Prepared catalog does not own this course")
         # Validate the copy's identity, then use its relevant source inputs when
         # checking the original root-bound receipt. Never copy or rewrite receipts.
-        _, copied = definitions.discover(course / "tools/regular-lab-setup.py")
+        _, copied = definitions.discover(course / "tools/lab-setup.py")
         if copied.get(course.name) != course:
             raise ValueError("Invalid isolated course identity")
         courses[course.name] = course
         return root, courses, definitions.load_catalog()
-    root, courses = definitions.discover(course / "tools/regular-lab-setup.py")
+    root, courses = definitions.discover(course / "tools/lab-setup.py")
     # Course-local copies use their parent's catalog runtime when synchronized.
-    if (course.parent / "tools/regular-lab-setup.py").is_file():
+    if (course.parent / "tools/lab-setup.py").is_file():
         root, courses = definitions.discover(
-            course.parent / "tools/regular-lab-setup.py"
+            course.parent / "tools/lab-setup.py"
         )
     catalog = definitions.load_catalog()
     return root, courses, catalog
@@ -80,14 +80,19 @@ def load(course, selector, *, launcher=False, runtime_id=False, experiment="defa
     selections = [(lab, row) for lab, spec in capabilities(course).items() for row in spec["variants"] if row["runtime"] == runtime]
     if selections:
         selected_lab, row = selections[0]
-        preparation = command(catalog["runtimes"][runtime]["group"], root=root, lab=selected_lab)
+        preparation = command(root=root, lab=f"{course.name}/{selected_lab}")
         preparation += f" --experiment {row['experiment']} --profiler {row['profiler']}"
         if capabilities(course)[selected_lab]["device_option"]:
             preparation += f" --device {row['device']}"
         if row["experiment"] == "sanitizer":
             preparation += " --sanitizer memcheck"
     else:
-        preparation = command(catalog["runtimes"][runtime]["group"], root=root, launcher=key)
+        if runtime_id:
+            key = next(
+                name for name, owner in sorted(bindings["launchers"].items())
+                if owner == runtime
+            )
+        preparation = command(root=root, launcher=f"{course.name}/{key}")
     try:
         record = read_json(root / ".runtime/runtimes" / f"{runtime}.json")
     except FileNotFoundError:
@@ -150,21 +155,9 @@ def monitoring(root):
     if not path.exists() and not path.is_symlink():
         return {}
     regular(path, private=True)
-    allowed = {"COURSE_WORKSPACE", "COURSE_METRICS_URL", "COURSE_PUSHGATEWAY"}
-    result = {}
-    for line in path.read_text().splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        fields = shlex.split(line)
-        if len(fields) != 2 or fields[0] != "export" or "=" not in fields[1]:
-            raise ValueError("Invalid worker monitoring environment")
-        key, value = fields[1].split("=", 1)
-        if key not in allowed or key in result:
-            raise ValueError("Worker monitoring environment has an unexpected field")
-        result[key] = value
-    if result.keys() != allowed:
-        raise ValueError("Worker monitoring environment is incomplete")
-    return result
+    from .handoff import parse
+
+    return parse(path.read_text())[0]
 
 
 def shell(course, selector, launcher=False, **selection):
@@ -243,7 +236,10 @@ def image(course, identity):
     if not owners:
         raise ValueError("Container is not owned by this course")
     launcher, owner = owners[0]
-    preparation = command(owner["group"], root=root, launcher=launcher)
+    launcher_name, _, flags = launcher.partition(" ")
+    preparation = command(root=root, launcher=f"{Path(course).name}/{launcher_name}")
+    if flags:
+        preparation += " " + flags
     try:
         record = read_json(root / ".runtime/images" / f"{name}-{checksum}.json")
     except FileNotFoundError:

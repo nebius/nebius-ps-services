@@ -1,6 +1,6 @@
 # Diagnostic tooling reference
 
-The [Lab Guide](../../lab-guide.html#lab-preparation-scripts) owns installation and readiness checks for Systems, Compute and private Grafana. Use the same qualified versions throughout the courses. Soperator supplies the existing DCGM collectors, VMAgent, and local VictoriaMetrics database; do not deploy another collector or database for these exercises.
+The [Lab Guide](../../lab-guide.html#lab-preparation) owns software preparation and the private Grafana handoff. Its separate “Browsing Grafana and Nsight Profilers” section explains how to qualify Systems and Compute captures on allocated GPUs. Use the same qualified versions throughout the courses. Soperator supplies the existing DCGM collectors, VMAgent, and local VictoriaMetrics database; do not deploy another collector or database for these exercises.
 
 PyTorch Profiler remains useful for operator dispatch in the advanced labs. Use the explicit external-only branch when collecting a separate Nsight trace, so two CUDA profilers do not compete for the same process. Profiling, sanitizers, and telemetry answer different questions; confirm an optimization with repeated unprofiled runs and the lab's correctness contract.
 
@@ -41,7 +41,9 @@ formal benchmark contract is actually being reproduced.
 
 Inside an allocated worker, `nsys status -e` reports capture prerequisites and
 `ncu --list-sets` lists the installed collection sets. These are diagnostic
-checks; shared environment setup's actual canary captures establish readiness for this runtime.
+checks. Software preparation does not run captures; execute the Lab Guide's
+profiling canaries and inspect their reports to establish capture readiness for
+the selected runtime.
 
 An `ERR_NVGPUCTRPERM`-style error is a recorded permission blocker. Escalate it
 to the cluster owner; do not weaken host security. DCGM profiling fields and

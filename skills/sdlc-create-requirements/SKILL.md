@@ -138,7 +138,7 @@ Convert user intent into durable, testable product requirements in `docs/require
 - If an existing requirement changes, update that `REQ-*` block and append a change-log entry.
 - If design must change, mark the affected requirements so `sdlc-create-design` can update related features.
 - When execution is already prepared, write product truth only in the registered
-  integration worktree, mark the active plan/execution `REPLAN_REQUIRED`, and
+  integration worktree, mark material changes `REPLAN_REQUIRED`, and
   preserve every started assignment, commit, and worktree for coordinator-led
   reconciliation. Do not reset execution history.
 

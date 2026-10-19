@@ -18,7 +18,7 @@ Estimated guided time: **36 hours**.
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lesson’s Practice section identifies the activity and links to its lab. The lab introduces its purpose, presents its source, and provides Run and Check your results commands. Use the syllabus to distinguish a reading preview from full execution.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Before practical work, follow [Lab Preparation](../lab-guide.html#lab-preparation), read the single setup command's completion summary, then follow the lesson route. Each lesson’s Practice section identifies the activity and links to its lab. The lab introduces its purpose, presents its source, and provides Run and Check your results commands. Use the syllabus to distinguish a reading preview from full execution.
 
 Begin with the library-first decision and a reproducible SM90 build. Write one correct vector kernel, learn validation/profiling, then build fusion, memory and reduction skills. Establish resource limits before diagnosing tails, combine mechanisms in pipelines and RMSNorm, and complete acceptance before optional Hopper and Tile branches.
 

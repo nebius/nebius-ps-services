@@ -283,6 +283,33 @@ class VerifierContractTests(unittest.TestCase):
         verifier.check_design(ctx)
         self.assertEqual([check.status for check in ctx.checks], ["PASS"])
 
+    def test_repair_contract_reads_current_troubleshooting_owner(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_repair_loop_contract(ctx)
+        self.assertEqual(
+            [(check.name, check.detail) for check in ctx.checks if check.status != "PASS"],
+            [],
+        )
+
+    def test_repair_contract_rejects_missing_handoff_link_or_rule(self) -> None:
+        cases = (
+            ("troubleshoot/SKILL.md", "references/workflow-handoffs.md"),
+            ("troubleshoot/references/workflow-handoffs.md", "Do not commit product fixes"),
+            ("troubleshoot/references/workflow-handoffs.md", "Return one `diagnosis-v1` to `sdlc-classify-failure`"),
+        )
+        read_text = verifier.read_text
+        for relative, term in cases:
+            with self.subTest(relative=relative, term=term):
+                ctx = self.source_contract_context()
+                target = ctx.skills_root / relative
+                with mock.patch.object(
+                    verifier, "read_text",
+                    side_effect=lambda path: read_text(path).replace(term, "")
+                    if path == target else read_text(path),
+                ):
+                    verifier.check_repair_loop_contract(ctx)
+                self.assertTrue(any(check.status == "FAIL" for check in ctx.checks))
+
     def test_readiness_matrix_reports_canonical_owner_receipt_result(self) -> None:
         for status in ("PASS", "FAIL"):
             with self.subTest(status=status):

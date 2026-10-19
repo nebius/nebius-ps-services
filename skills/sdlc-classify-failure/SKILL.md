@@ -111,6 +111,9 @@ Classify failures and select the correct retry or stop route before any SDLC loo
   existing attempt contract. After completed waves, require immutable
   corrective plan vN+1. After promotion, require a new corrective run from the
   promoted commit; never reopen sealed execution.
+- Apply the same terminal-execution boundary to `DOCUMENTATION_DRIFT`:
+  sealed, promoted or completed execution requires a new corrective run.
+  Before sealing, route to documentation, alignment and commit revalidation.
 - Use lifecycle `integrated_wave` when task integration succeeded but combined
   checks failed before wave completion. Record its exact failed commit and a
   complete localized diagnosis. A counted localized dispatch authorizes the

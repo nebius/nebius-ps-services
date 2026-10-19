@@ -204,7 +204,11 @@ Errors exit **1**; verified success exits **0**. Input/parser errors may exit **
 
 API-owned declarations replay by default (`replay: true`). Render validates and
 packages those project sources without contacting Grafana. Ordinary app apply
-and deploy replay them after Grafana readiness.
+and deploy replay them after Grafana readiness. Deployment resolution reads the
+frozen generated assets, including in private execution directories where the
+authored source files are absent. It validates each asset's UID and content/folder
+hash against its declaration. Missing or altered frozen assets fail without
+falling back to authored files; render again from valid project inputs.
 Missing dashboards are restored. Existing API-owned dashboards are preserved,
 including browser edits. Only an explicit `grafana import --overwrite` replaces
 changed content; importing different content without that flag fails. Live ownership is checked before Helm can remove any linked file provisioning.

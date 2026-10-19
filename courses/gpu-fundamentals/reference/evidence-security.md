@@ -9,8 +9,8 @@ or environment details even when the labs use synthetic data.
 
 1. Use synthetic or explicitly public inputs. Do not benchmark customer data,
    credentials, proprietary inputs, or regulated data.
-2. Complete the preparation for your course and lab number in the
-   [Lab Guide](../../lab-guide.html#lab-preparation-scripts).
+2. Complete software preparation in the [Lab Guide](../../lab-guide.html#lab-preparation)
+   and review its completion summary. Follow the Lab Guide’s guidance for any failures or hardware skips before submitting.
    Its private parent directories protect scheduler logs even when Slurm opens
    them before the job body starts.
 3. Keep `results/`, traces, and Slurm output in storage that only the learner or
@@ -19,6 +19,16 @@ or environment details even when the labs use synthetic data.
    unrelated secret-bearing environment variables according to site policy.
 5. Never commit generated evidence. The course `.gitignore` is not an access-control
    or redaction boundary.
+
+## Shared viewer copies
+
+A successful profiling stage automatically delivers a verified copy of its native
+reports to the installed Nsight viewer directory. These copies are readable by
+the existing shared viewer audience; the viewer does not provide per-user report
+isolation. Submit only workloads whose report contents are approved for that
+audience. Private originals, logs and other results remain in the job directory.
+Check `viewer_delivery` and use the exact viewer paths printed by the job;
+no manual copy or permission change is needed after `sbatch`.
 
 ## Share summaries, not raw artifacts
 

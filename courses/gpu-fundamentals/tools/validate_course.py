@@ -436,7 +436,7 @@ class Parser(html.parser.HTMLParser):
             "../gpu-performance-tools/index.html",
             "../pytorch-gpu-performance-engineering/index.html",
             "../lab-guide.html#how-to-set-up-the-lab",
-            "../lab-guide.html#lab-preparation-scripts",
+            "../lab-guide.html#lab-preparation",
             "../lab-guide.html#how-to-run-the-labs",
             "https://nebius.github.io/nebius-ps-services/courses/lab-guide.html",
         }:
@@ -667,16 +667,35 @@ def words(value: str) -> list[str]:
 def source_lessons() -> list[tuple[str, dict[str, str], int]]:
     document = (ROOT / "COURSE.md").read_text(encoding="utf-8")
     lessons: list[tuple[str, dict[str, str], int]] = []
-    for section in re.split(r"(?m)^## ", document)[1:]:
-        title = section.splitlines()[0].strip()
-        fields = {
-            match.group(1): match.group(2).strip()
-            for match in re.finditer(
-                r"(?ms)^\*\*([^*]+)\*\*\s*(.*?)(?=^\*\*[^*]+\*\*|\Z)",
-                section,
-            )
-        }
-        lessons.append((title, fields, len(words(section))))
+    section: list[str] = []
+    fields: dict[str, str] = {}
+    active_field = None
+    fenced = False
+
+    def finish():
+        if section:
+            lessons.append((section[0].strip(), {key: value.strip() for key, value in fields.items()},
+                            len(words("\n".join(section)))))
+
+    for line in document.splitlines():
+        if not fenced and line.startswith("## "):
+            finish()
+            section, fields, active_field = [line[3:]], {}, None
+            continue
+        if not section:
+            continue
+        section.append(line)
+        if active_field and line.strip().startswith("```"):
+            fields[active_field] += "\n" + line
+            fenced = not fenced
+            continue
+        if not fenced and (match := re.match(r"^\*\*([^*]+)\*\*\s*(.*)$", line)):
+            active_field = match.group(1)
+            fields[active_field] = match.group(2)
+            fenced = match.group(2).strip().startswith("```")
+        elif active_field:
+            fields[active_field] += "\n" + line
+    finish()
     return lessons
 
 
@@ -841,7 +860,7 @@ def validate_preparation_referral(guide: str) -> None:
     if re.search(r"\[[^\]]+\]\([^)]*lab-guide\.html[^)]*\)", guide):
         fail("shared preparation belongs at the course entry, not repeated per lab")
     if re.search(
-        r"(?:[\w-]+-lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh)",
+        r"(?:(?:[\w-]+-)?lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh)",
         guide,
     ):
         fail("dependency preparation commands belong only to the shared Lab Guide")

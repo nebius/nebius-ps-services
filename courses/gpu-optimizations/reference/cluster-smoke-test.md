@@ -13,8 +13,9 @@ profiler reports, and environment metadata private. Share only a sanitized
 summary that follows [evidence-security.md](evidence-security.md). A profiler
 run explains behavior; its instrumented duration is not acceptance timing.
 
-Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for this
-course before submitting. Preparation creates private result/log directories
+Complete shared preparation in the [Lab Guide](../../lab-guide.html#lab-preparation)
+and review its completion summary. Follow the Lab Guide’s guidance for any failures or hardware skips before submitting.
+Preparation creates private result/log directories
 and records installed runtime identities; launchers restore that runtime.
 Retain its receipts with the qualification evidence. Directory permissions do
 not replace the cluster's storage and access-control policy.

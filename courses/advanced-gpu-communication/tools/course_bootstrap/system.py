@@ -16,6 +16,19 @@ PROTECTED = re.compile(
 BASE_PACKAGES = ("python3.12", "python3.12-venv", "ca-certificates")
 
 
+class UnsafePackages(RuntimeError):
+    """Unsafe package plans or state must stop all preparation."""
+
+
+def package_health():
+    try:
+        if capture(["dpkg", "--audit"]).strip():
+            raise UnsafePackages("Package manager has incomplete transactions; administrator repair is required")
+        capture(["apt-get", "--simulate", "check"])
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise UnsafePackages("Package-manager health could not be established; stop preparation and repair it") from exc
+
+
 def prerequisites(catalog, components):
     if not components:
         return []
@@ -75,7 +88,7 @@ def check_transaction(output):
             continue
         name = parts[1].split(":", 1)[0]
         if parts[0] == "Remv" or PROTECTED.match(name):
-            raise RuntimeError(
+            raise UnsafePackages(
                 f"Package transaction would change protected platform software: {name}"
             )
 

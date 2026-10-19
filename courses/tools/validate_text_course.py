@@ -115,7 +115,7 @@ def validate_document(document: str, course_name="soperator") -> None:
             continue
         elif target in {
             "../lab-guide.html#how-to-set-up-the-lab",
-            "../lab-guide.html#lab-preparation-scripts",
+            "../lab-guide.html#lab-preparation",
             "../lab-guide.html#how-to-run-the-labs",
         }:
             continue

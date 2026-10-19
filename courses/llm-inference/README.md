@@ -24,7 +24,7 @@ comparing scheduling, quantization or speculation.
 
 ## Before the first lab
 
-Complete the [Lab Guide](../lab-guide.html#lab-preparation-scripts) and check
+Complete the [Lab Guide](../lab-guide.html#lab-preparation) and check
 [Versions and environment](VERSIONS.md). Use the approved runtime on one full
 H100; a qualified advanced cluster can also supply one-GPU allocations.
 
@@ -43,12 +43,14 @@ Keep that exception separate from the other offline runs.
 
 Mechanics uses `requirements-mechanics.txt`; lightweight clients use
 `requirements-serving.txt`. Native vLLM and AIPerf keep separate prepared
-environments and vendor-matched dependencies. Use the Lab Guide's course/lab
-lookup; only Lab 33 adds the larger target model. Jobs restore their saved
-runtime and private caches automatically.
+environments and vendor-matched dependencies. The Lab Guide's single setup
+command prepares these environments and their declared model artifacts, including
+Lab 33's larger target model. Jobs restore their saved runtime and private caches
+automatically.
 
-TensorRT-LLM/Triton and Dynamo container exercises are optional. Their prepared
-artifacts need their own readiness, response-correctness and GPU checks;
+TensorRT-LLM/Triton and Dynamo exercises are optional, with dependencies included
+in default preparation. Their prepared artifacts need their own readiness,
+response-correctness and GPU checks;
 preparation does not build a GPU engine or qualify serving performance.
 
 ## Completion

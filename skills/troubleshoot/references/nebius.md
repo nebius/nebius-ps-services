@@ -5,6 +5,31 @@ Managed Kubernetes, Soperator, VPC, storage, quota or capacity, IAM, AI
 services, and observability. Continue with the relevant generic playbooks for
 guest OS, Kubernetes, Slurm, network, storage, GPU, and application evidence.
 
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Cloud operation succeeded, workload fails | control-plane completion / guest state / quota-capacity / data path | exact project/resource/operation identity and guest/workload evidence | successful provisioning cannot prove guest application behavior | load only implicated service owner and current official docs; retain provider authority gates |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
 ## Scope And Identity First
 
 Freeze the exact tenant, project, region, zone where applicable, service,

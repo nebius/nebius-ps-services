@@ -264,7 +264,7 @@ def test_synthetic_workload_rates_have_operator_units_and_joined_boundary():
         ("llm-training/reference/labs/05_lora_sft.md", "masks padding only"),
         (
             "custom-cuda-kernels/reference/labs/10_hopper_cluster.md",
-            "COURSE_ENABLE_SM90A=ON",
+            "Shared setup prepares its separate SM90a build",
         ),
     ],
 )

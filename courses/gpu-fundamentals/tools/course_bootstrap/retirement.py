@@ -15,7 +15,11 @@ def retire(root, scopes):
         raise ValueError("Unsafe retirement scope")
     removed, preserved = [], []
     for course in roots:
-        for filename, hashes in [("course_setup.py", definitions["course_setup.py"])]:
+        for filename, hashes in definitions.items():
+            if filename in {"schema", "replacement_files"}:
+                continue
+            if Path(filename).name != filename or not filename.endswith(".py"):
+                raise ValueError("Unsafe retired entrypoint name")
             path = course / "tools" / filename
             if not path.exists() and not path.is_symlink():
                 continue
@@ -24,6 +28,8 @@ def retire(root, scopes):
                 any(parent.is_symlink() for parent in (path, *path.parents))
                 or not stat.S_ISREG(info.st_mode)
                 or info.st_uid != os.geteuid()
+                or info.st_nlink != 1
+                or info.st_mode & 0o7022
             ):
                 preserved.append(str(path.relative_to(root)))
                 continue

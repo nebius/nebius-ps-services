@@ -4,7 +4,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -147,47 +146,6 @@ def test_runner_mounts_managed_tools_and_preserves_arguments(
     assert str(root / "cached image.sif") in args
     assert args[-3:] == ["python3", "two words", "literal;$()"]
     assert any("source /etc/profile.d/99-nsight.sh" in arg for arg in args)
-
-
-@pytest.mark.parametrize("symlink", [False, True])
-def test_documented_report_export_preserves_private_original(tmp_path, symlink):
-    source = (ROOT / "README.md").read_text()
-    command = next(
-        block
-        for block in re.findall(r"```bash\n(.*?)\n```", source, re.S)
-        if "viewer_dir=" in block
-    )
-    private = tmp_path / "private"
-    private.mkdir(mode=0o700)
-    report = private / "selected report.nsys-rep"
-    report.write_bytes(b"native report fixture")
-    report.chmod(0o600)
-    selected = private / "link.nsys-rep" if symlink else report
-    if symlink:
-        selected.symlink_to(report)
-    destination = tmp_path / "viewer"
-    destination.mkdir()
-    command = command.replace(
-        "'<absolute path to the selected completed report>'", '"$SELECTED_REPORT"'
-    ).replace("/data/nsight-reports", str(destination))
-    result = subprocess.run(
-        ["bash", "-c", command],
-        env={**os.environ, "SELECTED_REPORT": str(selected)},
-        text=True,
-        capture_output=True,
-    )
-    assert report.read_bytes() == b"native report fixture"
-    assert report.stat().st_mode & 0o777 == 0o600
-    assert private.stat().st_mode & 0o777 == 0o700
-    if symlink:
-        assert result.returncode != 0
-        assert not list(destination.iterdir())
-    else:
-        assert result.returncode == 0, result.stderr
-        copies = list(destination.glob("*/*.nsys-rep"))
-        assert len(copies) == 1 and copies[0].read_bytes() == report.read_bytes()
-        assert copies[0].stat().st_mode & 0o777 == 0o644
-        assert copies[0].parent.stat().st_mode & 0o777 == 0o755
 
 
 def test_activation_cannot_fall_back_to_an_ambient_profiler(tmp_path, monkeypatch):

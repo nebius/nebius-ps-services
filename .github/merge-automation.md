@@ -100,6 +100,12 @@ SHA updates while preserving tool-version, cache, condition and ordering checks.
 
 ## Completion and recovery
 
+Candidate discovery failures display the helper's sanitized diagnostic and
+preserve its nonzero exit status. Empty failure output still reports the exit
+status. Failed discovery publishes no targets, so downstream CI dispatch and
+Pages jobs cannot proceed. Inspect the diagnostic before considering recovery;
+a discovery failure alone does not invalidate an already verified merge.
+
 The shared helper reads the authoritative result from GraphQL `mergeCommit.oid`
 and verifies the merged PR number, head and target identity. REST API
 `2026-03-10` removed the old result field. Missing result evidence stops before

@@ -6,6 +6,72 @@ project folder.
 
 ## [Unreleased]
 
+- Activate the installer-managed Nsight tools inside profiling batch stages across
+  all six practical courses. This fixes missing `ncu` and stale ambient `nsys`
+  selection without requiring learners to source a profile or modify `PATH`.
+
+- Align all six practical courses' evidence-sharing guidance and the run-labs
+  workflow with automatic Nsight delivery; document shared viewer access and
+  independently verify delivered copies without a second manual staging step.
+  Retire obsolete manual-copy tests, check publisher drift in campaign copies,
+  and remove unused workload locals from native launchers.
+
+- Deliver completed native Nsight reports automatically from the shared course
+  runner to the verified installed viewer directory. Preserve private originals,
+  expose complete stage sets atomically, report delivery failures independently
+  from capture, and budget delivery across all practical launchers. Remove the
+  learner's manual copy step and cover storage, cancellation and retry boundaries.
+
+- Fix native course Nsight Compute launchers passing `false` as the application
+  through the valueless `--force-overwrite` switch. Keep the default refusal to
+  overwrite reports, correct the shared profiler guide, and exercise real option
+  boundaries in the native-job test double. Guard every published Compute
+  launcher against overwrite-enabling flags and cover the Advanced Labs
+  companion's distinct profiler options.
+
+- Add `lab-setup.py --exclude containers` to defer image downloads, builds and
+  dependent runtimes while retaining full preparation by default. Report excluded
+  runtimes explicitly and preserve prepared images for later reuse; cover fresh
+  and repeated exclusion, standalone plans and image preservation in course CI.
+
+- Fix Transformer Engine preparation to compile against its isolated CUDA,
+  cuDNN and NCCL wheel headers. Preserve dependency pins and unrelated runtime
+  fingerprints; cover header resolution with a real compiler regression in course CI.
+
+- Align setup-related text across all nine course profiles and their navigation:
+  use the shared one-command preparation flow and completion summary, clarify
+  included optional dependencies, and keep profiler, CUDA and fabric qualification
+  separate. Refresh course referrals, readiness guides and generated pages. Use
+  immediate catalog scrolling and test every course TOC destination by keyboard.
+
+- Align course synchronization with unified preparation: reject incomplete
+  shared toolsets before transfer, close subprocess-creation cancellation gaps,
+  print the destination's `lab-setup.py` command, and reject unmarked monitoring
+  settings without a legacy upgrade path or changes to publication history.
+
+- Consolidate course preparation into `lab-setup.py`: metadata-complete default
+  coverage includes profiling and optional containers, with native-first failure
+  isolation, supervised image preparation, continuous progress, receipt reuse and
+  partial-success publication. Remove the five setup entrypoints and `--all`;
+  align the shared Lab Guide, standalone helpers and Linux regressions. Preserve
+  verified runtime readiness when an unchanged setup rerun is interrupted, and
+  resolve auxiliary runtime repair hints to their course-qualified launchers.
+
+- Show sanitized merge-completion discovery failures while preserving their exit
+  status and withholding target output. Keep the reusable workflow synchronized
+  and cover successful, blocked, pending, and empty-diagnostic shell paths.
+
+- Reject course publication without affirmative correctness evidence, restore
+  exact-job readiness inspection, preserve fenced lesson syntax in validators,
+  and validate private campaign storage before creating directories. Keep shared
+  course helpers and the installed campaign controller aligned.
+
+- Make normal course synchronization prepare workstation discovery dependencies,
+  remember validated cluster and SSH inputs, and atomically deliver private
+  monitoring settings before opening SSH. Preserve publication history, reject
+  replaced backends, add configure/local-only modes, and remove the separate
+  learner monitoring setup action and manual transfer detour.
+
 - Align ordinary PR skills around review before publication and explicit merge
   intent. Keep Dependabot on the manually initiated reviewed path. Fix Required
   CI self-gating through authoritative workflow provenance, and make cxcli

@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=00:42:30
+#SBATCH --time=00:48:00
 #SBATCH --mem=64G
 #SBATCH --no-requeue
 #SBATCH --output=results/20_prefix_cache_client/logs/%j.out
@@ -15,7 +15,7 @@
 course_stage() {
   set -euo pipefail
   umask 077
-  local selection=$1 workload=$2
+  local selection=$1
   shift 2
   export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
   case "$selection" in
@@ -125,7 +125,7 @@ run_trial() {
       --discard-environment=true --force-overwrite=false \
       --duration=300 --kill=none --wait=all \
       --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-      --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop "${COURSE_VLLM:?run serving-lab-setup.py}" serve --profiler-config.profiler cuda "${model}"
+      --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop "${COURSE_VLLM:?run lab-setup.py}" serve --profiler-config.profiler cuda "${model}"
     --revision "${revision}"
     --tokenizer-revision "${revision}"
     --host 127.0.0.1
@@ -311,7 +311,7 @@ run_trial() {
   local phase=$3
   local server_log="${COURSE_JOB_DIR}/logs/vllm-prefix-${phase}-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
   command=(
-    env VLLM_BATCH_INVARIANT=1 "${COURSE_VLLM:?run serving-lab-setup.py}" serve "${model}"
+    env VLLM_BATCH_INVARIANT=1 "${COURSE_VLLM:?run lab-setup.py}" serve "${model}"
     --revision "${revision}"
     --tokenizer-revision "${revision}"
     --host 127.0.0.1

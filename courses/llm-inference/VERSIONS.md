@@ -23,9 +23,9 @@ fallback or establish CUDA/H100 behavior. It downloads no model or engine.
 | PyTorch | 2.14.0 mechanics-manifest authority | Clean Linux/H100 install and qualification pending; no fallback approved |
 | Transformers | Pinned mechanics candidate set | Target installation and joint compatibility pending |
 | Native vLLM | 0.28.0 | Linux/H100 install and engine activation pending |
-| TensorRT-LLM and Triton | Explicit optional pinned container variant | Installation and target qualification are separate |
+| TensorRT-LLM and Triton | Pinned container for an optional exercise; included in default preparation | Installation and target qualification are separate |
 | Native AIPerf | 0.12.0 | Target qualification pending |
-| Dynamo container preflight | Explicit optional pinned container variant | Deferred pending transport/topology qualification |
+| Dynamo container preflight | Pinned container for an optional exercise; included in default preparation | Deferred pending transport/topology qualification |
 
 For optional containers, do not substitute an unqualified “latest” image. Once validated, record the
 full immutable digest, model revision, driver, runtime, and launch arguments.
@@ -39,7 +39,7 @@ persistent KV recovery or a GPUDirect Storage path.
 
 ## Shared profiling qualification
 
-Use the [Lab Guide](../lab-guide.html#lab-preparation-scripts) for the preparation
+Use the [Lab Guide](../lab-guide.html#lab-preparation) for the preparation
 and cluster-managed profiling route. Keep the matching CLI/viewer identities
 recorded with each run. Installation does not qualify the driver, either worker,
 the selected native runtime or optional container, or hardware-counter access;

@@ -58,14 +58,19 @@ def validate_result(value: dict, lab: str, *, diagnostic: bool = False) -> None:
         raise ValueError("Result schema or lab identity differs")
     checks = value.get("correctness")
 
-    def failed(node):
-        return (
-            node is False
-            or (isinstance(node, dict) and any(failed(v) for v in node.values()))
-            or (isinstance(node, list) and any(failed(v) for v in node))
-        )
+    def outcomes(node):
+        if isinstance(node, bool):
+            yield node
+        elif isinstance(node, dict):
+            for value in node.values():
+                yield from outcomes(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from outcomes(value)
 
-    if not isinstance(checks, dict) or not checks or failed(checks):
+    # Numeric diagnostics may accompany checks, but cannot establish success.
+    verdicts = list(outcomes(checks))
+    if not isinstance(checks, dict) or not verdicts or not all(verdicts):
         raise ValueError("Result has no successful correctness evidence")
     if (
         value.get("measurements", {}).get("acceptance_timing") is False

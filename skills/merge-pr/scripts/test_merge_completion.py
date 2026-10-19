@@ -8,7 +8,10 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import Mock, patch
 
@@ -696,6 +699,91 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(completion.targets(self.api, POLICY, {}), [])
         self.api.jobs[0]["conclusion"] = "failure"
         self.assertEqual(len(completion.targets(self.api, POLICY, {})), 1)
+
+
+class CandidateWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[3]
+        workflow = root / ".github/workflows/merge-completion.yml"
+        if not workflow.exists():
+            raise unittest.SkipTest("Installed skill without repository deployment")
+        cls.workflow = workflow.read_text()
+
+    def candidate_script(self):
+        jobs = re.findall(r"(?ms)^  candidates:\n(.*?)(?=^  \S|\Z)", self.workflow)
+        self.assertEqual(len(jobs), 1, "Expected one candidates job")
+        steps = re.findall(r"(?ms)^      - id: plan\n(.*?)(?=^      - |\Z)", jobs[0])
+        self.assertEqual(len(steps), 1, "Expected one candidate plan step")
+        blocks = re.findall(
+            r"(?m)^        run: \|\n((?:          [^\n]*(?:\n|$))*)", steps[0]
+        )
+        self.assertEqual(len(blocks), 1, "Expected one candidate shell block")
+        self.assertTrue(blocks[0].strip(), "Candidate shell block is empty")
+        return textwrap.dedent(blocks[0])
+
+    def run_candidates(self, payload, status):
+        script = self.candidate_script()
+        stub = """\
+python3() {
+  [ "$#" -eq 2 ] &&
+    [ "$1" = skills/merge-pr/scripts/merge_completion.py ] &&
+    [ "$2" = targets ] || return 99
+  printf 'called\n' >> "$CALL_LOG"
+  printf '%s' "$HELPER_OUTPUT"
+  return "$HELPER_STATUS"
+}
+"""
+        sentinel = "synthetic-secret-not-for-logs"
+        initial = "existing=value\n"
+        with tempfile.TemporaryDirectory(prefix="completion-candidates-") as folder:
+            output = Path(folder) / "output"
+            output.write_text(initial)
+            calls = Path(folder) / "calls"
+            result = subprocess.run(
+                ["bash", "--noprofile", "--norc", "-c", stub + script],
+                cwd=folder,
+                env={
+                    "PATH": os.defpath,
+                    "GITHUB_OUTPUT": str(output),
+                    "CALL_LOG": str(calls),
+                    "HELPER_OUTPUT": payload,
+                    "HELPER_STATUS": str(status),
+                    "GH_TOKEN": sentinel,
+                },
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            written = output.read_text()
+            self.assertEqual(calls.read_text(), "called\n")
+        self.assertNotIn(sentinel, result.stdout + result.stderr + written)
+        self.assertEqual(result.stdout, "")
+        return result, written, initial
+
+    def test_success_publishes_exact_targets(self):
+        for payload in ("[]", '[{"pr":1,"head":"' + HEAD + '"}]'):
+            with self.subTest(payload=payload):
+                result, written, initial = self.run_candidates(payload + "\n", 0)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(written, initial + f"targets={payload}\n")
+
+    def test_failure_shows_diagnostic_without_publishing_targets(self):
+        for status, outcome in ((1, "blocked"), (2, "pending"), (7, "blocked")):
+            with self.subTest(status=status):
+                payload = json.dumps({"outcome": outcome, "reason": "Safe diagnostic"})
+                result, written, initial = self.run_candidates(payload + "\n", status)
+                self.assertEqual(result.returncode, status)
+                self.assertIn(f"failed (exit {status})", result.stderr)
+                self.assertIn(payload + "\n", result.stderr)
+                self.assertEqual(written, initial)
+
+    def test_empty_failure_output_still_reports_exit_status(self):
+        result, written, initial = self.run_candidates("", 1)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Completion candidate discovery failed (exit 1).", result.stderr)
+        self.assertEqual(written, initial)
 
 
 if __name__ == "__main__":

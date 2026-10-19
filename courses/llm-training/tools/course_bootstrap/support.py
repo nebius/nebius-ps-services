@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import stat
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -178,6 +177,7 @@ def helm_service(connection, row, release):
             == row["namespace"]
             and s["metadata"].get("labels", {}).get("app.kubernetes.io/managed-by")
             == "Helm"
+            and s["spec"].get("clusterIP") != "None"
         ],
         f"Helm-owned {row['id']} Service",
     )
@@ -188,7 +188,7 @@ def helm_service(connection, row, release):
     )["port"]
     if not service["spec"].get("selector"):
         raise ValueError("Monitoring Service must select its installed pods")
-    ready_endpoints(connection, service, port)
+    ready_endpoints(connection, service, port, singleton=row["id"] != "grafana")
     return service, port
 
 
@@ -215,7 +215,7 @@ def private_url(url):
     return parsed
 
 
-def ready_endpoints(connection, service, port):
+def ready_endpoints(connection, service, port, *, singleton=True):
     meta = service["metadata"]
     port_spec = one(
         [p for p in service["spec"]["ports"] if p["port"] == port], "Service port"
@@ -252,8 +252,8 @@ def ready_endpoints(connection, service, port):
                 for address in endpoint["addresses"]:
                     host = f"[{address}]" if ":" in address else address
                     addresses.add(f"{host}:{endpoint_port}")
-    if len(addresses) != 1:
-        raise ValueError("Require one ready monitoring Service endpoint")
+    if not addresses or (singleton and len(addresses) != 1):
+        raise ValueError("Require one ready monitoring Service endpoint" if singleton else "Grafana has no ready Service endpoint")
     return addresses
 
 
@@ -392,6 +392,39 @@ def verify_metrics_write(agent, service, port):
         raise ValueError("Native VMAgent does not write to the selected local VMSingle")
 
 
+def configuration_digest(config):
+    return "sha256:" + hashlib.sha256(json.dumps(
+        config, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def accepted_configuration(config, manifest):
+    """Dashboard import declarations do not change installed monitoring intent.
+
+    Reconstruct only that field from rendered input, then require the exact
+    accepted source hash. Every other configuration byte-semantic stays bound.
+    This follows cxcli's immediate dashboard import, which saves declarations
+    without rendering or redeploying the monitoring stack.
+    """
+    expected = manifest["render"]["source_config_sha256"]
+    if configuration_digest(config) == expected:
+        return
+    candidate = copy.deepcopy(config)
+    accepted = manifest["runtime_config"]["apps"]["charts"]
+    for row in candidate.get("apps", {}).get("charts", []):
+        if row.get("id") != "grafana":
+            continue
+        previous = one([item for item in accepted if item.get("id") == "grafana"
+                        and item.get("instance_id") == row.get("instance_id")],
+                       "accepted Grafana configuration")
+        if "dashboard_imports" in previous:
+            row["dashboard_imports"] = previous["dashboard_imports"]
+        else:
+            row.pop("dashboard_imports", None)
+    if configuration_digest(candidate) != expected:
+        raise ValueError("Configuration differs from the rendered monitoring installation")
+
+
 def discover(args):
     import yaml
 
@@ -411,21 +444,9 @@ def discover(args):
         or not baseline.get("deployment_generation")
     ):
         raise ValueError("Unsupported or unaccepted cxcli monitoring artifacts")
-    digest = (
-        "sha256:"
-        + hashlib.sha256(
-            json.dumps(
-                yaml.safe_load(args.config.read_text()),
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode()
-        ).hexdigest()
-    )
-    if manifest["render"]["source_config_sha256"] != digest:
-        raise ValueError(
-            "Configuration differs from the rendered monitoring installation"
-        )
+    source = yaml.safe_load(args.config.read_text())
+    accepted_configuration(source, manifest)
+    digest = configuration_digest(source)
     target = one(
         [
             t
@@ -538,57 +559,6 @@ def discover(args):
         "datasource_name": datasource["name"],
         "datasource_uid": datasource["uid"],
     }
-
-
-def environment(values):
-    return "".join(
-        f"export {key}={shlex.quote(str(value))}\n" for key, value in values.items()
-    )
-
-
-def write_connections(args, receipt):
-    # Fresh private directories avoid mixing receipts or following existing output links.
-    if (
-        args.output_dir.exists()
-        or args.output_dir.is_symlink()
-        or any(p.is_symlink() for p in args.output_dir.parents)
-    ):
-        raise ValueError(
-            "Setup output already exists or is unsafe; choose a fresh private directory"
-        )
-    values = {
-        "CLUSTER_CONFIG": str(args.config.resolve()),
-        "CLUSTER_TARGET": args.target,
-        "KUBECONFIG": str(args.kubeconfig.resolve()),
-        "CLUSTER_CONTEXT": args.context,
-        "COURSE_SETUP_DIR": str(args.output_dir.resolve()),
-        "COURSE_WORKSPACE": args.workspace,
-        "COURSE_METRICS_URL": receipt["metrics_url"],
-        "COURSE_PUSHGATEWAY": receipt["pushgateway_url"],
-        "COURSE_DATASOURCE_UID": receipt["datasource_uid"],
-        "COURSE_GRAFANA_NAMESPACE": receipt["grafana_namespace"],
-        "COURSE_GRAFANA_SERVICE": receipt["grafana_service"],
-        "COURSE_GRAFANA_PORT": receipt["grafana_port"],
-    }
-    outputs = {
-        "monitoring.json": json.dumps(receipt, indent=2) + "\n",
-        "laptop-environment.sh": environment(values),
-        "environment.sh": environment(
-            {
-                k: values[k]
-                for k in (
-                    "COURSE_WORKSPACE",
-                    "COURSE_METRICS_URL",
-                    "COURSE_PUSHGATEWAY",
-                )
-            }
-        ),
-    }
-    args.output_dir.mkdir(mode=0o700, parents=True)
-    for name, content in outputs.items():
-        with (args.output_dir / name).open("x") as stream:
-            os.chmod(stream.name, 0o600)
-            stream.write(content)
 
 
 def open_directory(path):
@@ -734,29 +704,6 @@ def prepare(courses_root=None, course_root=None):
         finally:
             os.close(parent_fd)
     return {root.name: len(labs) for root, labs in inventory}
-
-
-def monitoring(args):
-    import yaml
-
-    os.umask(0o077)
-    try:
-        write_connections(args, discover(args))
-    except yaml.YAMLError:
-        raise SystemExit(
-            "Monitoring discovery not ready: invalid YAML in a configuration or monitoring artifact"
-        ) from None
-    except (
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-        subprocess.SubprocessError,
-    ) as exc:
-        raise SystemExit(f"Monitoring discovery not ready: {exc}") from exc
-    print(
-        "Private course connection files created. Source laptop-environment.sh, then verify monitoring and import dashboards."
-    )
 
 
 def history_digest(source, destination=None):

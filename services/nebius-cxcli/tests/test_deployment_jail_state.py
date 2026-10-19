@@ -104,7 +104,8 @@ def renderer(monkeypatch):
     )
     calls = []
 
-    def render(cfg, staged, *, component_output_values):
+    def render(cfg, staged, *, component_output_values, frozen_dashboard_inputs):
+        assert frozen_dashboard_inputs is True
         calls.append(copy.deepcopy(component_output_values))
         docs, _ = render_soperator_adapter_documents(jail_values(cli.to_plain_data(cfg), "cluster"))
         (staged.flux_dir / "targets/cluster/soperator-nebius-adapter.yaml").write_text(

@@ -131,3 +131,11 @@ never exposes prompt or statement text, free-form rationale, private impact/run
 paths, or content-derived digests. The existing editable prompt path may remain
 in list output. Keep owner-computed raw and normalized-intent change
 detection; never write a hash header into the editable prompt.
+
+Canonical reads use the execution owner's checkout resolver: the selected
+primary before preparation, its registered integration scope during execution,
+and the exact primary after promotion. Requirements readiness and publication
+require the recorded integration HEAD. Delivery-only paired reconciliation can
+refresh the current revision's impact and settle the unchanged locked plan
+through the execution owner before sealing. This does not authorize material
+changes, primary edits before promotion, foreign worktrees or reopened execution.

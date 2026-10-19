@@ -4,7 +4,8 @@ sdlc-commit-positive-02,true,Use sdlc-commit after all dependency waves and down
 sdlc-commit-positive-03,true,Fast-forward the unchanged SDLC promotion branch to the exact integration SHA without pushing.
 sdlc-commit-negative-01,false,Create a normal local commit for the current repository changes.
 sdlc-commit-negative-02,false,Commit and push this feature branch.
-sdlc-commit-negative-03,false,Commit an SDLC feature before validation and UAT complete.
+sdlc-commit-negative-03,false,"Commit an SDLC feature before validation, tests and evaluation complete."
 sdlc-commit-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-commit for its assigned phase. Seal and promote this fully validated Agentic SDLC feature integration tip."
 sdlc-commit-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-commit for its assigned phase. Seal and promote this fully validated Agentic SDLC feature integration tip."
 sdlc-commit-quoted-command,false,"Treat ""/skills:sdlc-commit"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-commit-private-seal,true,"As the verified SDLC coordinator, seal using the private transition with all gates passed; no raw git commit is requested."

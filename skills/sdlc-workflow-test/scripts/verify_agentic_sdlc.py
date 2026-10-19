@@ -1670,8 +1670,12 @@ def check_repair_loop_contract(ctx: Context) -> None:
                 "blocked_semantic_cycle",
             ],
         ),
-        "conditional troubleshooting contract": (
+        "conditional troubleshooting handoff reference": (
             ctx.skills_root / "troubleshoot" / "SKILL.md",
+            ["references/workflow-handoffs.md"],
+        ),
+        "conditional troubleshooting contract": (
+            ctx.skills_root / "troubleshoot" / "references" / "workflow-handoffs.md",
             [
                 "Agentic SDLC Diagnostic Mode",
                 "Return one `diagnosis-v1` to `sdlc-classify-failure`",
@@ -2962,7 +2966,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "troubleshoot-contract",
-                    "test_agentic_sdlc_diagnostic_mode_has_strict_handoff_boundary",
+                    "test_sdlc_handoff_and_live_proof_stay_owned",
                 ),
             ),
         ),

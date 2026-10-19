@@ -18,10 +18,14 @@ def inspect(lab: str, job: int) -> list[str]:
         inventory["setup"] if lab == "environment_readiness" else inventory["labs"][lab]
     )
     reports = []
-    base = ROOT / "results" / lab / "jobs" / str(job)
+    base = ROOT / "results"
+    if lab != "environment_readiness":
+        base = base / lab / "jobs" / str(job)
     if any(p.is_symlink() for p in (base, *base.parents)):
         raise ValueError("Job output must not follow symlinks")
-    for path in sorted(base.rglob("*.json")):
+    paths = (base.glob("environment_readiness-run-*.json")
+             if lab == "environment_readiness" else base.rglob("*.json"))
+    for path in sorted(paths):
         if path.is_symlink() or path.stat().st_size > 16 * 1024 * 1024:
             continue
         try:

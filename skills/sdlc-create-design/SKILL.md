@@ -179,9 +179,10 @@ integration/replan owner.
 - Requirement changes update affected feature blocks only.
 - Existing feature IDs remain stable.
 - When execution is already prepared, update design only in the registered
-  integration worktree, supersede the old locked plan through coordinator
-  routing, and preserve started assignments/commits/resources. Never rewrite
-  or reset the active execution history.
+  integration worktree. Material changes supersede the old locked plan through
+  coordinator routing; delivery-only evidence uses fresh refinement/impact
+  verification and unchanged-plan settlement before sealing. Preserve started
+  assignments, commits and resources. Never reset active execution history.
 - Replaying the same design admission and approval against the same fingerprint
   does not duplicate decision/change-log entries.
 

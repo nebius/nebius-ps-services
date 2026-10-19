@@ -29,6 +29,14 @@ future waves. An integrated coordinator can prepare an appended planned wave
 after all preceding waves are done; it preserves the existing TDD and integration
 lineage. Sealed, promoted, or completed execution cannot be reopened.
 
+The execution-owned canonical-spec resolver selects the registered integration
+scope during execution and the exact primary checkout after promotion. Delivery
+evidence published by the canonical owner is settled through refinement
+verification and unchanged-plan replanning before sealing. Material changes still
+require a new plan. Refinement checks the recorded integration HEAD; execution
+transitions retain their existing journal recovery checks. Primary spec drift,
+unsafe records, foreign worktrees and incomplete final cleanup fail closed.
+
 Failed combined checks use `wave-fail` with canonical classifier and counted
 dispatch identities. It retains a permanent failed-wave receipt and retires
 only clean reachable worker resources. An unresolved failure admits only its

@@ -354,6 +354,13 @@ jobs:
           python -B -m unittest discover \
             -s maintain-project-specs/assets/hooks/tests -p 'test_*.py'
 
+      - name: Run troubleshooting helper, hook and diagnostic harness tests
+        run: |
+          set -euo pipefail
+          python -B -m unittest discover -s troubleshoot/scripts -p 'test_*.py'
+          python -B -m unittest discover -s troubleshoot/assets/hooks/tests -p 'test_*.py'
+          python -B -m unittest discover -s troubleshoot/evals/diagnostic -p 'test_*.py'
+
       - name: Run workflow adapter tests
         run: |
           set -euo pipefail

@@ -17,45 +17,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def plans():
-    root, courses = catalog.discover(ROOT / "tools/regular-lab-setup.py")
+    root, courses = catalog.discover(ROOT / "tools/lab-setup.py")
     definitions = catalog.load_catalog()
-    return (
-        root,
-        courses,
-        definitions,
-        {
-            group: selection.resolve(group, courses, definitions)
-            for group in selection.GROUPS
-        },
-    )
+    return root, courses, definitions, selection.resolve(courses, definitions)
 
 
-def test_complete_disjoint_partition_and_regular_dependency_boundary():
-    _, _, definitions, groups = plans()
-    assert {group: len(plan["labs"]) for group, plan in groups.items()} == dict(
-        zip(selection.GROUPS, (79, 13, 10, 7, 1))
-    )
-    assert len({lab for plan in groups.values() for lab in plan["labs"]}) == 110
-    regular = groups["regular"]["components"]
-    assert "models-small" in regular
-    assert not set(regular) & {
-        "toolchain",
-        "vllm",
-        "aiperf",
-        "training-te",
-        "dynamo",
-        "nixl",
-        "bridge",
-    }
-    assert all(
-        definitions["components"][name]["kind"] in {"python", "models"}
-        for name in regular
-    )
-    assert all(
-        not definitions["runtimes"][name].get("optional")
-        for plan in groups.values()
-        for name in plan["runtimes"]
-    )
+def test_complete_metadata_coverage_including_container_exercises():
+    from course_execution import capabilities
+    _, courses, definitions, plan = plans()
+    labs, launchers = selection.inventory(courses, definitions)
+    expected = {"shared-tools", *launchers.values()}
+    for course in courses.values():
+        expected.update(row["runtime"] for spec in capabilities(course).values() for row in spec["variants"])
+    assert set(plan["labs"]) == set(labs)
+    assert set(plan["runtimes"]) == expected
+    assert set(plan["components"]) == set(catalog.order(definitions, [c for n in expected for c in definitions["runtimes"][n]["components"]]))
+    assert {"cuda-image", "trtllm-image", "dynamo-image"} <= set(plan["components"])
 
 
 @pytest.mark.parametrize(
@@ -68,21 +45,21 @@ def test_complete_disjoint_partition_and_regular_dependency_boundary():
 )
 def test_container_variants_are_explicit(group, launcher, component):
     _, courses, definitions, _ = plans()
-    plan = selection.resolve(group, courses, definitions, launcher=launcher, experiment="trtllm" if launcher == "30_engine_profile.sbatch" else "default")
+    plan = selection.resolve(courses, definitions, launcher=launcher, experiment="trtllm" if launcher == "30_engine_profile.sbatch" else "default")
     assert component in plan["components"]
 
 
 def test_model_selection_and_shared_revision():
     _, courses, definitions, _ = plans()
-    serving = selection.resolve("serving", courses, definitions, lab="10_vllm_offline")
+    serving = selection.resolve(courses, definitions, lab="10_vllm_offline")
     speculative = selection.resolve(
-        "serving", courses, definitions, lab="33_speculative_engine_client"
+        courses, definitions, lab="33_speculative_engine_client"
     )
     assert "models-small" in serving["components"]
     assert "models-speculative" not in serving["components"]
     assert {"models-small", "models-speculative"} <= set(speculative["components"])
     audit = selection.resolve(
-        "regular", courses, definitions, lab="16_model_artifact_audit"
+        courses, definitions, lab="16_model_artifact_audit"
     )
     # Shared regular publication setup downloads its shared small model; the audit runtime itself does not.
     assert all(
@@ -95,32 +72,34 @@ def test_model_selection_and_shared_revision():
     assert "models-dynamo" not in audit["components"]
 
 
-@pytest.mark.parametrize("group", selection.GROUPS)
-def test_plan_is_read_only_and_does_not_inspect_platform(tmp_path, group):
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-S",
-            str(ROOT / "tools" / f"{group}-lab-setup.py"),
-            "--plan",
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-    )
+@pytest.mark.parametrize("args", [("--plan",), ("--help",)])
+def test_plan_is_read_only_and_does_not_inspect_platform(tmp_path, args):
+    result = subprocess.run([sys.executable, "-I", "-S", str(ROOT / "tools/lab-setup.py"), *args], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["group"] == group
+    assert not result.stderr
+    if args == ("--plan",):
+        assert json.loads(result.stdout)["runtimes"]
     assert not list(tmp_path.iterdir())
-    if group != "regular":
-        result = subprocess.run(
-            [sys.executable, "-I", "-S", str(ROOT / "tools" / f"{group}-lab-setup.py")],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "no installation performed" in result.stdout
+
+
+@pytest.mark.parametrize("args", [("--all",), ("--profiler", "none"), ("--experiment", "default"), ("--device", "cpu"), ("--sanitizer", "memcheck")])
+def test_unsupported_or_untargeted_flags_fail_before_writes(tmp_path, args):
+    result = subprocess.run([sys.executable, "-I", "-S", str(ROOT / "tools/lab-setup.py"), "--plan", *args], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not result.stdout
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("args", [("--profiler", "none"), ("--lab", "example"), ("--device", "cpu")])
+def test_history_does_not_silently_ignore_selection_flags(tmp_path, args):
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(ROOT / "tools/lab-setup.py"), *args,
+         "organize-history", "--course-root", str(tmp_path)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "Selection flags apply to dependency preparation only" in result.stderr
+    assert not list(tmp_path.iterdir())
 
 
 def test_unrelated_definitions_do_not_invalidate_components_or_runtimes():
@@ -135,9 +114,28 @@ def test_unrelated_definitions_do_not_invalidate_components_or_runtimes():
     assert catalog.fingerprint(changed, root, courses, name) != before
 
 
+def test_auxiliary_runtime_id_repair_hint_resolves(monkeypatch):
+    from course_bootstrap import runtime
+    import shlex
+
+    def missing(_path):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(runtime, "read_json", missing)
+    course = ROOT / "llm-inference"
+    with pytest.raises(ValueError, match="Prepared runtime is missing") as exc:
+        runtime.load(course, "llm-inference.dynamo-preflight", runtime_id=True)
+    arguments = shlex.split(str(exc.value).split("; run ", 1)[1])
+    launcher = arguments[arguments.index("--launcher") + 1]
+    assert launcher == "llm-inference/dynamo_disaggregated_preflight.sbatch"
+    plan = selection.resolve({course.name: course}, catalog.load_catalog(), launcher=launcher)
+    assert "llm-inference.dynamo-preflight" in plan["runtimes"]
+
+
 def test_native_prerequisites_exclude_container_and_fabric_packages():
-    _, _, definitions, groups = plans()
-    packages = system.prerequisites(definitions, groups["regular"]["components"])
+    _, courses, definitions, _ = plans()
+    plan = selection.resolve(courses, definitions, lab="gpu-fundamentals/01_cpu_gpu_crossover")
+    packages = system.prerequisites(definitions, plan["components"])
     assert not set(packages) & {
         "apptainer",
         "libpci-dev",
@@ -186,7 +184,7 @@ def test_regular_reconciliation_preserves_specialized_record_and_generation(
     )
     for _ in range(2):
         controller.setup(
-            tmp_path / "tools/regular-lab-setup.py",
+            tmp_path / "tools/lab-setup.py",
             lambda **kw: None,
             plan={"group": "regular", "runtimes": ["shared-tools"]},
         )
@@ -215,6 +213,16 @@ def test_retirement_preserves_unknown_files_symlinks_and_results(tmp_path, monke
     assert retirement.retire(tmp_path, ["."])["preserved_modified"]
     old.unlink()
     old.write_bytes(b"known")
+    for mode in (0o666, 0o4755):
+        old.chmod(mode)
+        assert retirement.retire(tmp_path, ["."])["preserved_modified"]
+        assert old.read_bytes() == b"known"
+    old.chmod(0o644)
+    alias = tmp_path / "retained-hardlink"
+    alias.hardlink_to(old)
+    assert retirement.retire(tmp_path, ["."])["preserved_modified"]
+    assert alias.read_bytes() == b"known"
+    alias.unlink()
     assert retirement.retire(tmp_path, ["."])["retired"] == ["tools/course_setup.py"]
     assert historical.read_bytes() == b"known"
 
@@ -242,7 +250,7 @@ def test_failed_source_verification_precedes_retirement(tmp_path, monkeypatch):
     (tmp_path / "tools").mkdir()
     old = tmp_path / "tools/course_setup.py"
     old.write_bytes(b"old")
-    replacement = tmp_path / "tools/regular-lab-setup.py"
+    replacement = tmp_path / "tools/lab-setup.py"
     replacement.write_bytes(b"unexpected")
     monkeypatch.setattr(
         sys, "argv", ["verify_source_sync.py", "verify", "--root", str(tmp_path)]
@@ -255,7 +263,7 @@ def test_failed_source_verification_precedes_retirement(tmp_path, monkeypatch):
                 {
                     "schema": "course-source-sync/v1",
                     "files": {
-                        "tools/regular-lab-setup.py": {
+                        "tools/lab-setup.py": {
                             "sha256": "wrong",
                             "executable": False,
                         }
@@ -297,11 +305,11 @@ def test_preparation_error_uses_actual_checkout_root(tmp_path):
     import shlex
 
     command = selection.command(
-        "cuda", root=tmp_path / "standalone kit", launcher="01_vector_add.sbatch"
+        root=tmp_path / "standalone kit", launcher="01_vector_add.sbatch"
     )
     assert shlex.split(command) == [
         "python3.12",
-        str(tmp_path / "standalone kit/tools/cuda-lab-setup.py"),
+        str(tmp_path / "standalone kit/tools/lab-setup.py"),
         "--launcher",
         "01_vector_add.sbatch",
     ]

@@ -156,6 +156,7 @@ from prompt_impact import (  # noqa: E402
     publish as publish_prompt_impact,
     public_execution_bases,
     public_impact_status,
+    spec_checkout,
     verify_current as verify_current_prompt_impact,
 )
 from project_specs_lib.contracts import (  # noqa: E402
@@ -2310,7 +2311,10 @@ def _ready_requirements_refinement(
             "requirements refinement is not ready for the latest accepted intent",
         )
     project_root = Path(str(workspace["project_root"])).resolve()
-    requirements_path = project_root / "docs" / "requirements.md"
+    try:
+        requirements_path = spec_checkout(run_dir, project_root) / "docs" / "requirements.md"
+    except PromptImpactError as error:
+        raise PromptWorkspaceError(error.code, error.message) from error
     if (
         requirements_path.is_symlink()
         or not requirements_path.is_file()

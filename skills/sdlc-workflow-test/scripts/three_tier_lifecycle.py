@@ -141,6 +141,7 @@ import three_tier_browser  # noqa: E402 — verified bootstrap precedes runtime 
 import owned_git_origin  # noqa: E402 — private fixture owner
 import three_tier_target  # noqa: E402 — read-only workflow checkout binding
 import three_tier_runtime  # noqa: E402 — owned build/deployment evidence
+import three_tier_tests  # noqa: E402 — owner-executed product test evidence
 from three_tier_reporting import report_text  # noqa: E402 — verified bootstrap precedes runtime imports
 from three_tier_semantics import (  # noqa: E402 — verified bootstrap precedes runtime imports
     REQUIRED_GUI_STEPS as REQUIRED_GUI_STEPS,
@@ -190,6 +191,7 @@ GENERATION_GUARDED_COMMANDS = {
     "prepare-images",
     "record-git",
     "run-compose",
+    "run-test-class",
     "finish",
     "resume",
     "assert-active",
@@ -1184,6 +1186,18 @@ def browser_target(state: dict) -> dict:
     return {**target, "deployment": deployment}
 
 
+def run_test_class(root_value: Path, test_class: str, label: str) -> dict:
+    root = verification_root(root_value, create=False)
+    _, state = load_active(root)
+    try:
+        return three_tier_tests.run_class(
+            state, test_class, label, resolve_target=browser_target, command=command,
+            persist=lambda: update_state(root, state), write_json=private_json,
+        )
+    except three_tier_tests.TestEvidenceError as error:
+        raise LifecycleError(str(error)) from error
+
+
 def container_ports(identifier: str) -> dict[str, Any]:
     result = command(
         [
@@ -1801,6 +1815,9 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("prepare-images")
     stage_parser = commands.add_parser("run-browser-stage")
     stage_parser.add_argument("--stage", choices=three_tier_browser.STAGES, required=True)
+    test_parser = commands.add_parser("run-test-class")
+    test_parser.add_argument("--test-class", choices=three_tier_tests.TEST_CLASSES, required=True)
+    test_parser.add_argument("--label", required=True)
     commands.add_parser("close-browser")
     compose_parser = commands.add_parser("run-compose")
     compose_parser.add_argument("--worker-task")
@@ -1883,6 +1900,9 @@ def main(argv: list[str]) -> int:
             elif arguments.command == "run-browser-stage":
                 run_browser_stage(arguments.verification_root, arguments.stage)
                 print("Headless browser stage passed: " + arguments.stage)
+            elif arguments.command == "run-test-class":
+                run_test_class(arguments.verification_root, arguments.test_class, arguments.label)
+                print("Owned test class passed: " + arguments.test_class)
             elif arguments.command == "close-browser":
                 state = close_browser(arguments.verification_root)
                 print(

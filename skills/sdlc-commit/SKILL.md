@@ -142,7 +142,9 @@ the private transition helper and action-scoped execution state.
 - A default branch in unmanaged mode maps to `POLICY_BLOCK`.
 - Missing evidence maps to workflow blocker.
 - Hook denial maps to `POLICY_BLOCK`.
-- Missing or expired `commit-authorization.json` maps to `POLICY_BLOCK`.
+- For operator-visible raw `git commit` only, missing or expired
+  `commit-authorization.json` maps to `POLICY_BLOCK`. Normal private sealing
+  and promotion use their action-scoped transition authority, not this file.
 - Moved/dirty project or integration state maps to `PROMOTION_BLOCKED`;
   non-fast-forward ancestry maps to `PROMOTION_FAILED`; unsafe retained
   resources map to `CLEANUP_BLOCKED` without force removal.

@@ -43,6 +43,8 @@ through GitHub Pages and links to the course catalog. Pages deploys from branch
 `main` and folder `/(root)`. Protected broker merges explicitly request a Pages
 build after their exact-result CI passes; see
 [protected merge setup](.github/merge-automation.md#completion-and-recovery).
+Completion discovery failures retain their sanitized diagnostics and stop
+downstream effects; they do not undo an already verified merge.
 The root `.nojekyll` enables static publication without a custom
 deployment workflow. Other eligible repository files become available through
 Pages as well. Initial setup, course build and validation instructions live in

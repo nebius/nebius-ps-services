@@ -1468,6 +1468,7 @@ def _externalize_dashboard_json_values(
 @dataclass
 class _FluxRenderState:
     paths: ProjectPaths
+    frozen_dashboard_inputs: bool = False
     files: list[Path] = field(default_factory=list)
     resources: list[str] = field(default_factory=list)
     repositories: list[dict[str, Any]] = field(default_factory=list)
@@ -1667,9 +1668,20 @@ def _render_flux_app_helm_releases(
             for declaration in release["dashboard_imports"]:
                 if not declaration.get("replay", True):
                     continue
+                asset = (
+                    state.paths.generated_dir
+                    / "grafana_dashboards"
+                    / str(release["target_ref"])
+                    / "cxcli-api-imports"
+                    / f"{declaration['uid']}.json"
+                )
+                # Private deployment caches contain the frozen generation, not
+                # its original authored files. Never fall back across that boundary.
                 source = normalize_project_bundle_target(
                     state.paths.project_dir,
-                    state.paths.project_dir / declaration["json_file"],
+                    asset
+                    if state.frozen_dashboard_inputs
+                    else state.paths.project_dir / declaration["json_file"],
                 )
                 dashboard = read_dashboard(source)
                 if (
@@ -1680,13 +1692,6 @@ def _render_flux_app_helm_releases(
                     raise ValueError(
                         "Declared Grafana dashboard changed; run grafana import --overwrite"
                     )
-                asset = (
-                    state.paths.generated_dir
-                    / "grafana_dashboards"
-                    / str(release["target_ref"])
-                    / "cxcli-api-imports"
-                    / f"{declaration['uid']}.json"
-                )
                 _write_text(asset, json_bytes(dashboard).decode())
                 state.files.append(asset)
         _externalize_dashboard_json_values(state, release=release)
@@ -2162,6 +2167,7 @@ def render_flux(
     *,
     component_output_values: dict[str, Any] | None = None,
     ordinary_only: bool = False,
+    frozen_dashboard_inputs: bool = False,
 ) -> list[Path]:
     legacy_dirs = [
         path
@@ -2199,7 +2205,9 @@ def render_flux(
             split_target = ordinary_only or bool(soperator_target_refs(config))
             if split_target:
                 ordinary_paths = replace(target_paths, flux_dir=target_paths.flux_dir / "ordinary")
-                ordinary_state = _FluxRenderState(paths=ordinary_paths)
+                ordinary_state = _FluxRenderState(
+                    paths=ordinary_paths, frozen_dashboard_inputs=frozen_dashboard_inputs
+                )
                 _render_flux_app_helm_releases(
                     ordinary_state,
                     release_specs=[
@@ -2239,7 +2247,9 @@ def render_flux(
                 target_specs = [
                     item for item in target_specs if item.get("entry_id") == SOPERATOR_APP_ID
                 ]
-            state = _FluxRenderState(paths=target_paths)
+            state = _FluxRenderState(
+                paths=target_paths, frozen_dashboard_inputs=frozen_dashboard_inputs
+            )
             _render_flux_app_helm_releases(
                 state,
                 release_specs=target_specs,
@@ -2256,7 +2266,7 @@ def render_flux(
             written.extend(state.files)
         return written
 
-    state = _FluxRenderState(paths=paths)
+    state = _FluxRenderState(paths=paths, frozen_dashboard_inputs=frozen_dashboard_inputs)
     _render_flux_app_helm_releases(state, release_specs=release_specs)
     _render_post_flux_mysterybox_eso_resources(
         state,

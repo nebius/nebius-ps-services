@@ -117,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends rsync procps
+          sudo apt-get install --yes --no-install-recommends rsync procps build-essential
           # Reuse the validation pin without downloading GPU dependencies.
           python -m pip install \
             "$(sed -n '/^pytest==/p' requirements-validation.txt)" \
@@ -133,10 +133,24 @@ jobs:
           python -B -m pytest -q -p no:cacheprovider \
             tests/test_course_distribution.py \
             tests/test_course_preparation.py \
+            tests/test_run_labs_preparation.py \
             tests/test_preparation_groups.py \
+            tests/test_unified_setup.py \
+            tests/test_course_bootstrap.py \
+            tests/test_training_te_build.py \
+            tests/test_exclude_containers.py \
+            tests/test_course_mount_root.py \
             tests/test_setup_publication.py \
             tests/test_sync_labs.py \
+            tests/test_sync_handoff.py \
+            tests/test_monitoring_setup.py \
+            tests/test_lab_setup.py \
             tests/test_consolidated_jobs.py \
+            tests/test_viewer_delivery.py \
+            tests/test_managed_profilers.py \
+            tests/test_all_lab_profiling.py \
+            tests/test_alignment_delivery.py \
+            tests/test_native_capture_commands.py \
             tests/test_native_job_execution.py \
             tests/test_automatic_publication.py \
             tests/test_result_publication.py \

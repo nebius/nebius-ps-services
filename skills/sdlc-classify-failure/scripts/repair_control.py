@@ -1533,6 +1533,13 @@ def _classification_from(
             "alignment",
             "commit",
         ]
+    elif classification == "DOCUMENTATION_DRIFT":
+        if event["execution_lifecycle"] in {"sealed", "promoted", "completed"}:
+            route, corrective_mode = _implementation_route(event)
+            invalidates = ["validation", "tests", "evaluation", "documentation", "alignment", "commit"]
+        else:
+            route, corrective_mode = "sdlc-update-documents", None
+            invalidates = ["documentation", "alignment", "commit"]
     elif classification == "TEST_DEFECT":
         route, corrective_mode = "sdlc-tdd", "test_repair"
         invalidates = ["tests", "evaluation", "documentation", "alignment", "commit"]

@@ -13,8 +13,9 @@ own course.
 Local GPU practice uses one full H100; distributed-training experiments belong to
 [Advanced Labs](../advanced-gpu-communication/index.html).
 These bounded, often synthetic workloads do not establish production convergence
-or large-model scaling. Prepare with the shared Lab Guide's
-[environment setup](../lab-guide.html#lab-preparation-scripts).
+or large-model scaling. Follow the shared [Lab Preparation](../lab-guide.html#lab-preparation)
+and read the single setup command's completion summary before practice.
+Software preparation includes optional runtimes; their GPU checks remain separate.
 
 For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 

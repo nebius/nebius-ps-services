@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=01:01:30
+#SBATCH --time=01:07:00
 
 #SBATCH --no-requeue
 #SBATCH --output=results/32_learning_basics/logs/%j.out
