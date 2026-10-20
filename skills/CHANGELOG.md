@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Update the Nebius validation environment to aiohttp 3.14.4 and its required
+  yarl 1.25.1 dependency, addressing the aiohttp security advisories while
+  preserving an installable pinned environment.
+
 - Emit the independently observed image digest after verifying every immutable
   alias against publication evidence; keep malformed and conflicting values blocked.
 
