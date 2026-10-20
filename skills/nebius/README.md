@@ -110,7 +110,9 @@ This expansion intentionally changes interfaces without compatibility shims:
 
 Create a disposable virtual environment and install the validation dependencies
 there. The requirements file pins the complete environment used for this check;
-review and rerun schema tests before updating it. This does not install the skill
+review dependency constraints and rerun schema tests before updating it. The
+aiohttp 3.14.4 security update requires yarl 1.25.1 or later; keep their pins
+compatible. This does not install the skill
 into an agent runtime.
 
 ```bash
