@@ -42,15 +42,15 @@ def test_specs_expose_only_the_current_canonical_contracts() -> None:
     design = _read("docs/design.md")
 
     assert re.findall(r"^### (REQ-\d+):", requirements, re.MULTILINE) == [
-        f"REQ-{number:03d}" for number in range(13, 41)
+        f"REQ-{number:03d}" for number in range(13, 42)
     ]
     assert re.findall(r"^### (FEAT-\d+):", design, re.MULTILINE) == [
-        f"FEAT-{number:03d}" for number in range(13, 49)
+        f"FEAT-{number:03d}" for number in range(13, 50)
     ]
-    assert requirements.count("<!-- REQUIREMENT:") == 28
-    assert requirements.count("<!-- /REQUIREMENT:") == 28
-    assert design.count("<!-- FEATURE:") == 36
-    assert design.count("<!-- /FEATURE:") == 36
+    assert requirements.count("<!-- REQUIREMENT:") == 29
+    assert requirements.count("<!-- /REQUIREMENT:") == 29
+    assert design.count("<!-- FEATURE:") == 37
+    assert design.count("<!-- /FEATURE:") == 37
 
 
 def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:
