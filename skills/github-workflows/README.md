@@ -80,7 +80,8 @@ service-specific qualification. Standalone templates install the helper at
 
 Release manifests are uploaded before publication. Existing releases must match
 those original hashes, while images must match original digests across every
-immutable alias. Release and manual image lanes use separate aliases and one
+immutable alias. Image outputs use the registry digest after that comparison.
+Release and manual image lanes use separate aliases and one
 destination lock. Missing evidence, partial state and ambiguous errors block
 reconciliation without overwrite. See the [release](references/publish-release.md)
 and [image](references/container-image-publish.md) contracts for details.

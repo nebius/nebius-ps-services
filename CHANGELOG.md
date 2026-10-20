@@ -6,6 +6,8 @@ project folder.
 
 ## [Unreleased]
 
+- Keep image publication outputs tied to the independently verified registry digest.
+
 - Include the shared viewer-delivery helper in fresh course synchronization and
   replacement verification; check imports from the transferred job runner.
 

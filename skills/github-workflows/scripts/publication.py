@@ -488,7 +488,8 @@ def immutable_state(observed, manifests, tags):
     expected = digests.pop()
     if not DIGEST.fullmatch(expected) or set(observed.values()) != {expected}:
         raise Conflict("Immutable image digest conflicts with original evidence")
-    return "verified-existing", expected
+    # Emit the registry observation after matching every alias to original evidence.
+    return "verified-existing", next(iter(observed.values()))
 
 
 def output(values):

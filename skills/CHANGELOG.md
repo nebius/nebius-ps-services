@@ -4,6 +4,9 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Emit the independently observed image digest after verifying every immutable
+  alias against publication evidence; keep malformed and conflicting values blocked.
+
 - Stop catalog installation before replacing runtimes used by retained custom
   capture registrations. Preserve their files and settings for owner
   reconciliation, and cover both native hosts through the full installer.

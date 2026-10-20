@@ -151,6 +151,10 @@ class PublicationTests(unittest.TestCase):
             (dict.fromkeys(tags, OTHER), [manifest]),
             (dict.fromkeys(tags, DIGEST), []),
             (dict.fromkeys(tags, DIGEST), [manifest, {**manifest, "digest": OTHER}]),
+            (
+                dict.fromkeys(tags, "invalid-digest"),
+                [{**manifest, "digest": "invalid-digest"}],
+            ),
         ]:
             with self.assertRaises(pub.Unverifiable):
                 pub.immutable_state(observed, manifests, tags)
