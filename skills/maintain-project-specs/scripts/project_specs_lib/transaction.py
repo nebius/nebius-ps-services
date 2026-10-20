@@ -274,7 +274,9 @@ def _assert_publication_boundary(
     docs_descriptor: int,
     expected_head: str,
     expected_documents: dict[str, bytes | None],
+    authority_check=lambda: None,
 ) -> None:
+    authority_check()
     _assert_directory_binding(project, project_descriptor, "project")
     _assert_child_binding(project_descriptor, "docs", docs_descriptor, "docs")
     try:
@@ -294,7 +296,7 @@ def _assert_publication_boundary(
             )
 
 
-def publish_spec_pair(
+def _publish_spec_pair(
     project_root: Path,
     *,
     requirements_candidate: bytes,
@@ -303,6 +305,8 @@ def publish_spec_pair(
     expected_requirements_sha256: str,
     expected_design_sha256: str,
     operation_id: str,
+    _authority_check=lambda: None,
+    _workflow_identity=None,
 ) -> dict[str, Any]:
     """Publish a validated pair iff its bound Git and document state is current."""
 
@@ -375,6 +379,8 @@ def publish_spec_pair(
             "after": after,
             "contract_status": inspected["status"],
         }
+        if _workflow_identity is not None:
+            receipt["workflow_identity"] = _workflow_identity
         journal = root / f"{operation_id}.json"
         try:
             journal.lstat()
@@ -395,6 +401,7 @@ def publish_spec_pair(
                     docs_descriptor,
                     expected_git_head,
                     originals,
+                    _authority_check,
                 )
                 return receipt
             if any(
@@ -420,6 +427,7 @@ def publish_spec_pair(
                 docs_descriptor,
                 expected_git_head,
                 current_documents,
+                _authority_check,
             )
             for kind in ("requirements", "design"):
                 if current_documents[kind] == candidates[kind]:
@@ -438,6 +446,7 @@ def publish_spec_pair(
                     docs_descriptor,
                     expected_git_head,
                     current_documents,
+                    _authority_check,
                 )
         except Exception:
             try:
@@ -462,3 +471,35 @@ def publish_spec_pair(
             os.close(project_descriptor)
         fcntl.flock(lock, fcntl.LOCK_UN)
         os.close(lock)
+
+
+def publish_spec_pair(project_root: Path, *, expected_objective_sha256=None,
+                      expected_basis_sha256=None, **arguments) -> dict[str, Any]:
+    """Enforce registered workflow ownership without gating unrelated work."""
+    import subprocess
+    import sys
+    project = project_root.resolve()
+    result = subprocess.run(["git", "-C", str(project), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True, timeout=30, check=False)
+    common = Path(result.stdout.strip()) if result.returncode == 0 else None
+    registry = common / "workflow-spec-publication" if common is not None else None
+    if registry is None or not (registry.exists() or registry.is_symlink()):
+        return _publish_spec_pair(project_root, **arguments)
+    scripts = Path(__file__).resolve().parents[3] / "worktree" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        from workflow_publication import publication_guard
+        from workflow_state import WorkflowError
+        from workflow_spec_checkout import SpecCheckoutError
+    except ImportError as error:
+        raise ProjectSpecError("SPEC_CONFLICT", "registered workflow publication requires current Worktree support") from error
+    try:
+        with publication_guard(project, objective_sha256=expected_objective_sha256,
+                               basis_sha256=expected_basis_sha256) as check:
+            return _publish_spec_pair(project_root, _authority_check=check,
+                                      _workflow_identity={"objective_sha256": expected_objective_sha256,
+                                                          "basis_sha256": expected_basis_sha256},
+                                      **arguments)
+    except (WorkflowError, SpecCheckoutError) as error:
+        raise ProjectSpecError(error.code, str(error)) from error

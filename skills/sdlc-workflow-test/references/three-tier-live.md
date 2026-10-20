@@ -50,7 +50,7 @@ health checks and database readiness before the web service starts.
 
 ## Ownership and private state
 
-The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v4` under:
+The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v5` under:
 
 ```text
 <verification-root>/three-tier-live/
@@ -93,7 +93,7 @@ ownership from a name prefix alone.
    destroys the previous active environment through the exact ownership-checked
    standalone cleanup path, and creates a fresh lifecycle only after cleanup
    succeeds. Preparation creates the marker-only Git baseline and its one owned
-   local bare origin before normal prompt intake. Orphaned state, a changed
+   local bare origin before direct objective intake. Orphaned state, a changed
    project boundary, an external or extra Git remote, dirty
    kept work, a resource-label mismatch, or incomplete cleanup blocks the new
    lifecycle. Cleanup removes the union of recorded aliases and resources
@@ -115,19 +115,19 @@ ownership from a name prefix alone.
    that private config for `docker compose`; Compose uses the ordinary CLI
    configuration after the images are local. Use `<private-root>/<agent>-home` as
    the selected isolated native home (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`,
-   passed to the verifier with `--agent-home`) for prompt workspace and phase state
+   passed to the verifier with `--agent-home`) for accepted objective and phase state
    so destroy never targets the user's ordinary `~/.codex/sdlc-runs` tree.
-5. Use the existing prompt-bound workflow only. Initialize the workspace first,
-   then run `scripts/render_three_tier_prompt.py` against the returned starter.
-   The renderer preserves its four managed identity fields and replaces only
-   the scenario template's five named placeholders: project root, private root,
-   evidence root, verification ID, and Compose project. Intake must accept the
-   rendered file as revision `r0001` before phases begin:
+5. Render the fixture objective with `scripts/render_three_tier_objective.py`
+   into a verifier-owned input artifact. It replaces the five scenario
+   placeholders; the artifact has no workflow-managed frontmatter or identity.
+   In the owned project and isolated native home, invoke the public workflow:
 
    ```text
-   $sdlc-start workspace init <project-folder>
-   $sdlc-start run <prompt-ref-or-file>
+   $sdlc-start <rendered fixture objective>
    ```
+
+   Cross-session continuation uses `$sdlc-start continue <project-folder>`.
+   The workflow accepts the normalized objective before any phase begins.
 
    Do not add a workflow CLI or let the lifecycle helper call SDLC phases.
    Run every Docker Compose action through the helper's generation-locked
@@ -141,9 +141,16 @@ ownership from a name prefix alone.
    tests, evaluation, documents, alignment, commit, local ship, UAT, and the
    final document pass. Do not push, publish, create a PR, or merge a PR.
 7. After each phase, record a concise sanitized summary and one canonical
-   `agentic-sdlc/phase-result-v4` JSON result with `record-phase`. Bind it to
+   `agentic-sdlc/phase-result-v5` JSON result with `record-phase`. Bind it to
    the lifecycle verification ID, immutable baseline SHA, phase-time
-   `recorded_head`, and the exact phase-specific assertion list. Phase results
+   `recorded_head`, `objective_sha256`, the current `basis_sha256` for prepared
+   phases (null before preparation), and the exact phase-specific assertion list.
+   `record-phase` retains immutable attempts; prior failures and superseded passes
+   remain in the ledger. Final ingestion rechecks the admitted current attempt.
+   Earlier admitted bases may cross only hash-linked owner spec reconciliation
+   with no material effects, retained plan, unchanged objective and execution
+   identities, and valid Git ancestry. New phase admission remains strict;
+   never rewrite earlier receipts to today's basis. Phase results
    must be private, bounded, regular, single-link files. Record the clean baseline/promoted Git
    identity, loopback endpoints, Compose-internal database endpoint, and exact
    labelled Docker inventory. Use `--web-container` and
@@ -209,7 +216,7 @@ the dynamic loopback port, refresh recorded endpoints, then launch a fresh
 post-restart browser against the same task ID/title/completion state.
 Independent API and PostgreSQL checks accompany blank rejection, creation,
 completion, and post-restart persistence. Use the frozen task-board DOM/API/table
-contract in the generated prompt. Before evaluation and separately before UAT,
+contract in the rendered fixture objective. Before evaluation and separately before UAT,
 use the declared disposable reset to establish an empty database; resets are
 fixture setup, never part of the product acceptance journey. Never reset between
 UAT stages.
@@ -280,7 +287,9 @@ other than prepare and destroy requires `--expected-verification-id`. Do not
 expose these helper subcommands as a replacement for `$sdlc-start`.
 
 The live harness resolves the active feature through the isolated host's validated
-prompt workspace and canonical execution status. Before promotion, Compose and
+session/run binding, accepted objective revision and immutable execution basis.
+Worker access to shared application resources requires the current assignment's
+exclusive runtime lease. Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
 active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
@@ -291,8 +300,9 @@ resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
-Both identifiers are required. The resolver admits only the sole task in the
-active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+Both identifiers are required. The resolver admits only an assignment holding
+the exclusive runtime lease in an active scheduler slot during
+`sdlc-implement-plan`, with a registered worktree,
 unchanged assignment base, and an `ACTIVE` result from the execution owner's
 live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun

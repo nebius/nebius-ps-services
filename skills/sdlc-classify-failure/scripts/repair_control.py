@@ -1262,7 +1262,7 @@ def _current_revalidation_commit(run_dir: Path, feature_id: str, surface: str) -
         run_dir.resolve() / "execution" / feature_id / "coordinator.json",
         "execution coordinator",
     )
-    if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v7":
+    if coordinator.get("schema") != "workflow/execution-coordinator-v1":
         raise RepairControlError(
             "REVALIDATION_INVALID", "current execution coordinator is unsupported"
         )

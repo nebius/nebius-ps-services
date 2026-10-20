@@ -24,12 +24,12 @@ and secret disclosure remain outside ordinary task authority.
   or extra backups.
 - Recovery creates missing settings exclusively with private permissions;
   existing or concurrently created files are not replaced.
-- The trusted-local full-access profile, delegation policy, Task Implementer
+- The trusted-local full-access profile, delegation policy, Implement
   storage and each MCP integration are optional and explicitly selected.
 - Roles use native Markdown with inherited models and only Read/Grep/Glob
   tools. Effective project, CLI and managed overrides need runtime verification.
 - Structural checks reject malformed role frontmatter and require task-state
-  and selected Task Implementer storage roots to be actual private directories.
+  and selected Implement storage roots to be actual private directories.
 - Full hook setup reuses the existing complete package and installer, or the
   enabled native plugin. This skill adds no duplicate hook bundle.
 - Fresh setup creates a disabled delegation policy before hook installation

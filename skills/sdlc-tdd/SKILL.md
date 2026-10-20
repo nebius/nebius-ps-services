@@ -69,6 +69,11 @@ Define success before implementation by creating tests that prove the current fe
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Locked plan.
 - Feature and requirement blocks.
 - Existing tests and test framework configuration.

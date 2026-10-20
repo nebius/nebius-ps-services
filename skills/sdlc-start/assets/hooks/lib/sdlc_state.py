@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -120,7 +121,7 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
 # END shared runtime bootstrap
 _load_skill_support('runtime', __file__, 'sdlc-start/assets/hooks/lib/sdlc_state.py')
 
-from agent_runtime import agent_home  # noqa: E402
+from agent_runtime import agent_home, native_session_id  # noqa: E402
 
 
 CODEX_HOME = agent_home()
@@ -345,36 +346,93 @@ def staged_diff(project_root: Path) -> str:
     return result.stdout
 
 
+def _private_json(path: Path) -> dict[str, Any] | None:
+    """Bounded, no-follow observation used only for workflow ownership."""
+    descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            metadata = os.fstat(child)
+            sticky = metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX
+            if metadata.st_uid not in {0, os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                os.close(child)
+                return None
+            os.close(descriptor)
+            descriptor = child
+        child = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        try:
+            before = os.fstat(child)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                    or before.st_size > 4194304):
+                return None
+            data = bytearray()
+            while chunk := os.read(child, 65536):
+                data.extend(chunk)
+                if len(data) > 4194304:
+                    return None
+            after = os.fstat(child)
+            bound = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+            def identity(value):
+                return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            if identity(before) != identity(after) or identity(after) != identity(bound):
+                return None
+            value = json.loads(data)
+            return value if isinstance(value, dict) else None
+        finally:
+            os.close(child)
+    except (OSError, ValueError):
+        return None
+    finally:
+        os.close(descriptor)
+
+
 def _run_dir_from_lock(project_dir: Path, lock: dict[str, Any]) -> Path | None:
     run_id = str(lock.get("run_id") or "")
-    if run_id:
-        run_dir = project_dir / run_id
-        if run_dir.exists():
-            return run_dir
-    active_run = load_json(project_dir / "active-run.json")
-    active_id = str((active_run or {}).get("run_id") or "")
-    if active_id and (project_dir / active_id).exists():
-        return project_dir / active_id
-    active_dir = project_dir / "active"
-    if active_dir.exists():
-        return active_dir
-    if run_id:
-        return project_dir / run_id
-    return None
+    if (lock.get("schema") != "workflow/coordinator-ownership-v1"
+            or lock.get("owner") != "agentic-sdlc"
+            or re.fullmatch(r"run-[a-z0-9][a-z0-9-]{0,79}", run_id) is None):
+        return None
+    run_dir = project_dir / run_id
+    run = _private_json(run_dir / "run.json") or {}
+    if (run.get("schema") != "workflow/run-v1" or run.get("owner") != "agentic-sdlc"
+            or run.get("run_id") != run_id or run.get("project_root") != lock.get("project_root")
+            or run.get("project_id") != lock.get("project_id")
+            or run.get("coordinator_session_sha256") != lock.get("owner_session_hash")):
+        return None
+    objective = _private_json(run_dir / "objective.json") or {}
+    if (objective.get("schema") != "workflow/accepted-objective-v1"
+            or objective.get("run_id") != run_id or objective.get("owner") != "agentic-sdlc"
+            or not isinstance(objective.get("revisions"), list) or not objective["revisions"]):
+        return None
+    parent = None
+    for index, revision in enumerate(objective["revisions"], 1):
+        if not isinstance(revision, dict) or revision.get("revision") != f"r{index:04d}":
+            return None
+        if revision.get("snapshot") != f"objectives/r{index:04d}.json" or revision.get("parent_sha256") != parent:
+            return None
+        snapshot = _private_json(run_dir / revision["snapshot"])
+        if snapshot is None or set(snapshot) != {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications", "provenance"}:
+            return None
+        encoded = (json.dumps(snapshot, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
+        parent = hashlib.sha256(encoded).hexdigest()
+        if parent != revision.get("sha256"):
+            return None
+    return run_dir
 
 
 def _execution_registration(
-    run_dir: Path, cwd_path: Path
+    run_dir: Path, cwd_path: Path, session_hash: str, coordinator_owned: bool
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     for coordinator_path in sorted((run_dir / "execution").glob("*/coordinator.json")):
         try:
             coordinator = load_json(coordinator_path) or {}
         except json.JSONDecodeError:
             continue
-        if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v7":
+        if coordinator.get("schema") != "workflow/execution-coordinator-v1" or coordinator.get("owner") != "agentic-sdlc":
             continue
         integration_path = coordinator.get("integration_worktree")
-        if integration_path and is_inside(cwd_path, str(integration_path)):
+        if coordinator_owned and integration_path and is_inside(cwd_path, str(integration_path)):
             return coordinator, {
                 "role": "integration",
                 "feature_id": str(
@@ -393,10 +451,17 @@ def _execution_registration(
                 assignment = load_json(assignment_path) or {}
             except json.JSONDecodeError:
                 continue
-            if assignment.get("schema") != "agentic-sdlc/worker-assignment-v4":
+            if assignment.get("schema") != "workflow/worker-assignment-v1":
                 continue
             worker_path = assignment.get("worktree")
             if not worker_path or not is_inside(cwd_path, str(worker_path)):
+                continue
+            task = _private_json(coordinator_path.parent / "tasks" / str(assignment.get("wave_id")) / f"{assignment.get('task_id')}.json") or {}
+            unsigned = dict(assignment)
+            declared = unsigned.pop("assignment_digest", None)
+            digest = hashlib.sha256(json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+            if (assignment.get("owner") != "agentic-sdlc" or task.get("worker_session_hash") != session_hash
+                    or task.get("assignment_digest") != declared or digest != declared):
                 continue
             expected_head = str(assignment.get("base_head") or "")
             result_path = (
@@ -447,14 +512,25 @@ def _registered_identity(
     return actual_root, True, None
 
 
-def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME) -> ActiveRun | None:
+def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME, session_id: str | None = None) -> ActiveRun | None:
     cwd_path = resolve_path(cwd)
     runs_root = codex_home.expanduser() / "sdlc-runs"
+    session = session_id or native_session_id()
+    if not session:
+        return None
+    identity = hashlib.sha256(session.encode()).hexdigest()
+    binding = _private_json(runs_root / "bindings" / (identity + ".json")) or {}
+    bound_path = None
+    if (binding.get("schema") == "workflow/session-binding-v1" and binding.get("owner") == "agentic-sdlc"
+            and binding.get("session_sha256") == identity):
+        candidate = Path(str(binding.get("run_dir", "")))
+        if candidate.is_absolute() and candidate.parent.parent == runs_root:
+            bound_path = candidate
     if not runs_root.exists():
         return None
     for lock_path in sorted(runs_root.glob("*/active.lock")):
         try:
-            lock = load_json(lock_path)
+            lock = _private_json(lock_path)
         except json.JSONDecodeError:
             continue
         if not lock:
@@ -469,7 +545,12 @@ def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME) -> ActiveRun
             continue
         project_id = str(lock.get("project_id") or project_dir.name)
         run_id = str(lock.get("run_id") or run_dir.name)
-        if is_inside(cwd_path, project_root):
+        coordinator_owned = (bound_path == run_dir and lock.get("owner_session_hash") == identity
+                             and binding.get("project_root") == str(project_root))
+        if coordinator_owned:
+            objective = _private_json(run_dir / "objective.json") or {}
+            coordinator_owned = binding.get("objective_id") == objective.get("objective_id")
+        if coordinator_owned and is_inside(cwd_path, project_root):
             return ActiveRun(
                 project_id=project_id,
                 project_root=project_root,
@@ -480,9 +561,9 @@ def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME) -> ActiveRun
                 canonical_project_root=project_root,
                 execution_role="project",
             )
-        found = _execution_registration(run_dir, cwd_path)
+        found = _execution_registration(run_dir, cwd_path, identity, coordinator_owned)
         if found is None:
-            if is_inside(cwd_path, run_dir / "worktrees"):
+            if coordinator_owned and is_inside(cwd_path, run_dir / "worktrees"):
                 return ActiveRun(
                     project_id=project_id,
                     project_root=resolve_project_root(cwd_path),
@@ -524,9 +605,9 @@ def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME) -> ActiveRun
 
 
 def load_active_state(
-    cwd: Path | str,
+    cwd: Path | str, session_id: str | None = None,
 ) -> tuple[ActiveRun | None, dict[str, Any], dict[str, Any], dict[str, Any]]:
-    active = load_active_run(cwd)
+    active = load_active_run(cwd, session_id=session_id)
     if active is None:
         return None, {}, {}, {}
     run_state = load_json(active.run_json_path) or {}

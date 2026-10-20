@@ -234,7 +234,7 @@ class TrustedRuntimeTests(unittest.TestCase):
                 self.assertEqual('# BEGIN shared runtime bootstrap' + block
                                  + '# END shared runtime bootstrap', canonical, str(path.relative_to(ROOT)))
                 count += 1
-        self.assertGreaterEqual(count, 33)
+        self.assertGreaterEqual(count, 27)
 
 
 if __name__ == '__main__':

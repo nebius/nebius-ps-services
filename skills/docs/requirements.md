@@ -23,6 +23,12 @@ reviewable supporting assets.
 - AC-003: Skill instructions, examples, and generated public artifacts contain
   no secrets, private endpoints, customer data, or environment-specific
   credentials.
+- AC-004: Local single-skill and parent-catalog installations of the same
+  physical skill directory recognize one another as the same skill source.
+  Ownership converges to the selected source without changing unrelated skills.
+- AC-005: Identical shared hook payloads produce one installed file and one
+  registration per event without a duplicate-destination notice. Conflicting
+  payloads fail preflight before skill or hook writes.
 
 #### Negative Criteria
 
@@ -714,12 +720,12 @@ continuation or second assistant report is created.
 
 <!-- /REQUIREMENT: REQ-008 -->
 
-<!-- REQUIREMENT: REQ-009 status=active priority=P0 type=feature -->
+<!-- REQUIREMENT: REQ-009 status=superseded priority=P0 type=feature -->
 ### REQ-009: Capture and route bound-session prompt intent safely
 
 #### User Story
 
-Task Implementer and Agentic SDLC users need every direct prompt to reach the
+Implement and Agentic SDLC users need every direct prompt to reach the
 current agent normally. When the current Codex session is explicitly bound to
 an active managed objective, eligible material intent should also be captured
 in that objective's canonical prompt without turning capture into an execution
@@ -764,7 +770,7 @@ gate or requiring the user to locate and edit the prompt file.
   Codex session and current-turn claim. An already-accepted immutable
   projection may complete its exact merge and consume transition, but an older
   staged event must never be classified from later conversation context.
-- AC-008: Within an explicitly bound Task Implementer session, the primary
+- AC-008: Within an explicitly bound Implement session, the primary
   checkout project and manifest-proven managed-lane project resolve as one
   logical active objective for capture, registry updates, and prompt-result
   validation. The alias does not establish a fresh-session binding, and
@@ -779,7 +785,7 @@ gate or requiring the user to locate and edit the prompt file.
   in their original namespace. Event-v2 does not read, migrate, rewrite, or
   delete them, and it has no legacy compatibility path.
 - AC-012: Manual prompt-file edits never auto-run and remain effective only
-  through an explicit Task Implementer or SDLC `run` invocation.
+  through an explicit Implement or SDLC `run` invocation.
 - AC-013: Source implementation, hook installation, hook registration and
   trust, restart, and fresh-session behavior remain separately reported proof
   gates.
@@ -789,7 +795,7 @@ gate or requiring the user to locate and edit the prompt file.
 - NC-001: Unbound, ambiguous, Stop-generated continuation, subagent, no-op,
   sensitive, stale-session, failed-capture, or replayed turns must not update an
   objective, but prompt-intake policy must not prevent the direct user turn
-  from running. A unique active Task Implementer or SDLC objective must not
+  from running. A unique active Implement or SDLC objective must not
   make an otherwise unbound fresh session capture-eligible. An unbound direct
   turn emits no prompt-intake context or state even when its content matches
   the capture-specific secret detector.
@@ -943,7 +949,7 @@ real user installation remains a later rollout.
 
 Users need one semantically explicit commit request to commit the complete local
 repository diff even when related changes span multiple project folders,
-without weakening repository instructions, Task Implementer, Worktree,
+without weakening repository instructions, Implement, Worktree,
 Agentic SDLC, or transaction-owned safety.
 
 #### Acceptance Criteria
@@ -978,9 +984,9 @@ Agentic SDLC, or transaction-owned safety.
   folders may commit together without project-lifecycle attestations. The
   original task authorization plus transaction-owned Git, branch, Worktree,
   secret, and workflow-conflict checks remain authoritative.
-- AC-005: Task Implementer worker commits and Worktree integration commits use
+- AC-005: Implement worker commits and Worktree integration commits use
   their exact delegated claims, and interrupted exact-child adoption revalidates
-  that delegated ownership before completing the claim. Dirty Task Implementer
+  that delegated ownership before completing the claim. Dirty Implement
   source checkouts direct the user to a separate explicit `$commit`, and active
   Agentic SDLC continues to require `sdlc-commit`. Task start and base-state
   recovery return one transient canonical commit context with the exact
@@ -1048,7 +1054,7 @@ Agentic SDLC, or transaction-owned safety.
   environment that can reshape repository discovery or state remains denied;
   the helper's private preview index is the only permitted index override.
 - NC-002: `$commit` must not discover, integrate, promote, clean, or advance
-  Task Implementer lanes, Worktree children, or Agentic SDLC execution state.
+  Implement lanes, Worktree children, or Agentic SDLC execution state.
 - NC-003: The transaction must not persist prompt bodies, diff contents,
   secrets, private endpoints, commit messages, or repository file contents in
   private authorization and claim state.
@@ -1073,7 +1079,7 @@ prove substituting its fingerprint fails before staging.
 Cover root and sibling project changes, pre-staged and untracked files,
 renames/deletions, linked worktrees, default/protected branches, conflicts,
 secret-like content, malformed commands and managed state, merge commits, drift
-at each transition, commit-hook mutation, duplicate execution, Task Implementer
+at each transition, commit-hook mutation, duplicate execution, Implement
 and Worktree delegation, active/released Agentic SDLC state, receipt-bound semantic action assertions, replay rejection, and nonauthorizing
 conversational or quoted turns.
 Also cover contradictory explicit origin markers and repository-shaping Git
@@ -1088,12 +1094,12 @@ absence of a second commit on recovery.
 
 <!-- /REQUIREMENT: REQ-011 -->
 
-<!-- REQUIREMENT: REQ-012 status=active priority=P0 type=feature -->
-### REQ-012: Checkpoint a dirty persistent Task Implementer lane before a run
+<!-- REQUIREMENT: REQ-012 status=superseded priority=P0 type=feature -->
+### REQ-012: Checkpoint a dirty persistent Implement lane before a run
 
 #### User Story
 
-Task Implementer users need one explicit `run` invocation to preserve a
+Implement users need one explicit `run` invocation to preserve a
 coherent dirty persistent lane as the next generation baseline, including
 related changes that span repository root and sibling project folders, without
 manually committing, stashing, resetting, or cleaning the managed checkout.
@@ -1105,7 +1111,7 @@ manually committing, stashing, resetting, or cleaning the managed checkout.
   first generation. A clean candidate keeps the current `HEAD` and creates no
   commit.
 - AC-002: A dirty candidate uses repository-root `git add -A`, normal commit
-  hooks, and one fixed Task Implementer checkpoint message to create one
+  hooks, and one fixed Implement checkpoint message to create one
   single-parent direct-child commit containing staged, unstaged, deleted,
   renamed, and untracked non-ignored changes across the whole lane.
 - AC-003: Every changed lane path, including both sides of a rename, becomes an
@@ -1115,7 +1121,7 @@ manually committing, stashing, resetting, or cleaning the managed checkout.
 - AC-004: Worktree owns one recoverable checkpoint-and-generation-open
   transaction that binds the lane, run, workspace, branch, pre-checkpoint
   `HEAD`, status digest, candidate tree, complete changed paths, and claims.
-  Task Implementer persists the preparation token, candidate tree, path digest,
+  Implement persists the preparation token, candidate tree, path digest,
   and claims digest, pauses dirty candidates for review, and the open consumes
   only that exact evidence. The resulting checkpoint `HEAD` becomes the lane,
   lease, interop, coordinator, and first-wave baseline before task resources
@@ -1141,7 +1147,7 @@ manually committing, stashing, resetting, or cleaning the managed checkout.
   contents, repository file contents, secrets, private endpoints, or commit
   message input.
 - NC-003: A checkpoint must not bypass applicable repository instructions,
-  weaken Task Implementer or Worktree ownership gates, silently absorb an
+  weaken Implement or Worktree ownership gates, silently absorb an
   unresolved cross-project ownership conflict, or create task resources before
   its exact generation baseline is durable. Project lifecycle status is
   advisory.
@@ -1171,18 +1177,18 @@ post-checkpoint generation baseline, and no second commit on retry.
 
 <!-- /REQUIREMENT: REQ-012 -->
 
-<!-- REQUIREMENT: REQ-013 status=active priority=P1 type=feature -->
-### REQ-013: Reopen an existing Task Implementer workspace without lane mutation
+<!-- REQUIREMENT: REQ-013 status=superseded priority=P1 type=feature -->
+### REQ-013: Reopen an existing Implement workspace without lane mutation
 
 #### User Story
 
-Task Implementer users need one explicit command from the primary project or
+Implement users need one explicit command from the primary project or
 its owning managed lane to reopen the same generated workspace after an editor
 window closes, without knowing private workspace or worktree paths.
 
 #### Acceptance Criteria
 
-- AC-001: `$task-implementer workspace reuse [project-folder]` defaults to the
+- AC-001: `$implement workspace reuse [project-folder]` defaults to the
   current directory and resolves exactly the current repository, source ref,
   and repo-relative project scope. Primary-project and owning-lane invocations
   resolve the same workspace; every other caller Git root is rejected even if
@@ -1234,11 +1240,11 @@ and independently verify unchanged Git and private workflow state.
 <!-- /REQUIREMENT: REQ-013 -->
 
 <!-- REQUIREMENT: REQ-014 status=superseded priority=P0 type=feature -->
-### REQ-014: Bridge Task Implementer project contracts through the owner lifecycle
+### REQ-014: Bridge Implement project contracts through the owner lifecycle
 
 #### User Story
 
-Task Implementer users need one explicit `run` to move from a reviewed lane
+Implement users need one explicit `run` to move from a reviewed lane
 checkpoint into worker dispatch without manually reconciling incompatible
 private project-instruction bundles or bypassing the selected-project
 lifecycle.
@@ -1246,8 +1252,8 @@ lifecycle.
 #### Acceptance Criteria
 
 - AC-001: The project lifecycle admits a canonical project-instructions
-  inspect or render command bound to a Task Implementer run-owned bundle only
-  after a trusted, read-only Task Implementer adapter proves the exact
+  inspect or render command bound to a Implement run-owned bundle only
+  after a trusted, read-only Implement adapter proves the exact
   workspace, run, active wave, integration checkout, selected project, source
   lane, canonical installed or sibling-source helpers, action, and every
   action-specific private path. First preparation is bound to the original
@@ -1275,11 +1281,11 @@ lifecycle.
   helper's validation, repository-mutation, and terminal-state contracts. Task
   Implementer dispatch continues to replay the exact run-owned render against
   the clean contract commit.
-- AC-005: The public Task Implementer interface remains exactly five actions,
+- AC-005: The public Implement interface remains exactly five actions,
   and users are never asked to supply lifecycle session paths, run IDs, wave
   IDs, integration paths, or an adapter attestation.
 - AC-006: When the selected-project hook is bound to the persistent lane, it
-  may admit an exact Task Implementer worker `prepare`, `execute`, or `review`
+  may admit an exact Implement worker `prepare`, `execute`, or `review`
   commit transaction only after the read-only adapter proves the active
   capacity batch, assignment digest, running task plane, worker session,
   worker worktree, canonical commit evidence, original command digest, and
@@ -1297,9 +1303,9 @@ lifecycle.
   basename lookalike must remain denied.
 - NC-002: The bridge must not make every external project-instructions command
   lifecycle-neutral, weaken current-session evidence for ordinary work, or
-  let Task Implementer author lifecycle state directly.
+  let Implement author lifecycle state directly.
 - NC-003: The lifecycle impact path must not infer a successful repository
-  mutation from a failed Task Implementer command or from read-only workspace,
+  mutation from a failed Implement command or from read-only workspace,
   intake, verification, reuse, integration inspection, or help actions.
 - NC-004: Cross-worktree commit admission must not authorize raw Git, a
   coordinator-root transaction, an undispatched task, a sibling worktree, a
@@ -1308,7 +1314,7 @@ lifecycle.
 #### Validation Method
 
 Use disposable linked-worktree repositories and isolated Codex homes to submit
-the real Task Implementer run-owned project-instructions command through the
+the real Implement run-owned project-instructions command through the
 lifecycle hook and to observe the post-`wave-plan` lifecycle transition.
 
 #### Test Method
@@ -1331,12 +1337,12 @@ adapter ceremony.
 
 <!-- /REQUIREMENT: REQ-014 -->
 
-<!-- REQUIREMENT: REQ-015 status=active priority=P0 type=feature -->
+<!-- REQUIREMENT: REQ-015 status=superseded priority=P0 type=feature -->
 ### REQ-015: Recover missing active-wave worktree paths without discarding evidence
 
 #### User Story
 
-Task Implementer coordinators need an owner-supported way to continue a
+Implement coordinators need an owner-supported way to continue a
 stopped run when an active wave's worker or integration directory disappears
 but the Worktree lease, branch, and Git administrative registration remain,
 including an integrated checkout that disappears before promotion validation.
@@ -1404,12 +1410,12 @@ independently verify that no product commit or promotion was inferred.
 
 <!-- /REQUIREMENT: REQ-015 -->
 
-<!-- REQUIREMENT: REQ-016 status=active priority=P0 type=feature -->
+<!-- REQUIREMENT: REQ-016 status=superseded priority=P0 type=feature -->
 ### REQ-016: Prove prompt-revision impact before workflow progression
 
 #### User Story
 
-Task Implementer and Agentic SDLC users need a semantic edit to an editable
+Implement and Agentic SDLC users need a semantic edit to an editable
 objective prompt to be reflected in the canonical project contract, or proven
 already satisfied, before an existing execution plan can continue. Users also
 need concise status that explains whether the latest accepted revision changed
@@ -1457,7 +1463,7 @@ the contract without exposing prompt-derived content or private digests.
   coordinator cannot adopt the latest material revision as its historical
   basis merely because its old plan bytes still match. Terminal history remains
   readable as historical state without fabricating retroactive evidence.
-- AC-008: Task Implementer and Agentic SDLC status report the public prompt
+- AC-008: Implement and Agentic SDLC status report the public prompt
   reference and revision, editable-versus-accepted snapshot state, semantic
   edit detection, impact classification, mapped public record IDs or bounded
   reason category, and retain/replan/clarification action. Status never exposes
@@ -1465,7 +1471,7 @@ the contract without exposing prompt-derived content or private digests.
   run paths, or prompt-derived digest values. Existing editable prompt-path
   output remains unchanged.
 - AC-009: The shared impact validator remains an internal
-  `maintain-project-specs` owner boundary. Task Implementer and Agentic SDLC
+  `maintain-project-specs` owner boundary. Implement and Agentic SDLC
   remain adapters with separate workflow roots and retain their explicit
   public `run` boundary.
 
@@ -1506,12 +1512,12 @@ message and that no prompt hash header is created.
 
 <!-- /REQUIREMENT: REQ-016 -->
 
-<!-- REQUIREMENT: REQ-017 status=active priority=P0 type=feature -->
+<!-- REQUIREMENT: REQ-017 status=superseded priority=P0 type=feature -->
 ### REQ-017: Correct a reviewed wave without promoting known-bad integration
 
 #### User Story
 
-Task Implementer coordinators need blockers found by combined integration
+Implement coordinators need blockers found by combined integration
 review to be fixed by isolated workers while the reviewed wave remains
 unpromoted and all accepted worker evidence remains intact.
 
@@ -1568,12 +1574,12 @@ not move until the corrected integration passes review and promotes once.
 
 <!-- /REQUIREMENT: REQ-017 -->
 
-<!-- REQUIREMENT: REQ-018 status=active priority=P0 type=feature -->
-### REQ-018: Resume interrupted Task Implementer runs from authoritative state
+<!-- REQUIREMENT: REQ-018 status=superseded priority=P0 type=feature -->
+### REQ-018: Resume interrupted Implement runs from authoritative state
 
 #### User Story
 
-Task Implementer users need to rerun the same accepted prompt after any
+Implement users need to rerun the same accepted prompt after any
 interruption without duplicating completed work, losing retained evidence, or
 requiring knowledge of private coordinator commands.
 
@@ -1690,7 +1696,7 @@ requiring knowledge of private coordinator commands.
 - NC-002: Stale heartbeats, process identifiers, elapsed time, Markdown status,
   or missing local paths alone must not prove worker termination or authorize
   cleanup, recovery, promotion, or finalization.
-- NC-003: The recovery contract must not add a sixth public Task Implementer
+- NC-003: The recovery contract must not add a sixth public Implement
   action, a public resume flag, support for coordinator-v1 through v6, a
   compatibility execution path, or coordinator-authored product changes.
 - NC-004: An interrupted transition must not be abandoned in order to begin a
@@ -1887,12 +1893,12 @@ revisit trigger.
 
 <!-- /REQUIREMENT: REQ-019 -->
 
-<!-- REQUIREMENT: REQ-020 status=active priority=P0 type=feature -->
-### REQ-020: Report concise Task Implementer lane progress from machine evidence
+<!-- REQUIREMENT: REQ-020 status=superseded priority=P0 type=feature -->
+### REQ-020: Report concise Implement lane progress from machine evidence
 
 #### User Story
 
-Task Implementer users need one short, human-readable view of the persistent
+Implement users need one short, human-readable view of the persistent
 lane, current or latest run, temporary workers, promoted work, remaining work,
 and next public action without exposing changed files or disturbing execution.
 
@@ -1903,7 +1909,7 @@ and next public action without exposing changed files or disturbing execution.
   review, lane promotion/release, source observation, queued-prompt status, and
   a structured next action. Its immutable finalization contract is unchanged.
 - AC-002: Internal `lane-report` returns hard-cut
-  `task-implementer/lane-report-v2` with current or latest run progress,
+  `implement/lane-report-v2` with current or latest run progress,
   persistent-lane generation totals, a bounded current step, remaining steps,
   and one structured next public action.
 - AC-003: Current-run task totals come from coordinator-v7 wave indexes. A task
@@ -1925,11 +1931,11 @@ and next public action without exposing changed files or disturbing execution.
   queue activation, and returned exactly by `ALREADY_COMPLETE`. Interrupted
   finalization is idempotent and blocks another generation until complete.
 - AC-008: Clean source and lane state reports the exact primary-project
-  `$task-implementer integrate "<primary-project-path>"` command. A dirty
+  `$implement integrate "<primary-project-path>"` command. A dirty
   primary first directs the user to invoke `$commit` there.
 - AC-009: The generated workspace labels its unchanged lane path
   `CODE — MANAGED PERSISTENT LANE` and supplies one manual
-  `Task Implementer: Show Lane Status` task. It renders concise human text by
+  `Implement: Show Lane Status` task. It renders concise human text by
   default, retains explicit JSON for machine callers, and uses a cleared
   dedicated terminal without echoing the invocation or stealing focus.
 - AC-010: Generated workspace preflight classifies current, the exact previous
@@ -1939,7 +1945,7 @@ and next public action without exposing changed files or disturbing execution.
 - AC-011: Reporting takes two complete bounded observations and emits only a
   matching validated snapshot. One retry is allowed; continued movement
   returns `WORKSPACE_BUSY` without partial counts, a lock-file write, or
-  blocking the Task Implementer writer.
+  blocking the Implement writer.
 - AC-012: Before coordinator-v7 exists, the report says planning is in progress
   and totals are unavailable. When no run is active it uses only the latest
   sealed pending summary, and legacy-only history remains explicitly
@@ -1947,7 +1953,7 @@ and next public action without exposing changed files or disturbing execution.
 - AC-013: Human and JSON lane reports contain no changed-file information,
   file paths, comparison statistics, commits, branch names, prompt content,
   private identities, or embedded run summaries, and their size is bounded.
-- AC-014: The public Task Implementer interface remains exactly five actions;
+- AC-014: The public Implement interface remains exactly five actions;
   hooks and the Worktree mutation API are unchanged, and `lane-report` receives
   no coordinator privilege.
 
@@ -2304,7 +2310,7 @@ quality as separate evidence states.
 
 #### User Story
 
-Codex users need ordinary work, Task Implementer runs, and Agentic SDLC runs
+Codex users need ordinary work, Implement runs, and Agentic SDLC runs
 to remain independent from retired private lifecycle phases, seals, waivers,
 and project-instruction reload state without weakening canonical project-spec
 maintenance or workflow-owned safety.
@@ -2319,8 +2325,8 @@ maintenance or workflow-owned safety.
   receipts, render failures, ownership conflicts, lock contention, maintenance
   failures, and reload recommendations produce only bounded, redacted advisory
   diagnostics.
-- AC-003: Task Implementer planning, dispatch, integration, promotion,
-  cleanup, resume, and finalization depend only on Task Implementer-owned
+- AC-003: Implement planning, dispatch, integration, promotion,
+  cleanup, resume, and finalization depend only on Implement-owned
   prompt, plan, task, claim, worktree, evidence, Git, and recovery state.
   Accepted root intent and the canonical v2 project-spec receipt are required
   before spec-dependent planning and dispatch; historical lifecycle phase,
@@ -2337,7 +2343,7 @@ maintenance or workflow-owned safety.
   workflow checks, but bind to accepted prompt revisions, semantic contract
   inputs, the canonical spec pair, and locked plans instead of historical
   lifecycle receipts.
-- AC-006: Task Implementer and Agentic SDLC never apply project instructions
+- AC-006: Implement and Agentic SDLC never apply project instructions
   automatically or stop for `reload_required`. They may report a recommended
   change; explicit project-instruction mutation remains a separately invoked
   operation with its own filesystem, ownership, and recovery safety.
@@ -2355,7 +2361,7 @@ maintenance or workflow-owned safety.
 
 #### Negative Criteria
 
-- NC-001: Advisory lifecycle conversion must not weaken Task Implementer or
+- NC-001: Advisory lifecycle conversion must not weaken Implement or
   SDLC authorization, secret handling, destructive-action approval, worker
   ownership, test and review evidence, exact-SHA promotion, retry budget, or
   recovery invariants.
@@ -2371,7 +2377,7 @@ maintenance or workflow-owned safety.
 
 #### Validation Method
 
-Run hook, Task Implementer, Agentic SDLC, project-instruction, maintenance,
+Run hook, Implement, Agentic SDLC, project-instruction, maintenance,
 skill-structure, Markdown, code-review, and security checks. Report source,
 installed parity, fresh-session activation, and disposable workflow completion
 as separate evidence states.
@@ -2384,7 +2390,7 @@ with a workflow-owned negative control that must still stop.
 
 #### Evaluation Method
 
-Run disposable Task Implementer and SDLC workflows with historical lifecycle
+Run disposable Implement and SDLC workflows with historical lifecycle
 support absent or faulted, then repeat with one canonical-spec or
 workflow-owned safety failure. The historical-state failure must not gate the
 run, while the negative control must remain blocked.
@@ -2398,7 +2404,7 @@ run, while the negative control must remain blocked.
 
 Codex users need every direct root-user prompt to be classified consistently so
 durable project requirements and their designs remain current across ordinary
-sessions, Task Implementer, Agentic SDLC, and delegated worker execution.
+sessions, Implement, Agentic SDLC, and delegated worker execution.
 
 #### Acceptance Criteria
 
@@ -2426,7 +2432,7 @@ sessions, Task Implementer, Agentic SDLC, and delegated worker execution.
   workflow completion depend on project-spec state. SessionStart observes the
   actual canonical documents, and missing historical lifecycle state never
   produces `ADVISORY_UNAVAILABLE`.
-- AC-007: Task Implementer and Agentic SDLC use the canonical owner rather than
+- AC-007: Implement and Agentic SDLC use the canonical owner rather than
   independent parsers or schemas. Root agents classify and publish; workers
   inherit one root intent and return typed `spec_gaps` proposals without
   writing project specs. Worker path inventories preserve both sides of a
@@ -2459,12 +2465,12 @@ sessions, Task Implementer, Agentic SDLC, and delegated worker execution.
 
 #### Validation Method
 
-Run canonical parser, migration, transaction, hook, Task Implementer, Agentic
+Run canonical parser, migration, transaction, hook, Implement, Agentic
 SDLC, installer, skill-contract, Markdown, and changed-surface alignment checks.
 
 #### Test Method
 
-Exercise direct ordinary, Task Implementer, Agentic SDLC, worker, secret,
+Exercise direct ordinary, Implement, Agentic SDLC, worker, secret,
 continuation, ambiguity, concurrent writer, partial publication, v1 migration,
 pending design, implemented design, and independently verified design cases.
 Inject Git-head drift, external document writes, a swapped `docs` symlink, a
@@ -2479,19 +2485,19 @@ evidence lanes without inferring one from another.
 
 <!-- /REQUIREMENT: REQ-025 -->
 
-<!-- REQUIREMENT: REQ-026 status=satisfied priority=P1 type=feature -->
-### REQ-026: Explain branch-aware Task Implementer lane removal in help
+<!-- REQUIREMENT: REQ-026 status=superseded priority=P1 type=feature -->
+### REQ-026: Explain branch-aware Implement lane removal in help
 
 #### User Story
 
-Task Implementer users need report-only help to explain how to select an old
+Implement users need report-only help to explain how to select an old
 persistent lane for removal after the primary checkout has moved to another
 branch, without exposing a real user's local paths or adding another public
 workflow control.
 
 #### Acceptance Criteria
 
-- AC-001: `$task-implementer --help` and `$task-implementer -h` remain concise,
+- AC-001: `$implement --help` and `$implement -h` remain concise,
   report-only, and limited to the existing five public actions and documented
   positional arguments.
 - AC-002: Help explains that when the primary checkout is on a different branch
@@ -2510,7 +2516,7 @@ workflow control.
 
 #### Negative Criteria
 
-- NC-001: Help must not advise switching the Task Implementer lane itself to
+- NC-001: Help must not advise switching the Implement lane itself to
   another branch or imply that arbitrary worktrees can be removed.
 - NC-002: Help must not contain an observed username, repository path, lane
   identity, prompt content, or private workflow state.
@@ -2519,7 +2525,7 @@ workflow control.
 
 #### Validation Method
 
-Run the Task Implementer contract smoke test, strict stateful skill validation,
+Run the Implement contract smoke test, strict stateful skill validation,
 Markdown checks, changed-scope review and security lanes, canonical spec
 validation, and final alignment.
 
@@ -2532,7 +2538,7 @@ free.
 
 #### Evaluation Method
 
-In a separately installed fresh session, request Task Implementer help and
+In a separately installed fresh session, request Implement help and
 verify that it explains the fallback without inspecting the repository or
 revealing environment-specific paths. Keep that runtime observation separate
 from source validation.
@@ -2792,13 +2798,13 @@ Claude-native files while preserving personal configuration and shared workflows
 - AC-001: One sibling skill works from Codex and Claude, targeting CLAUDE_CONFIG_DIR or the native default, with explicit-only invocation and inspection-free help.
 - AC-002: Reconciliation preserves unrelated instructions and settings, patches only requested differences, backs up changed files only, and produces a no-write second run. Missing settings recover through exclusive private creation; malformed, unsafe or concurrently changed targets are rejected.
 - AC-003: Native user roles restrict tools to Read, Grep and Glob and inherit models. Context hooks advertise validated role candidates subject to effective override checks; existing Codex behavior remains intact.
-- AC-004: Trusted-local full access, automatic delegation, private Task Implementer storage and applicable MCP integrations are explicitly selected. Existing permissions and integrations remain unchanged absent specific authorization. Hook reinstalls preserve an existing operator delegation policy.
+- AC-004: Trusted-local full access, automatic delegation, private Implement storage and applicable MCP integrations are explicitly selected. Existing permissions and integrations remain unchanged absent specific authorization. Hook reinstalls preserve an existing operator delegation policy.
 - AC-005: Existing installer and plugin hook owners are reused, dependencies preflight before effects, competing installation routes are reported, and complete installations retain exactly one Stop arbiter.
 - AC-006: Deterministic tests and common two-host trigger/quality cases distinguish source, installed, runtime and comparative evidence. Missing authentication never counts as passing runtime evidence.
 
 #### Negative Criteria
 
-- NC-001: Do not relocate the catalog, add a duplicate hook bundle, copy private Codex state, or change Task Implementer and Agentic SDLC ownership or workflow protocol markers.
+- NC-001: Do not relocate the catalog, add a duplicate hook bundle, copy private Codex state, or change Implement and Agentic SDLC ownership or workflow protocol markers.
 - NC-002: Do not translate Codex config keys or AGENTS discovery rules into unsupported Claude settings, rewrite Claude application/auth state, or treat a subagent permissionMode as enforced read-only tools under a bypass parent.
 - NC-003: Source implementation does not install into real user homes, weaken managed restrictions, publish plugins, or copy secrets into recovery templates and logs.
 
@@ -2835,7 +2841,7 @@ supported functionality and its current source layout.
 - AC-002: Native extensions and strict whole-file conformity are reported separately. Required invocation restrictions and product-specific capabilities are retained; unknown or unavailable host support is never a universal compatibility pass.
 - AC-003: Actual pinned skills CLI discovery and copied installation for Codex and Claude run only in disposable locations and preserve required payloads and executable permissions. Missing resources, collisions or repeat-install divergence fail the check.
 - AC-004: Before editing each target, alignment captures its current working bytes and inventories actions, outputs, dependencies, metadata, hooks, authorization, state, idempotency and recovery. Compatibility changes preserve these contracts and use proportionate regression evidence.
-- AC-005: config-codex and config-claude retain their configured products. Task Implementer and Agentic SDLC retain worker/commit ownership, native identity, continuation and recovery. Unsupported capabilities are disclosed without weaker substitutions.
+- AC-005: config-codex and config-claude retain their configured products. Implement and Agentic SDLC retain worker/commit ownership, native identity, continuation and recovery. Unsupported capabilities are disclosed without weaker substitutions.
 - AC-006: Format, host policy, installation, runtime and comparative quality have separate evidence. Hook/runtime setup stays with native plugins and the existing local installer.
 
 #### Negative Criteria
@@ -2851,7 +2857,7 @@ skills; exercise standalone installed validation and isolated CLI payload parity
 #### Test Method
 
 Use typed YAML and distribution negative fixtures, retained catalog tests and
-focused configuration, Task Implementer and SDLC regressions.
+focused configuration, Implement and SDLC regressions.
 
 #### Evaluation Method
 
@@ -3499,7 +3505,7 @@ Ordinary create-pr performs complete local code review before publication and st
 - AC-006: PR-gated protection replaces the empty push-actor restriction; one approval, stale dismissal, conversations and strict required CI remain. Shared Actions identity is an explicit trust boundary.
 - AC-007: Unsupported queue or workflow-file merges stop for a maintainer without credential substitution.
 - AC-008: A trusted receipt precedes merge effects; completion and CI checkout accept only trusted operator-dispatched positive-review intents. Preserve immutable receipts, duplicate suppression, exact-result CI, Pages and publication guards.
-- AC-009: PR events, CI events and schedules update Required CI but produce no merge candidates. Completion schedules recover previously authorized operations only. MERGE_OPERATOR_IDS is the only merge-specific repository variable; no rollout toggles or metadata-only admission remain.
+- AC-009: PR events, CI events and completion recovery update Required CI but produce no merge candidates. Completion recovery resumes previously authorized operations only. MERGE_OPERATOR_IDS is the only merge-specific repository variable; no rollout toggles or metadata-only admission remain.
 - AC-010: Plain create-pr and review-pr never initiate merging. Explicit combined merge requests delegate once to merge-pr, which invokes parent-owned review-pr for every unmerged PR without recursive delegation. Remove create-pr --prepare-only; publication preparation-only modes remain.
 - AC-011: Before push or PR creation, create-pr delegates complete frozen candidate-diff analysis to nested read-only code-review. Parent-owned repairs require fresh validation and review. Reuse analysis only within the same root operation at unchanged head/base; always refresh GitHub identity, checks, objections, threads and mergeability. Preserve the original grant, receipt, targets, readiness deadline and publication checkpoint owner across handoffs.
 - AC-012: No scheduler or unattended agent initiates work. An operator starts the same local workflow for ordinary and Dependabot PRs, including major updates; dependency metadata never replaces review or CI.
@@ -3509,7 +3515,15 @@ Ordinary create-pr performs complete local code review before publication and st
 - AC-015: Review without checkout-dependent work leaves local refs and checkout alone. Checkout-dependent review switches back at completion or safe pause without integrating default history. Create-only from default leaves its new feature checked out; visiting existing targets switches back at the outer boundary.
 - AC-016: Following confirmed merge and verified destination containment, fetch that destination, fast-forward eligible existing local default/original branches and switch back to the original branch, including after CI or Pages failure/timeout. Preserve unique/diverged histories; never implicitly merge, rebase, reset or recreate missing refs. Resolve the actual default branch. Squash proof uses the authoritative result, not PR-head ancestry.
 - AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
-- AC-018: Completion candidate discovery must display the helper's sanitized failure reason, preserve every nonzero exit status and publish no targets on failure. Empty failure output still reports the exit status. Keep helper output contracts, API deadlines, receipt gates and effect permissions unchanged.
+- AC-018: Global completion discovery failures display a sanitized reason and original nonzero status and publish no targets. Target-specific receipt failures are isolated with blocked diagnostics and aggregate failure, while valid independent targets may proceed. Preserve API deadlines, receipt gates and effect permissions.
+
+- AC-019: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs.
+- AC-020: Completion events inspect only the producer run. Operator-dispatched merge intents and validated early result-CI routing receipts can route recovery, including failed CI. Routing identity never proves CI success. Preserve latest-attempt exact-result evidence. Target-specific malformed receipts block that target while independent valid targets proceed; authentication, permissions and incomplete global listings stop all effects.
+- AC-021: Keep the seven CI workflow identities and five result-dispatch inputs, trusted checkout ordering and success artifacts. Check policy, listener, path-filter and publication contract parity in baseline CI.
+- AC-022: Existing releases require a trusted immutable pre-publication manifest binding repository, tag object/commit, workflow run/attempt and every asset basename, size and SHA-256. Verify downloaded bytes. Missing evidence, transport/auth failures, partial or conflicting state block reconciliation; never treat errors as absence or overwrite published artifacts.
+- AC-023: Image SemVer tags are tag-triggered only (X.Y.Z and X.Y.Z-gSHA); manual builds use sha-SHA and optional main-only latest, with no release_version input. Serialize the destination image across preflight, push, digest verification and manifest using noncanceling queue:max. Verify all immutable aliases against trusted prior evidence before reuse and every remote digest after publication.
+- AC-024: Preserve service-specific release qualification and Helm catalog, metadata, package, anonymous-pull and digest checks. Share deterministic publication utilities without a privileged generic command workflow. github-workflows is the sole release/image YAML template owner; publisher skills delegate setup to it.
+- AC-025: Reviewer routing adds configured nonauthor reviewers for same-repository nondraft PRs using trusted base policy, and preserves manually requested users and teams. It never executes PR code or removes reviewers.
 
 #### Negative Criteria
 
@@ -3629,5 +3643,45 @@ Separate deterministic source proof from actual model routing, installation,
 Docker/browser application qualification and hosted publication evidence.
 
 <!-- /REQUIREMENT: REQ-045 -->
+<!-- REQUIREMENT: REQ-046 status=active priority=P0 type=feature -->
+### REQ-046: Direct objective implementation and SDLC workflows
+
+#### User Story
+
+Users need explicit workflows to consume conversation intent and deliver verified local changes without prompt files or persistent implementation lanes.
+
+#### Acceptance Criteria
+
+- AC-001: `$implement` and `$sdlc-start` accept an inline objective, the current unambiguous plan, or the same session's validated active binding. `continue [project-folder]` explicitly resumes across sessions. Help is side-effect free; unrelated objectives are never queued. SDLC retains its within-objective feature queue.
+- AC-002: Persist normalized outcome, scope, constraints, acceptance criteria, clarifications, provenance and revision ancestry; never capture raw turns, managed prompt files or prompt-history archives. Observation restores only an existing binding and never infers ownership or starts execution.
+- AC-003: Freeze objective revision, applicable spec receipts, plan, committed base, instructions/helpers, assignments, ownership and validation. Reject stale dispatch, admission, integration and promotion. Steering and cancellation fence work before writer quiescence and reconciliation; retain prior evidence and delivered commits.
+- AC-004: Steering is direct root-user input and uses the same statement-level requirements/design extraction and reconciliation as other prompts. Questions, status and execution-only instructions do not invent specification changes. Maintain Project Specs owns interpretation and paired publication through the registered integration checkout during execution and delivered checkout afterward. Workers report gaps. Execution-only/no-effect objectives do not require unnecessary specs.
+- AC-005: Implement uses one integration worktree per run, fresh task workers and existing Worktree transactions/locks/recovery. Execute committed history, preserve unrelated dirty files and block dependencies on uncommitted content.
+- AC-006: Automatically deliver to the unchanged clean original non-default branch. Source drift retains the verified result. Default or unknown-default starts deliver a feature branch and checkout while preserving the default. Reject detached/unborn starts; preserve managed outer ownership.
+- AC-007: Use a deterministic ready queue within frozen dependency waves, default at most four workers capped by observed native capacity, configuration and independent work. Refill only after termination, validated results and writer quiescence. Keep a full-wave integration barrier and stable task order. Serialize conflicting paths/resources and lease shared live targets exclusively per assignment. Unknown native capacity uses one worker.
+- AC-008: Preserve worker identity/ancestry/paths/evidence, combined validation/alignment, SDLC phase responsibilities, remediation budgets, promotion and cleanup, remote authorization and read-only post-promotion docs assessment.
+- AC-009: Rename the entire verifier to `$implement-test`, preserving no flags, `--create`, `--create --keep`, `--destroy` and private root `<agent-home>/implement-test`. Preserve supported SDLC verifier modes and canonical nested fixtures. Reject obsolete flat fixtures without conversion; retain application/database migration checks.
+- AC-010: Live trials invoke public workflow intake. Preserve owner-executed test receipts/counters, source/deployment identity and headless Playwright evidence. Separate deterministic, installed, native and application results; absent proof remains NOT_RUN/PARTIAL and harness intervention cannot certify PASS.
+- AC-011: Retire capture hooks, obsolete commands/names/state readers. Installer retirement removes only exact owned obsolete payloads/registrations and preserves foreign/custom hooks, private history and worktrees.
+
+#### Negative Criteria
+
+- NC-001: No aliases, compatibility wrappers, state conversion, nested coordinators or second Git lifecycle.
+- NC-002: No source commit/push/publication, SDLC Git-prerequisite relaxation or greenfield bootstrapping.
+
+#### Validation Method
+
+Use focused deterministic and real disposable Git checks, align and align-skill, then verify owned Codex/Claude installations independently.
+
+#### Test Method
+
+Cover direct/plan/continue intake, stale basis, invalid ownership, steering/cancellation, crash recovery, genuine overlap/refill/conflicts/fallback, clean/dirty/drift/default delivery, exact retirement and idempotent cleanup.
+
+#### Evaluation Method
+
+Run fresh native and disposable application trials through both public workflows; report observed concurrency and unavailable evidence separately.
+
+<!-- /REQUIREMENT: REQ-046 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

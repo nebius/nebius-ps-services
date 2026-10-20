@@ -1,7 +1,7 @@
-name: pr-reviewer-trimmer
+name: PR reviewer routing
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - reopened
@@ -17,135 +17,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  load-reviewers:
-    name: pr-reviewer-trimmer-load-reviewers
+  request-reviewers:
+    name: Request configured reviewers
     if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    outputs:
-      author_is_managed: ${{ steps.policy.outputs.author_is_managed }}
-      reviewers_json: ${{ steps.policy.outputs.reviewers_json }}
+    timeout-minutes: 5
     steps:
-      - name: Load reviewer policy
-        id: policy
+      - name: Add reviewers from trusted base policy
         uses: actions/github-script@v9
         with:
           script: |
+            const {owner, repo} = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number});
+            if (pr.state !== 'open' || pr.draft || pr.head.repo?.full_name !== `${owner}/${repo}`) return;
             const path = '.github/REVIEWERS';
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const pullRequest = context.payload.pull_request;
-            const ref = pullRequest.base.sha;
-
             let response;
             try {
-              response = await github.rest.repos.getContent({
-                owner,
-                repo,
-                path,
-                ref,
-              });
+              response = await github.rest.repos.getContent({owner, repo, path, ref: pr.base.sha});
             } catch (error) {
-              if (error.status === 404) {
-                core.warning(
-                  `${path} was not found at base commit ${ref}. Skipping reviewer trimming until the policy file exists on the base branch.`
-                );
-                core.setOutput('author_is_managed', 'false');
-                core.setOutput('reviewers_json', '[]');
-                return;
-              }
-              throw error;
+              if (error.status !== 404) throw error;
+              core.notice('No reviewer policy on the trusted base; no requests added.');
+              return;
             }
-
             if (Array.isArray(response.data) || response.data.type !== 'file') {
-              throw new Error(`${path} must be a regular file.`);
+              throw new Error('Reviewer policy must be a regular file.');
             }
-
             const content = Buffer.from(response.data.content, response.data.encoding).toString('utf8');
-            const reviewers = [...new Set(
-              content
-                .split(/\r?\n/)
-                .map((line) => line.replace(/#.*/, '').trim())
-                .filter(Boolean)
-                .map((line) => line.replace(/^@/, '').trim().toLowerCase())
-                .filter(Boolean)
-            )];
-
-            if (reviewers.length === 0) {
-              throw new Error(`${path} does not contain any GitHub usernames.`);
+            const reviewers = [...new Set(content.split(/\r?\n/)
+              .map(line => line.replace(/#.*/, '').trim().replace(/^@/, '').toLowerCase()).filter(Boolean))];
+            if (!reviewers.length || reviewers.some(login => !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/.test(login))) {
+              throw new Error('Reviewer policy must contain GitHub usernames.');
             }
-
-            const author = (pullRequest.user.login || '').toLowerCase();
-            const authorIsManaged = reviewers.includes(author);
-
-            core.info(`Managed reviewers: ${reviewers.join(', ')}`);
-            core.info(`PR author: ${author}`);
-            core.info(`Author is managed: ${authorIsManaged}`);
-
-            core.setOutput('author_is_managed', String(authorIsManaged));
-            core.setOutput('reviewers_json', JSON.stringify(reviewers));
-
-  trim-reviewers:
-    name: pr-reviewer-trimmer
-    needs: load-reviewers
-    if: needs.load-reviewers.result == 'success' && needs.load-reviewers.outputs.author_is_managed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trim requested reviewers
-        uses: actions/github-script@v9
-        env:
-          REVIEWERS_JSON: ${{ needs.load-reviewers.outputs.reviewers_json }}
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const pull_number = context.payload.pull_request.number;
-            const prAuthor = (context.payload.pull_request.user.login || '').toLowerCase();
-            const managedReviewers = JSON.parse(process.env.REVIEWERS_JSON || '[]');
-
-            const requested = await github.rest.pulls.listRequestedReviewers({
-              owner,
-              repo,
-              pull_number,
-            });
-
-            const requestedUsers = requested.data.users.map((user) => user.login);
-            const requestedTeams = requested.data.teams.map((team) => team.slug);
-
-            const reviewersToRemove = requestedUsers.filter(
-              (login) => !managedReviewers.includes(login.toLowerCase())
-            );
-            const teamReviewersToRemove = [...requestedTeams];
-
-            if (reviewersToRemove.length > 0 || teamReviewersToRemove.length > 0) {
-              await github.rest.pulls.removeRequestedReviewers({
-                owner,
-                repo,
-                pull_number,
-                reviewers: reviewersToRemove,
-                team_reviewers: teamReviewersToRemove,
-              });
+            const {data: requested} = await github.rest.pulls.listRequestedReviewers({owner, repo, pull_number});
+            const existing = new Set(requested.users.map(user => user.login.toLowerCase()));
+            const additions = reviewers.filter(login => login !== pr.user.login.toLowerCase() && !existing.has(login));
+            if (additions.length) {
+              await github.rest.pulls.requestReviewers({owner, repo, pull_number, reviewers: additions});
             }
-
-            const requestedUserSet = new Set(requestedUsers.map((login) => login.toLowerCase()));
-            const reviewersToRequest = managedReviewers.filter(
-              (login) => login !== prAuthor && !requestedUserSet.has(login)
-            );
-
-            if (reviewersToRequest.length > 0) {
-              await github.rest.pulls.requestReviewers({
-                owner,
-                repo,
-                pull_number,
-                reviewers: reviewersToRequest,
-              });
-            }
-
-            core.info(`Removed user reviewers: ${reviewersToRemove.join(', ') || 'none'}`);
-            core.info(`Removed team reviewers: ${teamReviewersToRemove.join(', ') || 'none'}`);
-            core.info(`Requested managed reviewers: ${reviewersToRequest.join(', ') || 'none'}`);
-
-            if (managedReviewers.includes(prAuthor)) {
-              core.info(
-                `Skipped requesting ${prAuthor} because GitHub does not allow requesting the PR author as a reviewer.`
-              );
-            }
+            core.info(`Added ${additions.length} configured reviewer(s); existing requests preserved.`);

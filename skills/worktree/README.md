@@ -37,6 +37,13 @@ Codex and Claude are used independently. This lock coordinates callers within
 one selected installation; it does not provide cross-agent synchronization or
 workflow handoff.
 
+Implement uses the shared private `prepare-specs` transition to allocate its
+integration checkout before initial specification publication. The following
+`prepare` journals and commits only the published canonical pair, then freezes
+execution and creates worker waves. This preserves the accepted source and
+keeps initial spec changes out of uncommitted worker inputs. These are internal
+workflow transitions, not additional public Worktree actions.
+
 `--project` selects the returned starting directory; it is not a sparse
 checkout, branch argument, staging boundary, or changed-path restriction.
 
@@ -103,15 +110,9 @@ Use these boundaries:
   one whole-repository local child commit and then one source commit when the
   complete diffs are coherent and safe, no Git operation or conflict exists,
   and no integration reservation or orphan candidate exists.
-- Automatic integration commits apply only to ordinary children. A
-  resource-free Task Implementer `run` has its own private Worktree transaction:
-  `task-lane-generation-prepare` reserves the complete candidate tree, paths,
-  digest, and claims for review without real-index or history mutation; the
-  token-bound open then uses repo-root `git add -A` and normal hooks to create
-  at most one fixed-message direct-child checkpoint and atomically opens the
-  generation at that clean head. Hook mutation rotates the review token. Once a
-  Task Implementer or Agentic SDLC lease is active, nested/coordinated dirt
-  blocks and returns to its owning workflow.
+- Automatic integration commits apply only to ordinary children. Implement and
+  Agentic SDLC execute committed history through shared private workflow
+  transactions. Active coordinator leases keep nested dirt with its owner.
 - Each automatic commit uses repo-root `git add -A`, a truthful message, and
   normal hooks. The reviewed staged tree is bound to the resulting commit tree;
   hook-added content requires complete actual-commit review before integration.
@@ -170,14 +171,6 @@ candidate for non-mutating alignment/tests. Only that validated SHA may
 fast-forward the clean checked-out source branch. Cleanup remains a separate
 proof-gated action.
 
-Task Implementer adds one private recovery transition at this boundary. When
-combined review rejects an exact clean lane candidate, Worktree archives that
-commit under a candidate-specific compare-and-set ref, journals the findings
-digest, removes only the temporary candidate worktree and branch, releases the
-reservation, and returns the still-pending lane to correction-ready state. The
-source branch is unchanged. Repeating the transition is idempotent, and a later
-successful corrected integration removes the temporary archive ref.
-
 Agentic SDLC may use private nested worktrees inside one child. Its lease blocks
 outer integration until internal promotion, cleanup, alignment, and evidence
 gates finish. Managed Agentic SDLC remains pending
@@ -199,20 +192,13 @@ Removal keeps an exact private removal-intent snapshot until receipt, manifest,
 and resource revalidation finish; interruption at either deletion boundary is
 therefore retryable without losing the receipt compare-and-set anchor.
 
-Task Implementer uses a different private consumer boundary: Worktree owns its
-persistent per-project lane creation, monotonic generation leases,
-repository-wide claims, two-parent source integration, rearm, and removal
-primitives. Lane state and immutable generation receipts are separate from the
-general schema-v4 manifest, so ordinary public Worktree children remain
-compatible. Ordinary Task/Agentic coordinator lease acquisition also rejects a
-Task lane before mutation; workflows must use their own matching consumer
-boundary rather than nest or share execution state. The branch's `lane_id`,
-`source_ref`, and `incarnation` fields are one indivisible identity. Partial
-metadata fails closed, and a live lane whose branch or worktree matches but
-whose branch metadata is absent cannot fall through to ordinary managed-child
-classification. Public `$worktree integrate` and `$worktree remove` reject Task
-lanes; only `$task-implementer integrate` and `$task-implementer workspace
-remove` may drive those private lifecycle transitions.
+Implement and Agentic SDLC use the shared workflow execution substrate documented
+in [workflow-contract.md](references/workflow-contract.md). Accepted objectives,
+immutable bases, fresh task worktrees, slot refill, result admission and delivery
+share these Git lifecycle primitives. Execution bases also bind mandatory workflow
+references, supporting owner instructions, and the worker result schema, so
+contract drift is rejected before task dispatch. Obsolete persistent-lane state is rejected
+and retained without conversion or cleanup.
 
 Push and PR guards classify the primary and every linked checkout against Git
 metadata, ownership manifests, integration reservations, and nested lease

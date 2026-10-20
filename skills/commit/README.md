@@ -53,8 +53,9 @@ and observe a real prompt produce fresh receipt context before publication.
 ## Calls From Other Skills
 
 The parent task's authorization can cover a call to this shared skill; users
-need not repeat a standalone commit phrase. Existing Worktree and Task
-Implementer delegation stays exact. An authorized unmanaged `create-pr` task
+need not repeat a standalone commit phrase. Worktree integration delegation
+stays exact; Implement workers use their coordinator's `task-finish` owner.
+An authorized unmanaged `create-pr` task
 uses its own private continuation grant for successive independently reviewed
 commits and safe failed-hook retries. The PR skill owns pushes and checks;
 ordinary direct commit and commit-push tasks allow one actual commit plus safe
@@ -133,28 +134,18 @@ Final status report
   children, so a helper crash cannot leave a surviving writer unfenced.
 - Cancellation retires proven unused claims. Actual or uncertain effects remain
   recorded; exact result review is metadata-only and does not reopen the task.
-- Root schemas change together without converting legacy authority. Delegated
-  Task Implementer and Worktree schemas retain their existing contracts.
+- Root schemas change together without converting legacy authority. Worktree
+  integration retains its separate exact transaction contract.
 - Worktree ownership and direct commits share one common-repository lock within
   the selected agent installation. A
   direct claim refuses an active Worktree preparation or reservation for the
   same source ref, and malformed ownership or coordination records fail closed
   before staging. Active Agentic SDLC runs continue to own commits through
   `sdlc-commit`.
-- Task Implementer workers receive the same hidden transaction interface from
-  `task-start`, bound to their immutable assignment, running task plane, worker
-  session, branch, and base commit. It can refresh a stale preview before the
-  one direct-child commit, but cannot authorize a second commit. The helper
-  revalidates live worker ownership before adopting an interrupted exact-child
-  commit. This is delegated worker authorization, not an implicit root-user
-  `$commit`.
-  The transition returns a transient canonical `commit_context`: exact
-  PATH-canonical Python, helper, exact scope cwd, worker repository, raw
-  `CODEX_THREAD_ID`, evidence paths, and prepare argv. The separately returned
-  session fingerprint is persisted evidence only and is never a `--session-id`
-  value. This keeps mixed hook/worker Python versions usable while rejecting
-  non-PATH interpreters, arbitrary wrappers, alternate helpers, or weakened
-  owner checks.
+- Implement and Agentic SDLC workers leave changes uncommitted. The shared
+  coordinator-owned `task-finish` validates assignment identity, scoped changes
+  and evidence before committing. Root commit transactions reject obsolete
+  worker authorization and claim formats without modifying their history.
 
 ## Files
 

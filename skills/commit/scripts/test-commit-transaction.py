@@ -429,7 +429,7 @@ class CommitTransactionTest(TransactionFixture):
         self.begin()
         delegated = {
             "schema": transaction.AUTH_SCHEMA,
-            "owner": "task-implementer",
+            "owner": "implement",
             "state": "AUTHORIZED",
         }
         transaction._atomic_json(authorization, delegated)
@@ -2218,12 +2218,12 @@ class CommitTransactionTest(TransactionFixture):
         self.assertEqual(process.returncode, 0, stderr or stdout)
         self.assertEqual(json.loads(stdout)["status"], "committed")
 
-    def test_task_implementer_worker_evidence_authorizes_exact_worker_commit(
+    def test_obsolete_implement_worker_evidence_is_rejected_unchanged(
         self,
     ) -> None:
         self.seed_multi_project_diff()
         assignment_sha256 = "a" * 64
-        plane = self.codex_home / "task-implementer" / "runs" / "task-1.json"
+        plane = self.codex_home / "implement" / "runs" / "task-1.json"
         plane.parent.mkdir(parents=True, mode=0o700)
         plane.write_text(
             json.dumps(
@@ -2254,7 +2254,7 @@ class CommitTransactionTest(TransactionFixture):
                     "session_sha256": transaction._digest_text("session-1"),
                     "turn_sha256": assignment_sha256,
                     "prompt_sha256": assignment_sha256,
-                    "owner": "task-implementer",
+                    "owner": "implement",
                     "owner_evidence_path": str(plane),
                     "owner_evidence_sha256": assignment_sha256,
                     "allow_default_branch": False,
@@ -2267,69 +2267,18 @@ class CommitTransactionTest(TransactionFixture):
         )
         authorization.chmod(0o600)
         claim = transaction.expected_claim_path(self.root)
-        prepared = self.run_helper(
-            "prepare",
-            "--repo-root",
-            str(self.root),
-            "--session-id",
-            "session-1",
-            "--authorization",
-            str(authorization),
-            "--claim",
-            str(claim),
-        )
-        self.assertEqual(
-            json.loads(authorization.read_text(encoding="utf-8"))["state"],
-            "AUTHORIZED",
-        )
-        git(self.root, "add", "-A")
-        git(self.root, "commit", "-qm", "commit completed before worker recovery")
-        worker_evidence = json.loads(plane.read_text(encoding="utf-8"))
-        worker_evidence["state"] = "completed"
-        plane.write_text(
-            json.dumps(worker_evidence) + "\n",
-            encoding="utf-8",
-        )
-        plane.chmod(0o600)
+        before = {path: path.read_bytes() for path in (plane, authorization)}
+        original_head = git(self.root, "rev-parse", "HEAD")
+        original_index = git(self.root, "write-tree")
         blocked = self.run_helper(
-            "execute",
-            "--repo-root",
-            str(self.root),
-            "--session-id",
-            "session-1",
-            "--claim",
-            str(claim),
-            "--token",
-            str(prepared["token"]),
-            "--reviewed-tree",
-            str(prepared["candidate_tree"]),
-            "--message",
-            "Do not adopt a commit after worker ownership ended",
-            expected=2,
+            "prepare", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--authorization", str(authorization), "--claim", str(claim), expected=2,
         )
-        self.assertIn("worker commit ownership is stale", str(blocked["reason"]))
-        worker_evidence["state"] = "running"
-        plane.write_text(
-            json.dumps(worker_evidence) + "\n",
-            encoding="utf-8",
-        )
-        plane.chmod(0o600)
-        committed = self.run_helper(
-            "execute",
-            "--repo-root",
-            str(self.root),
-            "--session-id",
-            "session-1",
-            "--claim",
-            str(claim),
-            "--token",
-            str(prepared["token"]),
-            "--reviewed-tree",
-            str(prepared["candidate_tree"]),
-            "--message",
-            "Commit exact Task Implementer worker change",
-        )
-        self.assertEqual(committed["status"], "committed")
+        self.assertIn("owner is invalid", blocked["reason"])
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), original_head)
+        self.assertEqual(git(self.root, "write-tree"), original_index)
+        self.assertFalse(claim.exists())
 
 
 class CheckoutCompletionTest(TransactionFixture):

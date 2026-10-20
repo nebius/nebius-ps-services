@@ -630,28 +630,6 @@ def _validate_authorization(
             )
         if value["allow_default_branch"] != grant["allow_default_branch"]:
             raise TransactionError("default branch policy changed", "scope_changed")
-    elif owner == "task-implementer":
-        evidence_value = value.get("owner_evidence_path")
-        evidence_digest = value.get("owner_evidence_sha256")
-        if (
-            not isinstance(evidence_value, str)
-            or not Path(evidence_value).is_absolute()
-            or not isinstance(evidence_digest, str)
-            or DIGEST_RE.fullmatch(evidence_digest) is None
-        ):
-            raise TransactionError("Task Implementer commit evidence is invalid")
-        evidence_path = Path(evidence_value)
-        if not _safe_private_file(evidence_path, _codex_home() / "task-implementer"):
-            raise TransactionError("Task Implementer worker evidence path is unsafe")
-        evidence = _load_json(evidence_path, "Task Implementer worker evidence")
-        if (
-            evidence_digest != value["turn_sha256"]
-            or evidence.get("state") != "running"
-            or evidence.get("base_commit") != identity["head"]
-            or evidence.get("worker_session_sha256") != _digest_text(session_id)
-            or evidence.get("assignment_sha256") != value["turn_sha256"]
-        ):
-            raise TransactionError("Task Implementer worker authorization is stale")
     else:
         raise TransactionError("commit authorization owner is invalid")
 
@@ -674,32 +652,7 @@ def _validate_claim_owner(
         if claim["state"] in EXECUTABLE_STATES:
             _publication_open(_task_state(task_path, grant), claim["ref"])
         return
-    evidence_path = Path(str(claim["owner_evidence_path"]))
-    if not _safe_private_file(evidence_path, _codex_home() / "task-implementer"):
-        raise TransactionError("Task Implementer worker evidence path is unsafe")
-    evidence = _load_json(evidence_path, "Task Implementer worker evidence")
-    current_head = _identity(root)["head"]
-    expected_head = claim["base_head"]
-    if claim["state"] in {"REVIEW_REQUIRED", "COMMITTED"}:
-        commit_head = claim.get("commit_head")
-        if isinstance(commit_head, str) and OBJECT_RE.fullmatch(commit_head):
-            expected_head = commit_head
-    head_matches = current_head == expected_head
-    if (
-        not head_matches
-        and allow_exact_direct_child
-        and claim["state"] in EXECUTABLE_STATES
-    ):
-        head_matches = _exact_direct_child(root, claim["base_head"], current_head)
-    if (
-        claim["owner_evidence_sha256"] != claim["turn_sha256"]
-        or evidence.get("state") != "running"
-        or evidence.get("base_commit") != claim["base_head"]
-        or evidence.get("worker_session_sha256") != _digest_text(session_id)
-        or evidence.get("assignment_sha256") != claim["turn_sha256"]
-        or not head_matches
-    ):
-        raise TransactionError("Task Implementer worker commit ownership is stale")
+    raise TransactionError("commit claim authorization owner is invalid")
 
 
 def _attempt_authorization_path(claim: dict[str, Any]) -> Path:
@@ -866,7 +819,6 @@ def _validate_claim(
         raise TransactionError("commit claim failure state is invalid")
     if value.get("authorization_owner") not in {
         "direct",
-        "task-implementer",
         "create-pr",
     }:
         raise TransactionError("commit claim authorization owner is invalid")
@@ -885,7 +837,7 @@ def _validate_claim(
         or not isinstance(value.get("owner_evidence_sha256"), str)
         or DIGEST_RE.fullmatch(value["owner_evidence_sha256"]) is None
     ):
-        raise TransactionError("Task Implementer commit claim evidence is invalid")
+        raise TransactionError("commit claim evidence is invalid")
 
 
 def _coordination_sha(value: object, label: str) -> str:
@@ -1133,7 +1085,7 @@ def _worktree_manifest_path(value: dict[str, Any], path: Path, primary: Path) ->
             raise TransactionError("Worktree ownership lease is invalid")
     elif (
         lease_state not in {"active", "released"}
-        or lease_owner not in {"task-implementer", "agentic-sdlc"}
+        or lease_owner not in {"implement", "agentic-sdlc"}
         or not isinstance(lease_token, str)
         or TOKEN_RE.fullmatch(lease_token) is None
     ):

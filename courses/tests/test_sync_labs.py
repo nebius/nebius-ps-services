@@ -490,8 +490,8 @@ controller.setup(
     lambda **kwargs: (root / '.runtime').mkdir(mode=0o700, exist_ok=True),
     plan={'runtimes': ['shared-tools']},
 )
-import course_publication_state, publish_results
-for module in (controller, course_publication_state, publish_results):
+import course_job, course_publication_state, publish_results
+for module in (controller, course_job, course_publication_state, publish_results):
     assert Path(module.__file__).is_relative_to(root)
 """
     for expected in ("publication initialized", "publication already initialized"):

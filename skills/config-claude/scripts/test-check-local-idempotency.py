@@ -159,7 +159,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_selected_private_state_and_delegation_checks(self):
         self.assertEqual(self.inspect(delegation=True, workspace=True)["status"], "NOT_ALIGNED")
         put(self.home / "hooks/global_context_policy.json", {"auto_read_only_subagents": True})
-        (self.home / "task-implementer").mkdir(mode=0o700)
+        (self.home / "implement").mkdir(mode=0o700)
         self.assertEqual(self.inspect(delegation=True, workspace=True)["status"], "STATIC_PASS")
         (self.base / ".git").mkdir()
         self.assertEqual(self.inspect(workspace=True)["status"], "NOT_ALIGNED")
@@ -175,7 +175,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.inspect()["status"], "NOT_ALIGNED")
 
     def test_private_state_roots_must_be_directories(self):
-        for name in ("task-state", "task-implementer"):
+        for name in ("task-state", "implement"):
             with self.subTest(root=name):
                 home = self.base / name
                 native_fixture(home)
@@ -184,7 +184,7 @@ class ConfigurationTests(unittest.TestCase):
                     target.rmdir()
                 put(target, "regular file cannot contain session directories")
                 before = snapshot(home)
-                result = config.inspect(home, ROOT, native_only=True, workspace=name == "task-implementer")
+                result = config.inspect(home, ROOT, native_only=True, workspace=name == "implement")
                 self.assertEqual(result["status"], "NOT_ALIGNED")
                 self.assertEqual(snapshot(home), before)
 

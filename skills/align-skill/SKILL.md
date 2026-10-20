@@ -293,7 +293,7 @@ restrictions, hooks, authorization, state, idempotency, and recovery. Map each
 compatibility edit to this inventory and compare affected behavior with the
 baseline using proportionate tests. Preserve intentional product targets:
 `config-codex` configures Codex and `config-claude` configures Claude regardless
-of the executing host. Preserve Task Implementer and Agentic SDLC worker/commit
+of the executing host. Preserve Implement and Agentic SDLC worker/commit
 ownership, native identity, continuation and recovery.
 
 Do not remove native controls, hide required resources, or substitute weaker

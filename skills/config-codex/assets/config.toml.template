@@ -50,9 +50,9 @@ config_file = "agents/risk_reviewer.toml"
 
 [sandbox_workspace_write]
 network_access = true
-# Keep task-implementer prompt storage opt-in. When sandbox_mode is
+# Keep implement execution state opt-in. When sandbox_mode is
 # workspace-write and the user requests it, append
-# "{{CODEX_HOME}}/task-implementer" without removing existing roots.
+# "{{CODEX_HOME}}/implement" without removing existing roots.
 writable_roots = ["{{CODEX_HOME}}/task-state"]
 
 [mcp_servers.context7]

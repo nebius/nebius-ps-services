@@ -58,7 +58,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Do not use before the feature plan is locked.
 - Do not implement production code, write tests, validate, commit the final
   feature, push, open a PR, or merge a PR.
-- Do not use the general `worktree` or `task-implementer` public workflows for
+- Do not use the general `worktree` or `implement` public workflows for
   internal SDLC task resources.
 
 ## Inputs
@@ -72,6 +72,11 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   steering, and checkpoint state.
 
 ## Required Reads
+
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
 
 - Reload `current-state.json`, the latest checkpoint, and active feature state.
 - Read the locked plan and the state-schema reference owned by `sdlc-start`.
@@ -121,7 +126,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Repeated preparation returns the same verified integration identity.
 - Never recreate a recorded branch, worktree, wave, task, or contract commit.
 - Foreign collisions, moved refs, malformed state, or changed locked plans fail
-  closed. Every execution coordinator schema v1 through v6 record returns
+  closed. Every execution coordinator obsolete Agentic schemas v1 through v7 record returns
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 - `replan-future` holds the execution transition lock, compares every active or
   completed task's full canonical definition and recorded definition digest,
@@ -132,9 +137,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 
 - Use `PLAN_INVALID` for malformed tasks, unknown dependencies, or cycles.
 - Use `WORKTREE_CONFLICT` for dirty, moved, foreign, or colliding Git resources.
-- Reject a Task Implementer persistent lane before Agentic coordinator, lease,
-  promotion, or resource mutation. Direct the user to the source checkout or
-  an ordinary Worktree child.
+- Reject obsolete persistent-lane state before mutation; preserve its history
+  and resources. Start from a source checkout or ordinary Worktree child.
 - Use `UNSUPPORTED_SUBMODULE_SCOPE` and `UNSUPPORTED_SYMLINK_SCOPE` when plan
   claims cross indexed gitlinks or tracked symlinks; inspect only and never
   initialize submodules.
@@ -152,7 +156,7 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   clean base `HEAD`, and empty write set still match.
 - Use private `task-recover --confirmed-stopped --expected-attempt <n>` only
   with a fresh worker session and an exactly re-observed clean or claimed-dirty
-  worktree. Reject worker-created commits; coordinator `task-finish` is the
+  worktree. Reject worker-created commits; coordinator `task-finish` with native termination evidence is the
   sole task-commit owner. The expected attempt makes ownership transfer
   compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
 - `task-finish` persists a digest-protected `task-finish-intent-v1` before the
@@ -163,15 +167,13 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Reject corrective replan when any active/completed task definition or digest
   changes, any future wave owns a branch/worktree/assignment/result/journal, or
   execution is sealed, promoted, or done.
-- Treat capacity batches as authoritative: `wave-prepare` creates only the
-  active batch, and private `batch-advance` opens the next batch only after all
-  current tasks are committed. Each assignment binds the accepted root-intent
-  digest and exact canonical project-spec receipt; workers inherit that
-  context, never reclassify intent or edit specs, and report typed `spec_gaps`
-  to the root coordinator. Disable Git rename folding for every worker path
-  inventory and reject sensitive text in all gap fields before output or
-  persistence. `task-start` derives worker identity from
-  the native host adapter; never accept a caller-invented session token.
+- Use deterministic ready slots within each frozen wave. `wave-prepare`
+  creates only assignments with available capacity; `task-admit` requires exact
+  native termination plus current-basis result validation, and `wave-refill`
+  reuses only released slots. No batch indexes exist. Keep the full-wave barrier.
+  Workers inherit objective/spec receipts, report typed `spec_gaps`, and never
+  publish canonical specs. Shared runtimes require assignment-bound exclusive
+  leases in addition to scheduling conflict domains.
 - Retain every observed partial resource in recovery state; never force-delete it.
 - For managed-outer promotion, persist the Git fast-forward, exact lease CAS,
   local interop, and coordinator state in that order. Resume must reconcile the

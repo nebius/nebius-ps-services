@@ -77,6 +77,11 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Project config, package manager files, build files, linter and type checker config.
 - Changed source files.
 - Locked plan, relevant feature design, and test files for the current feature.

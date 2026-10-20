@@ -93,10 +93,10 @@ the session. Installing this skill does not configure the user's machine.
    this operator-owned policy.
    Reuse the existing hook installer or plugin registration; do not create a
    new hook bundle. Preserve workflow handlers, one Stop arbiter, native
-   identities and Task Implementer/SDLC ownership. A plugin-owned hook route
+   identities and Implement/SDLC ownership. A plugin-owned hook route
    must not gain duplicate local registrations.
 7. Configure only selected options: trusted-local permissions, delegation
-   policy, private Task Implementer storage, and MCP integrations. For MCP,
+   policy, private Implement storage, and MCP integrations. For MCP,
    read [references/mcp.md](references/mcp.md); use Claude's native user-scope
    commands and secret-variable references. Do not reconstruct Claude's global
    application/authentication JSON or import private Codex configuration.
@@ -123,7 +123,7 @@ the session. Installing this skill does not configure the user's machine.
   tools do not imply that inherited hooks cannot update private task state.
 - Keep task state separate from Claude auto memory and transcripts. Retain
   `codex-remediation-budget:v1` unchanged as an existing cross-host protocol.
-  Automatic delegation and private Task Implementer storage remain opt-in.
+  Automatic delegation and private Implement storage remain opt-in.
 - Refuse malformed or duplicate-key JSON, symlinks, special files, unowned
   targets and unexpected concurrent edits. Do not repair user-owned drift by
   replacing an entire configuration. Never disable a guard or choose an

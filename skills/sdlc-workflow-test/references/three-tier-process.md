@@ -28,14 +28,13 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    that config for Compose. For resume mode, require the existing lifecycle to
    be owned, KEPT, and previously FAIL or PARTIAL; revalidate its project
    boundary and recorded resources without creating replacements. Use the
-   private root's isolated agent home for all prompt workspace and phase state;
+   private root's isolated agent home for all accepted objective and phase state;
    never reuse or delete the user's ordinary Agentic SDLC run directory.
-3. Create the project through the normal prompt-bound Agentic SDLC workflow:
-   first run `$sdlc-start workspace init <project-folder>`, then use
-   `scripts/render_three_tier_prompt.py` to replace the generated starter body
-   while preserving its managed identity, and finally run
-   `$sdlc-start run <prompt-ref-or-file>`. Follow the returned phase
-   skill; do not make the lifecycle helper or hooks orchestrate phases.
+3. Render the disposable request with `scripts/render_three_tier_objective.py`
+   and invoke `$sdlc-start <rendered fixture objective>` from the owned project.
+   Resume another native session with `$sdlc-start continue <project-folder>`.
+   Follow the returned phase skill; the harness and hooks never perform private
+   product transitions to satisfy workflow acceptance.
    Before dispatching that phase, record the startup phase while its checkpoint
    still names `sdlc-start`, before plans or execution state exist and before
    Git leaves the fixture baseline. The lifecycle observes exact JSON ownership
@@ -120,7 +119,7 @@ bindings cannot produce a receipt. Recheck service health, then launch a fresh
 post-restart browser against the same task ID/title/completion state.
 Independent API and PostgreSQL checks accompany blank rejection, creation,
 completion, and post-restart persistence. Use the frozen task-board DOM/API/table
-contract in the generated prompt. Before evaluation and separately before UAT,
+contract in the rendered fixture objective. Before evaluation and separately before UAT,
 use the declared disposable reset to establish an empty database; resets are
 fixture setup, never part of the product acceptance journey. Never reset between
 UAT stages.
@@ -134,7 +133,9 @@ actual agent launching a new stage and collecting evidence before unlock;
 a standalone browser smoke test does not certify agent continuity.
 
 The live harness resolves the active feature through the isolated host's validated
-prompt workspace and canonical execution status. Before promotion, Compose and
+session/run binding, accepted objective revision and immutable execution basis.
+Worker access to shared application resources requires the current assignment's
+exclusive runtime lease. Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
 active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
@@ -145,8 +146,9 @@ resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
-Both identifiers are required. The resolver admits only the sole task in the
-active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+Both identifiers are required. The resolver admits only an assignment holding
+the exclusive runtime lease in an active scheduler slot during
+`sdlc-implement-plan`, with a registered worktree,
 unchanged assignment base, and an `ACTIVE` result from the execution owner's
 live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun

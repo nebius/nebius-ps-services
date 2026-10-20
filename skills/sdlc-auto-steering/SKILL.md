@@ -1,6 +1,6 @@
 ---
 name: sdlc-auto-steering
-description: "Use only as part of the Agentic SDLC workflow; refresh private STEERING.md for an active prompt-bound run from accepted revisions, specs, context, locked plans, fingerprints, or evidence before phase selection."
+description: "Use only as part of the Agentic SDLC workflow; refresh private STEERING.md for an active objective-bound run from accepted revisions, specs, context, locked plans, fingerprints, or evidence before phase selection."
 user-invocable: false
 ---
 
@@ -48,7 +48,7 @@ changing committed product-truth documents directly.
 
 ## When To Use
 
-- `sdlc-start` accepts a changed revision of the run's bound managed prompt.
+- `sdlc-start` accepts a changed revision of the run's bound accepted objective.
 - `STEERING.md` has pending, stale, or conflicting entries.
 - Requirements, design, project instructions, context, locked plan,
   fingerprints, or evidence changed and the active feature needs compact
@@ -67,7 +67,7 @@ changing committed product-truth documents directly.
 
 ## Inputs
 
-- Accepted prompt ID, revision, digest, and immutable snapshot from
+- Accepted objective ID, revision, digest, and immutable snapshot from
   `sdlc-start` intake.
 - `docs/requirements.md`.
 - `docs/design.md` when present.
@@ -80,13 +80,18 @@ changing committed product-truth documents directly.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - `docs/requirements.md`.
 - `docs/design.md` when present.
 - The active selected-project instruction file and latest verified
   `project-agent-instructions` state when present.
 - `run.json`, `current-state.json`, `feature-queue.json`, `fingerprints.json`,
   `checkpoints/latest.json`, and the latest checkpoint.
-- `prompt.json` and the exact accepted immutable prompt snapshot.
+- `objective.json` and the exact accepted immutable objective snapshot.
 - `STEERING.md`.
 - Current feature context pack and locked plan when present.
 - Recent validation, test, evaluation, document-update, UAT, PR, review, or
@@ -106,23 +111,24 @@ changing committed product-truth documents directly.
 ## Process
 
 - Reload active state and existing steering before classifying anything.
-- Append each pending accepted prompt revision to the steering inbox exactly
-  once. Link its prompt ID, revision, digest, and snapshot pointer; store only a
+- Append each pending accepted objective revision to the steering inbox exactly
+  once. Link its objective ID, revision, digest, and snapshot pointer; store only a
   compact redacted summary, never raw prompt text, and redact secrets,
   credentials, private endpoints, customer data, raw logs, or other unsafe
   material.
-- Accept only `active_steering` revisions from the current non-terminal run.
-  A completed-prompt edit starts a linked run whose `r0001` kind is
-  `completed_follow_up`; route it through requirements refinement as a fresh
-  objective and never record it as steering.
-- Classify every unresolved steering entry as one of:
+- Consume normalized accepted objective revisions from the current non-terminal run.
+  A distinct objective after completion starts a fresh run against current
+  product truth. Completed execution is never reopened.
+- Use Maintain Project Specs' statement-level interpretation, shared with every
+  direct root-user prompt, to route each unresolved steering entry as one of:
   `runtime-only`, `requirements-change`, `design-change`,
   `project-agent-instructions-change`, `docs-update`, `resolved`,
   `superseded`, `rejected`, or `needs-human`.
 - Treat `requirements-change` and `design-change` as routing requests for
   `sdlc-start`; do not let them become implementation truth until the owning
-  product-truth document has been updated by `sdlc-create-requirements` or
-  `sdlc-create-design`.
+  product-truth document has been reconciled by Maintain Project Specs through
+  its `sdlc-create-requirements` or `sdlc-create-design` adapter. Execution-only
+  instructions and status/questions do not create specification changes.
 - Treat `project-agent-instructions-change` as advisory unless the current user
   explicitly requested the separate mutation workflow. Only in that explicit
   case may `sdlc-start` route to `project-agent-instructions`; otherwise keep
@@ -136,11 +142,12 @@ changing committed product-truth documents directly.
   locked plan, context, evidence, and unresolved steering entries.
 - Keep `STEERING.md` human-readable and keep `steering/auto-steering.json`
   machine-readable with the same pending disposition state.
-- After both ledgers are durably updated, invoke the private prompt helper's
-  `steering-resolve` transition with `applied`, `blocked`, or `no_effect`.
-  `applied` and `no_effect` additionally require the current accepted prompt
-  impact receipt and must agree with its owner-derived effect; a steering
-  summary or unchanged spec bytes are not sufficient evidence.
+- After both ledgers are durably updated, reconcile affected native writers
+  and retire affected waves through the shared execution owner. Settle the
+  objective's current canonical impact, prepare the distinct plan where material,
+  and call private `resume-replanned` only when every basis is current. A justified
+  no-effect revision may retain plan bytes; it still receives a fresh basis.
+  Blocked steering keeps dispatch and promotion fenced.
 - Return the requested routing signal for `sdlc-start` instead of invoking the
   next SDLC phase directly.
 
@@ -183,7 +190,7 @@ changing committed product-truth documents directly.
 
 ## Completion Criteria
 
-- New accepted prompt revisions are linked or safely summarized in `STEERING.md`.
+- New accepted objective revisions are linked or safely summarized in `STEERING.md`.
 - Every unresolved steering entry has a disposition.
 - Active reminders are compact, current, and tied to the active feature.
 - Machine-readable steering state agrees with `STEERING.md`.

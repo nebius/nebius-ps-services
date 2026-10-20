@@ -310,6 +310,11 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
             "Semantic results are missing a required passing SDLC phase."
         )
     gui_summary = validate_gui_results(state, value.get("gui_uat"))
+    from three_tier_lifecycle import validate_phase_history
+    try:
+        validate_phase_history(state)
+    except (RuntimeError, OSError, ValueError, KeyError) as error:
+        raise SemanticEvidenceError(str(error)) from error
     return {
         "layers": dict(value["layers"]),
         "tests": {

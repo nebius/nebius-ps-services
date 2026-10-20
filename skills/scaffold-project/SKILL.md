@@ -304,7 +304,7 @@ recorded before or after state. Never auto-rollback a partial apply.
 ## Must Not
 
 - Do not select or reopen the application stack.
-- Do not call `design`, `app-stack`, Task Implementer,
+- Do not call `design`, `app-stack`, Implement,
   `project-agent-instructions`, or any `sdlc-*` skill from this workflow.
 - Do not let specialists write the target in coordinated mode.
 - Do not delete, blindly overwrite, silently skip, or create a compatibility

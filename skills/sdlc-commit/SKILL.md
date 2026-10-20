@@ -69,6 +69,11 @@ Seal and promote one completed feature locally without pushing.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Git status and current branch.
 - Feature design and requirement IDs.
 - Evidence files.

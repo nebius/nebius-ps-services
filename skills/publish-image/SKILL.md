@@ -155,3 +155,12 @@ Return:
 - `assets/CHANGELOG.md.template`
 - `assets/publish-image.sh.template`
 - `$github-workflows` for image-publish workflow YAML
+
+## Publication evidence
+
+Tag-triggered releases publish `X.Y.Z` and `X.Y.Z-g<shortsha>`; manual builds
+publish `sha-<shortsha>` and optional main-only `latest`. Manual SemVer input is
+not supported. Delegate YAML and shared helper setup to `$github-workflows`.
+Require destination-image serialization, complete immutable alias preflight,
+trusted original digest evidence for reuse and equality of every remote tag to
+the build digest. Partial or unverifiable state blocks retries without overwrite.

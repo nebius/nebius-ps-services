@@ -174,3 +174,12 @@ Return:
 - `scripts/publish-helm-doer.sh`
 - `assets/CHANGELOG.md.template`
 - `assets/publish-helm.sh.template`
+
+## Publication evidence
+
+Delegate workflow YAML and shared publication helper setup to `$github-workflows`.
+Preserve catalog selection, chart metadata, packaged-byte equality, anonymous
+pull and OCI digest checks. Only authoritative absence permits publication;
+transport/authentication failures and generic HTTP 404 responses are unverifiable.
+A nested repository guard uses the public OCI tag listing: an empty successful
+list or structured NAME_UNKNOWN response is distinct from an inaccessible list.

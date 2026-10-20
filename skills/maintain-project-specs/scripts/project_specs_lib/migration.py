@@ -338,7 +338,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### Context Evidence
 
-Migrated from a validated Task Implementer design record.
+Migrated from a validated Implement design record.
 
 #### Design Details
 

@@ -1,7 +1,7 @@
 # Maintain Project Specs
 
 `maintain-project-specs` owns the canonical requirements/design contract for
-ordinary root-agent sessions, Task Implementer, and Agentic SDLC. Every direct
+ordinary root-agent sessions, Implement, and Agentic SDLC. Every direct
 root-user prompt is classified at statement level. Durable product intent is
 recorded before implementation, and proven implementation/verification
 evidence is recorded afterward. Unrelated requests leave the specs unchanged.
@@ -10,6 +10,16 @@ Hooks remain advisory because a hook cannot safely make the semantic decision
 or perform a repository transaction on behalf of the active workflow. They
 only observe the actual documents and stage metadata-only intake. The root
 agent performs classification and calls the canonical owner.
+
+Prepared workflows register canonical publication ownership through the shared
+Worktree engine. `publish` checks the bound coordinator and registered integration
+checkout, plus `--expected-objective-sha256` and `--expected-basis-sha256`. These
+join the existing Git/document compare-and-swap checks at every paired-write
+boundary. Workers report specification gaps. After delivery, the delivered
+checkout owns publication again; unrelated ordinary maintenance stays independent.
+Implement's initial pre-plan checkout requires the accepted objective digest
+without a basis digest. Only a completed integration allocation permits that
+publication; the execution owner commits the pair before freezing the plan.
 
 ## What Advisory Means
 
@@ -27,7 +37,7 @@ agent performs classification and calls the canonical owner.
 - Missing state, unsafe paths, or internal exceptions degrade to
   advisory/neutral behavior and never recreate the old
   `ADVISORY_UNAVAILABLE` lifecycle-state warning.
-- Task Implementer and Agentic SDLC keep their own execution and safety gates.
+- Implement and Agentic SDLC keep their own execution and safety gates.
 - Project-instruction changes require a separate explicit workflow and are not
   part of automatic lifecycle maintenance.
 
@@ -136,8 +146,8 @@ Private retention remains fail-safe and non-authoritative:
 
 ## Workflow Independence
 
-Task Implementer and Agentic SDLC use the same v2 parser, pair validator,
-publisher, and receipt. Their prompt-impact schemas, plan bases, dispatch,
+Implement and Agentic SDLC use the same v2 parser, pair validator,
+publisher, and receipt. Their objective-impact schemas, plan bases, dispatch,
 cleanup, finalization, recovery, and Stop behavior remain workflow-owned. Root
 coordinators bind the accepted intent and exact spec receipt before dispatch.
 Workers inherit that evidence, never reclassify user intent or write canonical
@@ -160,4 +170,4 @@ Focused tests cover:
 - canonical v2 pair validation, directory-swap-safe compare-and-set
   publication, owner-aware reader serialization, guarded rollback, and explicit
   v1/legacy migration recovery;
-- Task Implementer and Agentic SDLC adapter parity and workflow independence.
+- Implement and Agentic SDLC adapter parity and workflow independence.

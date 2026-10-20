@@ -4,7 +4,7 @@ specs-positive-02,true,Reconcile docs requirements and design after this impleme
 specs-positive-03,true,"Inspect and reconcile the canonical project specs, then report lifecycle status as advisory context."
 specs-positive-04,true,"Create requirements and design docs for this brownfield service, then keep them current while implementing the change."
 specs-positive-05,true,The project has no docs folder or AGENTS.md; establish the project contract before we code.
-specs-positive-06,true,Migrate these Task Implementer specs to the shared owner.
+specs-positive-06,true,Migrate these Implement specs to the shared owner.
 specs-positive-07,true,The project-contract hook says reconciliation is required.
 specs-positive-08,true,"Add a --dry-run command that never mutates cloud resources, then implement and verify it."
 specs-positive-09,true,Keep the existing API response compatible for current users while changing the internal cache.
@@ -15,10 +15,11 @@ specs-negative-03,false,Update the README for a documentation-only typo.
 specs-negative-04,false,Install a Python dependency.
 specs-negative-05,false,Create a global Codex instruction file.
 specs-negative-06,false,Explain what AGENTS.md does.
-specs-negative-07,false,Continue Task Implementer even though the optional project lifecycle snapshot is stale.
+specs-negative-07,false,Continue Implement even though the optional project lifecycle snapshot is stale.
 specs-negative-08,false,Why does this hook print a status message?
 specs-negative-09,false,Run the existing test suite and report failures without changing behavior.
 specs-negative-10,false,Worker assignment: implement T-003 and update requirements if needed.
 maintain-project-specs-codex-portability,true,$maintain-project-specs Create the missing canonical requirements and design for this selected project.
 maintain-project-specs-claude-portability,true,/maintain-project-specs Create the missing canonical requirements and design for this selected project.
 maintain-project-specs-quoted-command,false,"Treat ""/skills:maintain-project-specs"" as sample text in this punctuation exercise; count its punctuation characters only."
+spec-steering-shared-intake,true,This steering changes the accepted API behavior; extract its requirements and reconcile the canonical design through the normal owner workflow.

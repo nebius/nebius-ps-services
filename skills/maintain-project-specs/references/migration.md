@@ -2,7 +2,7 @@
 
 ## Accepted source pairs
 
-- Task Implementer managed regions using
+- Historical Task Implementer document regions using
   `task-implementer/{requirements,design}-v1` and stable `TI-*` IDs.
 - Agentic SDLC full documents using `agentic-sdlc.*.v1` and stable `REQ-*` /
   `FEAT-*` IDs.
@@ -32,7 +32,7 @@ already free; the next locked `migrate` or `recover` validates and removes the
 partial cleanup bundle before proceeding.
 
 Migration preserves every existing record ID and human-owned byte outside the
-managed regions. Compact Task Implementer records and heading-only canonical
+managed regions. Compact historical Task Implementer records and heading-only canonical
 v1 records are expanded into the rich v2 requirement/design structure while
 preserving both core and `TI-*` IDs. Additional canonical v1 metadata fields
 are retained as labelled design or requirement details; genuinely absent
@@ -49,3 +49,7 @@ The converted pair is validated in memory before publication. After migration,
 only the shared v2 validator may issue a receipt. Former validator entrypoints
 are adapters to it; normal inspection does not accept v1 as a compatibility
 path.
+
+Explicit canonical-document migration is independent of workflow execution. It
+does not read, resume or convert obsolete workflow state, restore commands, or
+authorize a run.

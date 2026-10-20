@@ -74,6 +74,11 @@ Coordinate isolated task agents to implement one locked feature safely.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Locked plan.
 - Feature design and context pack.
 - Relevant source files, tests, and project conventions.
@@ -96,29 +101,26 @@ Coordinate isolated task agents to implement one locked feature safely.
    A post-wave corrective plan retains that sealed TDD lineage and the existing
    integration tip. After `replan-future`, prepare its appended wave directly;
    do not reseal TDD or reopen a completed wave.
-3. For the next logical wave, run `wave-prepare`. Dispatch only the current
-   capacity batch. Every `TASK-*` must use its own fresh agent operating from
-   its immutable worker cwd; never reuse one agent for multiple parallel tasks.
-   Prefer native isolated agents. When they are unavailable, use the private
-   sequential native CLI fallback: one fresh process per task (`codex exec
-   --ephemeral` or `claude --print --no-session-persistence`),
-   exact `--cd <scope_cwd>`, `--sandbox workspace-write`, schema-bound output,
-   and no session resume or extra writable directories.
-   Invoke private `task-arm` only after a real worker slot exists. From dispatch
-   onward, invoke read-only `task-watch` every 30 seconds. Interrupt immediately
-   on `WORKER_PRESTART_TIMEOUT`, `WORKER_PRESTART_MUTATION`, `WORKER_STALLED`,
-   `WORKER_READ_ONLY_TIMEOUT`, `WORKER_SCOPE_VIOLATION`, or `WORKER_TIMEOUT`.
-   `READ_ONLY_DEADLINE_NEAR` requires an immediate productive change or blocker
-   report. After the batch commits, invoke private `batch-advance`; it creates
-   the next batch's assignments and worktrees. Never start a task outside the
-   active batch or reuse a session hash from a completed or recovered task.
-   The sequential fallback starts each worker in a dedicated process session;
-   on spawn, arm, watch, timeout, or helper failure it terminates the full
-   process group, including descendants. If a worker never reached `task-start`,
-   confirm that group is stopped and invoke private `task-requeue` with the
-   exact recorded dispatch timestamp before allocating a fresh slot.
+3. For the next dependency wave, run `wave-prepare`. Use its deterministic
+   ready queue and at most four native worker slots, capped by observed host
+   capacity, configured limits and independent tasks. Unknown native capacity
+   selects one isolated worker. Every task receives a fresh native agent and
+   exact assigned cwd; report observed concurrency, never declared task count.
+   Use the shared `worktree/scripts/workflow_dispatch.py` for sequential native
+   CLI fallback. Arm only when a real slot exists; watch every 30 seconds and
+   interrupt on prestart mutation, stall, scope violation or timeout. After a
+   native worker terminates, persist the exact coordinator-owned termination
+   observation, create/validate its result, and use `task-admit`. Only then may
+   `wave-refill` allocate the freed slot while independent peers continue.
+   Every worker in this wave uses its frozen base; integration waits for the
+   full wave. Path overlap, lockfiles, generated outputs, ports, databases and
+   runtime identities are scheduling constraints. Shared live-runtime access
+   also requires an exclusive assignment-bound `runtime-acquire` lease, verified
+   by the runtime consumer and released before result admission.
+   Timeout/recovery stops the full native process group and descendants. Never
+   reuse a session hash from a completed or recovered task.
 4. Give each worker only its task record, assignment digest, digest-bound
-   incoming handoff from all earlier completed waves and batches, inherited
+   incoming handoff from completed dependency waves, inherited
    root-intent digest, canonical project-spec receipt, requirements,
    design/context reminders, test target, write claims, and stop conditions.
    The worker calls `task-start` before editing, emits direct bounded
@@ -133,7 +135,7 @@ Coordinate isolated task agents to implement one locked feature safely.
    reconciliation and does not enter `task-finish`; every gap text field is
    sensitive-screened before dispatcher output. Worker path validation keeps
    rename folding disabled so both sides of a move remain enforceable. The
-   coordinator calls `task-finish` with that structured evidence to recheck
+   coordinator supplies the termination observation to `task-finish` with that structured evidence to recheck
    liveness, scan staged paths/content, create exactly one direct-child commit
    with normal Git hooks, and persist the result. The helper journals an exact
    tree/message/evidence finish intent before the commit so an interrupted retry
@@ -149,7 +151,7 @@ Coordinate isolated task agents to implement one locked feature safely.
    The worker must
    not reinterpret any completed task.
 5. The coordinator does not edit product files while workers run. It verifies
-   every result, then runs `wave-integrate`; merges occur in stable task order
+   every result and its immutable admission, then runs `wave-integrate`; merges occur in stable task order
    with retained coordinator-created task commits and explicit merge commits.
 6. Run combined validation/tests at the exact integration tip. For corrective
    work, run the original failed oracle, the counterfactual or affected-boundary

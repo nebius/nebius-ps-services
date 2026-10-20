@@ -183,7 +183,7 @@ A completed contradictory trigger or quality judgment yields `FAIL`.
 
 Run `scripts/test-skill-evals.py` to verify the adapters' deterministic evidence
 boundary. Run the native suites separately on each host. Portability cases must
-preserve intentionally Codex-specific configuration and Task Implementer versus
+preserve intentionally Codex-specific configuration and Implement versus
 SDLC commit ownership; replacing provider names is not a preservation test.
 
 ## Compatibility Preservation Cases

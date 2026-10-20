@@ -148,7 +148,6 @@ nccl-test-vMAJOR.MINOR.PATCH
 
 The GitHub workflow publishes immutable tags:
 
-- `sha-<shortsha>`
 - `<MAJOR.MINOR.PATCH>`
 - `<MAJOR.MINOR.PATCH>-g<shortsha>`
 
@@ -194,5 +193,16 @@ cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test
 
 The workflow also exposes `workflow_dispatch` for explicit rebuilds. Manual
 runs can publish a `sha-*` tag from a chosen ref that is already in `main`
-history, and can optionally add a SemVer tag when you provide
-`release_version`.
+history, and can optionally add `latest` when `source_ref=main`. SemVer versions
+come only from `nccl-test-vX.Y.Z` tags; manual builds never share the release
+aliases. There is no `release_version` input.
+
+The destination image is serialized across preflight, build/push and verification.
+Existing immutable aliases are reused only when every digest matches trusted
+original publication evidence. Partial, conflicting or unverifiable state stops
+without overwrite. Each remote tag must match the build digest. These changes
+do not remove historical registry tags.
+
+An explicit main-only manual request for `latest` may reuse an already verified
+manual digest. It copies that digest to the mutable alias under the same lock
+and verifies equality afterward; immutable aliases are never rebuilt or changed.

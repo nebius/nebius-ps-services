@@ -67,6 +67,11 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Test configuration.
 - Test files.
 - Feature design.

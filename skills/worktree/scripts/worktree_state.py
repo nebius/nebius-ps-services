@@ -20,7 +20,7 @@ TASK_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40,64}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 LEASE_STATES = {"none", "active", "released"}
-LEASE_OWNERS = {"task-implementer", "agentic-sdlc"}
+LEASE_OWNERS = {"implement", "agentic-sdlc"}
 
 
 class StateError(RuntimeError):

@@ -52,7 +52,7 @@ when determining whether a project-specific rule is redundant.
 
 Use only when the user explicitly requests project-instruction mutation or
 `maintain-project-specs` routes an explicit repair request here. Managed
-generation additionally requires its current canonical receipt. Task Implementer and Agentic SDLC only read already-effective
+generation additionally requires its current canonical receipt. Implement and Agentic SDLC only read already-effective
 instructions and may report advisory status; they never invoke, wait for, or
 seal this workflow. Keep
 `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. Do not expose
@@ -73,7 +73,7 @@ a standalone public workflow command.
 
 ## When Not To Use
 
-- Do not infer mutation authority from ordinary project work, Task Implementer,
+- Do not infer mutation authority from ordinary project work, Implement,
   Agentic SDLC, or hook observations.
 - Do not run from marker checks or unvalidated specification files.
 - Do not create generic guidance, task state, architecture prose, reusable
@@ -227,7 +227,7 @@ repair above uses native focused editing and does not enter helper transitions.
    mutation. Never write or delete a managed region directly.
 8. If state reports `reload_required: true`, stop only this instruction-
    mutation workflow and recommend a fresh session before relying on the new
-   rules. Task Implementer and Agentic SDLC remain independent and may continue
+   rules. Implement and Agentic SDLC remain independent and may continue
    under the instruction chain already loaded for their session.
 9. Return the outcome, decision fingerprint, target digest, evidence paths,
    reload status, file effect, and any blocker to the caller. For

@@ -31,11 +31,10 @@ class CommitContractTest(unittest.TestCase):
             "Project lifecycle state is advisory",
             "attestations are not required",
             "REVIEW_REQUIRED",
-            "one-direct-child authorization is minted by `task-start`",
-            "interrupted-commit recovery",
+            "coordinator-owned `task-finish`",
+            "Workers do not invoke this root commit transaction",
             "repository-shaping Git environment",
-            "worker_session_fingerprint_sha256",
-            "PATH-canonical",
+            "Reject obsolete worker commit authorizations",
         ):
             self.assertIn(required, skill)
 
@@ -66,28 +65,23 @@ class CommitContractTest(unittest.TestCase):
             "STALE",
             "REVIEW_REQUIRED",
             "commit_transaction.py",
-            "revalidates live worker ownership",
+            "coordinator-owned `task-finish`",
             "Repository-shaping Git environment",
-            "persisted evidence only",
+            "reject obsolete",
         ):
             self.assertIn(required, readme)
 
-    def test_task_implementer_dirty_source_handoff_is_explicit_commit(self) -> None:
-        manager = self.text("worktree/scripts/worktree_manager.py")
-        task_skill = self.text("task-implementer/SKILL.md")
+    def test_implement_preserves_dirty_source_and_coordinator_commit_ownership(self) -> None:
+        task_skill = self.text("implement/SKILL.md")
         for required in (
-            "fresh explicit $commit",
-            "complete repository diff",
-            "repeat integrate",
-        ):
-            self.assertIn(required, manager)
-        for required in (
-            "unrelated source dirt",
-            "invokes `$commit` exactly once",
-            "registered worktree and claims",
-            "coordinator independently verifies",
+            "execute committed history and block if the task depends",
+            "on uncommitted content",
+            "coordinator finishes through the shared owner",
+            "transaction for one direct-child commit",
+            "Source drift retains the verified result",
         ):
             self.assertIn(required, task_skill)
+        self.assertNotIn("invokes `$commit` exactly once", task_skill)
 
     def test_worktree_delegation_is_fresh_bounded_and_exact(self) -> None:
         commit_skill = self.text("commit/SKILL.md")

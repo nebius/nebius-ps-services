@@ -5,8 +5,8 @@ See `SKILL.md` for invocation, required setup and evidence boundaries.
 
 `sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks the design contract, source-installed skill parity,
-deterministic prompt and execution capabilities, sequential fallback, Task
-Implementer interoperability, the managed outer-worktree lease lifecycle, hook
+deterministic objective and execution capabilities, sequential fallback, Implement
+interoperability, the managed outer-worktree lease lifecycle, hook
 behavior, and optional private live-run evidence. Its opt-in live profile builds
 and tests one real local three-tier application without changing the lightweight
 default.
@@ -78,9 +78,14 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 - Uses `references/verification-checklist.md` as the test plan.
 - Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract,
   capability regressions, a nested disposable project, and hook fixture checks.
-  The two measured slow aggregates use explicit bounded budgets: 300 seconds
-  for the worktree matrix and 900 seconds for the Task Implementer wave matrix;
-  every other capability suite keeps the 120-second default.
+  The worktree, execution, three-tier and task-wave aggregates use explicit
+  900-second budgets; other capability suites keep the 120-second default.
+  Rejected fixtures are preserved, dependent hook checks are skipped with
+  explicit prerequisite failures, and the verifier still writes its report.
+  Failed suites report their exit code and bounded failing-test identifiers
+  without copying raw diagnostic output.
+  Lightweight profile evidence uses the current accepted-objective schema;
+  the objective alone is insufficient for a live PASS.
 - Compares configured hook payloads against their authoritative source: SDLC
   hooks come from `sdlc-start`, and shared runtime files come from
   `global-context-management`. Parity checks cover native wrapper registrations
@@ -113,7 +118,7 @@ proof; invalid ownership, publication or image identity cannot produce new proof
   path touched anywhere in the supplied live history.
 - Gives each fixture exactly one verifier-owned local bare `origin`, with a
   private generation/baseline receipt and an enforced push-rejection hook.
-  Normal prompt/worktree admission uses real local Git. External or additional
+  Normal objective/worktree admission uses real local Git. External or additional
   remotes, redirects, borrowed objects, unsafe inherited command configuration
   and changed ownership fail before transport or cleanup. This does not verify
   hosted authentication, network failures, publication, PRs or merging.
@@ -138,6 +143,10 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 - Acceptance also requires an owned build receipt binding the clean checkout
   to the immutable running web image. Stale images, web mounts and endpoints
   outside that container cannot certify the selected revision.
+- Newly admitted phase results require the current objective and basis.
+  Historical admitted receipts survive only owner-linked, no-effect spec
+  reconciliation with unchanged objective, plan, execution identities and Git
+  ancestry. Missing lineage or material changes remain failures.
 - The pinned verifier Playwright Test bundle may download npm dependencies at
   bootstrap. All application and browser execution remains local.
 - Headless web acceptance has no native desktop capture, foreground window,
@@ -195,8 +204,8 @@ runs `scripts/test_owned_git_origin.py` to verify the ownership boundary.
 - `scripts/collect_live_evidence.py`: private bounded artifact collector.
 - `scripts/test_verify_agentic_sdlc.py`: verifier status and evidence tests.
 - `assets/live-results.schema.json`: private live-results manifest contract.
-- `assets/three-tier-prompt.md.template`: managed public-safe application
-  prompt body for the opt-in profile.
+- `assets/three-tier-objective.md.template`: public-safe application
+  objective body for the opt-in profile.
 - `assets/three-tier-results.schema.json`: semantic live-profile result
   contract.
 - `references/three-tier-live.md`: mode, phase, UAT, reporting, ownership, and
@@ -206,10 +215,9 @@ runs `scripts/test_owned_git_origin.py` to verify the ownership boundary.
   empty Docker CLI config only for bounded public pulls.
 - `scripts/three_tier_browser.py`: fresh-profile Chrome launch, exact process
   identity validation, and process-group-scoped close helper.
-- `scripts/render_three_tier_prompt.py`: preserves the generated starter
-  identity while rendering the canonical scenario body and five placeholders.
-- `scripts/test_three_tier_prompt.py`: proves the rendered starter is accepted
-  by the real prompt intake as a new `r0001` run.
+- `scripts/render_three_tier_objective.py`: renders the canonical direct objective and five fixture placeholders.
+- `scripts/test_three_tier_objective.py`: proves the rendered starter is accepted
+  by public direct intake as a fresh objective revision.
 - `scripts/three_tier_semantics.py`: focused semantic PASS validator shared by
   the lifecycle helper and its tests.
 - `scripts/three_tier_reporting.py`: pure sanitized Markdown report renderer.
@@ -218,7 +226,13 @@ runs `scripts/test_owned_git_origin.py` to verify the ownership boundary.
 - `agents/openai.yaml`: UI metadata and explicit-only invocation prompt.
 
 The live harness resolves the active feature through the isolated host's validated
-prompt workspace and canonical execution status. Before promotion, Compose and
+session/run binding, accepted objective revision and immutable execution basis.
+Worker access to shared application resources requires the current assignment's
+exclusive runtime lease. The worker acquires and holds it through the full live
+sequence and teardown; the outer verifier consumes it without impersonating or
+releasing worker ownership. A per-resource use lock guards synchronous actions
+against lease release, while short state locks leave heartbeat/status available.
+Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
 active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
@@ -229,8 +243,8 @@ resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
-Both identifiers are required. The resolver admits only the sole task in the
-active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+Both identifiers are required. The resolver admits only the assignment holding
+the exclusive runtime lease in an active scheduler slot during `sdlc-implement-plan`, with a registered worktree,
 unchanged assignment base, and an `ACTIVE` result from the execution owner's
 live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Implement"
+  short_description: "Implement direct objectives with isolated task workers"
+  default_prompt: "Use $implement with the current plan or an inline implementation request; use $implement continue [project-folder] to resume across sessions. Freeze the objective and execution basis, validate isolated workers, and deliver verified local changes automatically."
+policy:
+  allow_implicit_invocation: false

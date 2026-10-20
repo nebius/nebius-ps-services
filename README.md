@@ -84,6 +84,19 @@ the focused `skills-project-specs-ci.yml` contract suite. The workflow validates
 the single v2 parser/publisher contract, nonblocking intake hooks, worker
 intent/spec inheritance, typed spec-gap reporting, and safe hook retirement.
 
+## Automation cadence and publication
+
+The protected merge broker reacts to PR and relevant CI events. The completion
+workflow runs one hourly recovery at minute 17 UTC and supports manual recovery;
+there is no per-minute or 15-minute merge polling. The seven CI workflow identities
+and their exact-result evidence remain separate. See the
+[merge protocol](.github/merge-automation.md) for recovery and trust boundaries.
+
+Release and image publication retries require original immutable evidence and
+verify remote bytes or digests. Unverifiable existing artifacts block automatic
+publication. Reviewer routing adds configured reviewers while preserving manual
+user and team requests.
+
 ## License
 
 Copyright 2025 Nebius B.V.

@@ -6,7 +6,7 @@ is run.
 
 ## What It Does
 
-Refreshes private active-run steering by recording accepted same-prompt revisions,
+Refreshes private active-run steering by recording accepted same-objective revisions,
 classifying them, and deriving compact reminders for the next SDLC phase.
 
 ## Main Boundaries
@@ -22,7 +22,7 @@ classifying them, and deriving compact reminders for the next SDLC phase.
 - Active run state.
 - `STEERING.md`.
 - Requirements, design, context, locked plan, fingerprints, and evidence.
-- Accepted prompt ID, revision, digest, and immutable snapshot.
+- Accepted objective ID, revision, digest, and immutable snapshot.
 
 ## Output
 

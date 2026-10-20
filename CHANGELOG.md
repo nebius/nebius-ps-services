@@ -6,6 +6,14 @@ project folder.
 
 ## [Unreleased]
 
+- Include the shared viewer-delivery helper in fresh course synchronization and
+  replacement verification; check imports from the transferred job runner.
+
+- Validate the shared Worktree worker-result schema in skills CI after the
+  workflow-owner redesign.
+
+- Reduce merge polling to one hourly recovery, target PR CI events, preserve manual reviewer requests, and verify publication retries with immutable evidence.
+
 - Activate the installer-managed Nsight tools inside profiling batch stages across
   all six practical courses. This fixes missing `ncu` and stale ambient `nsys`
   selection without requiring learners to source a profile or modify `PATH`.
@@ -883,7 +891,7 @@ project folder.
   a custom deployment workflow; documented initial activation and deployment
   verification. Course generation and checks remain local.
 - Added path-scoped CI for the reusable project-spec lifecycle and its ordinary
-  session, Task Implementer, Agentic SDLC, hook installer, and project
+  session, Implement, Agentic SDLC, hook installer, and project
   instruction adapters.
 - Updated the root README description from Nebius Public Services to Nebius
   Platform Services and aligned it with the repository's reusable AI/ML

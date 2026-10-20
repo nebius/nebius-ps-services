@@ -50,8 +50,8 @@ that baseline.
 - Patching `config.toml` for supported Codex features, MCP servers, custom
   agent config layers, and skill discovery.
 - Installing hook and custom-agent templates for global context management.
-- Opting in to private prompt-workspace storage and write access for
-  `task-implementer` without relaxing existing sandbox or approval policy.
+- Opting in to private execution-state storage and write access for
+  `implement` without relaxing existing sandbox or approval policy.
 - Validating that the resulting local Codex config parses and is ready for
   hook review.
 - Re-running against an already configured laptop and reporting "no changes"
@@ -101,7 +101,7 @@ that baseline.
 - If the denial is external or unrepairable in the current scope, including an
   OS, sandbox, enterprise, unknown-provenance, conflicting, or out-of-authority
   policy, report the smallest manual out-of-band action and do not bypass it.
-- Never create the optional task-implementer directory inside a Git worktree,
+- Never create the optional implement directory inside a Git worktree,
   follow a symlink for it, expose prompt contents, or loosen its `0700` mode.
 
 ## Patch-Only Contract
@@ -159,7 +159,7 @@ For existing `$CODEX_HOME/config.toml`:
   settings, MCP servers, project trust entries, `[[skills.config]]` entries, or
   writable roots when the current config already provides the requested
   behavior or the user did not ask for that integration.
-- Add `$CODEX_HOME/task-implementer` to
+- Add `$CODEX_HOME/implement` to
   `sandbox_workspace_write.writable_roots` only when the user explicitly opts
   in and the existing `sandbox_mode` is `workspace-write`. Preserve every
   existing writable root and never change `sandbox_mode` or `approval_policy`
@@ -215,8 +215,8 @@ recovery boundary.
    - `$CODEX_HOME/task-state/`
    - optional `$CODEX_HOME/hooks/global_context_policy.json` only when the
      user deliberately wants hook-assisted read-only subagent delegation
-   - optional `$CODEX_HOME/task-implementer/` with mode `0700` only when the
-     user deliberately requests the private prompt-workspace integration
+   - optional `$CODEX_HOME/implement/` with mode `0700` only when the
+     user deliberately requests the private execution-state integration
 8. Render or adapt templates from `assets/`:
    - `AGENTS.md.template`
    - `config.toml.template`, the public-safe missing-config recovery baseline
@@ -272,8 +272,8 @@ recovery boundary.
     version rejects unknown keys. Audit the full nested task-state tree
     read-only; use the helper's explicit `repair-permissions --execute` only
     after the operator approves a content-preserving one-time mode repair. When
-    prompt-workspace integration was requested, run the idempotency preflight
-    with `--require-task-implementer-workspace`.
+    private execution-state access was requested, run the idempotency preflight
+    with `--require-implement-state`.
 11. Produce an alignment report that lists each checked surface as `Aligned`,
     `Not aligned`, `Repo-owned guard repair pending`, or `Blocked external or
     unrepairable`. For a repo-owned defect, report canonical source, installed
@@ -329,13 +329,13 @@ Use the focused checks in `references/local-setup.md`. At minimum:
   audits, and use
   `--require-template-mcp-servers` only when the user explicitly wants the
   public MCP baseline audited against the template.
-- Add `--require-task-implementer-workspace` only for the explicit private
-  prompt-workspace opt-in. It validates that the external directory is outside
+- Add `--require-implement-state` only for the explicit private
+  execution-state opt-in. It validates that the external directory is outside
   every Git worktree and Git metadata directory, is not a symlink, has `0700`
   mode, and has the matching workspace-write root without printing the real
   Codex home.
   If persistent access is absent or blocked, report exactly:
-  `codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"`.
+  `codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"`.
 - For source changes to the idempotency script, run
   `python3 scripts/test-check-local-idempotency.py`; it uses disposable local
   fixtures and does not inspect the user's real Codex home.
@@ -392,7 +392,7 @@ Return:
   - hook scripts and optional hook policy
   - `hooks.json` required global entries and preserved workflow hooks
   - task-state directory
-  - optional task-implementer private directory and workspace access when the
+  - optional implement private directory and workspace access when the
     user requested that integration
 - what local files were created or patched
 - what backups were made

@@ -187,7 +187,9 @@ SOURCE_PARITY_SKILLS = (
 )
 DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS = 120
 CAPABILITY_SUITE_TIMEOUT_SECONDS = {
-    "worktree": 300,
+    "worktree": 900,
+    "execution": 900,
+    "three-tier": 900,
     "task-waves": 900,
 }
 
@@ -230,13 +232,12 @@ DESIGN_REQUIRED_TERMS = (
     "$sdlc-workflow-test",
     "--resume",
     "$sdlc-start",
-    "$sdlc-start workspace init [project-folder]",
-    "$sdlc-start run <prompt-ref-or-file>",
-    "agentic-sdlc/prompt-v3",
-    "Only `## Ask` is required",
-    "requirements refinement",
-    "refinement gate binds the latest accepted",
-    "FIFO queue",
+    "$sdlc-start <objective>",
+    "$sdlc-start continue [project-folder]",
+    "workflow/accepted-objective-v1",
+    "workflow/session-binding-v1",
+    "immutable execution basis",
+    "normalized objective",
     "ALREADY_COMPLETE",
     "allow_implicit_invocation: false",
     "~/.codex/sdlc-verification/report.md",
@@ -246,7 +247,7 @@ DESIGN_REQUIRED_TERMS = (
     "MCP payloads",
     "guarded Git or GitHub actions",
     "source-installed parity",
-    "exact manual",
+    "immutable execution basis",
     "task-recover",
     "replan-future",
     "sequential fallback",
@@ -262,7 +263,7 @@ DESIGN_REQUIRED_TERMS = (
     'uat_status: "passed"',
 )
 DEFAULT_PROJECT_ID = "sdlc-verification-project"
-DEFAULT_RUN_ID = "active"
+DEFAULT_RUN_ID = "run-active"
 DESIGN_RELATIVE = Path("docs") / "agentic-sdlc-design.md"
 LIVE_RESULTS_SCHEMA = "agentic-sdlc/verification-live-results-v3"
 LIVE_LANE_RESULT_SCHEMA = "agentic-sdlc/live-lane-result-v3"
@@ -407,7 +408,7 @@ EVIDENCE_PROFILES = {
     "safety",
 }
 PROFILE_SOURCE_SCHEMAS = {
-    "lightweight": "agentic-sdlc/prompt-binding-v2",
+    "lightweight": "workflow/accepted-objective-v1",
     "three-tier": "agentic-sdlc/three-tier-results-v3",
 }
 SKILL_REQUIRED_PROFILES = {
@@ -431,10 +432,10 @@ SKILL_REQUIRED_PROFILES.update(
 DETERMINISTIC_SKILL_CAPABILITIES = {
     "sdlc-start": {
         "public.interface",
-        "prompt.workspace-init",
-        "prompt.history",
-        "prompt.rename",
-        "prompt.lifecycle",
+        "objective.intake",
+        "objective.revisions",
+        "objective.binding",
+        "objective.lifecycle",
         "spec.validation-receipt",
     },
     "sdlc-prepare-execution": {
@@ -448,8 +449,8 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "execution.sequential-fallback",
         "execution.worker-liveness",
         "interop.outer-lease-v4",
-        "interop.task-implementer-compatibility",
-        "interop.task-implementer-promotion",
+        "interop.shared-execution",
+        "interop.implement-promotion",
     },
 }
 SKILL_LANE_REQUIREMENTS = {
@@ -548,6 +549,10 @@ PRIVATE_REPOSITORY_PARTS = {
     "screenshots",
     "steering",
     "transcripts",
+    "objectives",
+    "bases",
+    "bindings",
+    "execution",
 }
 PRIVATE_REPOSITORY_FILES = {
     "STEERING.md",
@@ -556,6 +561,8 @@ PRIVATE_REPOSITORY_FILES = {
     "current-state.json",
     "feature-queue.json",
     "prompt.json",
+    "objective.json",
+    "host-capacity.json",
     "run.json",
 }
 
@@ -639,7 +646,7 @@ def validated_lightweight_claims(
     final: str,
 ) -> set[str] | None:
     del ctx, sources, verification_id_value, final
-    # The prompt binding and failure summaries do not independently prove all
+    # The accepted objective and failure summaries do not independently prove all
     # seven live lanes. Stay fail-closed until the collector can derive exact
     # claims from checkpoint, Git, test, steering, and repaired-failure bytes.
     return None
@@ -1247,7 +1254,7 @@ def check_spec_ownership_contract(ctx: Context) -> None:
         ctx.skills_root
         / "sdlc-start"
         / "references"
-        / "prompt-requirements-refinement.md",
+        / "objective-refinement.md",
         *(ctx.skills_root / skill / "SKILL.md" for skill in REQUIRED_SDLC_SKILLS),
     ]
     for path in legacy_paths:
@@ -1490,17 +1497,17 @@ def check_execution_plane_contract(ctx: Context) -> None:
             / "references"
             / "execution-plane.md",
             [
-                "one fresh worker agent per task",
-                "sequential `codex exec` fallback",
+                "Dispatch fresh task workers into ready slots",
+                "Unobserved capacity means one isolated worker",
                 "task-recover",
                 "task-arm",
                 "task-requeue",
                 "task-heartbeat",
                 "task-watch",
                 "replan-future",
-                "git merge --no-ff --no-edit",
-                "git merge --ff-only",
-                "agentic-sdlc/execution-coordinator-v7",
+                "explicit merge commits",
+                "fast-forward the unchanged clean",
+                "workflow/execution-coordinator-v1",
             ],
         ),
         "locked plan task graph": (
@@ -1520,22 +1527,26 @@ def check_execution_plane_contract(ctx: Context) -> None:
         "implementation wave coordinator": (
             ctx.skills_root / "sdlc-implement-plan" / "SKILL.md",
             [
-                "Every `TASK-*` must use its own fresh agent",
+                "Every task receives a fresh native agent",
                 "wave-integrate",
                 "wave-complete",
                 "one direct-child commit",
-                "--ephemeral",
-                "workspace-write",
+                "task-admit",
+                "wave-refill",
             ],
         ),
-        "workflow state v2 with execution coordinator v7": (
+        "shared sequential native fallback": (
+            ctx.skills_root / "worktree/scripts/workflow_dispatch.py",
+            ["--ephemeral", "workspace-write", "--add-dir", "fresh_session=True"],
+        ),
+        "workflow state and immutable execution basis": (
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "agentic-sdlc/execution-coordinator-v7",
+                "workflow/execution-coordinator-v1",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
-                "sessions/<session-hash>.json",
+                "bindings/<native-session-sha256>.json",
                 'phase: "create-pr"',
                 "expected_head",
                 "base_head",
@@ -1636,14 +1647,15 @@ def check_execution_plane_contract(ctx: Context) -> None:
             [
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
-                "coordinator schema v1 through v6",
+                "`agentic-sdlc/execution-coordinator-v1` through `v7`",
+                "workflow/execution-coordinator-v1",
                 "sdlc-update-documents, then align",
             ],
         ),
     }
     for name, (path, terms) in checks.items():
         text = read_text(path)
-        missing = [term for term in terms if term not in text]
+        missing = [term for term in terms if " ".join(term.split()) not in " ".join(text.split())]
         status = "PASS" if text and not missing else "FAIL"
         detail = f"Execution-plane contract terms present in {path}."
         if not text:
@@ -1714,9 +1726,9 @@ def check_repair_loop_contract(ctx: Context) -> None:
         ),
         "corrective execution assignment": (
             ctx.skills_root
-            / "sdlc-prepare-execution"
+            / "worktree"
             / "scripts"
-            / "sdlc_execution_core.py",
+            / "workflow_execution.py",
             [
                 "diagnosis_id",
                 "regression_oracle",
@@ -2252,7 +2264,8 @@ def valid_verification_context(ctx: Context, value: Any, *, current_head: str) -
     return ancestry.returncode == 0
 
 
-def setup_disposable_project(ctx: Context) -> None:
+def setup_disposable_project(ctx: Context) -> bool:
+    first_check = len(ctx.checks)
     project = ctx.disposable_project
     if project.is_symlink() or (project.exists() and not project.is_dir()):
         ctx.add(
@@ -2261,7 +2274,7 @@ def setup_disposable_project(ctx: Context) -> None:
             "FAIL",
             "Disposable project root is symlinked or is not a directory; no project files were changed.",
         )
-        return
+        return False
     git_path = project / ".git"
     if project.exists():
         try:
@@ -2275,13 +2288,13 @@ def setup_disposable_project(ctx: Context) -> None:
                 "FAIL",
                 "Existing non-Git disposable directory is not verifier-owned; no project files were changed.",
             )
-            return
+            return False
     project.mkdir(parents=True, exist_ok=True)
     try:
         owned_git_origin.preflight(project)
     except owned_git_origin.OriginError as error:
         ctx.add("Disposable SDLC golden-path run results", "Git configuration", "FAIL", str(error))
-        return
+        return False
     files = {
         DISPOSABLE_FIXTURE_MARKER: DISPOSABLE_FIXTURE_MARKER_CONTENT,
         "README.md": "# Disposable SDLC Verification Project\n",
@@ -2297,21 +2310,7 @@ def setup_disposable_project(ctx: Context) -> None:
         "services/resource-validator/docs/.gitkeep": "",
         "services/unrelated/README.md": "# Unrelated sibling fixture\n",
     }
-    old_files = {
-        "pyproject.toml": (
-            '[project]\nname = "sdlc-verification-project"\nversion = "0.0.0"\n'
-        ),
-        "src/resource_name.py": '"""Disposable verification module."""\n',
-        "tests/test_resource_name.py": "def test_placeholder():\n    assert True\n",
-        "docs/.gitkeep": "",
-    }
-    old_fixture_files = {
-        "README.md": "# Disposable SDLC Verification Project\n",
-        **old_files,
-    }
-    fixture_targets = [
-        project / relative for relative in set(files).union(old_fixture_files)
-    ]
+    fixture_targets = [project / relative for relative in files]
 
     def unsafe_fixture_target(path: Path) -> bool:
         current = project
@@ -2334,9 +2333,8 @@ def setup_disposable_project(ctx: Context) -> None:
             "FAIL",
             "Disposable fixture contains symlinked or non-canonical paths; no project files were changed.",
         )
-        return
+        return False
     existing_repository = (project / ".git").exists()
-    tracked_files: set[str] = set()
     remotes: list[str] = []
     if existing_repository:
         tracked = git(project, "ls-files", "-z")
@@ -2348,18 +2346,8 @@ def setup_disposable_project(ctx: Context) -> None:
                 "FAIL",
                 "Existing disposable project ownership could not be verified.",
             )
-            return
-        tracked_files = {path for path in tracked.stdout.split("\0") if path}
+            return False
         remotes = [line for line in remote_result.stdout.splitlines() if line]
-    old_fixture = (
-        existing_repository
-        and not remotes
-        and tracked_files == set(old_fixture_files)
-        and all(
-            read_text(project / relative) == content
-            for relative, content in old_fixture_files.items()
-        )
-    )
     owned_fixture = (
         existing_repository
         and read_text(project / DISPOSABLE_FIXTURE_MARKER)
@@ -2375,15 +2363,15 @@ def setup_disposable_project(ctx: Context) -> None:
                 "FAIL",
                 "Existing disposable project is dirty; unknown changes were preserved.",
             )
-            return
-        if not (old_fixture or owned_fixture):
+            return False
+        if not owned_fixture:
             ctx.add(
                 "Disposable SDLC golden-path run results",
                 "Disposable project",
                 "FAIL",
                 "Existing clean Git repository is not a canonical verifier-owned fixture; no project files were changed.",
             )
-            return
+            return False
         if remotes or any(
             (ctx.verification_root / name).exists()
             or (ctx.verification_root / name).is_symlink()
@@ -2396,28 +2384,18 @@ def setup_disposable_project(ctx: Context) -> None:
                     "Disposable SDLC golden-path run results", "Owned local Git origin",
                     "FAIL", str(error),
                 )
-                return
+                return False
     for rel, content in files.items():
         path = project / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(content, encoding="utf-8")
-    if old_fixture:
-        for relative, content in old_files.items():
-            path = project / relative
-            if path.is_file() and read_text(path) == content:
-                path.unlink()
-        for relative in ("src", "tests", "docs"):
-            try:
-                (project / relative).rmdir()
-            except OSError:
-                pass
     if not existing_repository:
         try:
             owned_git_origin.create_baseline(project)
         except owned_git_origin.OriginError as error:
             ctx.add("Disposable SDLC golden-path run results", "Git baseline", "FAIL", str(error))
-            return
+            return False
         commit_message = "initial disposable verification project"
     else:
         git(project, "add", "-A")
@@ -2464,7 +2442,7 @@ def setup_disposable_project(ctx: Context) -> None:
                 "Disposable SDLC golden-path run results", "Owned local Git origin",
                 "FAIL", str(error),
             )
-            return
+            return False
         ctx.add(
             "Disposable SDLC golden-path run results", "Owned local Git origin",
             "PASS", "Exactly one owned local origin retains its frozen baseline.",
@@ -2480,7 +2458,7 @@ def setup_disposable_project(ctx: Context) -> None:
                 "FAIL",
                 "Preserved verification context contains invalid UTF-8 and was not modified.",
             )
-            return
+            return False
         except (OSError, json.JSONDecodeError):
             existing_context = None
         if not valid_verification_context(
@@ -2504,6 +2482,8 @@ def setup_disposable_project(ctx: Context) -> None:
             "FAIL",
             "Disposable baseline Git identity is unavailable.",
         )
+
+    return not any(check.status == "FAIL" for check in ctx.checks[first_check:])
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
@@ -2533,42 +2513,9 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
 
 def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
     run_dir = ctx.fixture_host_home / "sdlc-runs" / DEFAULT_PROJECT_ID / DEFAULT_RUN_ID
-    write_json(
-        run_dir.parent / "active.lock",
-        {
-            "project_id": DEFAULT_PROJECT_ID,
-            "project_root": str(ctx.selected_project),
-            "run_id": DEFAULT_RUN_ID,
-            "status": "running",
-        },
-    )
-    write_json(run_dir.parent / "active-run.json", {"run_id": DEFAULT_RUN_ID})
-    prompt_filename = "20260716T000000Z--verify-agentic-sdlc.md"
-    write_json(
-        run_dir / "run.json",
-        {"status": "running", "prompt": {"filename": prompt_filename}},
-    )
-    write_json(
-        run_dir / "prompt.json",
-        {
-            "schema": "agentic-sdlc/prompt-binding-v2",
-            "run_id": DEFAULT_RUN_ID,
-            "prompt_id": "prompt-" + "1" * 32,
-            "prompt_filename": prompt_filename,
-            "lineage_root": DEFAULT_RUN_ID,
-            "predecessor": None,
-            "revisions": [
-                {
-                    "revision": "r0001",
-                    "sha256": "a" * 64,
-                    "intent_sha256": "b" * 64,
-                    "kind": "initial",
-                    "snapshot": "inputs/r0001/prompt.md",
-                    "steering_status": "initial",
-                }
-            ],
-        },
-    )
+    sys.path.insert(0, str(ctx.skills_root / 'worktree/scripts'))
+    from test_workflow_fixture import seed
+    seed(run_dir, ctx.selected_project, DEFAULT_PROJECT_ID, 'verification-session', status='running')
     write_json(
         run_dir / "current-state.json",
         {
@@ -2613,28 +2560,13 @@ def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
     return run_dir
 
 
-def check_prompt_workspace(ctx: Context) -> None:
-    helper = ctx.skills_root / "sdlc-start" / "scripts" / "prompt_workspace.py"
-    tests = ctx.skills_root / "sdlc-start" / "scripts" / "test_prompt_workspace.py"
-    reference = ctx.skills_root / "sdlc-start" / "references" / "prompt-workspace.md"
-    template = ctx.skills_root / "sdlc-start" / "assets" / "prompt-template.md"
-    missing = [
-        path for path in (helper, tests, reference, template) if not path.is_file()
-    ]
-    if missing:
-        ctx.add(
-            "Idempotency results",
-            "Prompt workspace source",
-            "FAIL",
-            "Missing: " + ", ".join(str(path) for path in missing),
-        )
-        return
-    ctx.add(
-        "Idempotency results",
-        "Prompt workspace source",
-        "PASS",
-        "Prompt helper, regression tests, reference, and template are available.",
-    )
+def check_direct_objectives(ctx: Context) -> None:
+    paths = ['worktree/scripts/workflow_intake.py', 'worktree/scripts/workflow_objectives.py',
+             'worktree/scripts/workflow_impact.py', 'worktree/references/workflow-contract.md',
+             'worktree/scripts/test_workflow_objectives.py']
+    missing = [path for path in paths if not (ctx.skills_root / path).is_file()]
+    ctx.add('Idempotency results', 'Direct objective contracts', 'FAIL' if missing else 'PASS',
+            'Missing: ' + ', '.join(missing) if missing else 'Shared direct intake, immutable basis and continuation contracts are present.')
 
 
 def parse_unittest_results(output: str) -> tuple[set[str], set[str]]:
@@ -2667,18 +2599,7 @@ def check_capability_regressions(ctx: Context) -> None:
             ],
             ctx.skills_root,
         ),
-        "prompt": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "-v",
-                "sdlc-start/scripts/test_prompt_workspace.py",
-                "sdlc-start/scripts/test_sdlc_start_contract.py",
-                "sdlc-start/scripts/test_validate_project_specs.py",
-            ],
-            ctx.skills_root,
-        ),
+        "objective": ([sys.executable, '-m', 'unittest', 'discover', '-v', '-s', str(ctx.skills_root / 'sdlc-start/scripts'), '-p', 'test_*.py'], ctx.skills_root),
         "execution": (
             [
                 sys.executable,
@@ -2687,25 +2608,13 @@ def check_capability_regressions(ctx: Context) -> None:
                 "discover",
                 "-v",
                 "-s",
-                str(ctx.skills_root / "sdlc-prepare-execution" / "scripts"),
+                str(ctx.skills_root / "worktree" / "scripts"),
                 "-p",
                 "test_*.py",
             ],
             ctx.skills_root,
         ),
-        "dispatch": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "sdlc-implement-plan"
-                    / "scripts"
-                    / "test_worker_dispatch.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
+        "dispatch": ([sys.executable, 'worktree/scripts/test_workflow_dispatch.py', '-v'], ctx.skills_root),
         "worktree": (
             [sys.executable, "scripts/test-worktree-manager.py", "-v"],
             ctx.skills_root / "worktree",
@@ -2714,14 +2623,8 @@ def check_capability_regressions(ctx: Context) -> None:
             [sys.executable, "scripts/test-git-promotion.py", "-v"],
             ctx.skills_root / "worktree",
         ),
-        "task-implementer": (
-            [sys.executable, "scripts/test-worktree-interoperability.py", "-v"],
-            ctx.skills_root / "task-implementer",
-        ),
-        "task-waves": (
-            [sys.executable, "scripts/test-task-waves.py", "-v"],
-            ctx.skills_root / "task-implementer",
-        ),
+        "implement": ([sys.executable, 'implement/scripts/test_implement_contract.py', '-v'], ctx.skills_root),
+        "task-waves": ([sys.executable, 'worktree/scripts/test_workflow_contracts.py', '-v'], ctx.skills_root),
         "hooks": (
             [
                 sys.executable,
@@ -2829,7 +2732,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 "-m",
                 "unittest",
                 "-v",
-                "sdlc-workflow-test/scripts/test_three_tier_prompt.py",
+                "sdlc-workflow-test/scripts/test_three_tier_objective.py",
                 "sdlc-workflow-test/scripts/test_three_tier_browser.py",
                 "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
                 "sdlc-workflow-test/scripts/test_owned_git_origin.py",
@@ -2849,7 +2752,7 @@ def check_capability_regressions(ctx: Context) -> None:
 
     capabilities: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
         "three-tier.harness": (
-            "Three-tier prompt and lifecycle harness",
+            "Three-tier objective and lifecycle harness",
             (
                 ("three-tier", "test_aggregate_profile_resolves_its_owned_lifecycle_and_independent_identity"),
                 ("three-tier", "test_cleanup_signals_only_owned_runner_and_chrome"),
@@ -2874,7 +2777,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("three-tier", "test_interrupted_receipt_publication_is_not_adopted"),
                 (
                     "three-tier",
-                    "test_rendered_starter_is_accepted_as_a_new_managed_run",
+                    "test_rendered_objective_has_no_managed_frontmatter",
                 ),
                 ("three-tier", "test_renderer_rejects_compose_identity_drift"),
                 (
@@ -2970,70 +2873,12 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
             ),
         ),
-        "public.interface": (
-            "Public two-command contract",
-            (
-                ("prompt", "test_public_interface_is_mirrored"),
-                (
-                    "prompt",
-                    "test_private_completion_helpers_do_not_expand_public_surface",
-                ),
-            ),
-        ),
-        "prompt.workspace-init": (
-            "Prompt workspace initialization",
-            (
-                ("prompt", "test_init_is_idempotent_and_survives_git_init"),
-                ("prompt", "test_concurrent_init_creates_one_starter_prompt"),
-            ),
-        ),
-        "spec.validation-receipt": (
-            "Owner-issued project-spec validation receipt",
-            (
-                (
-                    "prompt",
-                    "test_valid_specs_emit_current_advisory_snapshot",
-                ),
-                ("prompt", "test_ready_feature_with_placeholder_is_rejected"),
-                ("prompt", "test_unknown_requirement_mapping_is_rejected"),
-                ("prompt", "test_foreign_owner_marker_is_rejected"),
-                ("prompt", "test_requirements_ready_admits_design_without_settling_impact"),
-                ("prompt", "test_requirements_ready_rejects_stale_or_unresolved_refinement"),
-                ("prompt", "test_missing_pair_bootstrap_preserves_adapter_ownership"),
-                ("project-specs", "test_bootstrap_missing_specs_publishes_pending_pair_and_preserves_counterpart"),
-            ),
-        ),
-        "prompt.history": (
-            "Prompt metadata history",
-            (
-                (
-                    "prompt",
-                    "test_editor_workspace_new_prompt_history_and_metadata_listing",
-                ),
-                (
-                    "prompt",
-                    "test_activity_is_monotonic_and_rejected_intake_does_not_reorder",
-                ),
-            ),
-        ),
-        "prompt.rename": (
-            "Prompt exact-rename safety",
-            (
-                ("prompt", "test_exact_manual_rename_repairs_binding_and_run_mirror"),
-                ("prompt", "test_rename_and_edit_or_stale_copy_fails_closed"),
-                ("hooks", "test_stop_uses_repaired_renamed_prompt_filename"),
-            ),
-        ),
-        "prompt.lifecycle": (
-            "Prompt run and steering lifecycle",
-            (
-                ("prompt", "test_new_resume_steering_resolve_and_completed_rerun"),
-                (
-                    "prompt",
-                    "test_concurrent_unchanged_intake_creates_one_run_and_revision",
-                ),
-            ),
-        ),
+        "public.interface": ('Direct objective public entry points', (('objective', 'test_public_interface_is_mirrored'), ('implement', 'test_public_interface_and_policy'), ('implement', 'test_retired_private_commands_fail_before_mutation'))),
+        "objective.intake": ('Direct objective intake', (('execution', 'test_accept_persists_only_normalized_objective'), ('execution', 'test_current_plan_has_explicit_provenance'), ('execution', 'test_detached_and_unborn_git_are_rejected'))),
+        "spec.validation-receipt": ('Owner-issued specification validation and no-impact outcomes', (('objective', 'test_valid_specs_emit_current_advisory_snapshot'), ('objective', 'test_ready_feature_with_placeholder_is_rejected'), ('objective', 'test_unknown_requirement_mapping_is_rejected'), ('objective', 'test_foreign_owner_marker_is_rejected'), ('task-waves', 'test_no_impact_needs_no_spec_documents'), ('project-specs', 'test_bootstrap_missing_specs_publishes_pending_pair_and_preserves_counterpart'))),
+        "objective.revisions": ('Normalized objective revisions', (('execution', 'test_raw_history_keys_are_rejected'), ('execution', 'test_snapshot_tampering_is_rejected'), ('execution', 'test_other_objectives_are_not_queued'))),
+        "objective.binding": ('Explicit native session binding', (('execution', 'test_new_session_does_not_infer_sole_active_run'), ('execution', 'test_restore_binding_is_read_only'), ('execution', 'test_cross_session_requires_explicit_continue'))),
+        "objective.lifecycle": ('Objective steering and cancellation', (('execution', 'test_same_session_continues_without_new_revision'), ('execution', 'test_steering_fences_dispatch_before_replanning'), ('execution', 'test_cancellation_fences_without_git_rollback'), ('execution', 'test_old_run_schema_is_rejected_without_conversion'))),
         "execution.scope": (
             "Exact initialized-folder scope",
             (
@@ -3212,86 +3057,14 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
             ),
         ),
-        "interop.task-implementer-compatibility": (
-            "Task Implementer persistent-lane coexistence",
-            (
-                (
-                    "task-implementer",
-                    "test_workers_remain_internal_to_the_outer_worktree_branch",
-                ),
-                (
-                    "task-implementer",
-                    "test_private_interop_rejects_public_lifecycle_before_subprocess",
-                ),
-                (
-                    "task-implementer",
-                    "test_managed_write_claim_may_span_the_full_checkout",
-                ),
-                (
-                    "task-implementer",
-                    "test_resume_repairs_exact_terminal_receipt_and_rejects_stale_sha",
-                ),
-                (
-                    "task-implementer",
-                    "test_successive_promotions_advance_the_outer_lease_history",
-                ),
-                (
-                    "task-implementer",
-                    "test_replan_claims_block_a_conflicting_live_lane_before_state_write",
-                ),
-                (
-                    "task-implementer",
-                    "test_exclusive_domain_classes_conflict_across_lanes_with_distinct_keys",
-                ),
-                (
-                    "task-waves",
-                    "test_repository_claims_add_every_exclusive_class_sentinel",
-                ),
-                (
-                    "worktree",
-                    "test_task_lane_rejects_ordinary_task_lease_without_state_mutation",
-                ),
-                (
-                    "worktree",
-                    "test_task_lane_missing_branch_identity_fails_closed_without_lease",
-                ),
-                (
-                    "execution",
-                    "test_private_interop_rejects_task_lane_before_state_write",
-                ),
-                (
-                    "execution",
-                    "test_task_lane_rejection_leaves_next_task_generation_available",
-                ),
-            ),
-        ),
-        "interop.task-implementer-promotion": (
-            "Task Implementer exact promotion and cleanup lifecycle",
-            (
-                (
-                    "task-waves",
-                    "test_full_repository_worktrees_ordered_merge_ff_promotion_and_cleanup",
-                ),
-                (
-                    "task-waves",
-                    "test_remote_default_head_drift_does_not_affect_lane_promotion",
-                ),
-                (
-                    "task-waves",
-                    "test_branch_advance_race_retains_worker_ref_and_blocks_promotion",
-                ),
-                (
-                    "task-waves",
-                    "test_legacy_wave_and_interop_schemas_are_rejected",
-                ),
-            ),
-        ),
+        "interop.shared-execution": ('Shared Worktree execution and assignment runtime ownership', (('execution', 'test_managed_outer_execution_releases_to_local_source_integration'), ('execution', 'test_private_interop_rejects_public_lifecycle_before_subprocess'), ('task-waves', 'test_refill_waits_for_admission_and_does_not_wait_for_peer'), ('task-waves', 'test_runtime_lease_requires_exact_worker_and_exclusive_identity'))),
+        "interop.implement-promotion": ('Automatic Implement delivery and exact cleanup', (('task-waves', 'test_clean_nondefault_delivery_and_completion'), ('task-waves', 'test_unknown_default_delivers_feature_checkout'), ('task-waves', 'test_dirty_source_requires_dependencies_and_preserves_unrelated_content'), ('task-waves', 'test_cancellation_drains_writers_without_admitting_results'))),
         "steering.continuation": (
-            "Prompt-bound steering continuation",
+            "Objective-bound steering continuation",
             (
                 ("hooks", "test_stop_continues_running_next_skill"),
                 ("hooks", "test_stop_continues_for_pause_steering"),
-                ("hooks", "test_stop_uses_repaired_renamed_prompt_filename"),
+                ("hooks", "test_stop_reconstructs_explicit_project_continuation"),
             ),
         ),
         "publication.authorization": (
@@ -3396,7 +3169,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("verifier", "test_capability_matrix_isolates_unrelated_warnings"),
                 ("verifier", "test_report_is_private"),
                 ("verifier", "test_verification_root_is_private"),
-                ("verifier", "test_flat_fixture_migrates_cleanly_to_nested_scope"),
+                ("verifier", "test_flat_fixture_is_rejected_without_conversion"),
                 ("verifier", "test_dirty_fixture_fails_without_mutation"),
                 (
                     "verifier",
@@ -3454,7 +3227,22 @@ def check_capability_regressions(ctx: Context) -> None:
         skipped = [test for suite, test in requirements if test in results[suite][2]]
         status = "FAIL" if failed_suites or missing else "WARN" if skipped else "PASS"
         if failed_suites:
-            detail = "Required regression suite failed: " + ", ".join(failed_suites)
+            summaries = []
+            for suite in failed_suites:
+                result = results[suite][0]
+                # Retain actionable identifiers, never exception bodies or raw
+                # stdout, which can contain fixture values or private paths.
+                names = sorted(set(re.findall(
+                    r"^(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,120})(?:\s|$)",
+                    result.stderr + result.stdout, re.MULTILINE,
+                )))
+                summary = f"{suite} (exit {result.returncode}"
+                if names:
+                    summary += "; failing tests: " + ", ".join(names[:20])
+                    if len(names) > 20:
+                        summary += f"; {len(names) - 20} more"
+                summaries.append(summary + ")")
+            detail = "Required regression suite failed: " + ", ".join(summaries)
         elif missing:
             detail = "Required regression tests were not executed: " + ", ".join(
                 missing
@@ -3539,9 +3327,8 @@ def denied(result: dict[str, Any]) -> str | None:
 
 
 def check_hooks_with_fixtures(ctx: Context) -> None:
-    # Hook fixtures must never share the prompt-bound CODEX_HOME used by a live
-    # run. Otherwise active-run discovery can resolve the operator's real run
-    # instead of the deterministic fixture and mutate or misread its state.
+    # Hook fixtures use a separate native home and explicit synthetic binding;
+    # they must never resolve an operator's live run.
     ctx = replace(
         ctx,
         fixture_host_home=ctx.verification_root / "hook-fixture-agent-home",
@@ -3593,9 +3380,9 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
         write_json(
             run_dir / "run.json",
             {
+                **json.loads((run_dir / 'run.json').read_text()),
                 "status": run_status or status,
                 "blocked_reason": blocked_reason,
-                "prompt": {"filename": "20260716T000000Z--verify-agentic-sdlc.md"},
             },
         )
         write_json(run_dir / "current-state.json", current_state)
@@ -3741,10 +3528,10 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
     reset_stop_state(next_skill="sdlc-validate-codes")
     stop_continue = run_hook(stop_hook, stop_payload(ctx), ctx)
     prompt = str(stop_continue.get("reason") or "")
-    bound_command = "Use $sdlc-start run 20260716T000000Z--verify-agentic-sdlc.md"
+    bound_command = "Use $sdlc-start continue"
     ctx.add(
         "Stop continuation test results",
-        "Continue through prompt-bound $sdlc-start",
+        "Continue through explicitly bound $sdlc-start",
         "PASS"
         if stop_continue.get("decision") == "block"
         and bound_command in prompt
@@ -3784,17 +3571,16 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
         else json.dumps(steering, sort_keys=True),
     )
 
-    unbound_dir = reset_stop_state(next_skill="sdlc-validate-codes")
-    (unbound_dir / "prompt.json").unlink()
-    write_json(unbound_dir / "run.json", {"status": "running"})
+    reset_stop_state(next_skill="sdlc-validate-codes")
+    binding = ctx.fixture_host_home / "sdlc-runs" / "bindings" / (
+        hashlib.sha256(b"verification-session").hexdigest() + ".json"
+    )
+    binding.unlink()
     unbound = run_hook(stop_hook, stop_payload(ctx), ctx)
     ctx.add(
         "Stop continuation test results",
-        "Unbound active run fails closed",
-        "PASS"
-        if unbound.get("continue") is False
-        and "WORKFLOW_UPGRADE_REQUIRED" in str(unbound.get("stopReason"))
-        else "FAIL",
+        "Unbound active run does not infer ownership",
+        "PASS" if unbound == {"continue": True} else "FAIL",
         str(unbound.get("stopReason") or unbound),
     )
 
@@ -4419,11 +4205,11 @@ def add_agent_required_sections(ctx: Context) -> None:
         ),
         "idempotency": (
             "Idempotency rerun",
-            "rerun the completed prompt without duplicate state",
+            "resume the completed objective without duplicate state",
         ),
         "change-request": (
             "Change-request handling",
-            "apply a scoped prompt change request",
+            "apply scoped steering to the accepted objective",
         ),
         "failure-routing": (
             "Failure-loop routing",
@@ -4496,18 +4282,18 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ),
         ("Installed worktree dependency", "runtime.worktree-dependency"),
         ("Source-installed parity", "runtime.skill-parity"),
-        ("Public two-command interface", "public.interface"),
-        ("Prompt workspace init", "prompt.workspace-init"),
-        ("Prompt history", "prompt.history"),
-        ("Prompt rename safety", "prompt.rename"),
-        ("Prompt lifecycle", "prompt.lifecycle"),
+        ("Public direct entry points", "public.interface"),
+        ("Direct objective intake", "objective.intake"),
+        ("Objective revisions", "objective.revisions"),
+        ("Explicit session binding", "objective.binding"),
+        ("Objective lifecycle", "objective.lifecycle"),
         ("Execution scope", "execution.scope"),
         ("Session recovery", "execution.sessions-recovery"),
         ("Future-wave replan", "execution.replan"),
         ("Secret persistence gate", "execution.secret-gate"),
         ("Sequential fallback", "execution.sequential-fallback"),
         ("Managed outer lease", "interop.outer-lease-v4"),
-        ("Task Implementer interoperability", "interop.task-implementer-compatibility"),
+        ("Implement interoperability", "interop.shared-execution"),
         ("Steering continuation", "steering.continuation"),
         ("Verifier self-tests", "verifier.self-tests"),
         ("Three-tier harness contract", "three-tier.harness"),
@@ -4629,13 +4415,13 @@ def report(ctx: Context) -> str:
     lines.extend(
         [
             "- `python3 align-skill/scripts/validate-skill-structure.py .`",
-            "- `python3 -m unittest -v sdlc-start/scripts/test_prompt_workspace.py sdlc-start/scripts/test_sdlc_start_contract.py sdlc-start/scripts/test_validate_project_specs.py`",
-            "- `python3 -m unittest discover -v -s sdlc-prepare-execution/scripts -p 'test_*.py'`",
-            "- `python3 sdlc-implement-plan/scripts/test_worker_dispatch.py -v`",
+            "- `python3 -m unittest -v worktree/scripts/test_workflow_objectives.py sdlc-start/scripts/test_sdlc_start_contract.py sdlc-start/scripts/test_validate_project_specs.py`",
+            "- `python3 -m unittest discover -v -s worktree/scripts -p 'test_*.py'`",
+            "- `python3 worktree/scripts/test_workflow_dispatch.py -v`",
             "- `python3 worktree/scripts/test-worktree-manager.py -v`",
             "- `python3 worktree/scripts/test-git-promotion.py -v`",
-            "- `python3 task-implementer/scripts/test-worktree-interoperability.py -v`",
-            "- `python3 task-implementer/scripts/test-task-waves.py -v`",
+            "- `python3 implement/scripts/test-worktree-interoperability.py -v`",
+            "- `python3 implement/scripts/test-task-waves.py -v`",
             "- `python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py -v`",
             "- `python3 sdlc-evaluate/scripts/test_observability_contract.py -v`",
             "- `python3 -m unittest -v sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py sdlc-workflow-test/scripts/test_collect_live_evidence.py`",
@@ -4732,10 +4518,17 @@ def main(argv: list[str]) -> int:
     check_repair_loop_contract(ctx)
     check_skill_discovery(ctx)
     check_hook_config(ctx)
-    setup_disposable_project(ctx)
-    check_prompt_workspace(ctx)
+    fixture_admitted = setup_disposable_project(ctx)
+    check_direct_objectives(ctx)
     check_capability_regressions(ctx)
-    check_hooks_with_fixtures(ctx)
+    if fixture_admitted:
+        check_hooks_with_fixtures(ctx)
+    else:
+        for section in ("PreToolUse safety test results", "Stop continuation test results"):
+            ctx.add(
+                section, "Hook fixture prerequisite", "FAIL",
+                "Disposable fixture admission failed; hook fixtures were not created or executed.",
+            )
     add_agent_required_sections(ctx)
     write_report(ctx, report_path)
     print(f"Report path: {report_path}")

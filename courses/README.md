@@ -163,8 +163,8 @@ Normal sync prepares its pinned workstation dependencies in an isolated uv
 environment, checks the installed monitoring services, saves private connection
 settings and transfers them with the course sources. It ensures Python 3.12 and
 venv support on the login node, then opens SSH. Source and settings verification
-must succeed before the shell opens. Sync rejects an incomplete setup toolset
-before contacting the destination. Remote-only results and runtime history are
+must succeed before the shell opens. Sync rejects an incomplete setup or report
+delivery toolset before contacting the destination. Remote-only results and runtime history are
 preserved.
 
 First use reads `CLUSTER_CONFIG`, `CLUSTER_TARGET`, `KUBECONFIG` and

@@ -1,0 +1,8 @@
+id,should_trigger,prompt
+explicit-plan,true,"$implement"
+explicit-request,true,"$implement Add the requested bounded retry behavior."
+explicit-continue,true,"$implement continue ./services/example"
+ordinary-edit,false,"Fix this one typo."
+sdlc,false,"$sdlc-start Build the accepted feature."
+review,false,"Review the current changes without implementing them."
+implement-steered-delivery,true,$implement continue example-project after the accepted steering revision.

@@ -313,7 +313,7 @@ class RepairControlTests(unittest.TestCase):
         coordinator.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v7",
+                    "schema": "workflow/execution-coordinator-v1",
                     "status": "integrated",
                     "active_wave": None,
                     "cleanup_retained": [],
@@ -831,7 +831,7 @@ class RepairControlTests(unittest.TestCase):
         coordinator_path.write_text(
             json.dumps(
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v7",
+                    "schema": "workflow/execution-coordinator-v1",
                     "integration_worktree": str(integration),
                 }
             ),
@@ -1002,7 +1002,7 @@ class RepairControlTests(unittest.TestCase):
                 coordinator_path.write_text(
                     json.dumps(
                         {
-                            "schema": "agentic-sdlc/execution-coordinator-v7",
+                            "schema": "workflow/execution-coordinator-v1",
                             "status": "done",
                             "base_branch": "main",
                             "project_root": str(promoted_project),

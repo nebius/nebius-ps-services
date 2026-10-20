@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ STOP = HOOK_DIR / "stop_sdlc_continue.py"
 
 
 def run_hook(script: Path, payload: dict, codex_home: Path) -> dict:
+    payload = {"session_id": "hook-test-worker" if "/TASK-" in str(payload.get("cwd", "")) else "hook-test-session", **payload}
     env = os.environ.copy()
     env["CODEX_HOME"] = str(codex_home)
     result = subprocess.run(
@@ -44,6 +46,7 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    path.chmod(0o600)
 
 
 def git(project: Path, *args: str) -> str:
@@ -61,7 +64,7 @@ def git(project: Path, *args: str) -> str:
 class HookTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.codex_home = self.root / "codex"
         self.origin = self.root / "origin.git"
         git(self.root, "init", "--bare", "-q", str(self.origin))
@@ -108,41 +111,9 @@ class HookTestCase(unittest.TestCase):
         next_skill: str = "sdlc-validate-codes",
     ) -> Path:
         run_dir = self.codex_home / "sdlc-runs" / "test-project" / "run-1"
-        lock = {
-            "project_id": "test-project",
-            "project_root": str(self.project),
-            "run_id": "run-1",
-            "status": status,
-            "created_at": "2026-06-16T00:00:00Z",
-        }
-        write_json(run_dir.parent / "active.lock", lock)
-        write_json(run_dir.parent / "active-run.json", {"run_id": "run-1"})
-        prompt_filename = "20260716T000000Z--test-feature.md"
-        write_json(
-            run_dir / "run.json",
-            {"status": status, "prompt": {"filename": prompt_filename}},
-        )
-        write_json(
-            run_dir / "prompt.json",
-            {
-                "schema": "agentic-sdlc/prompt-binding-v2",
-                "run_id": "run-1",
-                "prompt_id": "prompt-" + "1" * 32,
-                "prompt_filename": prompt_filename,
-                "lineage_root": "run-1",
-                "predecessor": None,
-                "revisions": [
-                    {
-                        "revision": "r0001",
-                        "sha256": "a" * 64,
-                        "intent_sha256": "b" * 64,
-                        "kind": "initial",
-                        "snapshot": "inputs/r0001/prompt.md",
-                        "steering_status": "initial",
-                    }
-                ],
-            },
-        )
+        sys.path.insert(0, str(HOOK_DIR.parents[2] / 'worktree/scripts'))
+        from test_workflow_fixture import seed
+        seed(run_dir, self.project, 'test-project', 'hook-test-session', status=status)
         write_json(
             run_dir / "current-state.json",
             {
@@ -384,7 +355,8 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "agentic-sdlc/execution-coordinator-v7",
+                    "schema": "workflow/execution-coordinator-v1",
+                "owner": "agentic-sdlc",
                     "status": "done",
                     "base_branch": "main",
                     "project_root": str(self.project),
@@ -468,7 +440,7 @@ class HookTestCase(unittest.TestCase):
     def registered_integration(self) -> tuple[Path, Path]:
         run_dir = self.active_run(phase="execution_prepared", next_skill="sdlc-tdd")
         integration = run_dir / "worktrees" / "FEAT-001" / "integration"
-        branch_name = "codex/sdlc/run-1/feat-001/integration"
+        branch_name = "codex/agentic-sdlc/run-1/feat-001/integration"
         git(self.project, "branch", branch_name, "HEAD")
         integration.parent.mkdir(parents=True)
         git(self.project, "worktree", "add", str(integration), branch_name)
@@ -479,7 +451,8 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "agentic-sdlc/execution-coordinator-v7",
+                "schema": "workflow/execution-coordinator-v1",
+                "owner": "agentic-sdlc",
                 "feature_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
@@ -515,7 +488,7 @@ class HookTestCase(unittest.TestCase):
     def registered_worker(self) -> tuple[Path, Path]:
         run_dir, integration = self.registered_integration()
         worker = run_dir / "worktrees" / "FEAT-001" / "waves" / "WAVE-001" / "TASK-001"
-        branch_name = "codex/sdlc/run-1/feat-001/wave-001/task-001"
+        branch_name = "codex/agentic-sdlc/run-1/feat-001/wave-001/task-001"
         git(integration, "branch", branch_name, "HEAD")
         worker.parent.mkdir(parents=True)
         git(integration, "worktree", "add", str(worker), branch_name)
@@ -531,7 +504,7 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "agentic-sdlc/worker-assignment-v4",
+                "schema": "workflow/worker-assignment-v1",
                 "feature_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",
@@ -541,6 +514,14 @@ class HookTestCase(unittest.TestCase):
                 "git_common_dir": str(common),
             },
         )
+        assignment_path = run_dir / 'execution/FEAT-001/assignments/WAVE-001/TASK-001.json'
+        assignment = json.loads(assignment_path.read_text())
+        assignment['owner'] = 'agentic-sdlc'
+        assignment['assignment_digest'] = hashlib.sha256(json.dumps(assignment,sort_keys=True,separators=(',', ':'),ensure_ascii=False).encode()).hexdigest()
+        write_json(assignment_path, assignment)
+        write_json(run_dir / 'execution/FEAT-001/tasks/WAVE-001/TASK-001.json', {
+            'assignment_digest': assignment['assignment_digest'],
+            'worker_session_hash': hashlib.sha256(b'hook-test-worker').hexdigest()})
         return run_dir, worker
 
     def pre_payload(
@@ -1931,7 +1912,7 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertEqual(result.get("decision"), "block")
         self.assertIn(
-            "Use $sdlc-start run 20260716T000000Z--test-feature.md",
+            "Use $sdlc-start continue",
             result.get("reason", ""),
         )
         self.assertNotIn("Use $sdlc-start.", result.get("reason", ""))
@@ -1952,7 +1933,7 @@ class HookTestCase(unittest.TestCase):
                 reason = result.get("reason", "")
                 self.assertEqual(result.get("decision"), "block")
                 self.assertIn(
-                    "Use $sdlc-start run 20260716T000000Z--test-feature.md", reason
+                    "Use $sdlc-start continue", reason
                 )
                 self.assertIn(canonical_name, reason)
                 self.assertNotIn(f"Next recommended skill: {short_name}", reason)
@@ -2123,7 +2104,7 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertEqual(result.get("decision"), "block")
         self.assertIn(
-            "Use $sdlc-start run 20260716T000000Z--test-feature.md",
+            "Use $sdlc-start continue",
             result.get("reason", ""),
         )
         self.assertIn("STEERING.md", result.get("reason", ""))
@@ -2137,48 +2118,25 @@ class HookTestCase(unittest.TestCase):
         self.assertFalse(result["continue"])
         self.assertIn("No progress", result["stopReason"])
 
-    def test_stop_fails_closed_for_unbound_active_run(self) -> None:
-        run_dir = self.active_run(next_skill="sdlc-validate-codes")
-        (run_dir / "prompt.json").unlink()
-        write_json(
-            run_dir / "run.json",
-            {
-                "status": "running",
-                "prompt": {"filename": "20260716T000000Z--test-feature.md"},
-            },
-        )
-        result = run_hook(STOP, self.stop_payload(), self.codex_home)
-        self.assertFalse(result["continue"])
-        self.assertIn("WORKFLOW_UPGRADE_REQUIRED", result["stopReason"])
+    def test_stop_ignores_unbound_run_without_inferring_ownership(self):
+        run_dir = self.active_run()
+        (run_dir / 'objective.json').unlink()
+        self.assertEqual(run_hook(STOP, self.stop_payload(), self.codex_home), {'continue': True})
 
-    def test_stop_fails_closed_for_prompt_binding_mismatch(self) -> None:
-        run_dir = self.active_run(next_skill="sdlc-validate-codes")
-        write_json(
-            run_dir / "run.json",
-            {
-                "status": "running",
-                "prompt": {"filename": "different-managed-prompt.md"},
-            },
-        )
-        result = run_hook(STOP, self.stop_payload(), self.codex_home)
-        self.assertFalse(result["continue"])
-        self.assertIn("WORKFLOW_UPGRADE_REQUIRED", result["stopReason"])
+    def test_stop_ignores_mismatched_session_binding(self):
+        self.active_run()
+        binding = self.codex_home / 'sdlc-runs/bindings' / (hashlib.sha256(b'hook-test-session').hexdigest()+'.json')
+        data = json.loads(binding.read_text())
+        write_json(binding, {**data, 'objective_id': 'foreign'})
+        self.assertEqual(run_hook(STOP, self.stop_payload(), self.codex_home), {'continue': True})
 
-    def test_stop_uses_repaired_renamed_prompt_filename(self) -> None:
-        run_dir = self.active_run(next_skill="sdlc-validate-codes")
-        binding = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
-        binding["prompt_filename"] = "renamed-feature-prompt.md"
-        write_json(run_dir / "prompt.json", binding)
-        run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-        run_state["prompt"]["filename"] = "renamed-feature-prompt.md"
-        run_state["prompt_filename"] = "renamed-feature-prompt.md"
-        write_json(run_dir / "run.json", run_state)
+    def test_stop_reconstructs_explicit_project_continuation(self) -> None:
+        self.switch_feature()
+        self.active_run()
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
-        self.assertEqual(result.get("decision"), "block")
-        self.assertIn(
-            "Use $sdlc-start run renamed-feature-prompt.md",
-            result.get("reason", ""),
-        )
+        self.assertEqual(result.get('decision'), 'block')
+        self.assertIn('$sdlc-start continue', result.get('reason', ''))
+        self.assertIn(str(self.project), result.get('reason', ''))
 
     def test_stop_does_not_continue_merge_pr(self) -> None:
         self.active_run(next_skill="sdlc-merge-pr")

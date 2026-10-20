@@ -1,168 +1,84 @@
 # Agentic SDLC State Schema
 
-Use this reference when creating, repairing, or reading local SDLC run state.
-All run artifacts are private local state under
-`<agent-home>/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
+Private state belongs to `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
+The shared schemas and mutation helpers are defined in
+`../../worktree/references/workflow-contract.md`.
 
-## Layout
+## Objective and Execution Layout
 
 ```text
-<agent-home>/sdlc-runs/
+sdlc-runs/
+  bindings/<native-session-sha256>.json
   <project-id>/
-    workspace.json
-    activity.json
-    prompt-queue.json
-    queued-prompts/
-    prompt.lock
-    prompts/
-      00-START-HERE.md
-      <created-at>--<slug>.md
-    <project>-prompts.code-workspace
+    project.json
     active-run.json
     active.lock
     <run-id>/
-      prompt.json
-      requirements-refinement.json
-      inputs/
-        r0001/prompt.md
       run.json
+      objective.json
+      objectives/r0001.json
+      clarifications.json
+      requirements-refinement.json
+      objective-impact-claim.json
+      objective-impact/attempt-0001.json
+      objective-impact/ledger.json
+      objective-impact/execution/FEAT-001.json
+      bases/FEAT-001/<sha256>.json
       current-state.json
       feature-queue.json
       fingerprints.json
       STEERING.md
-      steering/
-        auto-steering.json
+      steering/auto-steering.json
+      checkpoints/checkpoint-0001.json
+      checkpoints/latest.json
+      context/FEAT-001.context.md
+      plans/FEAT-001.plan.v1.md
+      plans/FEAT-001.plan.v1.md.lock
+      execution/FEAT-001/
+        base.json
+        coordinator.json
+        waves/WAVE-001.json
+        tasks/WAVE-001/TASK-001.json
+        assignments/WAVE-001/TASK-001.json
+        incoming-handoffs/WAVE-001/TASK-001.json
+        results/WAVE-001/TASK-001.json
+        terminations/TASK-001.json
+        admissions/TASK-001.json
+        reconciliations/WAVE-001-TASK-001.json
+        sessions/<session-sha256>.json
+        journals/coordinator.jsonl
+      worktrees/FEAT-001/integration/
+      worktrees/FEAT-001/waves/WAVE-001/TASK-001/
+      repairs/FEAT-001/
+        repair-control.json
+        repair-journal.jsonl
+        events/<event-id>.json
+        diagnoses/<diagnosis-id>.json
+        approvals/<approval-id>.json
+        classifications/<classification-id>.json
+        dispatches/<dispatch-id>.json
+        revalidations/<revalidation-id>.json
+      evidence/FEAT-001/
+      evidence/uat/
       permissions/
-        commit-authorization.json
-        execution/
-          <action-id>.json
-        pr-authorization.json
-        merge-authorization.json
-      checkpoints/
-        checkpoint-0001.json
-        latest.json
-      context/
-        FEAT-001.context.md
-      plans/
-        FEAT-001.plan.v1.md
-        FEAT-001.plan.v1.md.lock
-      execution/
-        FEAT-001/
-          coordinator.json
-          waves/WAVE-001.json
-          tasks/WAVE-001/TASK-001.json
-          assignments/WAVE-001/TASK-001.json
-          incoming-handoffs/WAVE-001/TASK-001.json
-          sessions/<session-hash>.json
-          results/WAVE-001/TASK-001.json
-          journals/coordinator.jsonl
-      repairs/
-        FEAT-001/
-          repair-control.json
-          repair-journal.jsonl
-          events/<event-id>.json
-          diagnoses/<diagnosis-id>.json
-          approvals/<approval-id>.json
-          classifications/<classification-id>.json
-          dispatches/<dispatch-id>.json
-          revalidations/<revalidation-id>.json
-      worktrees/
-        FEAT-001/integration/
-        FEAT-001/waves/WAVE-001/TASK-001/
-      evidence/
-        FEAT-001/
-          validate.md
-          tests.md
-          evaluate.md
-          documents.md
-          screenshots/
-          transcripts/
-          failure-log.md
-          commit.md
-        uat/
-          uat-report.md
-          documents.md
-        pr.md
-        review.md
-        merge.md
-      history/
-        iteration-0001.md
+      history/iteration-0001.md
 ```
 
-`workspace.json` binds the exact canonical project folder to the prompt
-workspace. `activity.json` records last invocation timestamps without touching
-editable prompt mtimes. `active-run.json` is a small project-level pointer to
-the active run ID. Read `prompt-workspace.md` for the prompt and revision
-schemas.
+No prompt workspace, raw-turn archive or unrelated-objective queue exists.
+`objective.json` selects ordered immutable normalized revisions and ancestry.
+`run.json` uses `workflow/run-v1`; phase fields live in `current-state.json`.
+The active pointer selects only a project run. It grants no session ownership.
+`active.lock` uses `workflow/coordinator-ownership-v1` and must agree with the
+run, project, native coordinator hash and `workflow/session-binding-v1` record.
+Only the coordinator can create or replace that binding. Session observation is
+read-only and never starts work. A new session uses explicit `continue` after
+writer quiescence. Obsolete schemas fail without conversion or deletion.
 
-Each new managed run has `prompt.json` with schema
-`agentic-sdlc/prompt-binding-v2`, one stable prompt ID and filename, lineage
-root, optional terminal predecessor, and an ordered revision list. Each
-revision records `rNNNN`, accepted timestamp, raw and normalized-intent SHA-256
-digests, revision kind, immutable snapshot pointer, and steering status. The run's
-`run.json` must mirror the bound prompt ID, filename, latest accepted revision,
-digests, kind, and snapshot pointer so hooks can continue without reading prompt
-bodies.
-
-`requirements-refinement.json` uses
-`agentic-sdlc/requirements-refinement-v1`. It binds the latest accepted intent
-to categorized extraction, stable `Q-*` clarification state and provenance,
-the compiled requirements digest, and `extracting`, `needs_clarification`, or
-`ready` status. Material open or reopened questions prevent `ready`. Private
-`refinement-ready` checks this ledger and the exact compiled requirements
-read-only before context/design. It does not create impact state or unlock
-planning, steering resolution, execution, integration or promotion.
-`refinement-verify` rechecks readiness and settles impact only after ready design
-and before planning; the two checks do not share an authority claim.
-
-`prompt-impact-claim.json` uses the workflow's prompt-impact contract. The SDLC
-adapter converts complete statement-occurrence dispositions into immutable
-`prompt-impact/attempt-NNNN.json` receipts and atomically selects the current
-head in `prompt-impact/ledger.json`. Per-run locked publication compare-checks
-the observed head and skips rather than overwrites a conflicting orphan attempt.
-`prompt-impact/execution/FEAT-NNN.json` separately binds each feature plan
-digest and plan-basis revision to the latest settled revision. Active state
-without this evidence freezes progression until a distinct safe replan creates
-a basis; terminal history reports `historical_no_receipt` without synthesizing
-coverage. Public status must use only the sanitized impact projection and never
-expose any digest or private path from these files.
-
-`prompt-queue.json` is a private FIFO of explicit run requests for prompts that
-cannot yet become active. Its immutable accepted snapshots live under
-`queued-prompts/`. Creation and saving never add entries; an edited queued
-prompt changes its entry only after another explicit run. Queue-head drift
-blocks activation, and the coordinator activates the head only after the
-active run and execution resources are terminal and released.
-
-## Active Workflow Ownership
-
-`active.lock` is a private JSON ownership record. Creating an empty file or
-holding an advisory OS lock does not register a workflow: hook discovery reads
-its JSON identity. The coordinator creates or updates it before the first
-phase, after accepting the managed prompt and confirming no conflicting writer.
-Use the exact validated workspace values; never infer the selected project root
-from the Git root in a nested project.
-
-```json
-{
-  "project_id": "example-project",
-  "project_root": "/absolute/selected/project",
-  "run_id": "run-example",
-  "status": "running",
-  "owner_session_hash": "sha256-of-native-session-identity",
-  "created_at": "2026-01-01T00:00:00Z"
-}
-```
-
-The first three fields must agree with `workspace.json`, `active-run.json` and
-the selected run. Derive the owner hash from the genuine native session, never
-a caller-invented identity. Publish the record privately and durably, then use
-read-only hook state discovery to require this exact project and run before
-phase dispatch. A missing, empty or mismatched record blocks initialization;
-never count a hook's no-active-run result as a passing continuation check.
-Checkpoint updates preserve the ownership record. Recovery requires proof that
-prior writers are quiescent; record the repair and replay affected checks from
-the last valid checkpoint without rewriting earlier evidence.
+Execution coordinators use `workflow/execution-coordinator-v1`, state version 1.
+Waves use ready, active and admitted task IDs with one frozen base and a full-wave
+integration barrier. Assignments and results bind immutable basis and plan
+identities. Termination permits slot reuse only after independent coordinator
+observation and result admission; a result file alone is insufficient.
 
 ## Minimum current-state.json
 
@@ -211,7 +127,7 @@ the last valid checkpoint without rewriting earlier evidence.
   },
   "repair": null,
   "execution": {
-    "schema": "agentic-sdlc/execution-coordinator-v7",
+    "schema": "workflow/execution-coordinator-v1",
     "feature_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
@@ -275,32 +191,20 @@ while the pending projection becomes empty. Other pending invalidations reject
 recovery. It preserves budgets. This exception cannot
 clear a code-repair cursor, a policy/human block, or a failed verifier trial.
 
-Coordinator v7 binds the exact initialized folder through `git_root`,
-`selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.
-Execution wave v2 enforces an active capacity-batch cursor. Mutable task v4
-records store append-only hashed worker-session history, attempt count,
-dispatch/start timestamps, heartbeat phase/sequence, and an optional
-digest-protected `task-finish-intent-v1`; assignment v3 binds the exact
-helper/run identity, liveness profile, and immutable `incoming-handoff-v1`.
-Private `task-arm`, `task-start`, direct `task-heartbeat`, and read-only
-`task-watch` transitions are Agentic-owned and never share Task Implementer
-state. Private `task-requeue` returns only a confirmed-stopped, never-started,
-clean exact dispatch to the queue. The coordinator-owned `task-finish` creates
-the task commit after recording its assignment/base/tree/message/evidence
-intent. Retry can adopt only that clean direct-child commit and an exact result
-from either persistence crash window. A
-`worker-result-v5` carries an explicit summary, decisions, open risks, typed
-`spec_gaps`, and,
-for corrective tasks, digest-protected `regression-oracle-evidence-v1` bound
-to the exact diagnosis, oracle, and coordinator-created task commit. Atomic private
-`execution/<feature>/sessions/<hash>.json` claims prevent concurrent reuse of
-one session identity across tasks. A private execution transition lock and
-expected-attempt recovery guard make each task ownership transfer exclusive.
-Optional `execution/interop.json` uses
-`agentic-sdlc/worktree-interop-v2` for a managed outer-worktree lease and
-source-integration handoff. Every coordinator v1 through v6 record fails with
-`WORKFLOW_UPGRADE_REQUIRED` and is
-not mutated, including completed records.
+Shared `workflow/execution-coordinator-v1` binds the selected folder through
+`git_root`, `selected_project_root`, `project_scope` and `scope_cwd`.
+`workflow/execution-wave-v1` owns ordered ready, active and admitted task IDs;
+there is no batch cursor. Shared task/assignment/result v1 records carry the
+immutable basis digest, native session history, attempt, direct heartbeat,
+claims, structured evidence and specification gaps. The coordinator records
+exact termination before result admission or slot reuse. Recovery needs an
+immutable coordinator authorization for the fresh native session and exact attempt.
+
+`execution/<feature>/sessions/<hash>.json` prevents concurrent identity reuse.
+Private transition locks and assignment-bound runtime leases synchronize writers.
+`execution/interop.json` uses `workflow/worktree-interop-v1` for an ordinary managed
+outer lease and source-integration handoff. Every retired coordinator or lane
+format fails with `WORKFLOW_UPGRADE_REQUIRED`, preserving history and resources.
 
 ## Minimum checkpoint
 
@@ -369,14 +273,12 @@ without conversation history.
 }
 ```
 
-Execution coordinator v7 is the only supported execution schema. If an
-`agentic-sdlc/execution-coordinator-v1` or
-`agentic-sdlc/execution-coordinator-v2` or
-`agentic-sdlc/execution-coordinator-v3` or
-`agentic-sdlc/execution-coordinator-v4` or
-`agentic-sdlc/execution-coordinator-v5` or
-`agentic-sdlc/execution-coordinator-v6` record exists, stop with
-`WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate its
+The `execution` member above is an informational checkpoint projection. The
+execution owner's authoritative state is `execution/<FEAT-ID>/coordinator.json`,
+using `workflow/execution-coordinator-v1` with `state_version: 1`. Retired
+`agentic-sdlc/execution-coordinator-v1` through
+`agentic-sdlc/execution-coordinator-v7` records stop with
+`WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate their
 resources. This applies to completed records; there is no legacy read path.
 
 `checkpoints/latest.json` points to the newest complete checkpoint:
@@ -391,25 +293,19 @@ resources. This applies to completed records; there is no legacy read path.
 
 ## Resume Rules
 
-1. Run private prompt intake, then read `active-run.json`, `prompt.json`,
-   `current-state.json`, `checkpoints/latest.json`, and
-   the latest checkpoint before selecting a phase.
-2. Treat the latest complete checkpoint as authoritative when it matches
-   available evidence.
-3. If `current-state.json` points past the latest complete checkpoint, repair it
-   from the checkpoint.
-4. If a checkpoint exists but `checkpoints/latest.json` is stale, update only
-   the pointer.
-5. If the latest checkpoint and evidence disagree, use the newest earlier
-   checkpoint that still matches evidence. If none can be trusted, stop with
-   `HUMAN_INPUT_REQUIRED`.
-6. Repeated runs with no state, steering, fingerprint, or evidence change must
-   return the same `next_recommended_skill` without appending duplicate history.
-7. An unfinished active run without `prompt.json` fails with
-   `WORKFLOW_UPGRADE_REQUIRED`; completed unbound history stays readable.
-8. A bound non-terminal run without current prompt-impact or execution-plan
-   settlement fails with `PROMPT_IMPACT_REQUIRED` or `REPLAN_REQUIRED` before
-   new dispatch, integration, or promotion. Terminal history remains readable.
+1. Observe the same session binding, or use explicit cross-session `continue`.
+2. Validate accepted objective ancestry, the current checkpoint, exact source and
+   registered execution resources. Read phase state only from that selected run.
+3. Reconcile current state, checkpoint, feature queue and evidence; preserve
+   repair budgets and prior attempts. Resume the newest complete checkpoint whose
+   evidence identities still match.
+4. Material steering first fences progress. Observe termination and reconcile
+   affected writers, then publish current spec impact and a distinct plan where
+   required. Resume only after every active execution basis is current.
+5. After promotion, use the delivered checkout. Documentation drift starts a
+   fresh corrective run; do not reopen completed execution.
+6. Old or foreign state remains untouched and fails `WORKFLOW_UPGRADE_REQUIRED`.
+   Missing native session binding does not authorize scanning for a sole run.
 
 ## Hook Authorization Files
 
@@ -530,13 +426,13 @@ current PR head to remain that exact promoted and reviewed SHA.
 ## Steering
 
 `STEERING.md` is temporary runtime steering, not a second requirements file.
-It is the active-run inbox and ledger for accepted managed prompt revisions,
+It is the active-run inbox and ledger for accepted objective revisions,
 including runtime instructions, requirements-related notes,
 design-related notes, project-instruction updates, documentation updates,
 blockers, priority overrides,
 pause instructions, and UAT rerun requests.
 
-Each inbox entry links the managed prompt ID, revision, SHA-256 digest, and
+Each inbox entry links the accepted objective ID, revision, SHA-256 digest, and
 snapshot pointer, but includes only a compact safe summary rather than the full
 prompt body. `sdlc-auto-steering` owns refreshing `STEERING.md` and
 `steering/auto-steering.json`. Each unresolved entry must have one disposition:
@@ -573,9 +469,9 @@ same-script registration with the same handlers, allowing only `statusMessage`
 metadata to differ while preserving unrelated entries in
 `$CODEX_HOME/hooks.json`.
 
-The Stop hook continuation prompt must route through explicit `$sdlc-start run
-<bound-unique-filename>` invocation and emit canonical `sdlc-*` skill names. It
-must stop instead of continuing an unfinished unbound legacy run. It may normalize short
+The Stop hook continuation prompt must route through explicit `$sdlc-start continue [project-folder]` invocation and emit canonical `sdlc-*` skill names. It
+does not select or continue a run without a valid native-session/objective binding;
+explicit intake rejects unsupported state. It may normalize short
 phase values when reading local state, but those aliases must not appear as
 emitted next-skill names. Steering text that pauses work or controls PR
 creation, including `Pause after the current feature. Do not create a PR.`,

@@ -114,7 +114,7 @@ Native invocation and live publication evidence must be verified separately.
 - `scripts/release_checkpoint.py`: private atomic checkpoints and locking.
 - `scripts/release_reconcile.py`: guarded reconciliation of reviewed pre-merge repairs.
 - `scripts/publish-release-doer.sh`: deterministic release primitives.
-- `assets/`: changelog, aligned runnable helper and release-workflow templates.
+- `assets/`: changelog and aligned runnable helper templates.
 - `scripts/test*.py`, `evals/`: executable and agent-evaluation coverage.
 
 ### Local checkout completion
@@ -124,3 +124,13 @@ See [the completion contract](../create-pr/references/checkout-completion.md) fo
 review switch-back, create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
+
+## Workflow ownership and existing releases
+
+Use `$github-workflows` for release YAML setup and its canonical
+`project-name-release-publish.yml.template`; this skill owns the local publication
+sequence. Preserve the exact workflow filename and service asset contract.
+Existing releases require trusted pre-publication hashes and downloaded-byte
+verification. Missing or expired evidence is a reconciliation blocker, not a
+reason to overwrite or recreate a release. The workflow must compare any
+retained original manifest before a rebuilt retry can publish.

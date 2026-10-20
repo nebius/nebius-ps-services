@@ -28,6 +28,8 @@
     "./gitignore",
     "./global-context-management",
     "./helmchart",
+    "./implement",
+    "./implement-test",
     "./install-grafana-mcp-for-nebius",
     "./linter",
     "./maintain-project-specs",
@@ -38,7 +40,6 @@
     "./nosleep4mac",
     "./optimize-pytest",
     "./project-agent-instructions",
-    "./prompt-session-intake",
     "./publish-helm",
     "./publish-image",
     "./publish-release",
@@ -69,8 +70,6 @@
     "./sdlc-workflow-test",
     "./shell-scripting",
     "./system-design-rules",
-    "./task-implementer",
-    "./task-implementer-test",
     "./terraform",
     "./troubleshoot",
     "./update-branch",
@@ -141,16 +140,6 @@
               "timeout": 30,
               "statusMessage": "Binding project contracts",
               "additionalContextLimit": 1600
-            }
-          ]
-        },
-        {
-          "hooks": [
-            {
-              "type": "command",
-              "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook prompt_session_intake.py --plugin-root \"${PLUGIN_ROOT}\"",
-              "timeout": 10,
-              "statusMessage": "Staging bound-session prompt intent"
             }
           ]
         },

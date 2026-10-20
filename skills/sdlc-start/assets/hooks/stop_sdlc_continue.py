@@ -603,7 +603,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             except (json.JSONDecodeError, OSError):
                 return "Agentic SDLC execution coordinator is unreadable."
             integration_value = coordinator.get("integration_worktree")
-            if coordinator.get("schema") != "agentic-sdlc/execution-coordinator-v7":
+            if coordinator.get("schema") != "workflow/execution-coordinator-v1":
                 return "Agentic SDLC execution coordinator is inconsistent."
             fingerprint_ids = current_state.get("fingerprint_ids")
             current_fingerprints: dict[str, str] = {}
@@ -741,42 +741,22 @@ def _max_iterations(current_state: dict[str, Any]) -> int:
     return int(current_state.get("max_iterations", 200) or 200)
 
 
-def _bound_prompt_filename(active, run_state: dict[str, Any]) -> str | None:
-    try:
-        binding = load_json(active.run_dir / "prompt.json") or {}
-    except (json.JSONDecodeError, OSError):
+def _bound_project(active, run_state: dict[str, Any]) -> str | None:
+    # load_active_run has already verified the native session binding, run and
+    # immutable objective ancestry. Continuation never reconstructs prompt files.
+    if (run_state.get("schema") != "workflow/run-v1"
+            or run_state.get("owner") != "agentic-sdlc"
+            or run_state.get("run_id") != active.run_id):
         return None
-    if (
-        binding.get("schema") != "agentic-sdlc/prompt-binding-v2"
-        or binding.get("run_id") != active.run_id
-    ):
-        return None
-    filename = str(binding.get("prompt_filename") or "")
-    if (
-        not filename
-        or Path(filename).name != filename
-        or not filename.endswith(".md")
-        or len(filename) > 255
-        or any(ord(character) < 32 or ord(character) == 127 for character in filename)
-    ):
-        return None
-    mirrors: list[str] = []
-    prompt_value = run_state.get("prompt")
-    if isinstance(prompt_value, dict) and prompt_value.get("filename"):
-        mirrors.append(str(prompt_value["filename"]))
-    if run_state.get("prompt_filename"):
-        mirrors.append(str(run_state["prompt_filename"]))
-    if any(mirror != filename for mirror in mirrors):
-        return None
-    return filename
+    return str(active.canonical_project_root)
 
 
 def _continuation_prompt(
-    current_state: dict[str, Any], next_skill: str, reason: str, prompt_filename: str
+    current_state: dict[str, Any], next_skill: str, reason: str, project_folder: str
 ) -> str:
     return "\n".join(
         [
-            f"Use ${COORDINATOR_SKILL} run {shlex.quote(prompt_filename)}",
+            f"Use ${COORDINATOR_SKILL} continue {shlex.quote(project_folder)}",
             "Continue the active SDLC run from local state.",
             "",
             f"Current feature: {current_state.get('current_feature') or '<none>'}",
@@ -856,8 +836,8 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         return _continue_normally()
 
     cwd = resolve_path(payload.get("cwd") or ".")
-    active = load_active_run(cwd)
-    if active is None:
+    active = load_active_run(cwd, session_id=payload.get("session_id"))
+    if active is None or active.execution_role == "worker":
         return _continue_normally()
     if not is_inside(cwd, active.project_root):
         return _continue_normally()
@@ -908,10 +888,10 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         _record_continuation(active, payload, digest, no_progress, "NO_PROGRESS")
         return stop("No progress after Stop continuation.")
 
-    prompt_filename = _bound_prompt_filename(active, run_state)
-    if prompt_filename is None:
+    project_folder = _bound_project(active, run_state)
+    if project_folder is None:
         return stop(
-            "WORKFLOW_UPGRADE_REQUIRED: unfinished SDLC run has no valid managed prompt binding."
+            "WORKFLOW_UPGRADE_REQUIRED: unfinished SDLC run has no valid native session binding and accepted objective."
         )
 
     next_skill = _normalize_skill_name(
@@ -930,7 +910,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     steering_reason = _steering_reason(active)
     if steering_reason:
         prompt = _continuation_prompt(
-            current_state, COORDINATOR_SKILL, steering_reason, prompt_filename
+            current_state, COORDINATOR_SKILL, steering_reason, project_folder
         )
         _record_continuation(active, payload, digest, no_progress, steering_reason)
         return continue_with(prompt)
@@ -940,7 +920,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         reason = "all features are committed and UAT has not passed"
         prompt = _continuation_prompt(
-            current_state, "sdlc-uat-tests", reason, prompt_filename
+            current_state, "sdlc-uat-tests", reason, project_folder
         )
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
@@ -948,7 +928,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if _uat_failed_addressable(current_state):
         reason = "UAT failed with an addressable classification"
         prompt = _continuation_prompt(
-            current_state, COORDINATOR_SKILL, reason, prompt_filename
+            current_state, COORDINATOR_SKILL, reason, project_folder
         )
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)
@@ -960,7 +940,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if next_skill:
         reason = f"state recommends {next_skill}"
         prompt = _continuation_prompt(
-            current_state, next_skill, reason, prompt_filename
+            current_state, next_skill, reason, project_folder
         )
         _record_continuation(active, payload, digest, no_progress, reason)
         return continue_with(prompt)

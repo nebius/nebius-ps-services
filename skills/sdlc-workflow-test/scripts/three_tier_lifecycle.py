@@ -159,14 +159,14 @@ from agent_runtime import agent_home, agent_name  # noqa: E402
 
 ROOT_MARKER = ".sdlc-workflow-test-root.json"
 ROOT_SCHEMA = "agentic-sdlc/verification-root-v1"
-LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v4"
+LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v5"
 RUN_MARKER = ".agentic-sdlc-three-tier-run.json"
 PROJECT_MARKER = ".sdlc-workflow-test-project.json"
 OWNERSHIP_LABEL = "sdlc-workflow-test.verification-id"
 COMPOSE_LABEL = "com.docker.compose.project"
 PHASE_STATUSES = {"PASS", "PARTIAL", "FAIL", "NOT_RUN"}
 FINAL_STATUSES = {"PASS", "PARTIAL", "FAIL"}
-PHASE_RESULT_SCHEMA = "agentic-sdlc/phase-result-v4"
+PHASE_RESULT_SCHEMA = "agentic-sdlc/phase-result-v5"
 ALLOWED_PHASES = set(REQUIRED_SDLC_PHASES) | {
     "sdlc-classify-failure",
     "sdlc-gui-test",
@@ -645,16 +645,26 @@ def update_state(root: Path, state: dict[str, Any]) -> None:
     write_report(root, state)
 
 
+def phase_identity(state: dict[str, Any], phase: str):
+    objective = three_tier_target.current_objective(state, agent=agent_name())
+    basis = (execution_target(state, require_clean=False)["basis_sha256"]
+             if phase in EXECUTION_PHASES else None)
+    return objective, basis
+
+
 def validate_phase_pass_artifact(
-    state: dict[str, Any], phase: str, evidence: list[str]
+    state: dict[str, Any], phase: str, evidence: list[str], *,
+    historical_entry: dict[str, Any] | None = None,
 ) -> None:
     run_root = Path(state["run_root"])
     expected = f"evidence/phases/{phase}.json"
-    if evidence != [expected]:
+    archived = (len(evidence) == 1 and re.fullmatch(
+        rf"evidence/phases/attempts/{re.escape(phase)}/[0-9a-f]{{64}}\.json", evidence[0]))
+    if evidence != [expected] and not archived:
         raise LifecycleError(
             f"Passing phase {phase} requires its one canonical JSON result."
         )
-    artifact = run_root / expected
+    artifact = run_root / evidence[0]
     reject_symlinks(artifact, stop_at=run_root)
     if (
         not artifact.is_file()
@@ -677,6 +687,8 @@ def validate_phase_pass_artifact(
             "verification_id",
             "baseline_sha",
             "recorded_head",
+            "objective_sha256",
+            "basis_sha256",
             "assertions",
         }
         or result.get("schema") != PHASE_RESULT_SCHEMA
@@ -687,25 +699,54 @@ def validate_phase_pass_artifact(
         or result.get("assertions") != PHASE_REQUIRED_ASSERTIONS[phase]
     ):
         raise LifecycleError(f"Phase semantic result is invalid: {phase}")
+    try:
+        objective, expected_basis = phase_identity(state, phase)
+    except three_tier_target.TargetError as error:
+        raise LifecycleError(str(error)) from error
+    historical = historical_entry is not None
+    if historical:
+        admitted = [item for item in state.get("phases", []) if item.get("phase") == phase]
+        if (not archived or not admitted or admitted[-1] != historical_entry
+                or historical_entry.get("status") != "PASS"
+                or historical_entry.get("evidence") != evidence
+                or historical_entry.get("artifact_sha256") != artifact.stem):
+            raise LifecycleError("Historical phase is not the latest admitted immutable receipt.")
+    if result.get("objective_sha256") != objective:
+        raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
+    if result.get("basis_sha256") != expected_basis:
+        if not historical or phase not in EXECUTION_PHASES:
+            raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
+        try:
+            three_tier_target.validate_historical_basis(
+                state, result.get("basis_sha256"), agent=agent_name(),
+            )
+        except three_tier_target.TargetError as error:
+            raise LifecycleError(str(error)) from error
+    if archived and artifact.stem != hashlib.sha256(artifact.read_bytes()).hexdigest():
+        raise LifecycleError(f"Immutable phase attempt changed: {phase}")
     baseline_sha = result.get("baseline_sha")
     recorded_head = result.get("recorded_head")
     if not valid_git_sha(baseline_sha) or not valid_git_sha(recorded_head):
         raise LifecycleError(f"Phase Git identity is invalid: {phase}")
     project_root = Path(state["project_root"])
     promoted_sha = state["git"].get("promoted_sha")
+    ancestry_checks = [(baseline_sha, recorded_head, "baseline")]
     if promoted_sha is None:
         if phase in EXECUTION_PHASES:
             current_head = execution_target(
-                state, require_clean=phase not in {"sdlc-tdd", "sdlc-update-documents", "align"}
+                state, require_clean=not historical and phase not in {
+                    "sdlc-tdd", "sdlc-update-documents", "align",
+                }
             )["head"]
         else:
             current_head = require_command(
                 ["git", "-C", str(project_root), "rev-parse", "HEAD"],
                 "Phase Git identity",
             )
-        if current_head != recorded_head:
+        if historical:
+            ancestry_checks.append((recorded_head, current_head, "current"))
+        elif current_head != recorded_head:
             raise LifecycleError(f"Phase Git identity is stale: {phase}")
-    ancestry_checks = [(baseline_sha, recorded_head, "baseline")]
     if promoted_sha is not None:
         ancestry_checks.append((recorded_head, promoted_sha, "promoted"))
     for ancestor, descendant, label in ancestry_checks:
@@ -775,16 +816,36 @@ def record_phase(
             three_tier_target.validate_startup_receipt(state)
         except three_tier_target.TargetError as error:
             raise LifecycleError(str(error)) from error
+    artifact_sha256 = None
+    if status == "PASS":
+        raw = (run_root / normalized_evidence[0]).read_bytes()
+        artifact_sha256 = hashlib.sha256(raw).hexdigest()
+        relative = f"evidence/phases/attempts/{phase}/{artifact_sha256}.json"
+        immutable = run_root / relative
+        if immutable.exists() or immutable.is_symlink():
+            reject_symlinks(immutable, stop_at=run_root)
+            if immutable.read_bytes() != raw:
+                raise LifecycleError("Immutable phase attempt was changed.")
+        else:
+            immutable.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            descriptor = os.open(immutable, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+        normalized_evidence = [relative]
+    previous = [item for item in state["phases"] if item.get("phase") == phase]
     entry = {
+        "attempt": len(previous) + 1,
+        "supersedes_attempt": previous[-1].get("attempt") if previous else None,
+        "artifact_sha256": artifact_sha256,
         "phase": phase,
         "status": status,
         "summary": summary.replace("\n", " ")[:500],
         "evidence": normalized_evidence,
         "recorded_at": utc_now(),
     }
-    state["phases"] = [
-        existing for existing in state["phases"] if existing.get("phase") != phase
-    ] + [entry]
+    state["phases"].append(entry)
     state["status"] = "RUNNING"
     update_state(root, state)
     return state
@@ -1052,7 +1113,40 @@ def execution_target(
         raise LifecycleError(str(error)) from error
 
 
-def run_owned_compose(
+def run_owned_compose(state, compose_args, *, worker_task=None, assignment_digest=None):
+    if worker_task is None:
+        return _run_owned_compose(state, compose_args, worker_task=worker_task, assignment_digest=assignment_digest)
+    if not assignment_digest:
+        raise LifecycleError('Runtime access requires an exact assignment digest.')
+    try:
+        _manifest, _project, _active, _lock, run_dir, current, env = three_tier_target._registration(state, agent_name())
+        feature = current['current_feature']
+        coordinator = three_tier_target._private_json(run_dir / 'execution' / feature / 'coordinator.json', Path(state['run_root']))
+        wave = coordinator['active_wave']
+        if not isinstance(wave, str) or not re.fullmatch(r'TASK-[0-9]{3,}', worker_task):
+            raise LifecycleError('Runtime access requires an active task.')
+        assignment = run_dir / 'execution' / feature / 'assignments' / wave / (worker_task + '.json')
+        record = three_tier_target._private_json(assignment, Path(state['run_root']))
+        if record.get('assignment_digest') != assignment_digest:
+            raise LifecycleError('Runtime assignment digest changed.')
+        scripts = Path(__file__).resolve().parents[2] / 'worktree/scripts'
+        sys.path.insert(0, str(scripts))
+        try:
+            from workflow_resources import consume
+            from workflow_state import WorkflowError
+        finally:
+            sys.path.pop(0)
+        try:
+            with consume(run_dir.parents[2], assignment, 'sdlc-three-tier-' + state['verification_id']):
+                return _run_owned_compose(state, compose_args, worker_task=worker_task,
+                                          assignment_digest=assignment_digest)
+        except WorkflowError as error:
+            raise LifecycleError('Runtime access requires the exact active worker lease.') from error
+    except three_tier_target.TargetError as error:
+        raise LifecycleError(str(error)) from error
+
+
+def _run_owned_compose(
     state: dict[str, Any], compose_args: list[str], *,
     worker_task: str | None = None, assignment_digest: str | None = None,
 ) -> str:
@@ -1123,7 +1217,8 @@ def run_owned_compose(
         raise LifecycleError("Owned Docker Compose action failed.")
     if build_model is not None:
         image_name, model_digest = build_model
-        after = execution_target(state)
+        after = execution_target(state, require_clean=False, worker_task=worker_task,
+                                 assignment_digest=assignment_digest)
         try:
             if (three_tier_runtime.source_identity(after) != three_tier_runtime.source_identity(target)
                     or three_tier_runtime.compose_build_model(state, after, command) != build_model):
@@ -1448,6 +1543,40 @@ def record_git(
     return state
 
 
+def validate_phase_history(state: dict[str, Any]) -> None:
+    phase_map = {
+        entry.get("phase"): entry
+        for entry in state.get("phases", [])
+        if isinstance(entry, dict)
+    }
+    if any(
+        phase not in phase_map
+        or phase_map[phase].get("status") != "PASS"
+        or not phase_map[phase].get("evidence")
+        for phase in REQUIRED_SDLC_PHASES
+    ):
+        raise LifecycleError("PASS requires recorded evidence for every SDLC phase.")
+    attempts = {}
+    for entry in state.get("phases", []):
+        phase = entry.get("phase")
+        expected = attempts.get(phase, 0) + 1
+        if type(entry.get("attempt")) is not int or entry["attempt"] != expected:
+            raise LifecycleError("Phase attempt history is incomplete or reordered.")
+        attempts[phase] = expected
+    for phase in REQUIRED_SDLC_PHASES:
+        entry = phase_map[phase]
+        evidence = entry["evidence"]
+        fingerprint = entry.get("artifact_sha256")
+        expected = f"evidence/phases/attempts/{phase}/{fingerprint}.json"
+        if (not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None
+                or evidence != [expected]):
+            raise LifecycleError("Current phase attempt is missing immutable receipt identity.")
+        # This validates containment, modes, inode links, bounded JSON, digest,
+        # objective, owner-linked non-material basis succession and Git ancestry.
+        validate_phase_pass_artifact(state, phase, evidence, historical_entry=entry)
+
+
+
 def validate_runtime_ready(state: dict[str, Any], *, keep: bool) -> None:
     resources = state["resources"]
     expected_counts = {
@@ -1482,20 +1611,7 @@ def validate_runtime_ready(state: dict[str, Any], *, keep: bool) -> None:
         three_tier_browser.validate_receipts(state)
     except three_tier_browser.BrowserOwnershipError as error:
         raise LifecycleError(str(error)) from error
-    phase_map = {
-        entry.get("phase"): entry
-        for entry in state.get("phases", [])
-        if isinstance(entry, dict)
-    }
-    if any(
-        phase not in phase_map
-        or phase_map[phase].get("status") != "PASS"
-        or not phase_map[phase].get("evidence")
-        for phase in REQUIRED_SDLC_PHASES
-    ):
-        raise LifecycleError("PASS requires recorded evidence for every SDLC phase.")
-    for phase in REQUIRED_SDLC_PHASES:
-        validate_phase_pass_artifact(state, phase, phase_map[phase]["evidence"])
+    validate_phase_history(state)
     validations = state.get("validations", [])
     if not validations or any(
         validation.get("status") != "PASS" for validation in validations

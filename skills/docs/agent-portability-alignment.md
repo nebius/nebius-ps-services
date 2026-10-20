@@ -1,5 +1,9 @@
 # Agent Portability Alignment
 
+This is a historical alignment snapshot. The direct-objective workflow replacement
+supersedes its prompt-workspace and capture evidence; those historical results
+do not qualify the current Implement or Agentic SDLC runtime.
+
 Source review date: 2026-09-12. Scope: all 71 skills and seven hook payload
 owners in this catalog. Existing working changes were the preservation baseline;
 no existing source/resource path or native metadata file was removed.
@@ -35,9 +39,9 @@ idempotency, recovery and output contracts remain required on both hosts.
 | Change group | Scope and preserved behavior |
 | --- | --- |
 | Invocation | All skills: `$name`, `/name` and native plugin `/skills:name`; Help remains tool-free after skill loading. Missing tools do not grant weaker execution. |
-| Shared runtime | GCM, prompt intake, Task Implementer, Commit and SDLC use native homes/session sources. Protocol field names, native worker identity, commit claims and one Stop arbiter remain intact. |
+| Shared runtime | GCM, prompt intake, Implement, Commit and SDLC use native homes/session sources. Protocol field names, native worker identity, commit claims and one Stop arbiter remain intact. |
 | Private CLI | Shared home options use `--agent-home`; PAI also requires `--agent`, and worker dispatch uses `--agent-binary`. No old option aliases were introduced. Existing serialized Codex fields remain stable. |
-| Worker execution | SDLC uses native print-mode structured output for Claude; its envelope, lease, liveness and process cleanup checks remain enforced. Task Implementer uses the selected native CLI with exact start/recovery and immutable-result checks. Both use the selected private home, working directory and fresh identity. |
+| Worker execution | SDLC uses native print-mode structured output for Claude; its envelope, lease, liveness and process cleanup checks remain enforced. Implement uses the selected native CLI with exact start/recovery and immutable-result checks. Both use the selected private home, working directory and fresh identity. |
 | Test lifecycles | Existing Codex `codex-home` state remains valid; Claude uses `claude-home`. Cross-host trial reuse fails before mutation. Existing Codex context schema is preserved; Claude has a distinct schema. |
 | Project instructions | Claude declares native instruction/settings/import digests bound to its current hook session and an existing tracked CLAUDE.md import. The AGENTS.md target, exact approval, private ownership, managed tail and recovery remain unchanged. Private local instructions remain conflict context, not published content. |
 | Configured products | `config-codex`, `config-claude` and Codex Grafana MCP setup retain their intentional product targets regardless of the executing agent. |
@@ -52,8 +56,8 @@ idempotency, recovery and output contracts remain required on both hosts.
 | Validator regressions | Structure 35, frontmatter 16, npx checker 11 and evaluation adapter 10 tests pass. |
 | Installed packages | Cross-agent installation/runtime suite: 27 tests pass, including full catalogs, repeat installation, settings preservation, hook entrypoints, source parity, native identity and negative trust checks. |
 | npx distribution | Actual pinned `skills@1.5.26`: all 71 discovered and copied for `codex` and `claude-code`; payload parity, repeated installation and isolation pass. This route does not register hooks. |
-| Workflow regression | PAI 92 plus retention 8; SDLC verifier 85, execution 79, worker dispatch 13 and native lifecycle 60; Task Implementer lifecycle 39; Commit transaction 22; SDLC hooks 111 and project hooks 38 pass. |
-| Additional regression | Task Implementer prompt workspace 90 and interoperability 13; SDLC prompt workspace 45; prompt intake 27, hook 19 and contract 5; troubleshooting hook 97, helpers 28, contract 16 and preflight 8 pass. |
+| Workflow regression | PAI 92 plus retention 8; SDLC verifier 85, execution 79, worker dispatch 13 and native lifecycle 60; Implement lifecycle 39; Commit transaction 22; SDLC hooks 111 and project hooks 38 pass. |
+| Additional regression | Implement prompt workspace 90 and interoperability 13; SDLC prompt workspace 45; prompt intake 27, hook 19 and contract 5; troubleshooting hook 97, helpers 28, contract 16 and preflight 8 pass. |
 | Configuration | Claude roles 8 and configuration 25; Codex configuration 70; shared local-template validation pass. |
 | Native triggers | Codex CLI 0.154.0 and Claude Code 2.1.236: UNAVAILABLE, authentication absent in isolated homes. |
 | Comparative quality | Same baseline/candidate sample on both native CLIs: UNAVAILABLE for authentication. No quality or native activation pass is claimed. |
@@ -84,7 +88,7 @@ unchanged vendor integrations against live services.
   requiring a new host field; Claude receives distinct native declarations.
 - Stale verifier/test assumptions: updated canonical spec ownership, v2
   templates, native CLI options and required conditional-reference checks.
-  Restored missing Task Implementer capture documentation; its seven contract
+  Restored missing Implement capture documentation; its seven contract
   mismatches also reproduced against the original working-byte baseline.
 - Final bounded read-only review found no remaining serious issue in these
   changes. Completed helper agents had no close control available.
@@ -103,11 +107,11 @@ execution, CI coverage and connected documentation. It found three gaps:
 
 | Finding | Resolution and evidence |
 | --- | --- |
-| ALIGN-WORKER-001 | Task Implementer’s sequential and recovery fallback still launched Codex for Claude sessions and inherited the parent identity. A failing routing/environment test reproduced both defects. The helper now selects the native CLI, sets the selected home/cwd and clears parent identities through the shared runtime adapter. Original Codex arguments, exact start/recovery prompts, lock release and immutable-result requirements remain intact. Claude uses print mode and native configured permissions without a bypass. Private launch names are host neutral with no old aliases. |
+| ALIGN-WORKER-001 | Implement’s sequential and recovery fallback still launched Codex for Claude sessions and inherited the parent identity. A failing routing/environment test reproduced both defects. The helper now selects the native CLI, sets the selected home/cwd and clears parent identities through the shared runtime adapter. Original Codex arguments, exact start/recovery prompts, lock release and immutable-result requirements remain intact. Claude uses print mode and native configured permissions without a bypass. Private launch names are host neutral with no old aliases. |
 | ALIGN-CI-001 | Five native workflow harness suites were absent from CI. The existing skills verification job now runs them; YAML inspection and actionlint validate the wiring. These suites use local fixtures and do not prove Docker, browser or model behavior. |
-| ALIGN-DOC-001 | Remaining shared-workflow README state paths, session names and fallback descriptions assumed Codex. Root and Task Implementer documentation, skill instructions and the handoff template now describe the selected host. Intentional configured products retain their native names. |
+| ALIGN-DOC-001 | Remaining shared-workflow README state paths, session names and fallback descriptions assumed Codex. Root and Implement documentation, skill instructions and the handoff template now describe the selected host. Intentional configured products retain their native names. |
 
-Task Implementer regressions exercise both hosts’ command arguments and recovery
+Implement regressions exercise both hosts’ command arguments and recovery
 prompts, real fixture subprocess environment/cwd/result creation, unavailable
 executables, child failure and missing immutable results. Fixture processes do
 not exercise a native model. The first subprocess fixture incorrectly combined
@@ -127,7 +131,7 @@ variables were removed.
 Fresh follow-up checks pass: all 71 skills on Codex, Claude and portable-core
 profiles; native manifests and canonical specs; 27 isolated installation/runtime
 tests; and actual pinned `skills@1.5.26` discovery, resource/mode parity, repeated
-copying and isolation for both hosts. Task Implementer resume tests (52), prompt
+copying and isolation for both hosts. Implement resume tests (52), prompt
 workspace tests (90), execution tests (10), dependency-wave tests (65) and
 contract smoke pass. The five
 native harness suites now wired into CI total 196 passing tests. Scoped Ruff,
@@ -212,7 +216,6 @@ including accepted uncommitted work.
 | [nosleep4mac](../nosleep4mac/SKILL.md) | Explicit only | 161 / 170 | 10 / 13 |
 | [optimize-pytest](../optimize-pytest/SKILL.md) | Implicit allowed | 193 / 202 | 19 / 22 |
 | [project-agent-instructions](../project-agent-instructions/SKILL.md) | Explicit only | 310 / 325 | 13 / 16 |
-| [prompt-session-intake](../prompt-session-intake/SKILL.md) | Explicit only | 205 / 217 | 38 / 41 |
 | [publish-helm](../publish-helm/SKILL.md) | Explicit only | 181 / 190 | 6 / 9 |
 | [publish-image](../publish-image/SKILL.md) | Explicit only | 165 / 174 | 6 / 9 |
 | [publish-release](../publish-release/SKILL.md) | Explicit only | 226 / 235 | 6 / 9 |
@@ -243,8 +246,8 @@ including accepted uncommitted work.
 | [sdlc-workflow-test](../sdlc-workflow-test/SKILL.md) | Explicit only | 499 / 425 | 13 / 16 |
 | [shell-scripting](../shell-scripting/SKILL.md) | Implicit allowed | 92 / 101 | 6 / 9 |
 | [system-design-rules](../system-design-rules/SKILL.md) | Implicit allowed | 168 / 177 | 18 / 21 |
-| [task-implementer](../task-implementer/SKILL.md) | Explicit only | 349 / 367 | 30 / 33 |
-| [task-implementer-test](../task-implementer-test/SKILL.md) | Explicit only | 298 / 312 | 17 / 20 |
+| [implement](../implement/SKILL.md) | Explicit only | 349 / 367 | 30 / 33 |
+| [implement-test](../implement-test/SKILL.md) | Explicit only | 298 / 312 | 17 / 20 |
 | [terraform](../terraform/SKILL.md) | Implicit allowed | 94 / 103 | 6 / 9 |
 | [troubleshoot](../troubleshoot/SKILL.md) | Implicit allowed | 614 / 623 | 30 / 33 |
 | [worktree](../worktree/SKILL.md) | Explicit only | 356 / 368 | 18 / 21 |

@@ -4,7 +4,7 @@ These are coordinator implementation details, not public skill flags. Use the
 canonical installed `commit/scripts/commit_transaction.py`, native session ID,
 exact repository root and hook-provided receipt digest. Never manufacture a
 receipt or write private authority records. Explicit root-user intent supplies
-authority; the receipt proves its origin. Delegated Worktree and Task Implementer
+authority; the receipt proves its origin. Delegated Worktree and Implement
 callers retain their existing interfaces and schemas.
 
 ## Intake and attempts

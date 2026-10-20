@@ -69,6 +69,11 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - `references/failure-taxonomy.md`.
 - `scripts/repair_control.py` and the active structured repair records.
 - Current state and retry counts.

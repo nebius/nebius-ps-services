@@ -114,7 +114,7 @@ The default report path is:
   behavior beyond its command-line help.
 - For a three-tier mode only: `references/three-tier-process.md`,
   `references/three-tier-live.md`,
-  `assets/three-tier-prompt.md.template`,
+  `assets/three-tier-objective.md.template`,
   `assets/three-tier-results.schema.json`, and
   `scripts/three_tier_lifecycle.py` help for the needed private action. Read
   `scripts/three_tier_semantics.py` before changing PASS derivation.
@@ -172,13 +172,12 @@ remotes.
    ```
 
    This script checks source-installed parity, explicit-only invocation,
-   canonical spec ownership, advisory project-lifecycle independence, prompt
-   workspace regressions, execution and secret gates, Task Implementer and
+   canonical spec ownership, advisory project-lifecycle independence, direct
+   objective/binding regressions, execution and secret gates, Implement and
    managed-worktree interoperability, bounded observability, repair control,
    exact-SHA publication modes, verifier self-tests, and hook fixtures. The
    disposable fixture is a nested selected folder in a local
-   monorepo-shaped Git repository. A clean canonical flat fixture with the
-   exact expected tracked tree and no remote is migrated once. Unknown,
+   monorepo-shaped Git repository. Obsolete flat fixtures and unknown,
    unowned, dirty, externally connected, or non-canonical directories and repositories
    fail closed without mutation. The script does not edit installed skills or
    hooks.
@@ -189,7 +188,7 @@ remotes.
 5. Run the disposable golden-path workflow when full verification is requested.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
-   `sdlc-start` (workspace initialization and prompt intake),
+   `sdlc-start` (direct objective acceptance),
    `sdlc-create-requirements`, `sdlc-gather-context`,
    `sdlc-create-design`, `sdlc-auto-steering`,
    `sdlc-create-plan`,
@@ -200,8 +199,8 @@ remotes.
    after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
    create a real PR.
 6. Verify rerun and change-request behavior.
-   Repeat `$sdlc-start run <prompt-ref-or-file>` with no prompt
-   changes, then edit the same prompt with the safe change
+   Repeat `$sdlc-start continue [project-folder]` with no objective
+   changes, then accept a new objective revision with the safe change
    request from the checklist and confirm stable IDs, immutable locked plans,
    scoped changes, refreshed evidence, and no duplicate commits.
 7. Verify failure routing and steering behavior.
@@ -210,8 +209,8 @@ remotes.
    enters `troubleshoot` exactly once and returns its diagnosis to
    `sdlc-classify-failure`, unresolved evidence stops, and a proven localized
    defect re-enters through a corrective plan and appended wave. Exercise a
-   budget stop without resetting counters, then repair and rerun. Add the
-   pause/no-PR instruction to the same prompt and repeat `run`.
+   budget stop without resetting counters, then repair and rerun. Accept the
+   pause/no-PR instruction as steering and verify explicit continuation.
 8. Verify continuation and optional harness smoke checks.
    Exercise Stop continuation with fake state and, where available, run safe
    GUI and TUI smoke checks against local disposable targets only.
@@ -302,7 +301,7 @@ The mode, authority, failure and completion rules in this file remain required.
   contain symlinks, fail closed before following or mutating them.
 - If an existing custom verification root lacks its ownership marker, or an
   existing disposable directory is non-empty and not an exact marked verifier
-  Git fixture or canonical flat migration source, fail closed without chmod,
+  Git fixture, fail closed without chmod,
   file writes, or commits. Reject every remote except the exactly owned local
   bare `origin` validated by the fixture contract.
 - If hook configuration is malformed or an SDLC hook command does not target
@@ -376,7 +375,13 @@ edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state.
 
 The live harness resolves the active feature through the isolated host's validated
-prompt workspace and canonical execution status. Before promotion, Compose and
+session/run binding, accepted objective revision and immutable execution basis.
+Worker access to shared application resources requires the current assignment's
+exclusive runtime lease. The worker acquires and holds it through the full live
+sequence and teardown; the outer verifier consumes it without impersonating or
+releasing worker ownership. A per-resource use lock guards synchronous actions
+against lease release, while short state locks leave heartbeat/status available.
+Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
 active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
@@ -395,8 +400,8 @@ it cannot restore full-workflow validity to earlier evidence.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
-Both identifiers are required. The resolver admits only the sole task in the
-active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+Both identifiers are required. The resolver admits only the assignment holding
+the exclusive runtime lease in an active scheduler slot during `sdlc-implement-plan`, with a registered worktree,
 unchanged assignment base, and an `ACTIVE` result from the execution owner's
 live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun
@@ -412,10 +417,10 @@ not serve concurrent worker tests.
 - `<agent-home>/sdlc-verification/report.md` exists.
 - Static skill discovery and hook configuration checks are recorded.
 - PreToolUse and Stop hook fixture results are recorded.
-- Prompt workspace initialization, revision, steering, terminal, and legacy
+- Direct objective intake, revision, steering, terminal, and obsolete-state rejection
   lifecycle results are recorded.
-- The deterministic capability matrix records prompt, execution, fallback,
-  outer lease, Task Implementer interop, steering, observability, hook, and
+- The deterministic capability matrix records objective, execution, fallback,
+  outer lease, Implement interop, steering, observability, hook, and
   verifier results, including failure-event/diagnosis/repair-control,
   corrective-plan, explicit-ref/head publication and explicit-PR, canonical
   single-action merge authorization.

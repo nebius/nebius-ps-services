@@ -75,6 +75,11 @@ and feature designs in `docs/design.md`.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Requirements.
 - Context packs.
 - Existing design.
@@ -170,7 +175,7 @@ integration/replan owner.
    their existing staged/unstaged state; preparation owns later staging.
    Stop on any mismatch; do not commit, reset, stash or absorb unrelated work.
 4. Run strict pair validation and return the ready design to the coordinator
-   for full prompt-impact verification before planning. The later
+   for full objective-impact verification before planning. The later
    `sdlc-prepare-execution` phase still owns the canonical contract commit.
 
 ## Idempotency
@@ -222,7 +227,7 @@ integration/replan owner.
   evaluation, rollout, rollback, and done criteria.
 - Open design questions are explicit.
 - Before planning, return the ready canonical pair to `sdlc-start` for complete
-  statement-impact settlement through `refinement-verify`. Requirements-only
+  statement-impact settlement through `settle-objective`. Requirements-only
   readiness cannot replace this receipt. A blocked or draft design remains
   ineligible for planning.
 - Failure-driven redesign records admission evidence, approval mode, affected

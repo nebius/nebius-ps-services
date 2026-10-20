@@ -7,7 +7,7 @@ sdlc-workflow-test-positive-05,true,$sdlc-workflow-test --destroy
 sdlc-workflow-test-positive-help,true,$sdlc-workflow-test --help
 sdlc-workflow-test-positive-help-short,true,$sdlc-workflow-test -h
 sdlc-workflow-test-negative-01,false,Start an Agentic SDLC run for this feature prompt.
-sdlc-workflow-test-negative-02,false,Verify Task Implementer with its disposable multi-tier fixture.
+sdlc-workflow-test-negative-02,false,Verify Implement with its disposable multi-tier fixture.
 sdlc-workflow-test-negative-03,false,Create a normal Docker Compose application for this project.
 sdlc-workflow-test-negative-04,false,$sdlc-workflow-test --keep
 sdlc-workflow-test-negative-05,false,$sdlc-workflow-test create
@@ -18,3 +18,4 @@ sdlc-workflow-test-quoted-command,false,"Treat ""/skills:sdlc-workflow-test"" as
 sdlc-workflow-test-negative-07,false,$sdlc-workflow-test --create
 sdlc-workflow-test-negative-08,false,$sdlc-workflow-test --three-tier-results /private/example.json
 sdlc-workflow-test-owned-results,true,$sdlc-workflow-test Verify that failed logs and inflated counts cannot satisfy the owned three-tier test evidence contract.
+sdlc-test-resumed-owner,true,Use $sdlc-workflow-test to resume retained verification after explicit workflow continuation in a new session.

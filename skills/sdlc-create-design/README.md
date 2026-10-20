@@ -70,8 +70,8 @@ becoming redesign.
 - Open design questions are explicit.
 - Initial owner-managed draft records carry no design decisions or readiness.
   This adapter owns their substantive design and ready transition. Before
-  planning, the coordinator settles complete prompt impact through
-  `refinement-verify`; requirements readiness alone is insufficient.
+  planning, the coordinator settles complete objective impact through
+  `settle-objective`; requirements readiness alone is insufficient.
 - An admitted design change preserves FEAT IDs and records a new fingerprint
   for immutable plan vN+1; reaffirmation records why and returns to
   classification without another design loop.

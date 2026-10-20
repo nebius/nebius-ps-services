@@ -157,7 +157,7 @@ def _log_event(
 ) -> None:
     cwd = payload.get("cwd") or "."
     try:
-        active, _, _, _ = load_active_state(cwd)
+        active, _, _, _ = load_active_state(cwd, session_id=payload.get("session_id"))
     except json.JSONDecodeError:
         active = None
     if active is None:
@@ -201,7 +201,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     command = _tool_text(tool_input)
 
     try:
-        active, _, current_state, _ = load_active_state(cwd)
+        active, _, current_state, _ = load_active_state(cwd, session_id=payload.get("session_id"))
     except json.JSONDecodeError:
         return _deny(
             payload,

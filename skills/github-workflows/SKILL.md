@@ -121,6 +121,16 @@ URLs, customer data, raw logs, or one-off local state.
   review for every PR, including Dependabot updates. Automatic events only report
   CI or recover already-authorized completion.
 
+## Publication evidence owner
+
+Use `scripts/publication.py` for deterministic release/image metadata and
+verification, keeping privileged effects and service qualification in their
+own workflows. Copy it to `.github/scripts/publication.py` for standalone
+assets. Before a release effect, preserve original asset hashes; existing
+artifacts need independent byte/digest verification against trusted evidence.
+Do not manufacture expected hashes from published assets or treat API errors
+as absence. See the publication references for lane and retry contracts.
+
 ## Resources
 
 - Assets:

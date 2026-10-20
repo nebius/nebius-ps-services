@@ -68,6 +68,11 @@ Validate the full product, not just individual features, before PR creation.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - `docs/requirements.md`.
 - Live Experiment Environment section in `docs/requirements.md`.
 - `docs/design.md`.

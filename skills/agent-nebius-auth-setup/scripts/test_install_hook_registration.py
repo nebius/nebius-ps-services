@@ -40,7 +40,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             )
         self.installer = self.repo_root / "install-skills.sh"
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.home = self.root / "home"
         self.codex_home = self.root / "codex"
         self.home.mkdir()
@@ -898,17 +898,16 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("unchanged agent-nebius-auth-setup/assets/hooks", second.stdout)
         self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
         self.assertIn("unchanged maintain-project-specs/assets/hooks", second.stdout)
-        self.assertIn("unchanged prompt-session-intake/assets/hooks", second.stdout)
+        self.assertNotIn("prompt-session-intake/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
         self.assertIn("unchanged troubleshoot/assets/hooks", second.stdout)
         self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
         self.assertIn("files: unchanged 7", second.stdout)
-        self.assertIn("files: unchanged 8", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
         self.assertIn(
-            "Summary: files updated 0, unchanged 31; registrations unchanged 13",
+            "Summary: files updated 0, unchanged 23; registrations unchanged 11",
             second.stdout,
         )
         self.assertTrue(
@@ -939,7 +938,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             for hook in group["hooks"]
             if "prompt_session_intake.py" in hook["command"]
         ]
-        self.assertEqual(prompt_events, ["UserPromptSubmit"])
+        self.assertEqual(prompt_events, [])
         self.assertNotIn("Discovered hook source directories", second.stdout)
         self.assertNotIn("Template suffixes were stripped", second.stdout)
         self.assertNotIn("Hook files:", second.stdout)
@@ -949,50 +948,33 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             "Action required: hook files or registrations changed", second.stderr
         )
 
-    def test_installed_prompt_intake_never_blocks_direct_delivery(self) -> None:
+    def test_hook_only_install_retires_exact_capture_and_preserves_spec_hooks(self) -> None:
+        hook = self.installed_hook_target("prompt_session_intake.py")
+        hook.parent.mkdir(parents=True)
+        hook.write_text("# owned retired capture payload\n")
+        sha = self.file_sha256(hook)
+        provenance = self.hook_provenance_path()
+        provenance.parent.mkdir()
+        provenance.write_text("\t".join((hook.name, "local:" + str(self.repo_root / "prompt-session-intake/assets/hooks"), hook.name, sha, sha)) + "\n")
+        owned = {"hooks": [{"type": "command", "timeout": 10,
+            "statusMessage": "Staging bound-session prompt intent",
+            "command": f'python3 "{self.codex_home}/hooks/hook_runtime.py" --agent codex --hook prompt_session_intake.py'}]}
+        foreign = {"hooks": [{"type": "command", "command": "echo foreign-preserved"}]}
+        settings = self.codex_home / "hooks.json"
+        settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [owned, foreign]}}))
+        private = self.codex_home / "prompt-session-intake/history/retained.json"
+        private.parent.mkdir(parents=True)
+        private.write_text("retained private history\n")
         installed = self.run_all_hooks_installer()
         self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
-        hook = self.installed_hook_target("prompt_session_intake.py")
-        project = self.root / "prompt-project"
-        project.mkdir(mode=0o700)
-        base = {
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "prompt-session",
-            "turn_id": "bind",
-            "cwd": str(project),
-            "codex_home": str(self.codex_home),
-        }
-
-        def invoke(prompt: str, turn_id: str) -> tuple[dict[str, object], str]:
-            result = subprocess.run(
-                [sys.executable, str(hook)],
-                input=json.dumps({**base, "turn_id": turn_id, "prompt": prompt}),
-                cwd=str(project),
-                env=self.env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(result.stderr, "")
-            return json.loads(result.stdout), result.stdout
-
-        bound, _ = invoke("$task-implementer workspace init", "bind")
-        self.assertTrue(bound["continue"])
-        conflict, conflict_output = invoke(
-            "$sdlc-start workspace init", "binding-conflict"
-        )
-        self.assertTrue(conflict["continue"])
-        self.assertNotIn("stopReason", conflict)
-        self.assertIn("BINDING_CONFLICT", conflict_output)
-
-        secret = "OPENAI_API_KEY=" + "sk-" + ("a" * 24)
-        secret_result, secret_output = invoke(secret, "secret")
-        self.assertTrue(secret_result["continue"])
-        self.assertNotIn("stopReason", secret_result)
-        self.assertNotIn(secret, secret_output)
-        event_root = self.codex_home / "prompt-session-intake" / "sessions"
-        self.assertFalse(any(event_root.rglob("raw.md")))
+        self.assertFalse(hook.exists())
+        hooks = json.loads(settings.read_text())["hooks"]
+        self.assertIn(foreign, hooks["UserPromptSubmit"])
+        commands = [hook["command"] for groups in hooks.values() for group in groups for hook in group["hooks"]]
+        self.assertFalse(any("prompt_session_intake.py" in command for command in commands))
+        self.assertTrue(any("project_specs_lifecycle.py" in command for command in commands))
+        self.assertTrue(any("user_prompt_context.py" in command for command in commands))
+        self.assertEqual(private.read_text(), "retained private history\n")
 
     def test_install_all_migrates_only_legacy_stop_owners_to_arbiter(self) -> None:
         unrelated = {

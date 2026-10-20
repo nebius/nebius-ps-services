@@ -27,7 +27,7 @@ from project_specs_lib.contracts import (
 from project_specs_lib.impact import (
     CLAIM_SCHEMA,
     public_impact_status,
-    validate_prompt_impact,
+    validate_objective_impact,
 )
 from project_specs_lib.impact import ProjectSpecError as ImpactError
 from project_specs_lib.lifecycle import lifecycle_dir
@@ -49,7 +49,7 @@ def git(root: Path, *arguments: str) -> str:
 
 
 def requirement_body(identifier: str = "TI-REQ-001") -> str:
-    return f"""# Task Implementer Requirements
+    return f"""# Implement Requirements
 
 ## Requirement Records
 
@@ -68,18 +68,18 @@ def requirement_body(identifier: str = "TI-REQ-001") -> str:
 
 - Run the focused owner tests.
 
-## Task Implementer Open Questions
+## Implement Open Questions
 
 - None.
 
-## Task Implementer Requirements Change Log
+## Implement Requirements Change Log
 
 - 2026-08-08: Established the canonical contract.
 """
 
 
 def design_body(identifier: str = "TI-DES-001", requirement: str = "TI-REQ-001") -> str:
-    return f"""# Task Implementer Designs
+    return f"""# Implement Designs
 
 ## Design Records
 
@@ -100,7 +100,7 @@ def design_body(identifier: str = "TI-DES-001", requirement: str = "TI-REQ-001")
 
 - Shared validator and migration tests.
 
-## Task Implementer Design Change Log
+## Implement Design Change Log
 
 - 2026-08-08: Established the canonical design.
 """
@@ -250,10 +250,10 @@ class ProjectSpecsTestCase(unittest.TestCase):
         )
         git(self.project, "add", "docs")
 
-    def prompt_impact_inputs(self) -> tuple[dict[str, object], dict[str, object]]:
+    def objective_impact_inputs(self) -> tuple[dict[str, object], dict[str, object]]:
         refinement: dict[str, object] = {
             "schema": "test/refinement-v1",
-            "prompt_id": "prompt-" + "a" * 32,
+            "objective_id": "objective-" + "a" * 32,
             "revision": "r0002",
             "intent_sha256": "b" * 64,
             "status": "ready",
@@ -264,7 +264,7 @@ class ProjectSpecsTestCase(unittest.TestCase):
         }
         claim: dict[str, object] = {
             "schema": CLAIM_SCHEMA,
-            "prompt_id": refinement["prompt_id"],
+            "objective_id": refinement["objective_id"],
             "revision": refinement["revision"],
             "intent_sha256": refinement["intent_sha256"],
             "dispositions": [
@@ -299,12 +299,12 @@ class ProjectSpecsTestCase(unittest.TestCase):
         prior_spec_receipt_sha256: str | None = None,
         generation: int = 1,
     ) -> dict[str, object]:
-        return validate_prompt_impact(
+        return validate_objective_impact(
             self.project,
-            workflow="task-implementer",
-            prompt_id=str(refinement["prompt_id"]),
+            workflow="implement",
+            objective_id=str(refinement["objective_id"]),
             revision=str(refinement["revision"]),
-            prompt_sha256="c" * 64,
+            objective_sha256="c" * 64,
             intent_sha256=str(refinement["intent_sha256"]),
             refinement=refinement,
             claim=claim,
@@ -313,9 +313,9 @@ class ProjectSpecsTestCase(unittest.TestCase):
             generation=generation,
         )
 
-    def test_prompt_impact_requires_complete_current_statement_coverage(self) -> None:
+    def test_objective_impact_requires_complete_current_statement_coverage(self) -> None:
         self.write_canonical()
-        refinement, claim = self.prompt_impact_inputs()
+        refinement, claim = self.objective_impact_inputs()
         receipt = self.validate_impact(refinement, claim)
         self.assertEqual(receipt["effects"], [])
         self.assertEqual(receipt["plan_action"], "retain_plan")
@@ -334,11 +334,11 @@ class ProjectSpecsTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ImpactError, "missing, duplicate, or unknown"):
             self.validate_impact(refinement, duplicate)
 
-    def test_prompt_impact_derives_effect_and_rejects_aggregate_or_record_drift(
+    def test_objective_impact_derives_effect_and_rejects_aggregate_or_record_drift(
         self,
     ) -> None:
         self.write_canonical()
-        refinement, claim = self.prompt_impact_inputs()
+        refinement, claim = self.objective_impact_inputs()
         changed = dict(list(claim["dispositions"])[0])
         changed["disposition"] = "changed_contract"
         changed["effects"] = ["design", "requirements"]
@@ -357,11 +357,11 @@ class ProjectSpecsTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ImpactError, "current requirement and design"):
             self.validate_impact(refinement, claim)
 
-    def test_prompt_impact_public_status_exposes_only_bounded_records_and_action(
+    def test_objective_impact_public_status_exposes_only_bounded_records_and_action(
         self,
     ) -> None:
         self.write_canonical()
-        refinement, claim = self.prompt_impact_inputs()
+        refinement, claim = self.objective_impact_inputs()
         receipt = self.validate_impact(refinement, claim)
         status = public_impact_status(receipt)
         self.assertEqual(
@@ -378,9 +378,9 @@ class ProjectSpecsTestCase(unittest.TestCase):
         self.assertNotIn("sha256", serialized)
         self.assertNotIn("Preserve the canonical owner", serialized)
 
-    def test_prompt_impact_records_append_only_owner_spec_transition(self) -> None:
+    def test_objective_impact_records_append_only_owner_spec_transition(self) -> None:
         self.write_canonical()
-        refinement, claim = self.prompt_impact_inputs()
+        refinement, claim = self.objective_impact_inputs()
         first = self.validate_impact(refinement, claim)
         requirements = self.docs / "requirements.md"
         requirements.write_bytes(b"Human context.\n\n" + requirements.read_bytes())
@@ -655,7 +655,7 @@ selected-project phase gates
         self.assertIn("invalid choice: 'start-prompt'", completed.stderr)
         self.assertEqual(completed.stdout, "")
 
-    def test_retired_task_implementer_receipt_flags_are_not_accepted(self) -> None:
+    def test_retired_implement_receipt_flags_are_not_accepted(self) -> None:
         self.write_canonical()
 
         completed = subprocess.run(
@@ -665,9 +665,9 @@ selected-project phase gates
                 "validate",
                 "--project-root",
                 str(self.project),
-                "--task-implementer-workspace",
+                "--implement-workspace",
                 str(self.project / ".tasks"),
-                "--task-implementer-run-id",
+                "--implement-run-id",
                 "run-retired-bridge",
             ],
             check=False,

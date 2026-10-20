@@ -72,6 +72,11 @@ a dependency-safe task graph.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - `docs/requirements.md`.
 - `docs/design.md`.
 - `context/FEAT-*.context.md`.

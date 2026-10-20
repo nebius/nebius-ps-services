@@ -216,6 +216,12 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         # weakening production path checks for that platform alias.
         self.temporary = tempfile.TemporaryDirectory(dir=Path.home())
         self.root = Path(self.temporary.name) / "verification"
+        # Synthetic identities for offline lifecycle tests; real registration is
+        # exercised separately by test_three_tier_target with actual Git state.
+        self.phase_identity = mock.patch.object(lifecycle, "phase_identity", side_effect=lambda state, phase:
+            ("a"*64, "d"*64 if phase in lifecycle.EXECUTION_PHASES else None))
+        self.phase_identity.start()
+        self.addCleanup(self.phase_identity.stop)
         self.preflight = mock.patch.multiple(
             lifecycle,
             require_command=mock.DEFAULT,
@@ -268,7 +274,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         relative = "evidence/workflow-startup.json"
         artifact = Path(state["run_root"]) / relative
         lifecycle.private_json(artifact, {
-            "schema": "agentic-sdlc/workflow-startup-v1",
+            "schema": "agentic-sdlc/workflow-startup-v2",
+            "objective_sha256": "a" * 64,
             "verification_id": state["verification_id"],
             "baseline_sha": state["git"]["baseline_sha"],
             "project_id": "test-project", "run_id": "run-test", "agent": "codex",
@@ -371,14 +378,24 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                         "verification_id": state["verification_id"],
                         "baseline_sha": state["git"]["baseline_sha"],
                         "recorded_head": state["git"]["promoted_sha"],
+                        "objective_sha256": "a"*64,
+                        "basis_sha256": "d"*64 if phase in lifecycle.EXECUTION_PHASES else None,
                         "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase],
                     }
                 ),
                 encoding="utf-8",
             )
             os.chmod(artifact, 0o600)
+            fingerprint = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            relative = f"evidence/phases/attempts/{phase}/{fingerprint}.json"
+            immutable = run_root / relative
+            immutable.parent.mkdir(parents=True, exist_ok=True)
+            immutable.write_bytes(artifact.read_bytes())
+            immutable.chmod(0o600)
             state["phases"].append(
                 {
+                    "attempt": 1,
+                    "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
                     "phase": phase,
                     "status": "PASS",
                     "summary": "Phase passed.",
@@ -1147,6 +1164,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     "verification_id": state["verification_id"],
                     "baseline_sha": state["git"]["baseline_sha"],
                     "recorded_head": state["git"]["promoted_sha"],
+                    "objective_sha256": "a"*64,
+                    "basis_sha256": None,
                     "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[
                         "sdlc-create-requirements"
                     ],
@@ -1179,6 +1198,22 @@ class ThreeTierLifecycleTests(unittest.TestCase):
 
 
 
+
+    def test_phase_rejects_changed_basis_with_unchanged_git_head(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        phase = "sdlc-implement-plan"
+        with mock.patch.object(lifecycle, 'phase_identity', return_value=('a'*64,'e'*64)):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, 'basis is stale'):
+                lifecycle.validate_phase_pass_artifact(state, phase, [f'evidence/phases/{phase}.json'])
+
+    def test_phase_ledger_preserves_failed_and_superseded_attempts(self):
+        state = self.prepare()
+        for status in ('FAIL', 'PARTIAL'):
+            state = lifecycle.record_phase(self.root, 'sdlc-tdd', status, 'retained offline attempt', [])
+        self.assertEqual([item['status'] for item in state['phases']], ['FAIL','PARTIAL'])
+        self.assertEqual([item['attempt'] for item in state['phases']], [1,2])
+        self.assertEqual(state['phases'][-1]['supersedes_attempt'], 1)
 
     def test_pass_rejects_placeholder_semantic_evidence(self) -> None:
         state = self.prepare()
@@ -1230,8 +1265,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def test_final_pass_revalidates_canonical_phase_artifact(self) -> None:
         state = self.prepare()
         self.write_valid_results(state)
-        phase = lifecycle.REQUIRED_SDLC_PHASES[0]
-        artifact = Path(state["run_root"]) / f"evidence/phases/{phase}.json"
+        artifact = Path(state["run_root"]) / state["phases"][0]["evidence"][0]
         artifact.write_text('{"result":"pass"}\n', encoding="utf-8")
         lifecycle.record_validation(
             self.root,

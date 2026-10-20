@@ -1,0 +1,6 @@
+interface:
+  display_name: "Implement Test"
+  short_description: "Verify Implement safely"
+  default_prompt: "Use $implement-test to run the lightweight verifier, or pass --create, --create --keep, or --destroy for the disposable multi-tier lifecycle."
+policy:
+  allow_implicit_invocation: false

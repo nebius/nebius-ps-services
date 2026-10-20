@@ -211,7 +211,6 @@ class CompletionTests(unittest.TestCase):
                     self.api, self.api.intent, POLICY, True
                 ),
                 lambda: completion.verify_pages(self.api, self.api.intent, True),
-                lambda: completion.targets(self.api, POLICY, {}),
                 lambda: completion.ci_inputs(self.api, POLICY, self.inputs(), "ci.yml"),
             ):
                 with self.subTest(operation=operation), self.assertRaises(gate.Blocked):
@@ -460,8 +459,7 @@ class CompletionTests(unittest.TestCase):
                 ]
                 with self.assertRaises(gate.Blocked):
                     completion.read_intent(self.api, 100, 1, 1, HEAD, POLICY)
-                with self.assertRaises(gate.Blocked):
-                    completion.targets(self.api, POLICY, {})
+                self.assertTrue(completion.targets(self.api, POLICY, {})[0]["blocked"])
                 with self.assertRaises(gate.Blocked):
                     completion.ci_checkout(self.api, POLICY, self.inputs(), "ci.yml")
                 run.assert_not_called()
@@ -479,6 +477,101 @@ class CompletionTests(unittest.TestCase):
         self.api.pr.update(merged=False, state="open")
         self.assertEqual(completion.targets(self.api, POLICY, {}), [])
         self.assertFalse(self.api.effects)
+
+    def test_event_discovery_never_scans_repository_artifacts(self):
+        original = self.api.pages
+
+        def scoped(path, key=None):
+            self.assertNotEqual(path, "actions/artifacts")
+            return original(path, key)
+
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}),
+            patch.object(self.api, "pages", side_effect=scoped),
+        ):
+            result = completion.targets(
+                self.api, POLICY, {"workflow_run": {"id": 100, "run_attempt": 1}}
+            )
+        self.assertEqual(
+            result, [{"pr": 1, "head": HEAD, "run_id": 100, "run_attempt": 1}]
+        )
+
+    def test_failed_result_ci_routes_with_identity_but_cannot_prove_success(self):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "200"}):
+            route = completion.emit_route(self.api, POLICY, self.inputs(), "ci.yml")
+        self.api.values[902] = route
+        self.api.ci["conclusion"] = "failure"
+        original = self.api.pages
+
+        def scoped(path, key=None):
+            if path == "actions/runs/200/artifacts":
+                return [self.api.artifact_meta(902, "result-route-200-1", 200)]
+            self.assertNotEqual(path, "actions/artifacts")
+            return original(path, key)
+
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}),
+            patch.object(self.api, "pages", side_effect=scoped),
+        ):
+            result = completion.targets(
+                self.api, POLICY, {"workflow_run": {"id": 200, "run_attempt": 1}}
+            )
+            self.assertEqual(result[0]["pr"], 1)
+        self.api.runs = [self.api.ci]
+        with self.assertRaises(gate.Blocked):
+            completion.verify_or_dispatch(self.api, self.api.intent, POLICY)
+        self.assertFalse(self.api.effects)
+
+    def test_unrelated_manual_ci_does_not_route(self):
+        self.api.ci.update(display_title="manual tests", actor={"id": 123})
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}):
+            self.assertEqual(
+                completion.targets(
+                    self.api, POLICY, {"workflow_run": {"id": 200, "run_attempt": 1}}
+                ),
+                [],
+            )
+
+    def test_bad_target_does_not_hide_valid_independent_target(self):
+        self.api.artifacts = [
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100),
+            self.api.artifact_meta(906, f"merge-intent-2-{BASE}-1", 100),
+        ]
+        other = {**self.api.intent, "pr": 2, "head": BASE}
+        original = self.api.api
+
+        def lookup(path):
+            if path == "pulls/2":
+                return {**self.api.pr, "number": 2, "head": {"sha": BASE}}
+            return original(path)
+
+        with (
+            patch.object(self.api, "api", side_effect=lookup),
+            patch.object(
+                completion,
+                "read_intent",
+                side_effect=[gate.Blocked("Invalid target receipt"), other],
+            ),
+            patch.object(completion, "merged_result", return_value=RESULT),
+        ):
+            values = completion.targets(self.api, POLICY, {})
+        self.assertEqual({v["pr"] for v in values}, {1, 2})
+        self.assertTrue(next(v for v in values if v["pr"] == 1)["blocked"])
+        self.assertNotIn("blocked", next(v for v in values if v["pr"] == 2))
+
+    def test_global_transport_failure_never_emits_partial_matrix(self):
+        self.api.artifacts = [
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100)
+        ]
+        with patch.object(
+            completion, "read_intent", side_effect=gate.ApiFailure("Transport failed")
+        ):
+            with self.assertRaises(gate.ApiFailure):
+                completion.targets(self.api, POLICY, {})
+        api = gate.GitHub(REPO)
+        with patch.object(api, "api", return_value={"jobs": "invalid"}):
+            with self.assertRaises(gate.ApiFailure):
+                api.pages("actions/runs/100/jobs", "jobs")
 
     def test_checkout_rejects_wrong_source_or_dirty_workspace_before_fetch(self):
         for outputs in [(HEAD + "\n",), (BASE + "\n", " M changed\n")]:

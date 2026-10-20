@@ -50,6 +50,7 @@
     "tools/course_publication_evidence.py",
     "tools/course_publication_state.py",
     "tools/course_runtime.py",
+    "tools/course_viewer.py",
     "tools/ensure_python312.sh",
     "tools/fabric_guard.py",
     "tools/inspect_results.py",

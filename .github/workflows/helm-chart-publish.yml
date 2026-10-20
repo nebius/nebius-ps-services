@@ -11,6 +11,7 @@ permissions:
 concurrency:
   group: helm-chart-publish-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 env:
   CHART_PUBLISH_CATALOG: .github/helm-chart-publish.json
@@ -268,7 +269,7 @@ jobs:
             echo "publish_needed=false" >> "${GITHUB_OUTPUT}"
           else
             printf '%s\n' "${pull_output}" >&2
-            if grep -Eiq 'not found|manifest unknown|404' <<< "${pull_output}"; then
+            if python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" registry-absent <<< "${pull_output}"; then
               echo "publish_needed=true" >> "${GITHUB_OUTPUT}"
             else
               echo "::error::Failed to check existing public chart version"
@@ -285,34 +286,11 @@ jobs:
 
       - name: Guard against duplicate nested chart repository
         if: steps.existing.outputs.publish_needed == 'true'
-        run: |
-          set -euo pipefail
-
-          helm_tmp="$(mktemp -d)"
-          export HELM_CONFIG_HOME="${helm_tmp}/config"
-          export HELM_CACHE_HOME="${helm_tmp}/cache"
-          export HELM_DATA_HOME="${helm_tmp}/data"
-          export HELM_REGISTRY_CONFIG="${helm_tmp}/registry.json"
-          mkdir -p "${HELM_CONFIG_HOME}" "${HELM_CACHE_HOME}" "${HELM_DATA_HOME}"
-
-          duplicate_ref="${{ steps.registry.outputs.duplicate_chart_ref }}"
-          if duplicate_output="$(helm show chart "${duplicate_ref}" 2>&1)"; then
-            printf '%s\n' "${duplicate_output}"
-            echo "::error::Duplicate nested chart repository detected at ${duplicate_ref}."
-            echo "::error::Delete the nested repository/artifacts first, then rerun the publish workflow."
-            echo "::error::The canonical public chart reference must stay ${{ steps.registry.outputs.chart_ref }}."
-            exit 1
-          fi
-
-          if grep -Eiq 'not found|manifest unknown|404|unable to locate any tags' <<< "${duplicate_output}"; then
-            printf '%s\n' "${duplicate_output}"
-            echo "::notice::No tagged duplicate nested chart repository detected at ${duplicate_ref}."
-            exit 0
-          fi
-
-          printf '%s\n' "${duplicate_output}" >&2
-          echo "::error::Unable to verify whether duplicate nested chart repository ${duplicate_ref} exists."
-          exit 1
+        env:
+          DUPLICATE_REPOSITORY: ${{ steps.registry.outputs.duplicate_chart_ref }}
+        run: >-
+          python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py"
+          repository-empty --repository "$DUPLICATE_REPOSITORY"
 
       - name: Configure Nebius CLI profile
         if: steps.existing.outputs.publish_needed == 'true'
@@ -412,8 +390,13 @@ jobs:
           fi
 
           digest="$(printf '%s\n' "${pull_output}" | awk '/^Digest:/ {print $2; exit}')"
-          if [[ -z "${digest}" ]]; then
-            digest="${{ steps.push.outputs.digest }}"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'Anonymous pull did not return a valid OCI digest.' >&2
+            exit 1
+          fi
+          if [[ -n "${{ steps.push.outputs.digest }}" && "${digest}" != "${{ steps.push.outputs.digest }}" ]]; then
+            echo 'Anonymous pull digest differs from the push result.' >&2
+            exit 1
           fi
 
           {
@@ -450,6 +433,7 @@ jobs:
             --arg tenant_id "${{ vars.NB_TENANT_ID }}" \
             --arg version "${{ steps.release.outputs.publish_version }}" \
             '{
+              schema: "publication-helm/v1",
               actor: $actor,
               chart_dir: $chart_dir,
               chart_name: $chart_name,

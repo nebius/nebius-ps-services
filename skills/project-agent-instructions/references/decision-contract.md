@@ -42,7 +42,7 @@ mode-`0600` receipt uses schema
 - relative requirements/design paths and full-file SHA-256 digests; and
 - a deterministic traceability-validation digest.
 
-Task Implementer and Agentic SDLC are authoring adapters. They invoke the same
+Implement and Agentic SDLC are authoring adapters. They invoke the same
 shared validator after checking their workflow-specific refinement or phase
 contracts. During every inspection and replay, the helper reruns the fixed
 `maintain-project-specs` validator and requires its complete output to equal the supplied
@@ -369,7 +369,7 @@ the current session's `ownership.json` from exact workspace-registry authority
 or unanimous sealed-history bootstrap; the command never accepts a
 prior-session ownership path from the caller.
 
-Both Task Implementer and Agentic SDLC use the same spec owner. The runtime declaration
+Both Implement and Agentic SDLC use the same spec owner. The runtime declaration
 is always required so that the active profile and discovery-sensitive CLI
 overrides are explicit. Declare the base profile and no overrides as:
 

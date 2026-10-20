@@ -10,7 +10,7 @@ These are existing target contracts for report-only assessment, not commands.
   hooks. It must retain native identity, authority, checkpoints and recovery.
 - config-codex configures the Codex home; config-claude configures Claude's
   settings and instruction files. Both preserve unrelated user configuration.
-- Task Implementer workers own their commits; Agentic SDLC commits stay with
+- Implement workers own their commits; Agentic SDLC commits stay with
   the coordinator. Cross-agent installation must retain those boundaries.
 - Some native host features have no equivalent on another standard-only host.
   The source capability must survive and the limitation must remain explicit.
