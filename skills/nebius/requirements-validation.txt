@@ -1,7 +1,7 @@
 # Offline validation baseline: Python 3.12, reviewed 2026-09-07.
 # Install only in a caller-owned validation environment.
 aiohappyeyeballs==2.7.1
-aiohttp==3.14.3
+aiohttp==3.14.4
 aiosignal==1.4.0
 attrs==26.1.0
 boto3==1.43.89
@@ -27,4 +27,4 @@ s3transfer==0.19.2
 six==1.17.0
 typing_extensions==4.16.0
 urllib3==2.8.0
-yarl==1.24.5
+yarl==1.25.1
