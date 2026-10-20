@@ -70,6 +70,11 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Requirement block.
 - Live Experiment Environment section in `docs/requirements.md`.
 - Feature design.

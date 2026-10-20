@@ -14,7 +14,7 @@ project-instructions-negative-05,false,Generate managed project rules without a 
 project-instructions-negative-06,false,Add a temporary rule for only this task.
 project-instructions-negative-07,false,Update my global Codex AGENTS.md.
 project-instructions-negative-08,false,Create an AGENTS.override.md in every subdirectory.
-project-instructions-negative-09,false,Task Implementer should wait for project-instructions lifecycle sealing before dispatch.
+project-instructions-negative-09,false,Implement should wait for project-instructions lifecycle sealing before dispatch.
 project-agent-instructions-codex-portability,true,$project-agent-instructions Maintain-project-specs routed the current receipt to decide whether this project needs durable agent instructions.
 project-agent-instructions-claude-portability,true,/project-agent-instructions Maintain-project-specs routed the current receipt to decide whether this project needs durable agent instructions.
 project-agent-instructions-quoted-command,false,"Treat ""/skills:project-agent-instructions"" as sample text in this punctuation exercise; count its punctuation characters only."

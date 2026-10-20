@@ -65,6 +65,11 @@ Merge only after explicit human instruction and final readiness verification.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - PR status, checks, reviews, branch protection, and unresolved conversations when available.
 - Latest UAT and review evidence.
 - Execution and commit evidence containing the exact promoted SHA.
@@ -77,10 +82,8 @@ Merge only after explicit human instruction and final readiness verification.
 - `permissions/merge-authorization.json`, immediately before the merge, with a
   short expiry and specific PR scope.
 - Final run status when this completes the SDLC run.
-- When this transition completes the run and all execution resources are
-  released, invoke the private Agentic SDLC `queue-next` transition. Activate
-  only the unchanged FIFO head; queue-head drift requires the user to rerun the
-  edited prompt, and a blocked active run is never overtaken.
+- When this transition completes the accepted objective, record its final
+  status through the bound coordinator. No unrelated-objective queue advances.
 
 ## Process
 

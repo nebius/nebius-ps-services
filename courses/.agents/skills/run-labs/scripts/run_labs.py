@@ -48,6 +48,16 @@ def private_environment(path):
         )
     if set(env) - required - {"variables", "course_variables", "lab_variables", "prepared_root"}:
         raise ValueError("Unknown environment fields; use references for credentials")
+    private_root = env["private_root"]
+    if (
+        not isinstance(private_root, str)
+        or not Path(private_root).is_absolute()
+        or ".." in Path(private_root).parts
+        or any(c in private_root for c in "\x00\n\r")
+    ):
+        raise ValueError("private_root must be an absolute path without parent traversal")
+    # Pin the same canonical spelling used when campaigns are loaded again.
+    env["private_root"] = str(safe_path(Path(private_root)).resolve())
     if "prepared_root" in env and (
         not isinstance(env["prepared_root"], str)
         or not Path(env["prepared_root"]).is_absolute()
@@ -171,10 +181,11 @@ def create(args):
         raise ValueError(
             "--environment is required for execution; dry-run needs no connection"
         )
-    private = directory(Path(env["private_root"]))
+    private = Path(env["private_root"])
     # Artifact roots must remain outside the course checkout.
     if private.is_relative_to(root) or root.is_relative_to(private):
         raise ValueError("Private root must be separate from the course checkout")
+    directory(private)
     identity = secrets.token_hex(8)
     path = directory(private / "campaigns" / identity)
     state = {

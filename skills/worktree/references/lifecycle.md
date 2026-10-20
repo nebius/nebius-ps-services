@@ -67,8 +67,8 @@ nested lease acquisition, removal, and source publication honor that claim and
 fail closed. Each commit must be one direct descendant on the same branch,
 leave a completely clean checkout, and have a commit tree equal to the reviewed
 staged tree. A hook-modified tree remains review-required until the complete
-actual commit is inspected and bound by exact head/tree proof. Nested Task
-Implementer or Agentic SDLC participation makes child dirt ineligible because
+actual commit is inspected and bound by exact head/tree proof. Nested Implement
+or Agentic SDLC participation makes child dirt ineligible because
 its terminal receipt binds an exact promoted head. Conflicts, active Git
 operations, unsafe or unclear content, orphan candidate resources, and
 concurrent movement also block before candidate creation.
@@ -136,10 +136,10 @@ inside the primary checkout.
 
 ## Nested Coordinator Lease
 
-Task Implementer and Agentic SDLC use lease schema v4. An `active` lease binds
+Implement and Agentic SDLC use lease schema v4. An `active` lease binds
 the exact outer path/branch/common Git directory, owner, run, token, initial
 head, ordered promotion heads, and every internal resource. Each promotion is
-an expected-head compare-and-set, which permits successive Task Implementer
+an expected-head compare-and-set, which permits successive Implement
 waves without accepting skipped or stale history. Ownership-manifest schema v4
 independently records the lease participation state, owner, and token; a missing
 lease file therefore cannot silently unlock integration or removal. Release
@@ -149,53 +149,19 @@ to `released`. A released receipt cannot be reacquired or updated; exact release
 replay is safe, while missing, stale, or contradictory state fails closed. Outer
 integration may proceed through a released receipt.
 
-## Persistent Task Implementer Lane
+## Shared Workflow Execution
 
-Task Implementer is a private Worktree-engine consumer, not a caller of public
-`$worktree` actions. Its lane key is the canonical common Git directory,
-primary checkout, exact named non-default source ref, and exact repo-relative
-project scope. Creation is permitted with source-checkout dirt because the lane
-starts from committed source `HEAD`; the source checkout is neither copied nor
-mutated. The lane itself must be clean before a generation starts.
+Implement and Agentic SDLC are peer consumers of the same Worktree Git
+transactions, locks, recovery, and cleanup. They never nest coordinators.
+Implement creates one run-owned integration checkout and fresh task worktrees;
+SDLC owns one integration checkout per prepared feature. Frozen dependency waves
+use a deterministic ready queue and a complete-wave integration barrier.
+See [the workflow contract](workflow-contract.md) for accepted objectives,
+immutable bases, session binding, admission, steering, cancellation, and delivery.
 
-Separate schema-v1 lane state records incarnation, globally monotonic active/
-pending/integrated generations across reincarnations, repository-wide exact/
-prefix/domain claims, integration recovery, and removal intent. Immutable
-generation receipts are persisted before a terminal schema-v4 coordinator
-lease is retired. Claims are validated against every other lane before the
-candidate lane document is published. This keeps the general Worktree manifest
-and lease schemas unchanged.
-
-The lane branch's `lane_id`, `source_ref`, and `incarnation` configuration is an
-all-or-none identity. Inspection also cross-checks the live lane registry by
-exact branch and worktree. Partial configuration, or a matching live lane with
-missing branch configuration, is corruption and fails closed before ordinary
-managed-child classification or lease mutation.
-
-Lane integration requires the source checkout and lane both clean, no active
-generation, and one contiguous pending range. It serializes the recorded source
-ref, reuses the exact two-parent candidate and validation protocol above,
-promotes by expected-old source-head proof, then fast-forwards and rearms the
-same lane at the merge head. Explicit lane removal requires idle, fully
-integrated, clean, source-reachable state and never deletes Task prompt/run
-history. Idle reuse/refresh, generation transitions, integration, and removal
-share the per-lane transition lock; initialization takes the lifecycle lock
-before that per-lane lock. Removal binds the observed source ref and source
-head into its durable intent, then atomically verifies that source ref while
-deleting the exact lane ref. Public Worktree integration/removal reject
-lane-owned branches.
-An exact review-rejection replay is a bounded exception to the checkpoint-first
-integration rejection only after the lane is already `pending`, its integration
-journal is absent, and the immutable rejection receipt matches the candidate
-and findings digest. It returns the receipt's unchanged source/lane heads even
-when the correction generation has only reserved a pending checkpoint. It
-cannot open or finish that checkpoint, create a candidate, or promote a ref;
-all ordinary integration attempts still fail until the checkpoint finishes.
-Before creating or resuming an outer integration reservation, rebind that
-receipt to the manifest and live outer branch/path/scope/common-directory/head,
-then rescan every recorded private path, symlink, registered worktree, and
-branch. Removal performs the same identity and resurrection proof before
-cleanup and receipt deletion.
+Obsolete persistent-lane markers or nonempty lane state fail with an upgrade
+error before mutation. Existing history and worktrees remain untouched. There is
+no alias, legacy reader, conversion, automatic deletion, or lane lifecycle API.
 
 ## Removal Proof
 

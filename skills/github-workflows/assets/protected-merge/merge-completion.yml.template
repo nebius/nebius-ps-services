@@ -4,16 +4,73 @@ on:
     workflows: ["Protected merge", "CI"]
     types: [completed]
   schedule:
-    - cron: '12,27,42,57 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
   pull-requests: read
   actions: read
 jobs:
+  recovery-ci-targets:
+    name: recovery-ci-targets
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ci_targets: ${{ steps.plan.outputs.ci_targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          targets=$(python3 .github/scripts/merge_gate.py ci-targets --recovery)
+          printf 'ci_targets=%s\n' "$targets" >> "$GITHUB_OUTPUT"
+  repair-ci-status:
+    name: required-ci-status
+    needs: recovery-ci-targets
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      needs.recovery-ci-targets.outputs.ci_targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.recovery-ci-targets.outputs.ci_targets) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: write
+    concurrency:
+      group: required-ci-${{ github.repository }}-${{ matrix.target.pr }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.target.pr }}
+          PR_HEAD: ${{ matrix.target.head }}
+        run: python3 .github/scripts/merge_gate.py publish-ci --pr "$PR_NUMBER" --head "$PR_HEAD"
+
   candidates:
     name: completion-candidates
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.event == 'workflow_dispatch' &&
+          (github.event.workflow_run.name == 'Protected merge' || startsWith(github.event.workflow_run.display_title, 'post-merge-'))))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -28,7 +85,13 @@ jobs:
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: |
           set -euo pipefail
-          targets=$(python3 .github/scripts/merge_completion.py targets)
+          status=0
+          targets=$(python3 .github/scripts/merge_completion.py targets) || status=$?
+          if [ "$status" -ne 0 ]; then
+            printf 'Completion candidate discovery failed (exit %s).\n' "$status" >&2
+            if [ -n "$targets" ]; then printf '%s\n' "$targets" >&2; fi
+            exit "$status"
+          fi
           printf 'targets=%s\n' "$targets" >> "$GITHUB_OUTPUT"
   dispatch:
     name: dispatch-result-ci
@@ -55,6 +118,11 @@ jobs:
       BROKER_RUN: ${{ matrix.target.run_id }}
       BROKER_ATTEMPT: ${{ matrix.target.run_attempt }}
     steps:
+      - name: Report blocked recovery target
+        if: matrix.target.blocked == true
+        run: |
+          echo 'Target receipt is invalid or unavailable; maintainer reconciliation required.' >&2
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -105,6 +173,9 @@ jobs:
       BROKER_RUN: ${{ matrix.target.run_id }}
       BROKER_ATTEMPT: ${{ matrix.target.run_attempt }}
     steps:
+      - name: Block invalid recovery target
+        if: matrix.target.blocked == true
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false

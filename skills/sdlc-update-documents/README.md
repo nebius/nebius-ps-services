@@ -6,10 +6,12 @@ is run.
 
 ## What It Does
 
-Updates project-facing documentation after implementation evidence, feature
-evaluation, resolved steering, UAT, or final run review shows docs need to
-match implemented behavior. Multi-layer behavior docs must be backed by
-evaluated end-to-end slice evidence when applicable.
+Updates project-facing documentation before promotion when implementation
+evidence, feature evaluation, or resolved steering shows docs need to match
+implemented behavior. Multi-layer behavior docs must be backed by evaluated
+end-to-end slice evidence when applicable. After promotion, document review is
+read-only: record a no-op or route `DOCUMENTATION_DRIFT` through classification
+to a corrective run from the promoted commit.
 Returns to `sdlc-start` for the general `align` quality gate before commitment.
 
 ## Main Boundaries

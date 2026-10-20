@@ -1,6 +1,6 @@
 ---
 name: maintain-project-specs
-description: "Maintain canonical requirements and design when direct root-user intent or proven delivery changes project truth, across ordinary sessions, Task Implementer, and Agentic SDLC. Hooks never gate tools, Stop, or workflow completion."
+description: "Maintain canonical requirements and design when direct root-user intent or proven delivery changes project truth, across ordinary sessions, Implement, and Agentic SDLC. Hooks never gate tools, Stop, or workflow completion."
 ---
 
 # Maintain Project Specs
@@ -34,8 +34,9 @@ never permission to bypass a guard or claim unobserved behavior.
 ## Purpose
 
 Keep canonical `docs/requirements.md` and `docs/design.md` useful and current
-for ordinary root-agent sessions, Task Implementer, and Agentic SDLC. The root
-agent classifies every direct user prompt at statement level. Durable product
+for ordinary root-agent sessions, Implement, and Agentic SDLC. The root
+agent classifies every direct user prompt at statement level, including steering
+and clarification answers. Durable product
 intent is reconciled into requirements and a ready design before
 implementation; implementation and verification evidence are reconciled after
 the work. Non-lifecycle requests leave both documents unchanged.
@@ -51,7 +52,7 @@ not a hook, performs semantic classification and repository writes.
   returns `continue:false`, blocks Stop, or prevents session completion.
 - Missing, stale, malformed, contended, locked, unsafe, or unavailable private
   lifecycle state produces at most a bounded advisory message.
-- Task Implementer and Agentic SDLC own their prompt-impact, plan, execution,
+- Implement and Agentic SDLC own their objective-impact, plan, execution,
   cleanup, finalization, and recovery gates. Their root coordinators use this
   owner contract for canonical spec parsing, paired publication, and receipts;
   those receipts describe project truth but never authorize workflow actions.
@@ -90,7 +91,7 @@ not a hook, performs semantic classification and repository writes.
   formatting-only edits, or implementation that restores already-documented
   behavior without changing the contract.
 - Do not infer that an advisory hook message authorizes repository changes.
-- Do not create a parallel prompt-impact or plan owner inside Task Implementer
+- Do not create a parallel objective-impact or plan owner inside Implement
   or Agentic SDLC.
 - Honor committed `mode: disabled` policy by skipping lifecycle observation and
   automatic spec maintenance.
@@ -148,7 +149,7 @@ selected design or mark it ready to satisfy a workflow gate.
 
 Publish through the paired transaction with exact current HEAD and both prior
 digests; use `absent` only for genuinely absent files. The draft pair remains
-`pending` and grants no prompt-impact, planning or execution authority. Return
+`pending` and grants no objective-impact, planning or execution authority. Return
 to the requirements adapter, which changes only requirements; the design
 adapter owns substantive design and readiness.
 
@@ -162,7 +163,8 @@ validate --project-root <path> [--output <private-path>]
 publish  --project-root <path> --requirements-candidate <path> \
   --design-candidate <path> --expected-head <sha> \
   --expected-requirements-sha256 <sha-or-absent> \
-  --expected-design-sha256 <sha-or-absent> --operation-id <id>
+  --expected-design-sha256 <sha-or-absent> --operation-id <id> \
+  [--expected-objective-sha256 <sha>] [--expected-basis-sha256 <sha>]
 migrate  --project-root <path>
 recover  --project-root <path>
 ```
@@ -171,6 +173,16 @@ recover  --project-root <path>
   Validation findings do not create lifecycle authority.
 - `publish` is the only normal repository-write path. It validates the complete
   candidate pair and compare-and-set checks Git plus both predecessor digests.
+  During prepared workflow execution, supply the current accepted objective and
+  immutable basis digests. The paired transaction requires the bound native
+  coordinator, quiescent writers and the registered integration checkout. It
+  rechecks ownership at every write boundary. After delivery, publication belongs
+  to the delivered checkout. Rejection affects this transaction only; unrelated
+  tools and session completion remain independent.
+  Implement's pre-plan `prepare-specs` checkout requires the accepted objective
+  digest but no basis digest yet. Publish only after allocation is complete;
+  failed allocation never grants publication authority on the source checkout.
+  The execution owner commits the initial pair when it locks preparation.
 - `migrate` and `recover` are explicit repository-mutating operations and keep
   their existing safety, ownership, and rollback checks.
 - `start-prompt`, `plan`, `open`, `seal`, and `waive` are retired. Do not add

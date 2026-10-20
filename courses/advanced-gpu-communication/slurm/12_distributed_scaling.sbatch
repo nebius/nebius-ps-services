@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=16
-#SBATCH --time=00:46:30
+#SBATCH --time=00:52:00
 
 #SBATCH --no-requeue
 #SBATCH --output=results/12_distributed_scaling/logs/%j.out

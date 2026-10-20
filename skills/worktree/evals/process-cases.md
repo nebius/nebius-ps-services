@@ -14,7 +14,7 @@ additional routing cases.
 ## Expected Boundary
 
 - The skill requires an explicit `$worktree` invocation.
-- A Task Implementer or Agentic SDLC handoff reports the exact command and
+- A Implement or Agentic SDLC handoff reports the exact command and
   stops; its coordinator, next-skill state, and Stop hook do not count as the
   user's explicit invocation.
 - No action means `add`; no compatibility aliases are accepted.
@@ -29,7 +29,7 @@ additional routing cases.
   calls to the returned `scope_cwd` and re-observes the child branch there.
   It does not claim that a subprocess changed the parent shell, Codex workspace,
   or editor window, and it does not launch an editor implicitly.
-- A nested Task Implementer or Agentic SDLC lease blocks outer integration and
+- A nested Implement or Agentic SDLC lease blocks outer integration and
   removal until final alignment and internal cleanup release it. Any recorded
   lease participation also makes later child dirt ineligible for auto-commit.
 - `integrate` runs only from the primary checkout. Its read-only preflight may

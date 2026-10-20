@@ -6,10 +6,48 @@ or the [local catalog](../index.html).
 
 ## Learner execution and tool ownership
 
-One no-argument `python3.12 tools/regular-lab-setup.py` operation discovers the catalog
+The public preparation entrypoint is `tools/lab-setup.py`. Retired setup filenames
+have no aliases or supported execution path. Synchronization retires only approved
+unmodified distributed copies after checking the replacement and complete helper
+inventory; modified or unsafe files stay in place with a warning.
+
+| Tool family | Owner and purpose |
+| --- | --- |
+| `lab-setup.py`, `course_bootstrap/` | CLI, catalog/recipes/container definition, installation, progress/worker, receipt reconciliation, retirement and synchronization helpers |
+| `ensure_python312.sh`, `install_fabric_tools.py`, `course_runtime.py`, `course_env.sh`, `course_execution.py` | Prerequisites, isolated activation and declared execution selection |
+| `course_job.py`, `course_job_cache.sh`, `course_evidence.py`, `cuda_result.py`, `fabric_guard.py`, `inspect_results.py` | Native jobs, caches, evidence, correctness, fabric gates and inspection |
+| `course_viewer.py` | Installed report-destination validation, bounded verified copies and atomic viewer delivery |
+| `course_publication.py`, `course_publication_state.py`, `course_publication_evidence.py`, `publish_results.py` | Runtime publication and preserved authority/history |
+| `readiness.py`, `managed_profilers.py`, `verify_monitoring.py` | Diagnostics and qualification checks |
+| `course_sync.py`, `workstation-requirements.txt`, `verify_source_sync.py`, `sync_course_tools.py` | Workstation handoff, verified source transfer and standalone helper parity |
+| `build_course_html.py`, `build_observability.py`, `course_archives.py`, `publication.py`, `course_builder/`, `course.css`, `catalog.css` | Canonical authoring, generated publications and presentation |
+| `validate_all_courses.py`, `validate_course_template.py`, `validate_text_course.py` | Aggregate and profile-specific validation |
+
+Keep UI and orchestration outside the fingerprinted installer methods and
+`state.py`. The parent holds one lock through native preparation, the supervised
+image phase and finalization. Revalidate committed worker receipts before runtime
+readiness; `.runtime/setup.json` is an aggregate outcome report, not a substitute
+for component/runtime receipts. Ordinary component failures do not block unrelated
+work or configured publication with successful dependencies. Unsafe shared state,
+source verification or package-manager health stops scheduling. Cancellation keeps
+the lock through transaction-safe cleanup. Old group reports need no cleanup.
+
+One no-argument `python3.12 tools/lab-setup.py` operation discovers the catalog
 from its installed path, prepares private results/logs before Slurm opens them,
 and reconciles every applicable runtime. `tools/course_bootstrap/catalog.json`
 owns immutable images, source revisions, model snapshots and dependency recipes.
+The Transformer Engine build uses CUDA, cuDNN and NCCL headers from its own
+Python environment through a component-scoped `CPATH`. Keep these paths in the
+catalog recipe rather than requiring learner exports or changing system CUDA.
+The compiler regression in `tests/test_training_te_build.py` checks that inherited
+headers cannot replace the environment-owned headers.
+`--exclude containers` removes runtimes with a transitive image dependency before
+deriving the retained component and prerequisite closure. Keep excluded runtime
+identities in plans and course summaries, distinct from hardware skips. Never
+rewrite excluded runtime receipts or enter the image worker on this path. Shared
+native dependencies stay included when needed. An all-container target fails
+before writes. `tests/test_exclude_containers.py` covers catalog/standalone plans,
+fresh and repeated exclusion, transitive dependencies and image preservation.
 Each practical course's `reference/runtime.json` maps every lab and native launcher
 to exactly one runtime. Keep those bindings complete when adding a variant.
 
@@ -25,8 +63,8 @@ Standalone copies carry the same bootstrap modules and recipes. Run
 `python3 tools/validate_all_courses.py`; the aggregate validator checks every
 shared copy before checking course publications. Synchronization must include
 the complete top-level setup import closure as well as course-local tools.
-Monitoring discovery remains the distinct `regular-lab-setup.py monitoring`
-workstation action.
+Normal sync owns monitoring discovery and private settings delivery through
+`course_bootstrap.sync_workstation` and `course_bootstrap.handoff`. The unified preparation command includes all declared variants and optional container dependencies by default.
 
 Preparation creates `results/<lab>/logs/` and `results/<lab>/jobs/` for every
 practical lab. It tightens owned, readable result directories to mode `0700`,
@@ -63,6 +101,20 @@ Do not delete a helper while campaign, launcher or validation consumers remain.
 Keep CUDA result conversion and benchmark stdout isolation: these enforce domain
 contracts rather than hiding learner commands. New native commands require
 source/argv tests; passing local tests does not qualify actual Slurm/Nsight runs.
+
+Keep Nsight Compute's default refusal to overwrite reports by omitting its
+valueless `--force-overwrite` switch. Nsight Systems uses the separate boolean
+`--force-overwrite=false` option. The native-job regression checks every Compute
+launcher declared in the course catalogs, including variant commands. Keep the
+profiler test double's option parsing and application boundary aligned with the
+native commands, including the Advanced Labs companion's options.
+
+Result validation requires at least one explicit passed correctness check and
+rejects any failed check, while retaining accompanying numerical diagnostics.
+Readiness inspection reads `results/environment_readiness-run-*.json` and filters
+by the recorded lab and Slurm job; native lab inspection uses its job directory.
+Standalone validators must preserve fenced headings and field-like text as literal
+content, matching the builder's lesson boundaries and field values.
 
 ## Website publication
 
@@ -342,7 +394,7 @@ The `courses-ci` Ubuntu workflow runs aggregate validation and focused
 preparation, synchronization, standalone-copy and native-job regressions on
 course pull requests and main-branch changes. It is also registered with the
 repository's protected merge completion checks. Its regression suite exercises
-all five preparation plans in each of six isolated course copies, every lab's
+the complete preparation plan in each of six isolated course copies, every lab's
 scheduler output paths, safe directory repair, and Linux terminated-child and
 live-worker cleanup. It installs `rsync` and process tools so these checks run.
 
@@ -355,6 +407,24 @@ devices select their exact runtimes and step resources. Aggregate `result.json`
 is a reader document; inspection/publication select eligible original records
 explicitly. Campaign recipes use the same canonical flags and stage-aware
 preparation under `native-jobs/v3`; historical evidence is preserved.
+
+`course_viewer.py` preflights the cxcli-installed descriptor, storage-local
+binding and open admission gate before a selected supported capture. Normal and
+fully skipped jobs have no viewer dependency. After each successful quiescent
+stage, the runner retains private originals and atomically exposes hash-verified
+native report copies to the existing shared viewer audience. Capture status,
+`viewer_delivery` and Grafana `publication` are independent. Delivery failure
+fails the job while preserving capture success; later captures proceed only
+after the publisher is confirmed stopped. Unconfirmed delivery stops them.
+
+The scheduler budget reserves 20 seconds once for viewer preflight and
+termination, plus 310 seconds per supported selected profiler, in addition to
+capture, teardown and the existing 60-second finalization allowance.
+`test_viewer_delivery.py` checks every launcher's largest valid selection;
+maintain the runtime calculation and all 110 launcher headers together.
+Standalone `readiness.py` captures stay at their printed private paths and do
+not exercise this lab delivery path. Deployment qualification must independently
+verify real report hashes and open both formats in the installed viewers.
 
 Mark allocation-dependent fabric variants with `scope.node_source: allocation`.
 The job helper resolves their actual nodes/tasks before stage execution and keeps
@@ -476,7 +546,7 @@ Asset rendering does not replace the separate full-page browser review.
 **For course maintainers.**
 
 `tools/course_execution.py`, `course_job.py`, `course_evidence.py`,
-`inspect_results.py`, `publish_results.py`, the preparation entry points,
+`inspect_results.py`, `publish_results.py`, `lab-setup.py`,
 `verify_monitoring.py`, and `readiness.py` are canonical shared helpers;
 course-local copies support standalone checkouts. Native srun, profiler, worker
 and server commands remain visible in each canonical batch file. The lifecycle
@@ -496,15 +566,17 @@ manifest, accepted artifact inventory and live owned services; it writes only
 private connection files and never installs resources or changes catalogs.
 Verification uses the native `cxcli-pushgateway` scrape job and local metrics.
 Both helpers require explicit kubeconfig and context. Old receipts and installer
-flags are unsupported; use a fresh discovery directory after installation changes.
+flags are unsupported. Sync detects changed cluster/backend identities even at
+unchanged URLs and refuses to overwrite an incompatible binding.
 The README embeds `docs/grafana.png`; the shared guide embeds the same PNG bytes
 with responsive sizing and alternative text. Course downloads retain all assigned dashboards; compact experiment guides
 use exact-job accounting and JSON inspection. The shared HTML guide is
 generated from README.md; rebuild it and all course pages after source changes.
 Keep its setup, run and dashboard-browsing sections concise. Specialized runtime
 commands live in owning course/lab guides; the renderer resolves shared-guide
-links to those generated sections. sync-labs.sh remains a source-transfer and
-SSH handoff, with dependency installation and private configuration transfer separate.
+links to those generated sections. sync-labs.sh owns source transfer, workstation discovery dependencies, private
+configuration delivery and the SSH handoff. Lab dependency installation remains
+in the existing preparation controller.
 
 Every executable recipe declares Nsight Systems applicability, the process to capture, a report view, and whether GPU telemetry is relevant. The 99 applicable labs capture a GPU worker, distributed rank, vendor process, or owned server; 11 CPU/model, artifact, health, protocol and RDMA wire-measurement exceptions explain their evidence limits. Six CPU/protocol dashboards omit GPU telemetry. Standalone validators reject mismatched capture commands, dashboard identities, query metrics and units. See [the all-lab audit](lab-profiling-audit.md).
 
@@ -519,9 +591,9 @@ Capstone and paired-serving trials carry explicit bounded trial ordinals;
 prefix-cache publication also checks its auxiliary equivalence probes. Empty
 metric recipes publish status/provenance without inferred timings.
 
-All five lab preparation scripts initialize `.runtime/publications` at the
-canonical prepared root after successful setup when private monitoring settings
-are present. Unconfigured preparation succeeds with local results; configuring
+`lab-setup.py` initializes `.runtime/publications` at the canonical prepared root
+when private monitoring settings and prepared publication dependencies are valid,
+even if unrelated components failed. Unconfigured preparation succeeds with local results; configuring
 monitoring later requires rerunning the same setup selection. Initialization
 performs local state work only and preserves identity/order on reruns. Its
 identity binds the root, workspace and transport settings; isolated
@@ -566,3 +638,46 @@ python3 tools/build_course_html.py
 Source validation does not establish live GPU or cluster readiness. Each new target must pass the shared README worker/container, single-scrape-owner, private-access and ingestion checks before its experiments can qualify that environment. The completed prepared-H200 campaign covers all 110 labs in both profiles; it does not qualify a new installation or the documented H100 target.
 
 See [profiling validation](profiling-validation.md) for source evidence, completed campaign coverage and remaining target qualification limits.
+
+## Synchronization profiles and delivery
+
+Normal sync stores its mode-600 profile and discovery receipt under a private
+`~/.gpu-course-sync/<checkout-hash>/` directory, with a pinned uv environment.
+Do not commit these files or copy their contents into support logs. `--configure`
+revisits inputs but never resets a workspace or publisher binding. Source-only,
+preview and help do not create a profile or install dependencies. Local-only
+checks the destination before source changes and refuses existing configuration.
+
+The bounded versioned identity comment in `.course-environment.sh` records
+observed Kubernetes/backend UIDs. Three exports remain data, never executed shell
+input. Unmarked settings are unsupported and rejected without modification;
+there is no settings migration or inferred backend identity. Normal sync
+preserves a valid workspace and any existing publication authority.
+
+Discovery accepts cxcli's immediate dashboard-import declarations without a
+redeployment: only Grafana's `dashboard_imports` field may differ from the
+accepted source hash. All other deployment inputs remain bound. Grafana may have
+multiple ready replicas and a separate headless gossip Service; discovery selects
+its owned HTTP Service. Metrics and Pushgateway retain their singleton checks.
+
+SSH preflight, source transfer, private delivery and digest readback use one
+account/key/port/destination. The receiver verifies its source closure under the
+setup lock, checks the previous digest and publication authority, and replaces
+settings atomically. A failed acknowledgment is unresolved unless independent
+readback proves the new settings; repeat sync resolves an unchanged-settings
+attempt through receiver validation. Do not clear private state to bypass a
+binding, lock or delivery error. Rollback changes source only and retains profiles,
+settings, runtimes, publisher identity, sequences, journals and results.
+
+Before contacting a destination, the selected transfer manifest must contain
+the complete shared setup helper inventory, including the container worker and
+activation helpers. Missing, omitted or linked helpers fail locally. Workstation
+subprocess creation blocks cancellation until group cleanup and terminal ownership
+are established, then restores signal delivery in both parent and child. The
+successful handoff prints the single `lab-setup.py` command for its destination.
+
+For explicit monitoring qualification use `tools/verify_monitoring.py` with the
+private profile's `monitoring.json`, kubeconfig and context, using a prepared
+Python environment containing the pinned profiling requirements. It starts
+bounded temporary forwards; keep this maintainer check separate from the learner
+handoff and from GPU workload qualification.

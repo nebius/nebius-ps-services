@@ -23,8 +23,13 @@ An adapter has absolute-executable `argv`, `pins` mapping each reviewed script
 and supporting input path to SHA256, JSON `outputs` paths, and bounded
 `timeout_seconds` (default 300, maximum 1800). Include every executable helper
 and imported private dependency in its pins. No shell command interpolation.
-`verify` is an adapter; `viewer_aliases` is a list of adapters that stage and
-hash-check task-owned native report copies. Logs and intent receipts remain
+`verify` is an adapter. Course lab jobs already deliver their native reports:
+use their ready `viewer_delivery` manifests and exact `viewer_paths`, with
+independent hash readback as described in [browser evidence](browser-evidence.md).
+Omit `viewer_aliases` for ordinary course evidence. If that optional adapter list
+is used to record path/hash observations, inspect its effects and keep it
+read-only; it must not copy reports or repair a failed delivery step.
+Logs and intent receipts remain
 private under the campaign's `evidence-runner/course/lab-profile` directory.
 
 Each `publications` entry has `intent`, `confirmed`, exact paired `stages`, and
@@ -154,7 +159,7 @@ stage. Do not treat the transport exit alone as missing restart permission.
 1. Run `python3 <skill>/scripts/evidence_runner.py status PRIVATE_MANIFEST`.
    This is read-only and reports the current exact unit gate.
 2. Run its `prepare` operation. It verifies frozen inputs, runs pinned adapters,
-   records verification, collects originals and stages viewer aliases. It then
+   records verification, collects originals and runs any declared viewer-readback adapters. It then
    publishes/reuses each comparison and captures its Grafana views before
    advancing to the next comparison. It stops at
    `visual-review`; it never starts another Slurm job.

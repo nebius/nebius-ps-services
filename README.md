@@ -43,6 +43,8 @@ through GitHub Pages and links to the course catalog. Pages deploys from branch
 `main` and folder `/(root)`. Protected broker merges explicitly request a Pages
 build after their exact-result CI passes; see
 [protected merge setup](.github/merge-automation.md#completion-and-recovery).
+Completion discovery failures retain their sanitized diagnostics and stop
+downstream effects; they do not undo an already verified merge.
 The root `.nojekyll` enables static publication without a custom
 deployment workflow. Other eligible repository files become available through
 Pages as well. Initial setup, course build and validation instructions live in
@@ -81,6 +83,19 @@ Implementer, Agentic SDLC, hook-installer, and project-instruction adapters run
 the focused `skills-project-specs-ci.yml` contract suite. The workflow validates
 the single v2 parser/publisher contract, nonblocking intake hooks, worker
 intent/spec inheritance, typed spec-gap reporting, and safe hook retirement.
+
+## Automation cadence and publication
+
+The protected merge broker reacts to PR and relevant CI events. The completion
+workflow runs one hourly recovery at minute 17 UTC and supports manual recovery;
+there is no per-minute or 15-minute merge polling. The seven CI workflow identities
+and their exact-result evidence remain separate. See the
+[merge protocol](.github/merge-automation.md) for recovery and trust boundaries.
+
+Release and image publication retries require original immutable evidence and
+verify remote bytes or digests. Unverifiable existing artifacts block automatic
+publication. Reviewer routing adds configured reviewers while preserving manual
+user and team requests.
 
 ## License
 

@@ -8,3 +8,4 @@ publish-image-negative-03,false,Write only the GitHub Actions image workflow.
 publish-image-codex-portability,true,$publish-image Use publish-image to release this container image end to end.
 publish-image-claude-portability,true,/publish-image Use publish-image to release this container image end to end.
 publish-image-quoted-command,false,"Treat ""/skills:publish-image"" as sample text in this punctuation exercise; count its punctuation characters only."
+checkout-behavior-explanation,false,"Explain how publish-image handles the final local checkout; do not run it or change anything."

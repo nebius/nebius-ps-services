@@ -57,6 +57,12 @@ execution owner's failure retirement and corrective plan. Immutable dispatch
 receipts allow later resolution checks without resetting the repair budget or
 changing the original failure.
 
+`DOCUMENTATION_DRIFT` before sealing routes to `sdlc-update-documents` and
+invalidates documentation, alignment, and commit evidence. Once execution is
+sealed, promoted, or completed, it routes to `sdlc-create-plan` for a new
+corrective run from the promoted commit with fresh validation and downstream
+gates; it never reopens the retired integration checkout.
+
 A successful repair with invalidations enters `revalidation_required`.
 `record-revalidation` advances one ordered gate at a time using immutable
 `revalidation-evidence-v1` whose source must be a structured phase-owned

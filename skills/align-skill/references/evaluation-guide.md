@@ -183,7 +183,7 @@ A completed contradictory trigger or quality judgment yields `FAIL`.
 
 Run `scripts/test-skill-evals.py` to verify the adapters' deterministic evidence
 boundary. Run the native suites separately on each host. Portability cases must
-preserve intentionally Codex-specific configuration and Task Implementer versus
+preserve intentionally Codex-specific configuration and Implement versus
 SDLC commit ownership; replacing provider names is not a preservation test.
 
 ## Compatibility Preservation Cases
@@ -202,3 +202,13 @@ actual npx installation separately. Offline `test-npx-compatibility.py` tests
 the checker with fixtures; only `check-npx-compatibility.py` invokes the real
 pinned CLI. Its JSON PASS covers installation, never native triggering or
 output quality. Keep network setup separate from the offline unit suite.
+
+## Troubleshooting Diagnostic Suite
+
+`--suite diagnostic` delegates to the troubleshoot-owned isolated runner. It requires
+`--baseline-dir`, `--image` pinned by digest, and `--model`; `--network` defaults to
+none. It uses the same native command and loading adapters while keeping fixture
+answers and repair oracles outside the scored payload. See
+[diagnostic qualification](../../troubleshoot/evals/diagnostic/README.md). This path
+has separate deterministic and independent causal-review gates; ordinary quality
+judgment is not a substitute for diagnostic qualification.

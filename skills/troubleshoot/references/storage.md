@@ -6,7 +6,35 @@ owner; client and server; mount or endpoint; consistency and durability model;
 capacity and performance expectations; encryption and identity; and incident
 window.
 
-## Architecture And Component Inventory
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Write fails with space error | bytes / inodes / quota / backend reservation | error code, same-mount free bytes and inodes, effective user quota | free bytes do not eliminate inode/quota exhaustion | identify growth owner and exact exhausted resource before cleanup |
+| Storage appears unavailable | permissions / read-only mount / wrong namespace / attachment | affected identity error code, mount identity/options and path ownership | EACCES and EROFS do not prove service outage | compare access from the application namespace, then attachment only if implicated |
+| Slow I/O | application queue / block queue / service throttle / transport | operation latency split, queue depth and throttle/error deltas at comparable request size | high utilization alone is not a universal saturation threshold | trace application-to-device/service delay before invasive I/O diagnostics |
+| Stale or invalid data | cache / consistency contract / partial write / corruption | version IDs, committed write ordering, read-only checksums and replica observations | different permitted versions are not necessarily corruption | preserve evidence; require explicit recovery authority before repair tools |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
+## Failing Path And Component Identity
 
 Trace the active path from application or job through library and system calls,
 filesystem or object client, page and metadata caches, mount namespace, volume
@@ -16,8 +44,8 @@ volume IDs, mount options, access mode, ownership, quota, and recent changes.
 
 ## Component Verification
 
-For each client, controller, node plugin, mount, network endpoint, service,
-device, and backend dependency, verify version and existence, active
+For the implicated client, controller, node plugin, mount, network endpoint,
+service, device or backend dependency, verify version and existence, active
 configuration, health, authentication and authorization, reachability,
 attachment or mapping, capacity and inodes, latency and queue pressure, error
 counters, clocks, data-path permissions, and recent operations or maintenance.
@@ -34,7 +62,8 @@ Separate these failure classes:
 ## Logs And Correlation
 
 Correlate application request, job, file or object key using safe redaction,
-volume or device, mount, pod and node, operation ID, and timestamp. Examine:
+volume or device, mount, pod and node, operation ID, and timestamp. Select
+relevant evidence from:
 
 - application, database, queue, object client, and job stdout or stderr;
 - CSI controller and node plugins, orchestrator events, attachment and mount

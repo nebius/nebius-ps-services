@@ -101,6 +101,24 @@ def promotion_branch(task_slug: str, lifecycle_id: str) -> str:
     return f"feature/{slug}-{opaque}"
 
 
+def observe_implementation_source(cwd: Path) -> dict[str, object]:
+    """Observe committed local delivery policy without switching or fetching."""
+    root = repository_root(cwd)
+    branch = current_branch(root)
+    head = current_head(root)
+    if not branch:
+        raise GitPromotionError("detached HEAD is unsupported")
+    result = _run(root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], allowed=(0, 1, 128))
+    symbolic = result.stdout.strip()
+    default = symbolic.removeprefix("refs/remotes/origin/") if symbolic.startswith("refs/remotes/origin/") else None
+    return {
+        "promotion_branch": branch, "promotion_initial_head": head,
+        "promotion_source": "implementation-local", "remote": None,
+        "default_branch": default, "default_ref": None, "default_head": None,
+        "delivery_mode": "source" if default is not None and branch != default else "feature",
+    }
+
+
 def resolve_remote_default(cwd: Path, *, remote: str = "origin") -> dict[str, str]:
     root = repository_root(cwd)
     _git(root, "remote", "get-url", remote)

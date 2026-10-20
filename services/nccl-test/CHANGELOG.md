@@ -16,6 +16,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Publish SemVer image tags only from release tags; reserve SHA/latest for manual builds and verify immutable aliases under one destination lock.
+
 - Aligned the image publish workflow with the shared `nb-image-chart-publish` GitHub
   environment used for Nebius Container Registry push credentials.
 - Added an Ubuntu 24.04 based NCCL test container image build with MPI support,

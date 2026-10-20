@@ -6,8 +6,8 @@ vendor documentation and matching domain skills for product-specific behavior.
 
 ## Technology Routing
 
-After completing stack discovery, load only the playbooks that match the
-observed path:
+Start at the implicated component and load only the playbooks that match the
+observed failing path:
 
 - `slurm.md` for scheduler, controller, worker, accounting, MUNGE, and job paths.
 - `soperator.md` for Soperator controllers, checks, reactions, and log pipeline.
@@ -16,10 +16,10 @@ observed path:
 - `linux.md` for service manager, OS, kernel, resources, clocks, and host hardware.
 - `network.md`, `storage.md`, and `gpu.md` for their respective data paths.
 
-For each relevant layer, populate the component matrix and log-coverage ledger
-from `investigation-protocol.md`. A component status command is not a substitute
-for incident-window logs, dependency-path verification, or active-configuration
-comparison.
+Use the adaptive boundary/evidence ledger in `investigation-protocol.md`.
+Record examined and material unexamined boundaries with reasons; expand only
+when evidence requires it. A status command cannot substitute for the workload
+oracle or for the incident-window evidence required by the current explanation.
 
 ## Active Incident
 

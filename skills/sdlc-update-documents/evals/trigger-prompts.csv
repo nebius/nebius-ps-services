@@ -8,3 +8,5 @@ sdlc-docs-negative-03,false,Implement the feature described by these docs.
 sdlc-update-documents-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-update-documents for its assigned phase. Update the README changelog and usage docs from this evaluated Agentic SDLC feature."
 sdlc-update-documents-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-update-documents for its assigned phase. Update the README changelog and usage docs from this evaluated Agentic SDLC feature."
 sdlc-update-documents-quoted-command,false,"Treat ""/skills:sdlc-update-documents"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-docs-post-promotion,true,"As the verified SDLC coordinator, assess documentation after promotion without editing the checkout and return any required correction."
+sdlc-docs-ordinary-post-uat,false,Fix a README typo in an ordinary repository without an active SDLC run.

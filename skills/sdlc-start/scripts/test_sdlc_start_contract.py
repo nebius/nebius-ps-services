@@ -1,269 +1,71 @@
 #!/usr/bin/env python3
-"""Static contract checks for prompt-bound Agentic SDLC entry and steering."""
-
-from __future__ import annotations
-
+"""Public SDLC entry and phase-ownership contract checks."""
 from pathlib import Path
+import re
 import unittest
-
 
 SKILLS = Path(__file__).resolve().parents[2]
 
 
 class SdlcStartContractTests(unittest.TestCase):
-    def text(self, relative: str) -> str:
-        return (SKILLS / relative).read_text(encoding="utf-8")
+    def text(self, path):
+        return (SKILLS / path).read_text()
 
-    def assert_terms(self, relative: str, terms: list[str]) -> None:
-        text = self.text(relative)
-        for term in terms:
-            with self.subTest(path=relative, term=term):
-                self.assertIn(term, text)
+    def test_public_interface_is_mirrored(self):
+        for path in ('sdlc-start/SKILL.md', 'sdlc-start/README.md'):
+            content = self.text(path)
+            for command in ('$sdlc-start', '$sdlc-start <objective>', '$sdlc-start continue [project-folder]'):
+                self.assertIn(command, content)
+            self.assertNotIn('$sdlc-start workspace init', content)
+            self.assertNotIn('$sdlc-start run <', content)
 
-    def test_public_interface_is_mirrored(self) -> None:
-        terms = [
-            "$sdlc-start workspace init [project-folder]",
-            "$sdlc-start run <prompt-ref-or-file>",
-        ]
-        for relative in (
-            "sdlc-start/SKILL.md",
-            "sdlc-start/README.md",
-            "sdlc-start/references/prompt-workspace.md",
-        ):
-            self.assert_terms(relative, terms)
-        for relative in ("docs/agentic-sdlc-design.md", "README.md"):
-            if (SKILLS / relative).is_file():
-                self.assert_terms(relative, terms)
+    def test_metadata_stays_explicit_only(self):
+        self.assertIn('allow_implicit_invocation: false', self.text('sdlc-start/agents/openai.yaml'))
+        self.assertIn('disable-model-invocation: true', self.text('sdlc-start/SKILL.md'))
 
-    def test_state_and_steering_contract_is_mirrored(self) -> None:
-        self.assert_terms(
-            "sdlc-start/references/prompt-workspace.md",
-            [
-                "agentic-sdlc/prompt-v3",
-                "agentic-sdlc/prompt-binding-v2",
-                "ALREADY_COMPLETE",
-                "private FIFO",
-                "QUEUED_PROMPT_DRIFT",
-                "WORKFLOW_UPGRADE_REQUIRED",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-auto-steering/SKILL.md",
-            ["prompt ID", "revision", "digest", "snapshot", "steering-resolve"],
-        )
-        self.assert_terms(
-            "sdlc-auto-steering/assets/templates/auto-steering.json.template",
-            [
-                "prompt_id",
-                "prompt_revision",
-                "prompt_sha256",
-                "prompt_snapshot",
-                "compact redacted summary only",
-            ],
-        )
-        steering_template = self.text(
-            "sdlc-auto-steering/assets/templates/STEERING.md.template"
-        )
-        self.assertIn("accepted managed prompt revision", steering_template)
-        self.assertIn("compact redacted summary", steering_template)
-        self.assertNotIn("raw prompt when safe", steering_template)
+    def test_phase_consumers_read_shared_execution_contract(self):
+        for folder in SKILLS.glob('sdlc-*'):
+            if folder.name == 'sdlc-workflow-test':
+                continue
+            content = self.text(str(folder.relative_to(SKILLS) / 'SKILL.md'))
+            self.assertIn('workflow-contract.md', content, folder.name)
 
-    def test_workspace_identity_is_helper_owned(self) -> None:
-        skill = self.text("sdlc-start/SKILL.md")
-        self.assertIn("project ID returned by the validated workspace", skill)
-        self.assertIn("Never recompute prompt", skill)
-        self.assertNotIn("Resolve the project ID from the repository identity", skill)
+    def test_no_capture_or_prompt_file_entry(self):
+        self.assertFalse((SKILLS / 'prompt-session-intake').exists())
+        self.assertFalse((SKILLS / 'sdlc-start/scripts/prompt_workspace.py').exists())
+        for path in ('sdlc-start/SKILL.md', 'sdlc-start/README.md'):
+            self.assertNotIn('prompt-ref-or-file', self.text(path))
+        self.assertIn('raw', self.text('sdlc-start/SKILL.md'))
 
-    def test_metadata_stays_explicit_only(self) -> None:
-        self.assert_terms(
-            "sdlc-start/agents/openai.yaml",
-            [
-                "workspace init [project-folder]",
-                "run <prompt-ref-or-file>",
-                "allow_implicit_invocation: false",
-            ],
-        )
+    def test_private_completion_helpers_do_not_expand_public_surface(self):
+        content = self.text('sdlc-start/SKILL.md')
+        lines = re.findall(r'(?m)^\$sdlc-start[^\n]*$', content)
+        self.assertEqual(lines, ['$sdlc-start', '$sdlc-start <objective>', '$sdlc-start continue [project-folder]', '$sdlc-start -h', '$sdlc-start --help'])
 
-    def test_direct_capture_never_invokes_sdlc(self) -> None:
-        self.assert_terms(
-            "sdlc-start/SKILL.md",
-            [
-                "direct prompts may be captured into the canonical prompt",
-                "never invoke this coordinator",
-                "does not invoke either public action",
-                "durable project-intent projection",
-                "shell/tool",
-                "Capture failure never blocks the direct turn",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-start/README.md",
-            [
-                "runs normally in the current agent",
-                "Capture never starts",
-                "captured prompt updates still require explicit `run`",
-                "never stores the submitted",
-                "operation ID and projection digest",
-                "auto-rebase",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-start/references/prompt-workspace.md",
-            [
-                "current agent handles it normally",
-                "captured updates and manual changes require explicit",
-                "capture failures do not persist or block the direct request",
-                "Staging is event-v2 metadata only",
-                "commands used as project contracts",
-                "never auto-rebase",
-            ],
-        )
+    def test_post_uat_documents_preserve_promotion_boundary(self):
+        for path in ('sdlc-start/SKILL.md', 'sdlc-update-documents/SKILL.md'):
+            content = ' '.join(self.text(path).split())
+            self.assertIn('post-promotion documentation assessment is read-only', content)
+            self.assertIn('corrective run from the exact promoted commit', content)
+            self.assertIn('DOCUMENTATION_DRIFT', content)
 
-    def test_project_specs_validate_without_becoming_workflow_authority(self) -> None:
-        self.assert_terms(
-            "sdlc-start/SKILL.md",
-            [
-                "`scripts/validate_project_specs.py`",
-                "exact canonical v2 pair",
-                "never authorizes auto-steering",
-                "Do not create, edit, retire, or reload project instructions automatically",
-                "`project-agent-instructions-change`",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-start/references/state-schema.md",
-            [
-                '"project_spec_observation"',
-                '"status": "current|pending|invalid|migration-required"',
-                "recorded as advisory and does not block SDLC progress",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-prepare-execution/SKILL.md",
-            [
-                "already-effective",
-                "canonical v2 spec pair itself",
-            ],
-        )
-        sequence = self.text("sdlc-start/references/state-schema.md")
-        self.assertNotIn("4. project-agent-instructions", sequence)
+    def test_raw_commit_authorization_does_not_gate_private_sealing(self):
+        content = ' '.join(self.text('sdlc-commit/SKILL.md').split())
+        self.assertIn('For operator-visible raw `git commit` only', content)
+        self.assertIn('private sealing and promotion', content)
 
-    def test_project_instruction_change_is_explicit_only(self) -> None:
-        start = self.text("sdlc-start/SKILL.md")
-        state_schema = self.text("sdlc-start/references/state-schema.md")
-        steering = self.text("sdlc-auto-steering/SKILL.md")
-        for content in (start, state_schema, steering):
-            normalized = " ".join(content.split())
-            self.assertIn(
-                "current user explicitly requested the separate mutation workflow",
-                normalized,
-            )
-            self.assertIn("advisory", content)
-        self.assertNotIn(
-            "`project-agent-instructions-change` to `project-agent-instructions`",
-            start,
-        )
-        self.assertNotIn("rerun the conditional decision", steering)
+    def test_managed_outer_handoff_is_exact_and_local(self):
+        content = self.text('sdlc-start/SKILL.md')
+        self.assertIn('$worktree integrate <generated-name>', content)
+        self.assertIn('outer-integration-pending', content)
+        self.assertIn('complete-outer-integration', content)
 
-    def test_no_current_bare_continuation_contract(self) -> None:
-        hook = self.text("sdlc-start/assets/hooks/stop_sdlc_continue.py")
-        self.assertIn("run {shlex.quote(prompt_filename)}", hook)
-        self.assertNotIn('f"Use ${COORDINATOR_SKILL}."', hook)
-
-    def test_managed_outer_handoff_is_exact_and_local(self) -> None:
-        self.assert_terms(
-            "sdlc-start/SKILL.md",
-            [
-                "`outer-integration-pending`",
-                "`$worktree integrate <generated-name>`",
-                "recorded primary path/source branch",
-                "fresh user invocation from that primary checkout",
-                "auto-continue the explicit-only",
-                "never push the\n  child or open a PR from it",
-                "`complete-outer-integration` to bind",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-start/references/state-schema.md",
-            [
-                "recorded\n    primary path and await a fresh",
-                "`$worktree integrate` from that primary checkout",
-                "recorded primary path plus\nthe exact `$worktree integrate <generated-name>` command and stops",
-                "The child is never\npublished",
-                "create-pr` is publication-only",
-            ],
-        )
-
-    def test_private_completion_helpers_do_not_expand_public_surface(self) -> None:
-        skill = self.text("sdlc-start/SKILL.md")
-        helper = self.text("sdlc-start/scripts/prompt_workspace.py")
-        for term in (
-            "Agentic SDLC: New Prompt",
-            "Agentic SDLC: Prompt History",
-            '"new"',
-            '"list"',
-            '"queue-list"',
-            '"queue-cancel"',
-            '"queue-next"',
-            '"verify"',
-            '"refinement-ready"',
-            '"refinement-verify"',
-        ):
-            self.assertIn(term, helper)
-        self.assertIn(
-            "private `new`, `list`, `queue-list`, `queue-cancel`, `queue-next`, and",
-            skill,
-        )
-        self.assertIn("requirements lock helper", skill)
-        self.assertIn("Expose exactly these two actions", skill)
-
-    def test_requirements_refinement_is_mechanically_locked(self) -> None:
-        self.assert_terms(
-            "sdlc-start/SKILL.md",
-            [
-                "prompt_workspace.py refinement-ready",
-                "prompt_workspace.py refinement-verify",
-                "After design is ready and before planning",
-                "complete private impact claim",
-                "exact current canonical specs",
-                "immutable impact receipt",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-create-requirements/SKILL.md",
-            [
-                "private `refinement-ready` action owned by `sdlc-start`",
-                "latest accepted prompt identity and intent",
-                "This read-only check publishes no impact receipt",
-                "After design is ready",
-            ],
-        )
-        self.assert_terms(
-            "sdlc-start/scripts/prompt_workspace.py",
-            [
-                "def verify_requirements_refinement_ready",
-                "def verify_requirements_refinement_contract",
-                "REQUIREMENTS_REFINEMENT_REQUIRED",
-                "publish_prompt_impact",
-            ],
-        )
-
-    def test_missing_pair_bootstrap_preserves_adapter_ownership(self) -> None:
-        self.assert_terms(
-            "maintain-project-specs/SKILL.md",
-            ["Missing-Spec Bootstrap", "existing counterpart byte for byte",
-             "`status=draft`", "`delivery=not-started`", "pair remains\n`pending`"],
-        )
-        self.assert_terms(
-            "sdlc-create-requirements/SKILL.md",
-            ["Do not\n  create the missing design yourself", "draft-pair bootstrap"],
-        )
-        self.assert_terms(
-            "sdlc-create-design/SKILL.md",
-            ["This adapter owns substantive architecture", "transition to ready",
-             "Before planning", "`refinement-verify`"],
-        )
+    def test_specification_ownership_is_shared(self):
+        content = self.text('sdlc-start/SKILL.md')
+        for term in ('maintain-project-specs', 'canonical', 'integration'):
+            self.assertIn(term, content)
+        self.assertIn('publish', self.text('worktree/references/workflow-contract.md'))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

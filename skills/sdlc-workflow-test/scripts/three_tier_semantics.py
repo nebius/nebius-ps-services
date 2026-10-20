@@ -9,6 +9,7 @@ from typing import Any
 
 import three_tier_target
 import three_tier_browser
+import three_tier_tests
 
 
 SCENARIO = "three-tier-task-board-v1"
@@ -159,8 +160,6 @@ def summarize_semantic_results(state: dict[str, Any]) -> dict[str, Any] | None:
     ):
         return None
     normalized_tests: dict[str, dict[str, Any]] = {}
-    seen_test_evidence: set[str] = set()
-    seen_test_digests: set[str] = set()
     for name, result in tests.items():
         if not isinstance(result, dict) or result.get("status") not in allowed:
             return None
@@ -174,29 +173,17 @@ def summarize_semantic_results(state: dict[str, Any]) -> dict[str, Any] | None:
             or any(not isinstance(item, str) or not item for item in evidence)
         ):
             return None
-        if result["status"] == "PASS":
+        status = result["status"]
+        if status == "PASS":
             if assertions < 1 or not evidence:
                 return None
             try:
-                for relative in evidence:
-                    if not relative.startswith("evidence/tests/"):
-                        return None
-                    artifact = artifact_path(run_root, relative)
-                    if (
-                        relative in seen_test_evidence
-                        or artifact.stat().st_size == 0
-                        or artifact.stat().st_size > 10 * 1024 * 1024
-                    ):
-                        return None
-                    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-                    if digest in seen_test_digests:
-                        return None
-                    seen_test_evidence.add(relative)
-                    seen_test_digests.add(digest)
-            except (OSError, SemanticEvidenceError):
-                return None
+                three_tier_tests.validate_claim(state, name, result)
+            except three_tier_tests.TestEvidenceError:
+                status = "PARTIAL"
+                assertions = 0
         normalized_tests[name] = {
-            "status": result["status"],
+            "status": status,
             "assertions": assertions,
             "evidence_count": len(evidence),
         }
@@ -290,8 +277,6 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         raise SemanticEvidenceError(
             "Semantic results must cover every required test class."
         )
-    seen_test_evidence: set[str] = set()
-    seen_test_digests: dict[str, str] = {}
     for test_name, test_value in tests.items():
         if (
             not isinstance(test_value, dict)
@@ -311,34 +296,10 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
             raise SemanticEvidenceError(f"Required {test_name} assertions are missing.")
         if not isinstance(evidence, list) or not evidence:
             raise SemanticEvidenceError(f"Required {test_name} evidence is missing.")
-        for item in evidence:
-            relative = required_string(item, f"tests.{test_name}.evidence")
-            if not relative.startswith("evidence/tests/"):
-                raise SemanticEvidenceError(
-                    "Test evidence must stay under evidence/tests/."
-                )
-            if relative in seen_test_evidence:
-                raise SemanticEvidenceError(
-                    "One generic artifact cannot satisfy multiple test classes."
-                )
-            artifact = artifact_path(run_root, relative)
-            if artifact.stat().st_size == 0 or artifact.stat().st_size > 10 * 1024 * 1024:
-                raise SemanticEvidenceError(
-                    f"Test evidence size is invalid: {relative}"
-                )
-            try:
-                digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-            except OSError as error:
-                raise SemanticEvidenceError(
-                    f"Could not read test evidence: {relative}"
-                ) from error
-            prior_test = seen_test_digests.get(digest)
-            if prior_test is not None and prior_test != test_name:
-                raise SemanticEvidenceError(
-                    "Identical generic evidence cannot satisfy multiple test classes."
-                )
-            seen_test_digests[digest] = test_name
-            seen_test_evidence.add(relative)
+    try:
+        three_tier_tests.validate_evidence(state, tests)
+    except three_tier_tests.TestEvidenceError as error:
+        raise SemanticEvidenceError(str(error)) from error
     phases = value.get("sdlc_phases")
     if (
         not isinstance(phases, dict)
@@ -349,6 +310,11 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
             "Semantic results are missing a required passing SDLC phase."
         )
     gui_summary = validate_gui_results(state, value.get("gui_uat"))
+    from three_tier_lifecycle import validate_phase_history
+    try:
+        validate_phase_history(state)
+    except (RuntimeError, OSError, ValueError, KeyError) as error:
+        raise SemanticEvidenceError(str(error)) from error
     return {
         "layers": dict(value["layers"]),
         "tests": {

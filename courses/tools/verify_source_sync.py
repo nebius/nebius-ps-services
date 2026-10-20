@@ -57,6 +57,14 @@ def main():
             if not (args.root / p).is_symlink()
             or (args.root / p).resolve().is_relative_to(root)
         ]
+        replacement = json.loads((root / "tools/course_bootstrap/retired.json").read_text())["replacement_files"]
+        required = set(replacement) | {
+            "tools/verify_source_sync.py", "tools/course_sync.py", "tools/workstation-requirements.txt",
+        }
+        for relative in sorted(required):
+            path = root / relative
+            if relative not in files or path.is_symlink() or not path.is_file():
+                raise ValueError(f"Incomplete setup transfer: {relative}")
         print(
             json.dumps(
                 {
@@ -70,32 +78,20 @@ def main():
         runtime = args.root / ".runtime"
         with setup_lock(runtime) if runtime.exists() else nullcontext():
             count = verify(args.root, manifest)
-            scripts = (
-                "regular",
-                "cuda",
-                "communication",
-                "serving",
-                "transformer-engine",
-            )
+            replacement = json.loads((Path(__file__).parent / "course_bootstrap/retired.json").read_text())["replacement_files"]
             scopes = []
             for relative in manifest["files"]:
-                if relative.endswith("tools/regular-lab-setup.py"):
+                if relative.endswith("tools/lab-setup.py"):
                     course = Path(relative).parent.parent
-                    required = [
-                        course / "tools" / f"{group}-lab-setup.py" for group in scripts
-                    ]
-                    required += [
-                        course / "tools/course_bootstrap/cli.py",
-                        course / "tools/course_bootstrap/support.py",
-                        course / "tools/course_publication_state.py",
-                        course / "tools/publish_results.py",
-                    ]
+                    required = [course / path for path in replacement]
                     if all(
                         "sha256" in manifest["files"].get(path.as_posix(), {})
                         for path in required
                     ):
                         scopes.append(course)
             result = retire(args.root, scopes)
+        for name in result["preserved_modified"]:
+            print(f"WARNING: Preserved modified or unsafe retired entrypoint: {name}", file=sys.stderr)
         print(
             f"Verified {count} source files; retired {len(result['retired'])} known old entrypoints; preserved {len(result['preserved_modified'])} modified entries."
         )

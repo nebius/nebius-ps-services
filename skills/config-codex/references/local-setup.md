@@ -49,8 +49,8 @@ when the user explicitly wants the public MCP baseline audited against
 `assets/config.toml.template`. These audit flags must not be used as
 justification to replace existing laptop `AGENTS.md` or `config.toml` files.
 
-Use `--require-task-implementer-workspace` only after the user explicitly
-opts in to private prompt-workspace access. The default preflight must remain
+Use `--require-implement-state` only after the user explicitly
+opts in to private execution-state access. The default preflight must remain
 independent of that optional directory.
 
 When a repo-owned guard blocks an otherwise safe patch, prove its exact
@@ -96,25 +96,25 @@ mkdir -p "$CODEX_HOME/hooks" "$CODEX_HOME/agents" "$CODEX_HOME/task-state"
 chmod 700 "$CODEX_HOME/task-state"
 ```
 
-## Optional Task Implementer Prompt Workspace
+## Optional Implement Execution State
 
 This integration is opt-in. When requested, create the private storage root
 outside every Git worktree and Git metadata directory, and restrict it before
-any prompt is stored:
+accepted objective or execution evidence is stored:
 
 ```bash
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
-if [ -L "$CODEX_HOME/task-implementer" ]; then
-  echo "Refusing symlinked task-implementer storage" >&2
+if [ -L "$CODEX_HOME/implement" ]; then
+  echo "Refusing symlinked implement storage" >&2
   exit 1
 fi
 
-mkdir -p "$CODEX_HOME/task-implementer"
-chmod 700 "$CODEX_HOME/task-implementer"
+mkdir -p "$CODEX_HOME/implement"
+chmod 700 "$CODEX_HOME/implement"
 ```
 
-Do not accept a symlink at that path. Do not print prompt bodies while
+Do not accept a symlink at that path. Do not print private objective content while
 inspecting or validating it.
 
 If the existing `sandbox_mode` is `workspace-write`, append the rendered
@@ -123,7 +123,7 @@ entries:
 
 ```toml
 [sandbox_workspace_write]
-writable_roots = ["<existing-root>", "{{CODEX_HOME}}/task-implementer"]
+writable_roots = ["<existing-root>", "{{CODEX_HOME}}/implement"]
 ```
 
 Replace `{{CODEX_HOME}}` only in the user's local file. Do not add this root
@@ -134,7 +134,7 @@ preferred, leave `sandbox_mode` and `approval_policy` unchanged and report
 this exact generic invocation:
 
 ```bash
-codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
+codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"
 ```
 
 Validate the opt-in contract without exposing the resolved home path:
@@ -142,7 +142,7 @@ Validate the opt-in contract without exposing the resolved home path:
 ```bash
 python3 config-codex/scripts/check-local-idempotency.py \
   --codex-home "$CODEX_HOME" \
-  --require-task-implementer-workspace
+  --require-implement-state
 ```
 
 The validator checks that the directory is real, is not a symlink, is outside
@@ -321,7 +321,7 @@ Do not add template-only model defaults, app/plugin settings, MCP servers,
 project entries, skill entries, or writable roots to an existing config merely
 because they appear in `assets/config.toml.template`.
 
-The private task-implementer root is the exception only after explicit opt-in;
+The private implement root is the exception only after explicit opt-in;
 follow the dedicated contract above and preserve the existing policy.
 
 For a missing config, the public-safe MCP baseline in the template restores the

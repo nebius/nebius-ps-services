@@ -1,8 +1,14 @@
 # Run-labs preparation alignment
 
-## Delivered scope
+This is a historical audit of the former preparation interface. The current
+learner path is the [Lab Guide](../lab-guide.html#lab-preparation): normal
+synchronization followed by one `lab-setup.py` command. The source-owned
+`run-labs` skill consumes that unified contract; the evidence below retains
+its original scope.
 
-The canonical `skills/run-labs` skill now consumes the five-script managed
+## Historical delivered scope
+
+At this audit revision, `skills/run-labs` consumed the five-script managed
 preparation contract. The README's project-local installation command refreshes
 `.agents/skills/run-labs`; no global skill, hook or agent configuration changes
 are required.

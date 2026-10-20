@@ -53,10 +53,9 @@ branch without publishing child branches.
   `integrate` may commit eligible primary dirt.
 - Do not use child worktrees for push or PR publication. Publish only the
   accumulated source branch through the standalone Git/PR skills.
-- Do not invoke these public actions as Task Implementer's internal worker
-  manager. Task Implementer is an approved private consumer of separate lane
-  primitives owned by this helper; those primitives are not public Worktree
-  actions or compatibility aliases.
+- Do not invoke these public actions as Implement's internal worker
+  manager. Implement and Agentic SDLC consume the shared private workflow
+  execution engine; it reuses this helper's Git transactions and ownership.
 - A caller or coordinator reaching an outer-lifecycle handoff must return the
   exact `$worktree ...` command and stop. A recorded next skill, hook
   continuation, or internal phase transition is not the fresh explicit user
@@ -87,7 +86,7 @@ $worktree remove <generated-worktree-name>
 - Read [references/lifecycle.md](references/lifecycle.md) before integration,
   recovery, restart, or cleanup.
 - For `integrate`, load `$commit` before an eligible automatic commit and load
-  `$align` for candidate validation. Load the relevant Task Implementer or
+  `$align` for candidate validation. Load the relevant Implement or
   Agentic SDLC handoff when that workflow produced the child head.
 
 ## Writes
@@ -123,23 +122,10 @@ $worktree remove <generated-worktree-name>
   normal-hook commit, and records its direct-child/tree proof. Neither layer
   fetches for lifecycle decisions, pushes, creates PRs, deletes remote branches,
   or writes private workflow state into the repo.
-- Private Task Implementer lane primitives keep separate schema-v1 lane state
-  and immutable generation receipts under the same protected state root. The
-  private prepare primitive journals and claims an exact whole-lane candidate
-  for review without mutating the real index or history. The token-bound open
-  creates at most one repo-root fixed-message checkpoint and publishes its exact
-  clean post-checkpoint head as the lane and lease baseline. Hook mutation
-  rotates the token; interrupted retries adopt only the exact reviewed staged
-  tree or exact reviewed clean direct child, and active-generation dirt never
-  triggers another checkpoint. These primitives continue
-  reusing schema-v4 ownership, exact integration candidates, locks, and
-  expected-head cleanup. Public `integrate` and `remove` reject those lanes,
-  and ordinary coordinator lease acquisition rejects them before lease or
-  manifest mutation. Branch `lane_id`, `source_ref`, and `incarnation` metadata
-  is an all-or-none identity; incomplete or missing metadata for a live lane
-  fails closed before the checkout can be classified as an ordinary managed
-  child. Task Implementer and Agentic SDLC remain separate peer workflows over
-  this shared Worktree substrate.
+- Shared workflow execution owns accepted objectives, immutable bases, fresh
+  worker worktrees and ready slots. It reuses these Git lifecycle primitives.
+  Obsolete lane state is rejected and retained without conversion or deletion.
+  See [workflow-contract.md](references/workflow-contract.md).
 
 ## Process
 
@@ -288,16 +274,14 @@ $worktree remove <generated-worktree-name>
   the exact owner, token, promoted head, clean outer checkout, and absent
   resources; the receipt is removed only with the outer lifecycle. Schema-v4
   ownership manifests retain the lease participation state and exact identity,
-  while ordered promotion heads permit successive Task Implementer waves only
+  while ordered promotion heads permit successive Implement waves only
   through expected-head compare-and-set. Outer removal retains an exact private
   removal-intent snapshot until receipt, manifest, and final resource cleanup
   complete.
-- Persistent Task Implementer lanes are idempotent by logical common-directory,
-  primary-checkout, named source-ref, and project-scope identity. Their
-  generations are monotonic, released receipts are immutable, integration
-  consumes a contiguous pending range and rearms the same lane, and explicit
-  lane removal records an incarnation boundary without deleting Task prompt
-  history.
+- Implement keeps one integration worktree per run and fresh worker worktrees
+  per task. Replays validate exact assignments and immutable receipts; retired
+  waves retain reconciled recovery resources without treating them as delivered
+  dependencies. Delivery reports retained resources explicitly.
 
 ## Failure Handling
 
@@ -309,14 +293,6 @@ $worktree remove <generated-worktree-name>
   at the recorded base.
 - Merge conflict retains the private candidate and integration reservation;
   other integration into the same source is blocked until reconciliation.
-- A Task Implementer candidate rejected by combined review is archived by its
-  exact SHA behind a private compare-and-set ref before only its clean temporary
-  candidate resources and reservation are released. The source ref stays
-  unchanged and the pending lane becomes correction-ready. An exact replay may
-  re-read that terminal receipt while the correction run has only a pending
-  generation checkpoint; it does not advance integration, finish the
-  checkpoint, or change either head. Ordinary Worktree integration has no
-  review-rejection transition.
 - Source or child movement, malformed state, wrong merge parents, failed
   validation, failed fast-forward, or uncertain cleanup fails closed and
   preserves evidence.
@@ -327,7 +303,7 @@ $worktree remove <generated-worktree-name>
 
 - Never use `git worktree remove --force`, broad prune/GC, reset, rebase,
   cherry-pick, force-push, or direct checked-out-ref updates.
-- Never allow direct managed-child, integration-candidate, Task Implementer
+- Never allow direct managed-child, integration-candidate, Implement
   worker, or Agentic SDLC worker `commit-push`/`create-pr`; state-backed guards
   must route to the owning local promotion and integration workflow.
 - Never treat `--project` as a staging or changed-path boundary. Git operations

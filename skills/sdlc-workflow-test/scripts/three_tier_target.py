@@ -96,12 +96,15 @@ def resolve_target(
             state, skills_root=skills_root, agent=agent, require_clean=require_clean,
             worker_task=worker_task, assignment_digest=assignment_digest,
         )
+    except TargetError:
+        raise
     except (
         OSError,
         ValueError,
         KeyError,
         subprocess.TimeoutExpired,
         owned_git_origin.OriginError,
+        RuntimeError,
     ) as error:
         raise TargetError(
             "Owned workflow execution target is unavailable or invalid."
@@ -127,50 +130,153 @@ def _registration(state: dict, agent: str):
     env["GIT_OPTIONAL_LOCKS"] = "0"
     runs = home / "sdlc-runs"
     _safe_path(runs, boundary)
-    entries = list(runs.iterdir())
-    if len(entries) > 100:
-        raise TargetError("Workflow workspace inventory exceeds its bound.")
-    matches = []
-    for entry in entries:
-        _safe_path(entry, boundary)
-        manifest = entry / "workspace.json"
-        if not manifest.exists():
-            continue
-        workspace = _private_json(manifest, boundary)
-        if workspace.get("project_root") == str(project):
-            matches.append((manifest, workspace))
-    if len(matches) != 1:
-        raise TargetError("Exactly one owned prompt workspace is required.")
-    manifest, workspace = matches[0]
-    active = _private_json(manifest.parent / "active-run.json", boundary)
-    run_id = active.get("run_id")
-    if (
-        not isinstance(run_id, str)
-        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id) is None
-    ):
-        raise TargetError("Active workflow run is invalid.")
-    run_dir = manifest.parent / run_id
-    current = _private_json(run_dir / "current-state.json", boundary)
-    lock = _private_json(manifest.parent / "active.lock", boundary)
-    identity = {
-        "project_id": workspace.get("project_id"),
-        "project_root": str(project),
-        "run_id": run_id,
-    }
-    if (
-        not isinstance(identity["project_id"], str)
-        or not identity["project_id"]
-        or any(lock.get(key) != value for key, value in identity.items())
-        or re.fullmatch(r"[0-9a-f]{64}", str(lock.get("owner_session_hash", ""))) is None
-        or not isinstance(lock.get("created_at"), str)
-        or not lock["created_at"]
-        or not isinstance(lock.get("status"), str)
-        or not lock["status"]
-    ):
-        raise TargetError("Hook ownership record does not bind the active workflow.")
-    if current.get("run_id") != run_id or current.get("project_id") != identity["project_id"]:
-        raise TargetError("Workflow checkpoint does not bind the active run.")
+    startup = validate_startup_receipt(state) if state.get('workflow_startup') else None
+    if startup:
+        # Startup identity is immutable; its former session may bind another run.
+        if any(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", startup[key]) is None
+               for key in ('project_id', 'run_id')):
+            raise TargetError('Startup run identity is invalid.')
+        run_dir = runs / startup['project_id'] / startup['run_id']
+    else:
+        native = env.get('CODEX_THREAD_ID') if agent == 'codex' else env.get('SKILLS_SESSION_ID')
+        if not native:
+            raise TargetError('Native coordinator identity is required for initial observation.')
+        session_sha = hashlib.sha256(native.encode()).hexdigest()
+        binding = _private_json(runs / 'bindings' / (session_sha + '.json'), boundary)
+        if (binding.get('schema') != 'workflow/session-binding-v1' or binding.get('owner') != 'agentic-sdlc'
+                or binding.get('session_sha256') != session_sha or binding.get('project_root') != str(project)):
+            raise TargetError('Recorded coordinator binding does not own this fixture.')
+        run_dir = Path(str(binding.get('run_dir', '')))
+    if run_dir.parent.parent != runs:
+        raise TargetError('Recorded run binding escapes the workflow home.')
+    manifest = run_dir.parent / 'project.json'
+    workspace = _private_json(manifest, boundary)
+    active = _private_json(run_dir.parent / 'active-run.json', boundary)
+    lock = _private_json(run_dir.parent / 'active.lock', boundary)
+    current = _private_json(run_dir / 'current-state.json', boundary)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'worktree/scripts'))
+    try:
+        from workflow_objectives import validate_run
+        run, objective = validate_run(run_dir, owner='agentic-sdlc')
+    finally:
+        sys.path.pop(0)
+    if startup:
+        if (startup['run_id'] != run_dir.name or startup['project_id'] != workspace.get('project_id')
+                or startup['objective_sha256'] not in {item['sha256'] for item in objective['revisions']}):
+            raise TargetError('Startup receipt belongs to a different run or objective ancestry.')
+        session_sha = run['coordinator_session_sha256']
+        binding = _private_json(runs / 'bindings' / (session_sha + '.json'), boundary)
+        if (binding.get('schema') != 'workflow/session-binding-v1' or binding.get('owner') != 'agentic-sdlc'
+                or binding.get('session_sha256') != session_sha or binding.get('project_root') != str(project)
+                or binding.get('run_dir') != str(run_dir)):
+            raise TargetError('Current coordinator binding does not own the observed run.')
+    identity = {'project_id': workspace.get('project_id'), 'project_root': str(project), 'run_id': run_dir.name}
+    if (workspace.get('schema') != 'workflow/project-v1' or workspace.get('owner') != 'agentic-sdlc'
+            or active.get('schema') != 'workflow/active-run-v1' or active.get('run_id') != run_dir.name
+            or lock.get('schema') != 'workflow/coordinator-ownership-v1' or lock.get('owner') != 'agentic-sdlc'
+            or any(lock.get(key) != value for key, value in identity.items())
+            or run.get('coordinator_session_sha256') != session_sha or lock.get('owner_session_hash') != session_sha
+            or binding.get('objective_id') != objective['objective_id']
+            or current.get('run_id') != run_dir.name or current.get('project_id') != workspace['project_id']):
+        raise TargetError('Hook ownership record does not bind the active workflow.')
     return manifest, workspace, active, lock, run_dir, current, env
+
+
+def current_objective(state: dict, *, agent: str) -> str:
+    """Read the current revision through the previously observed binding."""
+    _manifest, _workspace, _active, _lock, run_dir, _current, _env = _registration(state, agent)
+    return _private_json(run_dir / "objective.json", Path(state["run_root"]))["revisions"][-1]["sha256"]
+
+
+def validate_historical_basis(state: dict, recorded: str, *, agent: str) -> None:
+    """Admit only an owner-linked, no-effect settlement of the same execution."""
+    try:
+        _validate_historical_basis(state, recorded, agent=agent)
+    except TargetError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+        raise TargetError("Historical execution basis is unavailable or invalid.") from error
+
+
+def _validate_historical_basis(state: dict, recorded: str, *, agent: str) -> None:
+    if not isinstance(recorded, str) or re.fullmatch(r"[0-9a-f]{64}", recorded) is None:
+        raise TargetError("Historical execution basis digest is invalid.")
+    current_target = resolve_target(
+        state, skills_root=Path(__file__).resolve().parents[2], agent=agent,
+        require_clean=False,
+    )
+    _, _, _, _, run_dir, current, _ = _registration(state, agent)
+    boundary = Path(state["run_root"])
+    feature = current["current_feature"]
+
+    def canonical(value):
+        return hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode()).hexdigest()
+
+    def basis(fingerprint):
+        value = _private_json(run_dir / "bases" / feature / (fingerprint + ".json"), boundary)
+        if (canonical(value) != fingerprint
+                or value.get("schema") != "workflow/objective-impact-execution-basis-v1"):
+            raise TargetError("Historical execution basis changed.")
+        return value
+
+    prior = basis(recorded)
+    latest = basis(current_target["basis_sha256"])
+    settlement_fields = {"impact_sha256", "spec_receipt_sha256", "spec_transition_sha256", "plan_action"}
+    if (set(prior) != set(latest)
+            or any(prior[key] != latest[key] for key in prior.keys() - settlement_fields)):
+        raise TargetError("Historical execution basis has a material identity change.")
+
+    # Follow immutable owner receipts, never a caller assertion or arbitrary basis file.
+    paths = list((run_dir / "objective-impact").glob("attempt-*.json"))
+    if len(paths) > 1024:
+        raise TargetError("Historical impact chain exceeds the evidence bound.")
+    receipts = {}
+    for path in paths:
+        value = _private_json(path, boundary)
+        fingerprint = canonical(value)
+        if fingerprint in receipts:
+            raise TargetError("Historical impact chain has duplicate receipts.")
+        receipts[fingerprint] = value
+    old = receipts.get(prior["impact_sha256"])
+    if (not isinstance(old, dict)
+            or old.get("spec_receipt_sha256") != prior["spec_receipt_sha256"]):
+        raise TargetError("Historical impact receipt is missing or changed.")
+    cursor = latest["impact_sha256"]
+    expected_spec = latest["spec_receipt_sha256"]
+    seen = set()
+    while cursor != prior["impact_sha256"]:
+        row = receipts.get(cursor)
+        if (cursor in seen or not isinstance(row, dict)
+                or row.get("schema") != "workflow/objective-impact-receipt-v1"
+                or row.get("workflow") != latest["owner"]
+                or row.get("objective_id") != latest["objective_id"]
+                or row.get("revision") != latest["latest_settled_revision"]
+                or row.get("objective_sha256") != latest["objective_sha256"]
+                or row.get("effects") != [] or row.get("plan_action") != "retain_plan"
+                or row.get("spec_receipt_sha256") != expected_spec):
+            raise TargetError("Historical impact succession is missing or material.")
+        seen.add(cursor)
+        predecessor = receipts.get(row.get("prior_impact_sha256"))
+        if not isinstance(predecessor, dict):
+            raise TargetError("Historical impact predecessor is missing.")
+        previous_spec = predecessor.get("spec_receipt_sha256")
+        transition = row.get("spec_transition")
+        expected_transition = ({
+            "prior_spec_receipt_sha256": previous_spec,
+            "next_spec_receipt_sha256": expected_spec,
+            "prior_impact_sha256": row["prior_impact_sha256"],
+            "reason": "owner_reconciliation",
+        } if previous_spec != expected_spec else None)
+        if (transition != expected_transition
+                or row.get("spec_transition_sha256") != (
+                    canonical(transition) if transition is not None else None)):
+            raise TargetError("Historical specification transition is invalid.")
+        cursor = row["prior_impact_sha256"]
+        expected_spec = previous_spec
+    if expected_spec != prior["spec_receipt_sha256"]:
+        raise TargetError("Historical specification ancestry is incomplete.")
 
 
 def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
@@ -211,7 +317,7 @@ def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
         ):
             raise TargetError("Workflow startup registration changed during inspection.")
         return {
-            "schema": "agentic-sdlc/workflow-startup-v1",
+            "schema": "agentic-sdlc/workflow-startup-v2",
             "verification_id": state["verification_id"],
             "baseline_sha": state["git"]["baseline_sha"],
             "project_id": workspace["project_id"],
@@ -221,6 +327,7 @@ def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
             "hook_discovery": "MATCH",
             "owner_session_hash": lock["owner_session_hash"],
             "lock_sha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
+            "objective_sha256": _private_json(run_dir / 'objective.json', boundary)['revisions'][-1]['sha256'],
         }
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, owned_git_origin.OriginError) as error:
         raise TargetError("Workflow startup registration is unavailable or invalid.") from error
@@ -238,15 +345,15 @@ def validate_startup_receipt(state: dict) -> dict:
         if hashlib.sha256(path.read_bytes()).hexdigest() != receipt["sha256"]:
             raise TargetError("Workflow startup receipt digest does not match.")
         if (
-            set(value) != {"schema", "verification_id", "baseline_sha", "project_id", "run_id", "agent", "current_phase", "hook_discovery", "owner_session_hash", "lock_sha256", "observed_at"}
-            or value.get("schema") != "agentic-sdlc/workflow-startup-v1"
+            set(value) != {"schema", "verification_id", "baseline_sha", "project_id", "run_id", "agent", "current_phase", "hook_discovery", "owner_session_hash", "lock_sha256", "objective_sha256", "observed_at"}
+            or value.get("schema") != "agentic-sdlc/workflow-startup-v2"
             or value.get("verification_id") != state["verification_id"]
             or value.get("baseline_sha") != state["git"]["baseline_sha"]
             or value.get("agent") not in {"codex", "claude"}
             or value.get("current_phase") != "sdlc-start"
             or value.get("hook_discovery") != "MATCH"
             or any(not isinstance(value.get(key), str) or not value[key] for key in ("project_id", "run_id", "observed_at"))
-            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(key, ""))) is None for key in ("owner_session_hash", "lock_sha256"))
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(key, ""))) is None for key in ("owner_session_hash", "lock_sha256", "objective_sha256"))
         ):
             raise TargetError("Workflow startup receipt identity is invalid.")
         return value
@@ -285,40 +392,18 @@ def _resolve_target(
         raise TargetError(
             "Workflow checkpoint does not bind the active run and feature."
         )
-    _run(
-        [
-            sys.executable,
-            str(skills_root / "sdlc-start/scripts/prompt_workspace.py"),
-            "verify",
-            "--workspace",
-            str(manifest),
-            "--run-id",
-            run_id,
-            "--json",
-        ],
-        env,
-    )
     coordinator_path = run_dir / "execution" / feature / "coordinator.json"
     coordinator = _private_json(coordinator_path, boundary)
-    status = json.loads(
-        _run(
-            [
-                sys.executable,
-                str(skills_root / "sdlc-prepare-execution/scripts/sdlc_execution.py"),
-                "status",
-                "--run-dir",
-                str(run_dir),
-                "--feature",
-                feature,
-            ],
-            env,
-        )
-    )
-    if not isinstance(status, dict) or status.get("status") != "ok":
-        raise TargetError("Execution inspection returned an invalid envelope.")
-    status = status.get("result")
-    if not isinstance(status, dict):
-        raise TargetError("Execution inspection returned an invalid object.")
+    sys.path.insert(0, str(skills_root / 'worktree/scripts'))
+    try:
+        from workflow_impact import verify_execution, canonical_digest
+        from workflow_execution import describe_status, watch_task
+        from workflow_resources import verify as verify_runtime
+        basis = verify_execution(run_dir, feature, coordinator['plan_digest'], project)
+        basis_sha256 = canonical_digest(basis)
+    finally:
+        sys.path.pop(0)
+    status = describe_status(run_dir, feature)
     for key in (
         "feature_id",
         "status",
@@ -401,32 +486,22 @@ def _resolve_target(
             raise TargetError("Worker runtime requires an active implementation wave.")
         execution_root = run_dir / "execution" / feature
         wave = _private_json(execution_root / "waves" / f"{wave_id}.json", boundary)
-        batches = wave.get("batches", [])
-        active_batch = wave.get("active_batch_index")
-        if (
-            not isinstance(active_batch, int)
-            or active_batch < 0
-            or active_batch >= len(batches)
-            or batches[active_batch] != [worker_task]
-        ):
-            raise TargetError("Shared runtime requires exactly one active worker.")
+        if worker_task not in wave.get('active_task_ids', []):
+            raise TargetError('Runtime worker does not own an active scheduler slot.')
         worker_assignment_path = (
             execution_root / "assignments" / wave_id / f"{worker_task}.json"
         )
         worker_assignment = _private_json(worker_assignment_path, boundary)
-        watch = json.loads(_run([
-            sys.executable,
-            str(skills_root / "sdlc-prepare-execution/scripts/sdlc_execution.py"),
-            "task-watch", "--run-dir", str(run_dir), "--feature", feature,
-            "--wave", wave_id, "--task", worker_task,
-            "--assignment-digest", assignment_digest,
-        ], env))
+        watch = watch_task(run_dir, feature, wave_id, worker_task, assignment_digest)
         if (
-            watch.get("status") != "ok"
-            or watch.get("result", {}).get("status") != "ACTIVE"
+            watch.get("status") != "ACTIVE"
             or worker_assignment.get("assignment_digest") != assignment_digest
         ):
             raise TargetError("Worker runtime target failed its live scope guard.")
+        if worker_assignment.get('basis_sha256') != basis_sha256:
+            raise TargetError('Runtime worker belongs to a stale execution basis.')
+        verify_runtime(run_dir.parents[2], worker_assignment_path,
+                       'sdlc-three-tier-' + state['verification_id'])
         target = run_dir / "worktrees" / feature / "waves" / wave_id / worker_task
         _safe_path(target, boundary)
         expected = worker_assignment.get("base_head")
@@ -480,4 +555,5 @@ def _resolve_target(
         "run_id": run_id,
         "feature_id": feature,
         "phase": current["current_phase"],
+        "basis_sha256": basis_sha256,
     }

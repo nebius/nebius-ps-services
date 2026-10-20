@@ -46,7 +46,7 @@ Read this reference before assigning materialization units or operations.
 - Post-apply audit: `align` in audit-only mode.
 - Ambient recovery only: `global-context-management`, `troubleshoot`.
 - Authoring only: `skill-creator`, `align-skill`.
-- Excluded: Task Implementer, `project-agent-instructions`, Git publication,
+- Excluded: Implement, `project-agent-instructions`, Git publication,
   live setup, and every `sdlc-*` skill.
 
 Do not call `linter`, `code-review`, or `apply-security` directly from the

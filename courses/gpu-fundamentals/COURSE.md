@@ -14,8 +14,9 @@ training, inference and kernel courses.
 Local exercises use one full H100, and operational exercises are read-only.
 Lesson 12 applies distributed concepts in Labs 02 and 08 of
 [Advanced Labs](../advanced-gpu-communication/index.html).
-Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
-before running experiments.
+Follow [Lab Preparation](../lab-guide.html#lab-preparation) in the shared Lab Guide.
+Its single command prepares the available lab software; read the completion
+summary before running experiments. Hardware checks remain part of the labs.
 
 For the tensor foundation, read [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 

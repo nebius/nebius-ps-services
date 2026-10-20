@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=01:32:00
+#SBATCH --time=01:42:40
 
 #SBATCH --no-requeue
 #SBATCH --output=results/24_sdpa_attention/logs/%j.out
@@ -26,7 +26,7 @@ course_stage() {
 srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s ncu --target-processes all --nvtx --nvtx-include course_measure/ \
   --kernel-name-base demangled --rename-kernels off --kernel-name "regex:${COURSE_PROFILE_KERNEL:-.*}" \
   --launch-count 1 --set basic --section SpeedOfLight --section MemoryWorkloadAnalysis --section Occupancy \
-  --clock-control none --force-overwrite false \
+  --clock-control none \
   --export "$COURSE_PROFILES_DIR/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" "${COURSE_PYTHON}" labs/24_sdpa_attention.py --external-only --workload "$workload" "$@"
 
 # Successful exit alone does not prove that a profiler collected a report.

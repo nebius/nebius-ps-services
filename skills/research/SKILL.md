@@ -62,7 +62,7 @@ to use it, and what tradeoffs matter for a real project.
 - Do not use for checklist-only review of an existing design; use
   `system-design-rules`.
 - Do not use for Agentic SDLC-owned context packs or committed design docs; use
-  the relevant `sdlc-*` skill through the bound `$sdlc-start run <prompt-ref-or-file>` command.
+  the relevant `sdlc-*` skill through `$sdlc-start <objective>` or `$sdlc-start continue [project-folder]`.
 
 ## Inputs
 

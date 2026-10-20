@@ -1,0 +1,27 @@
+{
+  "skill_name": "troubleshoot",
+  "evals": [
+    {
+      "id": "adaptive-code",
+      "prompt": "Use $troubleshoot in diagnose-only mode: a CLI receives APP_MODE=safe but then unconditionally replaces that value with settings[mode]=unsafe before execution. The executed source and reproduction are confirmed. What is the causal boundary, smallest next distinguishing check and verification plan? No infrastructure symptoms are present.",
+      "files": [],
+      "expected_output": "A scoped configuration-precedence diagnosis with a counterfactual and explicit limits; no unrelated infrastructure inventory.",
+      "assertions": [
+        "Localizes configuration resolution while distinguishing a supported mechanism from a verified deployed fix.",
+        "Uses one relevant counterfactual; does not demand cloud telemetry, eight log rows or a minimum hypothesis count.",
+        "Preserves diagnose-only authority and concise canonical report."
+      ]
+    },
+    {
+      "id": "contaminated-replay",
+      "prompt": "Use $troubleshoot to assess this verification: the product should create a required table. It failed because the table was missing. An operator created the table manually, and a subsequent health check passed. Production is read-only for this task.",
+      "files": [],
+      "expected_output": "Mitigation with contaminated evidence and a clean-replay requirement; no verified-fix claim.",
+      "assertions": [
+        "Separates operator recovery from product-owned initialization.",
+        "Requires a known-good checkpoint before the earliest divergence or contamination and quiescent writers.",
+        "Does not mutate production or claim end-to-end repair from the healthy final state."
+      ]
+    }
+  ]
+}

@@ -14,12 +14,10 @@ from typing import Any
 DELEGATES = (
     "remediation_attempt_guard.py",
     "stop_sdlc_continue.py",
-    "stop_prompt_session_intake.py",
 )
 REPORT_READY_FIELD = "_troubleshootReportReady"
 REPORT_FINALIZE_FIELD = "_troubleshootFinalizeReport"
 REPORT_FINALIZED_FIELD = "_troubleshootReportFinalized"
-PROMPT_CONTINUATION_FIELD = "_promptSessionMarkStopContinuation"
 ARBITER_BUDGET_SECONDS = 25.0
 DELEGATE_TIMEOUT_SECONDS = 8.0
 FINALIZATION_WARNING = (
@@ -74,29 +72,6 @@ def _run_delegate(
     return value
 
 
-def _mark_prompt_continuation(
-    directory: Path,
-    payload: dict[str, Any],
-    result: dict[str, Any],
-    deadline: float,
-) -> dict[str, Any]:
-    if result.get("decision") != "block":
-        return result
-    delegate = directory / "stop_prompt_session_intake.py"
-    if not delegate.is_file():
-        return result
-    reason = result.get("reason")
-    if not isinstance(reason, str) or not reason:
-        return {
-            "continue": False,
-            "stopReason": "Stop policy continuation reason is invalid.",
-        }
-    marked = _run_delegate(
-        delegate, {**payload, PROMPT_CONTINUATION_FIELD: reason}, deadline
-    )
-    if marked.get("continue") is False:
-        return marked
-    return result
 
 
 def _finalize_report(
@@ -165,27 +140,21 @@ def evaluate(payload: dict[str, Any], hook_dir: Path | None = None) -> dict[str,
             )
         return terminal
     if len(blockers) == 1:
-        return _mark_prompt_continuation(directory, payload, blockers[0][1], deadline)
+        return blockers[0][1]
     if blockers:
         reasons = [
             f"- {name}: {result.get('reason', 'continuation required')}"
             for name, result in blockers
         ]
-        return _mark_prompt_continuation(
-            directory,
-            payload,
-            {
-                "decision": "block",
-                "reason": "Complete every active Stop-policy continuation:\n"
-                + "\n".join(reasons),
-            },
-            deadline,
-        )
+        return {
+            "decision": "block",
+            "reason": "Complete every active Stop-policy continuation:\n" + "\n".join(reasons),
+        }
     if report_ready:
         finalized = _finalize_report(directory, payload, deadline)
         if not finalized.pop(REPORT_FINALIZED_FIELD, False):
             return _finalization_failure()
-        return _mark_prompt_continuation(directory, payload, finalized, deadline)
+        return finalized
     return {"continue": True}
 
 

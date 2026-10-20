@@ -39,6 +39,8 @@ def _parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--expected-requirements-sha256", required=True)
     publish_parser.add_argument("--expected-design-sha256", required=True)
     publish_parser.add_argument("--operation-id", required=True)
+    publish_parser.add_argument("--expected-objective-sha256")
+    publish_parser.add_argument("--expected-basis-sha256")
     return parser
 
 
@@ -74,6 +76,8 @@ def main(argv: list[str]) -> int:
                 expected_requirements_sha256=args.expected_requirements_sha256,
                 expected_design_sha256=args.expected_design_sha256,
                 operation_id=args.operation_id,
+                expected_objective_sha256=args.expected_objective_sha256,
+                expected_basis_sha256=args.expected_basis_sha256,
             )
         else:
             output = recover_migration(args.project_root)

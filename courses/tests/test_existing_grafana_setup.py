@@ -22,10 +22,9 @@ def test_existing_grafana_values_survive_discovery(owned_monitoring):
     s.save()
     before = copy.deepcopy(s.live_grafana)
     snapshot = {p: p.read_bytes() for p in s.generated.rglob("*") if p.is_file()}
-    m.write_connections(args, m.discover(args))
+    receipt = m.discover(args)
     assert s.live_grafana == before
     assert all(p.read_bytes() == content for p, content in snapshot.items())
-    receipt = json.loads((args.output_dir / "monitoring.json").read_text())
     assert "private-reference" not in json.dumps(receipt)
     assert "extraObjects" not in json.dumps(receipt)
 

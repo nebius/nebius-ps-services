@@ -59,7 +59,7 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Inputs
 
-- The exact immutable prompt revision accepted by `sdlc-start`, or an approved
+- The exact immutable objective revision accepted by `sdlc-start`, or an approved
   change request routed from its steering disposition.
 - Existing `docs/requirements.md` when present.
 - Existing `docs/design.md` for impact awareness only.
@@ -69,15 +69,20 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Required Reads
 
-- `references/prompt-refinement.md` for prompt-v3 extraction, source
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
+- `references/objective-refinement.md` for accepted-objective extraction, source
   precedence, selective clarification, and stable question handling.
 - Existing requirements file.
 - Existing design file if present.
 - Project README or docs if available.
 - Active SDLC run state if the change happens during a run.
-- The bound run's `prompt.json` and accepted snapshot when prompt intake
+- The bound run's `objective.json` and accepted snapshot when prompt intake
   initiated the change.
-- The bound run's private `requirements-refinement.json` when prompt-v3 intake
+- The bound run's private `requirements-refinement.json` when accepted-objective intake
   initiated or revised the objective.
 
 ## Writes
@@ -125,20 +130,20 @@ Convert user intent into durable, testable product requirements in `docs/require
   receipt in the private refinement ledger and set `ready` only when no
   material question is open or reopened.
 - Invoke the private `refinement-ready` action owned by `sdlc-start` with the
-  exact workspace and run after saving `ready`. Route to context/design only
-  when it binds the latest accepted prompt identity and intent to the exact
+  exact accepted run after saving `ready`. Route to context/design only
+  when it binds the latest accepted objective identity and intent to the exact
   compiled requirements. This read-only check publishes no impact receipt.
-  After design is ready, the coordinator must run `refinement-verify` with a
+  After design is ready, the coordinator must run `settle-objective` with a
   complete statement-impact claim before planning or execution. Do not use
   requirements readiness or a bare `no_effect` label as execution proof.
 
 ## Idempotency
 
-- Reapplying the same prompt revision must not duplicate requirements.
+- Reapplying the same objective revision must not duplicate requirements.
 - If an existing requirement changes, update that `REQ-*` block and append a change-log entry.
 - If design must change, mark the affected requirements so `sdlc-create-design` can update related features.
 - When execution is already prepared, write product truth only in the registered
-  integration worktree, mark the active plan/execution `REPLAN_REQUIRED`, and
+  integration worktree, mark material changes `REPLAN_REQUIRED`, and
   preserve every started assignment, commit, and worktree for coordinator-led
   reconciliation. Do not reset execution history.
 

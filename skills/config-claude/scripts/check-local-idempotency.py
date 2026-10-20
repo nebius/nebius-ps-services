@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-only", action="store_true", help="Inspect native files without claiming hook setup or dependencies.")
     parser.add_argument("--require-trusted-local", action="store_true")
     parser.add_argument("--require-delegation", action="store_true")
-    parser.add_argument("--require-task-implementer-workspace", action="store_true")
+    parser.add_argument("--require-implement-state", action="store_true")
     parser.add_argument("--require-mcp", action="append", choices=MCP_NAMES, default=[])
     parser.add_argument("--mcp-config", type=Path, help="Exact native application JSON for requested user-scope MCP checks; never printed.")
     args = parser.parse_args(argv)
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         result = inspect(native_home(args.claude_home), args.source_root.absolute(),
                          route=args.hook_route, native_only=args.native_only,
                          trusted=args.require_trusted_local, delegation=args.require_delegation,
-                         workspace=args.require_task_implementer_workspace,
+                         workspace=args.require_implement_state,
                          mcp_names=tuple(args.require_mcp), mcp_config=args.mcp_config)
     except (OSError, ValueError):
         print('{"status":"NOT_ALIGNED","reason":"unsafe or invalid target"}')

@@ -387,6 +387,7 @@ def installed_project(tmp_path, monkeypatch):
         lambda *a, **kw: copy.deepcopy(storage),
     )
     monkeypatch.setattr(nsight_install, "prepare_nsight_viewers", lambda *a, **kw: ())
+    monkeypatch.setattr(nsight_install, "reconcile_report_destination", lambda **kw: kw["fence"]())
     jobs, verified, applied = [], [], []
     admission, verification = package_receipts()
     monkeypatch.setattr(
@@ -466,6 +467,14 @@ def test_two_successful_installs_preserve_accepted_state_and_generated_bytes(
     installed_project, monkeypatch
 ):
     local, _, state, jobs, verified, applied = installed_project
+    report_contracts = []
+
+    def reconcile_reports(**kwargs):
+        kwargs["fence"]()
+        assert state.read().value["active"] is None
+        report_contracts.append((kwargs["generation"], kwargs["receipt"]))
+
+    monkeypatch.setattr(nsight_install, "reconcile_report_destination", reconcile_reports)
     kwargs = dict(
         target_ref="cluster",
         secret_name="nsight-streamer-auth",
@@ -488,6 +497,8 @@ def test_two_successful_installs_preserve_accepted_state_and_generated_bytes(
     monkeypatch.setattr(DeploymentState, "begin", forbidden)
     monkeypatch.setattr(DeploymentState, "accept", forbidden)
     nsight_install.install_profiling(local.config_path, **kwargs)
+    assert len(report_contracts) == 2
+    assert report_contracts[0] == report_contracts[1]
     assert state.read().value == before and len(jobs) == 3
     assert local.config_path.read_bytes() == config
     assert {
@@ -783,6 +794,57 @@ def test_generic_deploy_routes_active_profiling_before_recovery(
         )
     assert state.read().value == before
     assert jobs == []
+
+
+@pytest.mark.parametrize("unrelated_app", [False, True])
+def test_candidate_normalizes_shared_namespace_on_both_sides(installed_project, unrelated_app):
+    local, initial, *_ = installed_project
+    namespace = {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "soperator"}}
+    prefix = "flux/targets/cluster/"
+    files = dict(initial.files)
+    protected = yaml.safe_load(base64.b64decode(files[prefix + "kustomization.yaml"]))
+    protected["resources"].append("namespace-shared.yaml")
+    files[prefix + "kustomization.yaml"] = base64.b64encode(
+        yaml.safe_dump(protected).encode()
+    ).decode()
+    files[prefix + "namespace-shared.yaml"] = base64.b64encode(
+        yaml.safe_dump(namespace).encode()
+    ).decode()
+    files[prefix + "ordinary/namespace-shared.yaml"] = files[prefix + "namespace-shared.yaml"]
+    resources = ["namespace-shared.yaml"]
+    if unrelated_app:
+        resources.append("existing-app.yaml")
+        files[prefix + "ordinary/existing-app.yaml"] = base64.b64encode(
+            yaml.safe_dump(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {"name": "existing-app"},
+                    "data": {"keep": "unchanged"},
+                }
+            ).encode()
+        ).decode()
+    files[prefix + "ordinary/kustomization.yaml"] = base64.b64encode(
+        yaml.safe_dump({"resources": resources}).encode()
+    ).decode()
+    base = DeploymentGeneration(initial.manifest, files)
+    if unrelated_app:
+        with pytest.raises(RuntimeError, match="would change another App"):
+            nsight_install.prepare_generation(
+                cli, local, base, target_ref="cluster", settings=default_settings()
+            )
+        return
+    generation = nsight_install.prepare_generation(
+        cli, local, base, target_ref="cluster", settings=default_settings()
+    )
+    assert (
+        generation.files[prefix + "namespace-shared.yaml"]
+        == files[prefix + "namespace-shared.yaml"]
+    )
+    assert {k: v for k, v in generation.files.items() if "/ordinary/" not in k} == {
+        k: v for k, v in base.files.items() if "/ordinary/" not in k
+    }
+    assert prefix + "ordinary/namespace-shared.yaml" not in generation.files
 
 
 def test_candidate_compares_existing_apps_after_immutable_source_binding(

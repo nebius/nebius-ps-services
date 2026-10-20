@@ -146,7 +146,7 @@ LEASE_KIND = "coordinator"
 LEASE_REMOVAL_SCHEMA = 1
 LEASE_REMOVAL_KIND = "coordinator-removal"
 PREPARATION_KIND = "integration-commit-preparation"
-OWNER_KINDS = {"task-implementer", "agentic-sdlc"}
+OWNER_KINDS = {"implement", "agentic-sdlc"}
 LEASE_RECORD_STATES = {"active", "released"}
 RESOURCE_STATES = {"planned", "present", "absent"}
 RESOURCE_KINDS = {"integration", "worker"}
@@ -454,30 +454,6 @@ def lifecycle_creation_lock(primary: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
-@contextmanager
-def task_lane_transition_lock(primary: Path) -> Iterator[None]:
-    """Serialize repository-wide Task lane claim and release transitions."""
-
-    root = _root(primary, create=True)
-    path = root / ".task-lanes.lock"
-    flags = os.O_CREAT | os.O_RDWR
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags, 0o600)
-    except OSError as error:
-        raise InteropError(
-            f"could not open Task lane transition lock: {path}"
-        ) from error
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise InteropError(f"Task lane transition lock must be regular: {path}")
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
 @contextmanager
@@ -524,8 +500,8 @@ def _validate_resource(value: object, owner_kind: str) -> dict[str, str]:
     if kind not in RESOURCE_KINDS:
         raise InteropError("task lease resource kind is invalid")
     patterns = {
-        "task-implementer": r"codex/ti-[A-Za-z0-9._/-]+",
-        "agentic-sdlc": r"codex/sdlc/[A-Za-z0-9._/-]+",
+        "implement": r"codex/implement/[A-Za-z0-9._/-]+",
+        "agentic-sdlc": r"codex/agentic-sdlc/[A-Za-z0-9._/-]+",
     }
     if (
         not isinstance(branch, str)

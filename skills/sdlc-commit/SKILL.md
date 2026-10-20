@@ -69,6 +69,11 @@ Seal and promote one completed feature locally without pushing.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Git status and current branch.
 - Feature design and requirement IDs.
 - Evidence files.
@@ -142,7 +147,9 @@ the private transition helper and action-scoped execution state.
 - A default branch in unmanaged mode maps to `POLICY_BLOCK`.
 - Missing evidence maps to workflow blocker.
 - Hook denial maps to `POLICY_BLOCK`.
-- Missing or expired `commit-authorization.json` maps to `POLICY_BLOCK`.
+- For operator-visible raw `git commit` only, missing or expired
+  `commit-authorization.json` maps to `POLICY_BLOCK`. Normal private sealing
+  and promotion use their action-scoped transition authority, not this file.
 - Moved/dirty project or integration state maps to `PROMOTION_BLOCKED`;
   non-fast-forward ancestry maps to `PROMOTION_FAILED`; unsafe retained
   resources map to `CLEANUP_BLOCKED` without force removal.

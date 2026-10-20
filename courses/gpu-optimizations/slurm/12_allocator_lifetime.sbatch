@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:31:30
+#SBATCH --time=00:37:00
 
 #SBATCH --no-requeue
 #SBATCH --output=results/12_allocator_lifetime/logs/%j.out

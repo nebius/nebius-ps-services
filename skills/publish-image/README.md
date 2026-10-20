@@ -68,3 +68,20 @@ Published image tags and digest
 
 See [ordinary publication](references/ordinary-publication.md) for preparation,
 exact-result tagging, protected merge, resume and verification boundaries.
+
+### Local checkout completion
+
+The canonical commit transaction owns safe target checkout and outer completion.
+See [the completion contract](../create-pr/references/checkout-completion.md) for
+review switch-back, create-only behavior, verified-result fast-forwards, resumed
+work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
+are reported independently. No public skill flags are added.
+
+## Publication evidence
+
+Tag-triggered releases publish `X.Y.Z` and `X.Y.Z-g<shortsha>`; manual builds
+publish `sha-<shortsha>` and optional main-only `latest`. Manual SemVer input is
+not supported. Delegate YAML and shared helper setup to `$github-workflows`.
+Require destination-image serialization, complete immutable alias preflight,
+trusted original digest evidence for reuse and equality of every remote tag to
+the build digest. Partial or unverifiable state blocks retries without overwrite.

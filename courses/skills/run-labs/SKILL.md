@@ -78,7 +78,7 @@ each batch file keeps its native srun, profiler, worker and server commands visi
    Read [environment.md](references/environment.md), including its managed
    preparation contract. Resolve requirements from every selected recipe launcher;
    default preparation does not include optional variants. The checkout's
-   `lab-guide.html#lab-preparation-scripts` owns the five preparation commands.
+   `lab-guide.html#lab-preparation` owns the unified lab-setup.py preparation command.
    Independently qualify existing prepared monitoring at runtime; setup discovery
    and new connection receipts remain a separate workflow. Preserve the selected
    local metrics routing and record every prerequisite observation before jobs.
@@ -139,7 +139,7 @@ publication and replacement of owned evidence. For managed dashboards, reuse
 that authorization after the identity and scope checks in
 [browser-evidence.md](references/browser-evidence.md); ownership metadata alone
 does not require another approval. Reuse prepared installations;
-missing installations belong to the Lab Guide's five preparation scripts.
+missing installations belong to the Lab Guide's lab-setup.py command.
 Report the exact command selected by the failing launcher and stop before jobs;
 this workflow does not install dependencies. Do not rerun the
 profiling installer for discovery, provision resources, download new models,

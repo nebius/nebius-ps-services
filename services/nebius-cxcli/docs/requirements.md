@@ -1400,4 +1400,36 @@ target separately from unit and chart-render evidence.
 
 <!-- /REQUIREMENT: REQ-040 -->
 
+<!-- REQUIREMENT: REQ-041 status=active priority=P1 type=feature -->
+### REQ-041: Verified profiling report destination
+
+#### User Story
+
+Operators provide one verified nonsecret producer-to-viewer storage contract so course jobs can deliver reports automatically without inspecting Kubernetes or carrying credentials.
+
+#### Acceptance Criteria
+
+- AC-001: Profiling install publishes a versioned root-owned descriptor at /var/lib/nebius-cxcli/nsight-reports.json after verifying accepted target/generation and both viewers' PVC/PV binding. It includes producer/viewer paths, mount boundary/type and a nonsecret binding token; package receipts and monitoring settings remain separate.
+- AC-002: A root-owned marker under the actual report filesystem binds the same installation and token. Runtime readers reject unsafe ancestors, symlinks and missing or replaced mounts and compare mount identity only within the current namespace.
+- AC-003: Unchanged installs reconcile missing metadata without new package Jobs, credential rotation or report changes. Publish marker before descriptor and preserve valid bytes on no-op. Serialize reconciliation with a storage-local kernel lock. Close new-job admission while preserving already admitted bindings, require authoritative Slurm quiescence, then invalidate old descriptors before supported binding changes. Publish admission open only after matching descriptor and marker readback; interrupted transitions remain recoverable through install.
+- AC-004: Create new root-owned shared report roots with mode 1777. Reject unsafe existing roots with exact operator remediation; never infer ownership from accepted configuration alone, recursively chmod content or automatically adopt foreign paths.
+- AC-005: Normal Apps reconciliation and profiling show do not mutate this contract. Installation checks do not depend on user report contents or workload success.
+
+#### Negative Criteria
+
+- NC-001: Preserve unrelated changes and existing reports; source tests do not establish live GPU or viewer qualification.
+
+#### Validation Method
+
+Trace the installed storage contract through native capture, stage delivery and viewer paths.
+
+#### Test Method
+
+Exercise unsafe/stale metadata, mount replacement, exact retries, concurrency, partial failures, deadlines, cancellation, budgets and unchanged-install behavior.
+
+#### Evaluation Method
+
+Separate source and Linux fixture verification from fresh authorized nonproduction single-GPU, distributed, container and browser report acceptance.
+
+<!-- /REQUIREMENT: REQ-041 -->
 <!-- maintain-project-specs:requirements:end -->

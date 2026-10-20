@@ -112,6 +112,94 @@ def test_application_render_reuses_every_generation_release(
     )
 
 
+@pytest.mark.parametrize("frozen_input", ["valid", "missing", "changed", "wrong_uid"])
+def test_application_render_consumes_frozen_dashboard_assets(tmp_path, monkeypatch, frozen_input):
+    from nebius_cxcli.grafana_dashboards import content_digest, json_bytes
+
+    local = paths(tmp_path)
+    dashboard = {"uid": "board", "title": "Frozen dashboard", "panels": []}
+    declaration = {
+        "uid": "board",
+        "json_file": "dashboards/board.json",
+        "folder_uid": "course",
+        "sha256": content_digest(dashboard, "course"),
+    }
+    payload = config()
+    payload["apps"]["charts"] = [
+        {
+            "id": "grafana",
+            "instance_id": "cluster",
+            "enabled": True,
+            "dashboard_imports": [
+                declaration,
+                {
+                    "uid": "manual",
+                    "json_file": "absent-manual.json",
+                    "sha256": "a" * 64,
+                    "replay": False,
+                    "management_sha256": "b" * 64,
+                },
+            ],
+        }
+    ]
+    asset = "grafana_dashboards/cluster/cxcli-api-imports/board.json"
+    stored = dict(dashboard)
+    if frozen_input == "changed":
+        stored["title"] = "Unexpected change"
+    elif frozen_input == "wrong_uid":
+        stored["uid"] = "other"
+    files = (
+        {} if frozen_input == "missing" else {asset: base64.b64encode(json_bytes(stored)).decode()}
+    )
+    frozen = DeploymentGeneration(
+        {"runtime_config": payload, "render": {"inputs": freeze_catalog(payload)}}, files
+    )
+    before = copy.deepcopy(frozen)
+    # The real private deployment cache has no authored source. Even when one
+    # happens to exist, it must never repair or replace an invalid frozen asset.
+    if frozen_input != "valid":
+        authored = local.project_dir / declaration["json_file"]
+        authored.parent.mkdir()
+        authored.write_bytes(json_bytes(dashboard))
+    release = {
+        "scope": "cluster",
+        "target_ref": "cluster",
+        "entry_id": "grafana",
+        "release_name": "grafana",
+        "namespace": "observability",
+        "source_name": "grafana",
+        "source_kind": "helm_repository",
+        "source_url": "https://example.invalid/charts",
+        "chart_ref": "grafana",
+        "chart_version": "1.0.0",
+        "interval": "1m",
+        "timeout": "5m",
+        "values": {},
+        "dashboard_imports": payload["apps"]["charts"][0]["dashboard_imports"],
+    }
+    monkeypatch.setattr(flux_render, "_configured_app_release_specs", lambda *a, **kw: [release])
+    monkeypatch.setattr(
+        "nebius_cxcli.deployment_resolution.bind_flux_artifacts", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_execution.freeze_compatibility", lambda *a: {"report": {}}
+    )
+
+    def resolve():
+        return resolved_application_generation(
+            cli, frozen, local, target_ref="cluster", render_inputs={}
+        )
+
+    if frozen_input == "valid":
+        result = resolve()
+        assert base64.b64decode(result.files[asset]) == json_bytes(dashboard)
+        assert not (local.project_dir / declaration["json_file"]).exists()
+    else:
+        with pytest.raises(ValueError, match="Dashboard input|dashboard changed"):
+            resolve()
+    assert frozen == before
+
+
 def test_application_output_resolver_includes_native_nfs_mount_options(tmp_path, monkeypatch):
     from nebius_cxcli.deployment_resolution import resolve_application_outputs
 
@@ -193,7 +281,8 @@ def test_output_resolution_is_derived_from_frozen_inputs_and_repeats_across_runn
     )
 
     # Preserve the real NFS output materializer, isolate upstream chart retrieval.
-    def render(cfg, staged, *, component_output_values):
+    def render(cfg, staged, *, component_output_values, frozen_dashboard_inputs):
+        assert frozen_dashboard_inputs is True
         chart = {"values": {"externalNfs": {}}}
         flux_render._materialize_soperator_nfs_values(
             payload=cli.to_plain_data(cfg),

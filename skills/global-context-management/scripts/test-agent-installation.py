@@ -24,6 +24,8 @@ from agent_runtime import agent_home, native_session_id, normalize_payload, stat
 from hook_runtime import OWNERS, bind_claude_bash, bound_claude_stop, payload_files, plugin_runtime, project_hook_entries  # noqa: E402 — verified bootstrap precedes runtime imports
 
 
+from test_retire_workflow_capture import RetirementTests  # noqa: E402,F401 — both-host retirement suite
+
 ROOT = Path(__file__).resolve().parents[2]
 PROMPT_ID = "550e8400-e29b-41d4-a716-446655440000"
 
@@ -278,6 +280,118 @@ class CombinedUpgradeTests(unittest.TestCase):
                     self.assertEqual(list(home.glob("*.bak.*")), [])
 
 
+class SourceOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="skill-source-ownership-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+
+    def fixture(self, agent):
+        base = self.base / agent
+        source = base / "source catalog"
+        for name in ("commit", "create-pr", "control"):
+            skill = source / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: Test skill\n---\nrevision one\n")
+        env = {**os.environ, "HOME": str(base / "home"), "CODEX_HOME": str(base / "codex"),
+               "CLAUDE_CONFIG_DIR": str(base / "claude"), "NO_COLOR": "1"}
+        env.pop("SKILLS_AGENT", None)
+        return source, base / "installed skills", env
+
+    def install(self, agent, source, destination, env, *, success=True):
+        result = subprocess.run(
+            ["bash", str(ROOT / "install-skills.sh"), "--agent", agent, str(source), str(destination)],
+            cwd=ROOT, env=env, capture_output=True, text=True, timeout=30,
+        )
+        if success:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def test_individual_then_catalog_updates_and_prunes_owned_skills(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                source, dest, env = self.fixture(agent)
+                for name in ("commit", "create-pr"):
+                    self.install(agent, source / name, dest, env)
+                    (source / name / "SKILL.md").write_text(f"# {name}: updated catalog content\n")
+                result = self.install(agent, source, dest, env)
+                self.assertNotIn("Skip (owned by different source)", result.stdout)
+                for name in ("commit", "create-pr"):
+                    self.assertEqual((source / name / "SKILL.md").read_bytes(), (dest / name / "SKILL.md").read_bytes())
+                    self.assertEqual((dest / name / ".install-source-id").read_text(), f"local:{source}\n")
+                rerun = self.install(agent, source, dest, env)
+                self.assertIn("Installed/updated: 0, unchanged: 3, skipped: 0, removed: 0", rerun.stdout)
+                shutil.rmtree(source / "create-pr")
+                cleanup = self.install(agent, source, dest, env)
+                self.assertIn("Removed stale skill: create-pr", cleanup.stdout)
+                self.assertFalse((dest / "create-pr").exists())
+                self.assertTrue((dest / "commit/SKILL.md").is_file())
+
+    def test_catalog_then_individual_preserves_siblings(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                source, dest, env = self.fixture(agent)
+                self.install(agent, source, dest, env)
+                sibling_before = (dest / "create-pr/SKILL.md").read_bytes()
+                (source / "commit/SKILL.md").write_text("# Updated individual skill\n")
+                result = self.install(agent, source / "commit", dest, env)
+                self.assertNotIn("Skip (owned by different source)", result.stdout)
+                self.assertEqual((source / "commit/SKILL.md").read_bytes(), (dest / "commit/SKILL.md").read_bytes())
+                self.assertEqual((dest / "create-pr/SKILL.md").read_bytes(), sibling_before)
+                self.assertEqual((dest / "create-pr/.install-source-id").read_text(), f"local:{source}\n")
+                self.assertIn("Installed/updated: 0, unchanged: 1", self.install(agent, source / "commit", dest, env).stdout)
+
+    def test_catalog_skill_alias_matches_the_physical_source(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                source, dest, env = self.fixture(agent)
+                physical = source.parent / "physical skills/commit"
+                physical.parent.mkdir()
+                (source / "commit").rename(physical)
+                (source / "commit").symlink_to(physical, target_is_directory=True)
+                self.install(agent, physical, dest, env)
+                (physical / "SKILL.md").write_text("# Updated through physical source\n")
+                result = self.install(agent, source, dest, env)
+                self.assertNotIn("Skip (owned by different source)", result.stdout)
+                self.assertEqual((physical / "SKILL.md").read_bytes(), (dest / "commit/SKILL.md").read_bytes())
+                result = self.install(agent, physical, dest, env)
+                self.assertNotIn("Skip (owned by different source)", result.stdout)
+
+    def test_unmanaged_and_unrelated_owners_remain_untouched(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                source, dest, env = self.fixture(agent)
+                foreign = source.with_name(source.name + "-unrelated")
+                (foreign / "commit").mkdir(parents=True)
+                (foreign / "commit/SKILL.md").write_text("# Foreign source\n")
+                owners = (None, f"local:{foreign}", f"local:{foreign / 'commit'}",
+                          "github:example/catalog@main:skills", f"local:{self.base / 'missing'}")
+                for index, owner in enumerate(owners):
+                    target = dest / str(index)
+                    skill = target / "commit"
+                    skill.mkdir(parents=True)
+                    (skill / "SKILL.md").write_text("# Preserve me\n")
+                    if owner is not None:
+                        (skill / ".install-source-id").write_text(owner + "\n")
+                    before = {p.name: p.read_bytes() for p in skill.iterdir()}
+                    result = self.install(agent, source, target, env)
+                    expected = "existing unmanaged directory" if owner is None else "owned by different source"
+                    self.assertIn(f"Skip ({expected}): commit", result.stdout)
+                    self.assertEqual({p.name: p.read_bytes() for p in skill.iterdir()}, before)
+
+    def test_conflicting_shared_payload_fails_before_installation(self):
+        source, dest, env = self.fixture("codex")
+        for name in ("commit", "create-pr"):
+            hooks = source / name / "assets/hooks"
+            hooks.mkdir(parents=True)
+            (hooks / "shared.py").write_text(f"# Different payload from {name}\n")
+        result = self.install("codex", source, dest, env, success=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("conflicting hook destination: shared.py", result.stderr)
+        self.assertFalse(dest.exists())
+        self.assertFalse((Path(env["CODEX_HOME"]) / "hooks").exists())
+
+
 class InstallationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -297,6 +411,8 @@ class InstallationTests(unittest.TestCase):
             first = cls.install(*args)
             if first.returncode:
                 raise AssertionError(first.stdout + first.stderr)
+            if "Duplicate hook destination" in first.stdout:
+                raise AssertionError("shared payloads must converge without a duplicate warning")
             before = settings.read_bytes()
             second = cls.install(*args)
             if second.returncode or settings.read_bytes() != before:
@@ -457,10 +573,73 @@ class InstallationTests(unittest.TestCase):
                 self.assertEqual(receipts[0].read_bytes(), before)
 
 
+    def test_installed_pr_checkout_completion_on_both_hosts(self):
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                project = self.base / f"checkout-{agent}"
+                project.mkdir()
+                env = {**self.env, "SKILLS_AGENT": agent, "PYTHONDONTWRITEBYTECODE": "1"}
+                env.pop("CODEX_THREAD_ID", None)
+                def git(*args):
+                    return subprocess.run(["git", "-C", str(project), *args], check=True,
+                                          capture_output=True, text=True, env=env).stdout.strip()
+                git("init", "-b", "trunk")
+                git("config", "user.name", "Fixture")
+                git("config", "user.email", "fixture@example.com")
+                (project / "tracked.txt").write_text("baseline\n")
+                git("add", "-A")
+                git("commit", "-m", "baseline")
+                seed = git("rev-parse", "HEAD")
+                tree = git("rev-parse", "HEAD^{tree}")
+                remote = self.base / f"checkout-origin-{agent}.git"
+                git("init", "--bare", str(remote))
+                git("remote", "add", "origin", str(remote))
+                git("push", "origin", "trunk")
+                git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+                pr_head = git("commit-tree", tree, "-p", seed, "-m", "PR head")
+                git("push", "origin", f"{pr_head}:refs/heads/remote-pr")
+                git("fetch", "origin")
+                git("switch", "-c", "feature")
+                session = f"checkout-{agent}-session"
+                payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(project),
+                           "session_id": session, "prompt": "merge the selected ordinary PR",
+                           "turn_id" if agent == "codex" else "prompt_id": PROMPT_ID}
+                hook = subprocess.run([sys.executable, "-B", str(self.base / agent / "hooks/hook_runtime.py"),
+                                       "--agent", agent, "--hook", "commit_intent.py"],
+                                      input=json.dumps(payload), env=env, capture_output=True, text=True)
+                self.assertEqual(hook.returncode, 0, hook.stderr)
+                receipts = [path for path in (self.base / agent / "commit-transactions").rglob("intent.json")
+                            if json.loads(path.read_text()).get("session_sha256") == hashlib.sha256(session.encode()).hexdigest()]
+                self.assertEqual(len(receipts), 1)
+                digest = hashlib.sha256(receipts[0].read_bytes()).hexdigest()
+                catalog = self.base / "home/.agents/skills" if agent == "codex" else self.base / agent / "skills"
+                helper = catalog / "commit/scripts/commit_transaction.py"
+                self.assertEqual(helper.read_bytes(), (ROOT / "commit/scripts/commit_transaction.py").read_bytes())
+                def command(action, *args, expected=0):
+                    result = subprocess.run([sys.executable, "-B", str(helper), action,
+                                             "--repo-root", str(project), "--session-id", session,
+                                             "--requested-action", "create-pr", "--intent-sha256", digest, *args],
+                                            env=env, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    return json.loads(result.stdout)
+                command("begin", "--pr-base", "trunk", "--target", "remote-pr")
+                merged = git("commit-tree", tree, "-p", seed, "-m", "Squash result")
+                git("push", "origin", f"{merged}:refs/heads/trunk")
+                command("complete-checkout", "--mode", "record-merge", "--merged-target", "remote-pr", "--result-sha", merged)
+                command("complete-checkout", "--mode", "finalize")
+                closure = command("finish", "--outcome", "completed")
+                self.assertEqual(closure["schema"], "commit-transaction.task-closure.v2")
+                self.assertEqual(git("branch", "--show-current"), "feature")
+                self.assertEqual(git("rev-parse", "feature"), merged)
+                self.assertEqual(git("rev-parse", "trunk"), merged)
+                self.assertEqual(git("for-each-ref", "--format=%(refname)", "refs/heads/remote-pr"), "")
+                self.assertEqual(git("status", "--porcelain"), "")
+                command("complete-checkout", "--mode", "finalize", expected=2)
+
     def test_every_claude_hook_entrypoint_runs_from_installed_payloads(self):
         hooks = {
             "session_start_context.py": "SessionStart", "user_prompt_context.py": "UserPromptSubmit",
-            "project_specs_lifecycle.py": "SessionStart", "prompt_session_intake.py": "UserPromptSubmit",
+            "project_specs_lifecycle.py": "UserPromptSubmit",
             "pre_tool_use_sdlc_policy.py": "PreToolUse", "pre_tool_use_nebius_auth.py": "PreToolUse",
             "remediation_attempt_guard.py": "PreToolUse", "stop_lifecycle_arbiter.py": "Stop",
         }

@@ -1,4 +1,4 @@
-"""Validate complete prompt-revision impact coverage against canonical specs."""
+"""Validate complete objective-revision impact coverage against canonical specs."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ from .contracts import (
 )
 
 
-CLAIM_SCHEMA = "maintain-project-specs.prompt-impact-claim.v1"
-RECEIPT_SCHEMA = "maintain-project-specs.prompt-impact-receipt.v1"
-WORKFLOWS = {"task-implementer", "agentic-sdlc"}
+CLAIM_SCHEMA = "maintain-project-specs.objective-impact-claim.v1"
+RECEIPT_SCHEMA = "maintain-project-specs.objective-impact-receipt.v1"
+WORKFLOWS = {"implement", "agentic-sdlc"}
 DISPOSITIONS = {
     "changed_contract",
     "existing_contract",
@@ -35,13 +35,13 @@ CONTRACT_EFFECTS = {"requirements", "design"}
 ALL_EFFECTS = CONTRACT_EFFECTS | {"execution"}
 PLAN_ACTIONS = {"retain_plan", "replan_required"}
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-PROMPT_ID_RE = re.compile(r"prompt-[0-9a-f]{32}\Z")
+OBJECTIVE_ID_RE = re.compile(r"objective-[0-9a-f]{32}\Z")
 REVISION_RE = re.compile(r"r[0-9]{4}\Z")
 CATEGORY_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 
 
 def _fail(message: str) -> None:
-    raise ProjectSpecError("PROMPT_IMPACT_INVALID", message)
+    raise ProjectSpecError("OBJECTIVE_IMPACT_INVALID", message)
 
 
 def _sha256(value: object, label: str, *, optional: bool = False) -> str | None:
@@ -83,7 +83,15 @@ def statement_inventory(extracted: object) -> list[dict[str, object]]:
     return inventory
 
 
-def _spec_context(project_root: Path) -> dict[str, object]:
+def _spec_context(project_root: Path, *, required: bool = True) -> dict[str, object]:
+    paths = [project_root / "docs" / f"{kind}.md" for kind in ("requirements", "design")]
+    if not required and not any(path.exists() or path.is_symlink() for path in paths):
+        return {
+            "receipt": {"schema": "maintain-project-specs.no-impact.v1",
+                        "requirements": {"sha256": "absent"},
+                        "design": {"sha256": "absent"}},
+            "requirements": {}, "design": {},
+        }
     receipt = validate_project(project_root)
     project = Path(str(receipt["project_root"]))
     parsed: dict[str, list[dict[str, Any]]] = {}
@@ -123,13 +131,13 @@ def _sorted_unique_ids(value: object, label: str) -> list[str]:
     return list(value)
 
 
-def validate_prompt_impact(
+def validate_objective_impact(
     project_root: Path,
     *,
     workflow: str,
-    prompt_id: str,
+    objective_id: str,
     revision: str,
-    prompt_sha256: str,
+    objective_sha256: str,
     intent_sha256: str,
     refinement: dict[str, object],
     claim: dict[str, object],
@@ -141,12 +149,12 @@ def validate_prompt_impact(
 
     if workflow not in WORKFLOWS:
         _fail("workflow is invalid")
-    if PROMPT_ID_RE.fullmatch(prompt_id) is None:
-        _fail("prompt identity is invalid")
+    if OBJECTIVE_ID_RE.fullmatch(objective_id) is None:
+        _fail("objective identity is invalid")
     if REVISION_RE.fullmatch(revision) is None:
-        _fail("prompt revision is invalid")
-    _sha256(prompt_sha256, "prompt digest")
-    _sha256(intent_sha256, "prompt intent digest")
+        _fail("objective revision is invalid")
+    _sha256(objective_sha256, "objective digest")
+    _sha256(intent_sha256, "objective intent digest")
     _sha256(prior_impact_sha256, "prior impact digest", optional=True)
     _sha256(prior_spec_receipt_sha256, "prior spec receipt digest", optional=True)
     if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
@@ -154,15 +162,15 @@ def validate_prompt_impact(
     if refinement.get("status") != "ready":
         _fail("requirements refinement is not ready")
     if (
-        refinement.get("prompt_id") != prompt_id
+        refinement.get("objective_id") != objective_id
         or refinement.get("revision") != revision
         or refinement.get("intent_sha256") != intent_sha256
     ):
-        _fail("requirements refinement is bound to another prompt revision")
+        _fail("requirements refinement is bound to another objective revision")
 
     required_claim = {
         "schema",
-        "prompt_id",
+        "objective_id",
         "revision",
         "intent_sha256",
         "dispositions",
@@ -173,7 +181,7 @@ def validate_prompt_impact(
         not isinstance(claim, dict)
         or set(claim) != required_claim
         or claim.get("schema") != CLAIM_SCHEMA
-        or claim.get("prompt_id") != prompt_id
+        or claim.get("objective_id") != objective_id
         or claim.get("revision") != revision
         or claim.get("intent_sha256") != intent_sha256
     ):
@@ -202,7 +210,10 @@ def validate_prompt_impact(
     if set(by_key) != set(expected):
         _fail("every extracted statement occurrence requires one disposition")
 
-    specs = _spec_context(project_root)
+    specs = _spec_context(project_root, required=any(
+        item.get("disposition") in {"changed_contract", "existing_contract"}
+        for item in dispositions
+    ))
     current_requirements = dict(specs["requirements"])
     current_designs = dict(specs["design"])
     effects: set[str] = set()
@@ -300,9 +311,9 @@ def validate_prompt_impact(
     return {
         "schema": RECEIPT_SCHEMA,
         "workflow": workflow,
-        "prompt_id": prompt_id,
+        "objective_id": objective_id,
         "revision": revision,
-        "prompt_sha256": prompt_sha256,
+        "objective_sha256": objective_sha256,
         "intent_sha256": intent_sha256,
         "refinement_sha256": canonical_digest(refinement),
         "statement_set_sha256": canonical_digest(inventory),

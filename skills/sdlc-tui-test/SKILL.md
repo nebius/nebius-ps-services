@@ -66,6 +66,11 @@ Control terminal applications like a user and capture prompts, inputs, outputs, 
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Evaluation plan.
 - CLI or TUI docs.
 - Existing command definitions.

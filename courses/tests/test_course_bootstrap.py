@@ -84,14 +84,14 @@ def test_discovery_excludes_reading_courses_without_runtime_bindings(tmp_path, p
         reference = tmp_path / slug / "reference"
         reference.mkdir(parents=True)
         (reference / "course.json").write_text(json.dumps({"slug": slug, **metadata}))
-    root, courses = catalog.discover(tmp_path / "tools/regular-lab-setup.py")
+    root, courses = catalog.discover(tmp_path / "tools/lab-setup.py")
     assert root == tmp_path
     assert courses == {"practical": tmp_path / "practical"}
     assert not (tmp_path / "reading/results").exists()
 
 
 def test_every_catalog_lab_and_launcher_has_one_runtime():
-    root, courses = catalog.discover(ROOT / "tools/regular-lab-setup.py")
+    root, courses = catalog.discover(ROOT / "tools/lab-setup.py")
     definitions = catalog.load_catalog()
     assert len(courses) == 6
     rows = [catalog.bindings(course, definitions) for course in courses.values()]
@@ -416,14 +416,16 @@ def test_runtime_shell_restores_selectors_and_ignores_stale_managed_libraries(
     assert "/usr/local/site/lib" in result.stdout
 
 
-def test_monitoring_file_is_parsed_as_data_not_executed(tmp_path):
+def test_monitoring_file_is_parsed_as_data_not_executed(tmp_path, monitoring_settings):
     marker = tmp_path / "should-not-exist"
     file = tmp_path / ".course-environment.sh"
     file.write_text(
+        monitoring_settings().split("\n", 1)[0] + "\n" +
         f'export COURSE_WORKSPACE="$(touch {marker})"\nexport COURSE_METRICS_URL=x\nexport COURSE_PUSHGATEWAY=y\n'
     )
     file.chmod(0o600)
-    assert runtime.monitoring(tmp_path)["COURSE_WORKSPACE"].startswith("$(touch")
+    with pytest.raises(ValueError, match="workspace"):
+        runtime.monitoring(tmp_path)
     assert not marker.exists()
     file.write_text("export AWS_SECRET_ACCESS_KEY=x\n")
     with pytest.raises(ValueError, match="unexpected"):
@@ -495,22 +497,101 @@ def test_shell_loader_starts_without_inherited_python_overrides(tmp_path, overri
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("profiler", "profile_state", "success"),
+    [
+        ("nsys", "ready", True),
+        ("ncu", "ready", True),
+        ("nsys", "missing", False),
+        ("ncu", "symlink", False),
+        ("ncu", "failed", False),
+        ("none", "missing", True),
+    ],
+)
+def test_batch_shell_activates_managed_profilers(
+    tmp_path, profiler, profile_state, success
+):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "python3.12").symlink_to(sys.executable)
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    for name in ("nsys", "ncu"):
+        (managed / name).write_text("#!/bin/sh\nexit 0\n")
+        (managed / name).chmod(0o755)
+    # Model the login node's stale ambient nsys and absent ambient ncu.
+    (binaries / "nsys").write_text("#!/bin/sh\nexit 99\n")
+    (binaries / "nsys").chmod(0o755)
+    profile = tmp_path / "99-nsight.sh"
+    if profile_state == "ready":
+        profile.write_text(f'export PATH="{managed}:$PATH"\n')
+    elif profile_state == "symlink":
+        profile.symlink_to(binaries / "nsys")
+    elif profile_state == "failed":
+        profile.write_text("return 1\n")
+    loader = tools / "course_env.sh"
+    loader.write_text(
+        (ROOT / "tools/course_env.sh").read_text().replace(
+            "/etc/profile.d/99-nsight.sh", str(profile)
+        )
+    )
+    python = tmp_path / ".runtime/installations/prepared/bin/python"
+    record = {"id": "lab", "environment": {"COURSE_PYTHON": str(python)}}
+    # Exercise actual runtime PATH assembly, with only receipt lookup isolated.
+    (tools / "course_runtime.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        f"sys.path.insert(0, {str(ROOT / 'tools')!r})\n"
+        "from course_bootstrap import runtime\n"
+        f"runtime.load = lambda *a, **k: (Path.cwd(), {record!r})\n"
+        "runtime.shell(Path.cwd(), 'lab')\n"
+    )
+    result = subprocess.run(
+        [
+            "/bin/bash", "-c",
+            'source tools/course_env.sh example || exit $?; '
+            'printf "%s\\n" "$COURSE_PYTHON" "$PWD" "$COURSE_PROFILE_TOOL"; '
+            'if [[ $COURSE_PROFILE_TOOL != none ]]; then '
+            'command -v nsys; command -v ncu; fi',
+        ],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{binaries}:/usr/bin:/bin",
+            "COURSE_PROFILE_TOOL": profiler,
+        },
+        capture_output=True,
+        text=True,
+    )
+    if not success:
+        assert result.returncode != 0
+        assert "ERROR: Managed profiler environment" in result.stderr
+        assert not result.stdout
+        return
+    assert result.returncode == 0, result.stderr
+    expected = [str(python), str(tmp_path), profiler]
+    if profiler != "none":
+        expected += [str(managed / "nsys"), str(managed / "ncu")]
+    assert result.stdout.splitlines() == expected
+
+
 def test_no_argument_entrypoint_dispatches_setup_without_importing_dependencies(
     tmp_path,
 ):
     tools = tmp_path / "tools"
     tools.mkdir()
-    (tools / "regular-lab-setup.py").write_bytes(
-        (ROOT / "tools/regular-lab-setup.py").read_bytes()
+    (tools / "lab-setup.py").write_bytes(
+        (ROOT / "tools/lab-setup.py").read_bytes()
     )
     package = tools / "course_bootstrap"
     package.mkdir()
     (package / "__init__.py").touch()
     (package / "cli.py").write_text(
-        "def main(script, group):\n print('automatic setup dispatched'); return 0\n"
+        "def main(script):\n print('automatic setup dispatched'); return 0\n"
     )
     result = subprocess.run(
-        [sys.executable, "-S", str(tools / "regular-lab-setup.py")],
+        [sys.executable, "-S", str(tools / "lab-setup.py")],
         cwd=tmp_path.parent,
         capture_output=True,
         text=True,
@@ -618,15 +699,15 @@ def test_controller_cold_and_warm_setup_and_hardware_skips(
 
     def reconcile():
         if broken:
-            with pytest.raises(RuntimeError, match="could not be installed"):
+            with pytest.raises(RuntimeError, match="could not be prepared"):
                 controller.setup(
-                    tmp_path / "tools/regular-lab-setup.py",
+                    tmp_path / "tools/lab-setup.py",
                     prepare,
                     plan={"group": "regular", "runtimes": ["shared-tools", "lab"]},
                 )
         else:
             controller.setup(
-                tmp_path / "tools/regular-lab-setup.py",
+                tmp_path / "tools/lab-setup.py",
                 prepare,
                 plan={"group": "regular", "runtimes": ["shared-tools", "lab"]},
             )

@@ -2,22 +2,14 @@ name: __PROJECT_NAME__-image-publish
 
 on:
   push:
-    branches: ["__MAIN_BRANCH__"]
     tags:
       - "__PROJECT_TAG_PREFIX__-v*"
-    paths:
-      - "__APP_DIR__/**"
-      - ".github/workflows/__PROJECT_NAME__-image-publish.yml"
   workflow_dispatch:
     inputs:
       source_ref:
         description: "Git ref (branch, tag, or SHA) to build"
         required: false
         default: "__MAIN_BRANCH__"
-        type: string
-      release_version:
-        description: "Optional release SemVer (X.Y.Z) to publish X.Y.Z-g<sha> on manual runs"
-        required: false
         type: string
       publish_latest:
         description: "Also publish :latest (recommended only for __MAIN_BRANCH__)"
@@ -27,18 +19,24 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: __PROJECT_NAME__-image-publish-${{ github.ref }}
-  cancel-in-progress: true
+  group: image-${{ github.repository }}-__IMAGE_NAME__
+  cancel-in-progress: false
+  queue: max
 
 env:
+  MAIN_BRANCH: __MAIN_BRANCH__
   IMAGE_NAME: __IMAGE_NAME__
   APP_DIR: __APP_DIR__
   REGISTRY_HOST: __REGISTRY_HOST__
 
 jobs:
   test:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/__MAIN_BRANCH__'
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
     name: __PROJECT_NAME__-lint-and-test
     runs-on: ubuntu-latest
     defaults:
@@ -49,6 +47,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_ref || github.ref }}
+
+      - name: Freeze tested source
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -74,18 +76,25 @@ jobs:
     environment:
       name: __PUBLISH_ENVIRONMENT__
     steps:
+      - name: Checkout trusted publication owner
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .publication-owner
+          persist-credentials: false
+      - name: Freeze helper from workflow revision
+        run: cp .publication-owner/.github/scripts/publication.py "$RUNNER_TEMP/publication.py"
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.source_ref || github.ref }}
+          ref: ${{ needs.test.outputs.commit }}
           fetch-depth: 0
 
       - name: Ensure tag commit belongs to main history
-        if: github.event_name == 'push' && github.ref_type == 'tag'
         run: |
           set -euo pipefail
           git fetch origin "__MAIN_BRANCH__:refs/remotes/origin/__MAIN_BRANCH__" --prune
-          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/__MAIN_BRANCH__"; then
+          if ! git merge-base --is-ancestor "${{ needs.test.outputs.commit }}" "origin/__MAIN_BRANCH__"; then
             echo "::error::Tag commit ${GITHUB_SHA} is not in origin/__MAIN_BRANCH__ history"
             exit 1
           fi
@@ -114,15 +123,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
           PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           set -euo pipefail
-
-          if [[ -n "${RELEASE_VERSION}" && ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::release_version must match X.Y.Z"
-            exit 1
-          fi
 
           if [[ "${PUBLISH_LATEST}" == "true" && "${SOURCE_REF}" != "__MAIN_BRANCH__" ]]; then
             echo "::error::publish_latest=true is only allowed with source_ref=__MAIN_BRANCH__"
@@ -170,47 +173,48 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
-          SHA: ${{ github.sha }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
           PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           set -euo pipefail
-
-          short_sha="${SHA::7}"
-          tags="${IMAGE_NAME}:sha-${short_sha}"
-
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
-            if [[ "${PUBLISH_LATEST}" == "true" ]]; then
-              tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
+          commit="$(git rev-parse HEAD)"
+          short_sha="${commit::7}"
+          release_tag=""
+          if [[ "$EVENT_NAME" == push ]]; then
+            if [[ ! "$REF_NAME" =~ ^__PROJECT_TAG_PREFIX__-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo 'Invalid release tag.' >&2
+              exit 1
             fi
-            if [[ -n "${RELEASE_VERSION}" ]]; then
-              tags="${tags}"$'\n'"${IMAGE_NAME}:${RELEASE_VERSION}-g${short_sha}"
-            fi
+            version="${REF_NAME#__PROJECT_TAG_PREFIX__-v}"
+            tags="${IMAGE_NAME}:${version}"$'\n'"${IMAGE_NAME}:${version}-g${short_sha}"
+            release_tag="$REF_NAME"
           else
-            if [[ "${REF_TYPE}" == "branch" && "${REF_NAME}" == "__MAIN_BRANCH__" ]]; then
+            tags="${IMAGE_NAME}:sha-${short_sha}"
+            if [[ "$PUBLISH_LATEST" == true ]]; then
               tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
-            fi
-
-            if [[ "${REF_TYPE}" == "tag" ]]; then
-              if [[ "${REF_NAME}" =~ ^__PROJECT_TAG_PREFIX__-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-                semver="${BASH_REMATCH[1]}"
-                tags="${tags}"$'\n'"${IMAGE_NAME}:${semver}"
-                tags="${tags}"$'\n'"${IMAGE_NAME}:${semver}-g${short_sha}"
-              else
-                echo "::error::Tag '${REF_NAME}' must match __PROJECT_TAG_PREFIX__-vMAJOR.MINOR.PATCH"
-                exit 1
-              fi
             fi
           fi
-
           {
-            echo "tags<<EOF"
-            echo "${tags}"
-            echo "EOF"
+            echo "commit=$commit"
+            echo "release_tag=$release_tag"
+            echo 'tags<<EOF'
+            echo "$tags"
+            echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
+      - name: Check all immutable image aliases
+        id: existing
+        env:
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+          GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ steps.image_tags.outputs.tags }}
+          RELEASE_TAG: ${{ steps.image_tags.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.image_tags.outputs.commit }}
+        run: >-
+          python3 "$RUNNER_TEMP/publication.py" image-state --workflow __PROJECT_NAME__-image-publish.yml
+          --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG"
+
       - name: Build and push image
+        if: steps.existing.outputs.publish_needed == 'true'
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -223,48 +227,51 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Write publish manifest
+      - name: Update explicitly requested latest from verified digest
+        if: steps.existing.outputs.latest_needed == 'true'
+        env:
+          LATEST_REF: ${{ steps.existing.outputs.latest_ref }}
+          VERIFIED_SOURCE: ${{ steps.existing.outputs.verified_source }}
+        run: docker buildx imagetools create --prefer-index=false --tag "$LATEST_REF" "$VERIFIED_SOURCE"
+
+      - name: Verify every remote tag digest
         env:
           TAGS: ${{ steps.image_tags.outputs.tags }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          tags_json="$(printf '%s\n' "${TAGS}" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
-          jq -n \
-            --arg actor "${GITHUB_ACTOR}" \
-            --arg event "${GITHUB_EVENT_NAME}" \
-            --arg ref "${GITHUB_REF}" \
-            --arg ref_name "${GITHUB_REF_NAME}" \
-            --arg sha "${GITHUB_SHA}" \
-            --arg digest "${IMAGE_DIGEST}" \
-            --arg run_id "${GITHUB_RUN_ID}" \
-            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
-            --arg repository "${GITHUB_REPOSITORY}" \
-            --argjson tags "${tags_json}" \
-            '{
-              actor: $actor,
-              repository: $repository,
-              event: $event,
-              ref: $ref,
-              ref_name: $ref_name,
-              sha: $sha,
-              tags: $tags,
-              digest: $digest,
-              run_id: $run_id,
-              run_attempt: $run_attempt,
-              timestamp_utc: now | todate
-            }' > publish-manifest.json
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+        run: python3 "$RUNNER_TEMP/publication.py" image-verify
+
+      - name: Record verified image identity
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        env:
+          TAGS: ${{ steps.image_tags.outputs.tags }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+          RELEASE_TAG: ${{ steps.image_tags.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.image_tags.outputs.commit }}
+        run: >-
+          python3 "$RUNNER_TEMP/publication.py" image-manifest --workflow __PROJECT_NAME__-image-publish.yml
+          --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG" --output publication.json
+
+      - name: Preserve immutable image evidence
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: publication-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication.json
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload publish manifest artifact
+        if: steps.existing.outputs.publish_needed == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: __PROJECT_NAME__-image-publish-manifest-${{ github.run_id }}
-          path: publish-manifest.json
+          path: publication.json
+          if-no-files-found: error
 
       - name: Publish run summary
         env:
           TAGS: ${{ steps.image_tags.outputs.tags }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
         run: |
           {
             echo "### __PROJECT_NAME__ image publish"
@@ -272,7 +279,7 @@ jobs:
             echo "- Actor: \`${GITHUB_ACTOR}\`"
             echo "- Event: \`${GITHUB_EVENT_NAME}\`"
             echo "- Ref: \`${GITHUB_REF}\`"
-            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Commit: \`${{ steps.image_tags.outputs.commit }}\`"
             echo "- Digest: \`${IMAGE_DIGEST}\`"
             echo ""
             echo "#### Tags"

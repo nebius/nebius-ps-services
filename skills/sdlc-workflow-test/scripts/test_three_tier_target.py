@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -16,16 +16,18 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 for directory in (
     Path(__file__).parent,
-    ROOT / "sdlc-start/scripts",
-    ROOT / "sdlc-prepare-execution/scripts",
+    ROOT / "worktree/scripts",
     ROOT / "maintain-project-specs/scripts",
 ):
     sys.path.insert(0, str(directory))
 
-import prompt_workspace as workspace  # noqa: E402
-import sdlc_execution_core as execution  # noqa: E402
+import workflow_objectives as objectives  # noqa: E402 — verified runtime support precedes imports
+import workflow_refinement as refinement  # noqa: E402 — verified runtime support precedes imports
+import workflow_resources as resources  # noqa: E402 — verified runtime support precedes imports
+import workflow_impact as impact  # noqa: E402
+import workflow_execution as execution  # noqa: E402
 from project_specs_lib.transaction import publish_spec_pair  # noqa: E402
-from test_sdlc_execution import REQUIREMENTS, DESIGN, PLAN  # noqa: E402
+from test_workflow_execution import REQUIREMENTS, DESIGN, PLAN, finish_task as fixture_finish  # noqa: E402
 import three_tier_lifecycle as lifecycle  # noqa: E402
 import three_tier_target as target  # noqa: E402
 
@@ -57,45 +59,20 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.project = Path(self.state["project_root"])
         self.home = Path(self.state["private_root"]) / "codex-home"
         self.environment = mock.patch.dict(
-            os.environ, {"CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex"}
+            os.environ, {"CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "target-root"}
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        initial = workspace.initialize(self.project, self.home, False, "code")
-        self.manifest = Path(initial["workspace"])
-        prompt = Path(initial["starter_prompt"])
-        prompt.write_text(
-            prompt.read_text().replace(
-                "<!-- Required: replace this comment with your Ask. -->",
-                "Implement the planned behavior and verify its observable acceptance criteria.",
-            )
-        )
-        prompt.chmod(0o600)
-        intake = workspace.intake(str(prompt), self.project, self.home)
-        self.run_id = intake["run_id"]
-        self.run = Path(intake["snapshot"]).parents[2]
-        project_id = json.loads(self.manifest.read_text())["project_id"]
-        private_json(
-            self.manifest.parent / "active.lock",
-            {
-                "project_id": project_id,
-                "project_root": str(self.project),
-                "run_id": self.run_id,
-                "status": "running",
-                "owner_session_hash": "c" * 64,
-                "created_at": lifecycle.utc_now(),
-            },
-        )
-        private_json(
-            self.run / "current-state.json",
-            {
-                "run_id": self.run_id,
-                "project_id": project_id,
-                "current_feature": "FEAT-001",
-                "status": "running",
-                "current_phase": "sdlc-start",
-            },
-        )
+        initial = objectives.accept(self.project, self.home, 'agentic-sdlc', 'target-root', {
+            'outcome':'Implement the planned behavior', 'scope':['fixture project'], 'constraints':[],
+            'acceptance_criteria':['observable behavior passes'], 'clarifications':[],
+            'provenance':{'kind':'direct_request','source_sha256':'a'*64}})
+        self.run = Path(initial['run_dir'])
+        self.run_id = self.run.name
+        self.manifest = self.run.parent / 'project.json'
+        project_id = json.loads(self.manifest.read_text())['project_id']
+        private_json(self.run / 'current-state.json', {'run_id': self.run_id, 'project_id': project_id,
+                     'current_feature':'FEAT-001','status':'running','current_phase':'sdlc-start'})
         self.base = self.git("rev-parse", "HEAD")
         self.startup_observation = target.observe_startup(
             self.state, skills_root=ROOT, agent="codex"
@@ -110,6 +87,8 @@ class ThreeTierTargetTests(unittest.TestCase):
                 "verification_id": self.state["verification_id"],
                 "baseline_sha": self.base,
                 "recorded_head": self.base,
+                "objective_sha256": self.startup_observation["objective_sha256"],
+                "basis_sha256": None,
                 "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS["sdlc-start"],
             },
         )
@@ -125,34 +104,16 @@ class ThreeTierTargetTests(unittest.TestCase):
             expected_design_sha256="absent",
             operation_id="initial-spec-admission",
         )
-        refinement = workspace.load_requirements_refinement(self.run, required=True)
-        refinement["status"] = "ready"
-        refinement["extracted"]["outcomes"] = ["Implement the planned behavior."]
-        refinement["compiled_requirements_sha256"] = hashlib.sha256(
-            REQUIREMENTS.encode()
-        ).hexdigest()
-        workspace.save_requirements_refinement(self.run, refinement)
-        private_json(
-            self.run / "prompt-impact-claim.json",
-            {
-                "schema": "agentic-sdlc/prompt-impact-claim-v1",
-                "prompt_id": refinement["prompt_id"],
-                "revision": refinement["revision"],
-                "intent_sha256": refinement["intent_sha256"],
-                "dispositions": [
-                    {
-                        "statement": "outcomes:0001",
-                        "disposition": "changed_contract",
-                        "requirements": ["REQ-001"],
-                        "design": ["FEAT-001"],
-                        "effects": ["design", "requirements"],
-                        "reason": None,
-                    }
-                ],
-                "declared_effects": ["design", "requirements"],
-                "declared_plan_action": "replan_required",
-            },
-        )
+        value = refinement.refinement(self.run)
+        from project_specs_lib.impact import statement_inventory
+        claim = {key: value[key] for key in ('objective_id','revision','intent_sha256')}
+        claim.update(schema=impact.CLAIM_SCHEMA, declared_effects=['design','requirements'],
+                     declared_plan_action='replan_required', dispositions=[{
+                         'statement': item['key'], 'disposition':'changed_contract',
+                         'requirements':['REQ-001'],'design':['FEAT-001'],
+                         'effects':['design','requirements'],'reason':None}
+                         for item in statement_inventory(value['extracted'])])
+        self.claim = claim
 
     def git(self, *arguments, path=None):
         return subprocess.run(
@@ -169,6 +130,23 @@ class ThreeTierTargetTests(unittest.TestCase):
         lock.chmod(0o600)
         with self.assertRaises(target.TargetError):
             self.resolve()
+
+    def test_explicit_new_session_continuation_preserves_startup_and_phase_evidence(self):
+        coordinator = self.admit_and_prepare()
+        startup = dict(self.state['workflow_startup'])
+        continued = objectives.continue_run(
+            self.project, self.home, 'agentic-sdlc', 'continued-root'
+        )
+        self.assertEqual(continued['run_dir'], str(self.run))
+        # The original native session may bind another objective after handoff.
+        old_binding = self.home / 'sdlc-runs/bindings' / (objectives.session_hash('target-root') + '.json')
+        private_json(old_binding, {'schema': 'foreign-binding'})
+        with mock.patch.dict(os.environ, {'CODEX_THREAD_ID': 'continued-root'}):
+            self.assertEqual(self.resolve()['path'], coordinator['integration_worktree'])
+            objective_sha, basis_sha = lifecycle.phase_identity(self.state, 'sdlc-implement-plan')
+            self.assertEqual(objective_sha, self.startup_observation['objective_sha256'])
+            self.assertEqual(len(basis_sha), 64)
+        self.assertEqual(self.state['workflow_startup'], startup)
 
     def test_startup_receipt_is_bound_and_cannot_be_retrofitted(self):
         observed = target.validate_startup_receipt(self.state)
@@ -198,12 +176,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.resolve()
 
     def admit_and_prepare(self):
-        workspace.verify_requirements_refinement_ready(self.manifest, self.run_id)
-        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
-            workspace.verify_requirements_refinement_contract(
-                self.manifest, self.run_id
-            )
-        self.assertIn("tracked", caught.exception.message)
+        refinement.ready(self.run)
         # Execute the documented initial admission: only the new canonical pair is dirty.
         canonical = {"docs/requirements.md", "docs/design.md"}
         self.assertEqual(
@@ -221,22 +194,135 @@ class ThreeTierTargetTests(unittest.TestCase):
                 self.git("show", ":" + name), (self.project / name).read_text().strip()
             )
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
-        workspace.verify_requirements_refinement_contract(self.manifest, self.run_id)
         plans = self.run / "plans"
         plans.mkdir(mode=0o700, exist_ok=True)
         plan = plans / "FEAT-001-v1.md"
-        plan.write_text(PLAN.split("### TASK-002")[0])
+        plan.write_text(PLAN.split("### TASK-002")[0].replace('- Conflict domains: code:a',
+            '- Conflict domains: runtime:sdlc-three-tier-' + self.state['verification_id']))
         plan.chmod(0o600)
         plan.with_suffix(".md.lock").write_text("locked\n")
         plan.with_suffix(".md.lock").chmod(0o600)
         # The prepare phase owns this commit; design admission above did not commit.
         self.git("commit", "-qm", "Record canonical contract")
+        refinement.settle(self.run, self.claim)
         return execution.prepare_execution(self.run, self.project, "FEAT-001", plan, 1)
 
     def resolve(self, **kwargs):
         return target.resolve_target(
             self.state, skills_root=ROOT, agent="codex", **kwargs
         )
+
+    def admit_phase_then_reconcile_delivery(self, *, material=False):
+        """Real owner publication/settlement; no fabricated execution basis."""
+        coordinator = self.admit_and_prepare()
+        integration = Path(coordinator["integration_worktree"])
+        phase = "sdlc-prepare-execution"
+        prior_basis = self.resolve()["basis_sha256"]
+        relative = f"evidence/phases/{phase}.json"
+        private_json(Path(self.state["run_root"]) / relative, {
+            "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
+            "verification_id": self.state["verification_id"], "baseline_sha": self.base,
+            "recorded_head": coordinator["integration_head"],
+            "objective_sha256": self.startup_observation["objective_sha256"],
+            "basis_sha256": prior_basis, "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase],
+        })
+        self.state = lifecycle.record_phase(self.root, phase, "PASS", "Offline preparation fixture.", [relative])
+        entry = self.state["phases"][-1]
+        requirements = (integration / "docs/requirements.md").read_bytes()
+        design = (integration / "docs/design.md").read_bytes()
+        publish_spec_pair(
+            integration, requirements_candidate=requirements,
+            design_candidate=design.replace(b"delivery=not-started", b"delivery=implemented").replace(
+                b"Not implemented yet.", b"Offline fixture delivery evidence."),
+            expected_git_head=coordinator["integration_head"],
+            expected_requirements_sha256=hashlib.sha256(requirements).hexdigest(),
+            expected_design_sha256=hashlib.sha256(design).hexdigest(),
+            expected_objective_sha256=self.startup_observation["objective_sha256"],
+            expected_basis_sha256=prior_basis, operation_id="delivery-reconciliation",
+        )
+        claim = json.loads(json.dumps(self.claim))
+        if not material:
+            claim.update(declared_effects=[], declared_plan_action="retain_plan")
+            for row in claim["dispositions"]:
+                row.update(disposition="existing_contract", effects=[])
+        refinement.settle(self.run, claim)
+        execution.replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
+        current = json.loads((self.run / "current-state.json").read_text())
+        private_json(self.run / "current-state.json", {**current, "current_phase": "sdlc-update-documents"})
+        self.assertNotEqual(prior_basis, self.resolve(require_clean=False)["basis_sha256"])
+        return phase, entry, prior_basis, coordinator
+
+    def test_admitted_history_survives_owner_delivery_settlement(self):
+        phase, entry, _, _ = self.admit_phase_then_reconcile_delivery()
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry,
+        )
+        # The same old bytes cannot be submitted as a new phase result.
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "basis is stale"):
+            lifecycle.validate_phase_pass_artifact(self.state, phase, entry["evidence"])
+
+    def test_historical_basis_requires_latest_admitted_receipt(self):
+        phase, entry, _, _ = self.admit_phase_then_reconcile_delivery()
+        self.state["phases"].remove(entry)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "latest admitted"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_historical_basis_rejects_material_impact(self):
+        phase, entry, _, _ = self.admit_phase_then_reconcile_delivery(material=True)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "succession is missing or material"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_historical_basis_rejects_material_intermediate_settlement(self):
+        phase, entry, _, coordinator = self.admit_phase_then_reconcile_delivery(material=True)
+        claim = json.loads(json.dumps(self.claim))
+        claim.update(declared_effects=[], declared_plan_action="retain_plan")
+        for row in claim["dispositions"]:
+            row.update(disposition="existing_contract", effects=[])
+        refinement.settle(self.run, claim)
+        execution.replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "succession is missing or material"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_historical_basis_rejects_changed_plan(self):
+        phase, entry, _, coordinator = self.admit_phase_then_reconcile_delivery()
+        old = Path(coordinator["plan_path"])
+        new = self.run / "plans/FEAT-001-v2.md"
+        new.write_text(old.read_text().replace("Plan v1", "Plan v2"))
+        new.with_suffix(".md.lock").write_text("locked\n")
+        execution.replan_future(self.run, "FEAT-001", new, 1)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "material identity"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_historical_basis_rejects_changed_immutable_record(self):
+        phase, entry, prior, _ = self.admit_phase_then_reconcile_delivery()
+        path = self.run / "bases/FEAT-001" / (prior + ".json")
+        value = json.loads(path.read_text())
+        value["ownership"]["run_id"] = "foreign-run"
+        private_json(path, value)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "basis changed"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_historical_basis_requires_impact_predecessor(self):
+        phase, entry, prior, _ = self.admit_phase_then_reconcile_delivery()
+        value = json.loads((self.run / "bases/FEAT-001" / (prior + ".json")).read_text())
+        for path in (self.run / "objective-impact").glob("attempt-*.json"):
+            if impact.canonical_digest(json.loads(path.read_text())) == value["impact_sha256"]:
+                path.unlink()
+                break
+        with self.assertRaises(lifecycle.LifecycleError):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
 
     def test_fresh_specs_admit_without_early_commit_and_target_real_integration(self):
         coordinator = self.admit_and_prepare()
@@ -295,6 +381,8 @@ class ThreeTierTargetTests(unittest.TestCase):
                 "verification_id": self.state["verification_id"],
                 "baseline_sha": self.state["git"]["baseline_sha"],
                 "recorded_head": sealed["integration_head"],
+                "objective_sha256": self.startup_observation["objective_sha256"],
+                "basis_sha256": self.resolve()["basis_sha256"],
                 "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase],
             },
         )
@@ -340,7 +428,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         worker = Path(assignment["worktree"])
         (worker / "src").mkdir()
         (worker / "src/a.py").write_text("VALUE = 1\n")
-        execution.finish_task(
+        fixture_finish(
             self.run,
             "FEAT-001",
             "WAVE-001",
@@ -390,11 +478,22 @@ class ThreeTierTargetTests(unittest.TestCase):
         worker = Path(assignment["worktree"])
         (worker / "src").mkdir()
         (worker / "src/a.py").write_text("VALUE = 1\n")
+        with self.assertRaises(target.TargetError):
+            self.resolve(**identity)
+        assignment_path = execution.assignment_path(self.run, 'FEAT-001', 'WAVE-001', 'TASK-001')
+        resource = 'sdlc-three-tier-' + self.state['verification_id']
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["up", "--detach"], **identity)
+            command.assert_not_called()
+        resources.acquire(self.home, assignment_path, resource, 'runtime-fixture-worker')
+        self.assertEqual(os.environ['CODEX_THREAD_ID'], 'target-root')
         with mock.patch.object(
             lifecycle, "command",
             return_value=mock.Mock(returncode=0, stdout="passed", stderr=""),
         ) as command:
             lifecycle.run_owned_compose(self.state, ["up", "--detach"], **identity)
+        self.assertEqual(resources.verify(self.home, assignment_path, resource)['status'], 'active')
         argv = command.call_args.args[0]
         self.assertEqual(argv[argv.index("--project-directory") + 1], str(worker))
         self.assertNotEqual(self.resolve()["path"], str(worker))
@@ -410,16 +509,15 @@ class ThreeTierTargetTests(unittest.TestCase):
         with self.assertRaisesRegex(target.TargetError, "implementation wave"):
             self.resolve(**identity)
         private_json(current_path, {**current, "current_phase": "sdlc-implement-plan"})
-        wave_path = execution.wave_path(self.run, "FEAT-001", "WAVE-001")
-        wave = json.loads(wave_path.read_text())
-        changed_wave = {**wave, "batches": [["TASK-001", "TASK-002"]]}
-        private_json(wave_path, changed_wave)
-        with self.assertRaisesRegex(target.TargetError, "one active worker"):
-            self.resolve(**identity)
-        private_json(wave_path, wave)
+        # A lease permits this worker even when independent slots exist.
+        assignment_path = execution.assignment_path(self.run, 'FEAT-001', 'WAVE-001', 'TASK-001')
+        resource = 'sdlc-three-tier-' + self.state['verification_id']
+        resources.acquire(self.home, assignment_path, resource, 'runtime-fixture-worker')
+        self.assertEqual(self.resolve(**identity)['path'], str(worker))
+        resources.release(self.home, assignment_path, resource, 'runtime-fixture-worker')
         (worker / "unclaimed.txt").write_text("outside claims\n")
         with mock.patch.object(lifecycle, "command") as command:
-            with self.assertRaisesRegex(lifecycle.LifecycleError, "scope guard"):
+            with self.assertRaises(lifecycle.LifecycleError):
                 lifecycle.run_owned_compose(self.state, ["up", "--detach"], **identity)
             command.assert_not_called()
         (worker / "unclaimed.txt").unlink()
@@ -432,7 +530,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         current_path = self.run / "current-state.json"
         current = json.loads(current_path.read_text())
         private_json(current_path, {**current, "project_id": "foreign"})
-        with self.assertRaisesRegex(target.TargetError, "checkpoint"):
+        with self.assertRaises(target.TargetError):
             self.resolve()
         private_json(current_path, current)
         self.git("worktree", "unlock", coordinator["integration_worktree"])

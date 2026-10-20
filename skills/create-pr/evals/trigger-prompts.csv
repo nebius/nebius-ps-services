@@ -17,3 +17,4 @@ create-and-merge,true,$create-pr Create a PR and merge it after review and check
 base-sync-create-only,true,$create-pr Merge main into my branch and open a PR; do not merge the PR.
 create-pr-question-action,true,$create-pr Can you create a PR and merge it after checks pass?
 create-pr-information-only,false,Does $create-pr merge by default or stop at a reviewed PR? Explain only.
+checkout-behavior-explanation,false,"Explain how create-pr handles the final local checkout; do not run it or change anything."

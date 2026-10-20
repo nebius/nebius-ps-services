@@ -68,3 +68,27 @@ and Dependabot PRs, including Docker updates. The built-in token never bypasses 
 Pages builds compensate for suppressed token-generated push events. AI agents remain
 local; privileged Actions runs trusted-default deterministic code only. Agentic
 SDLC remains separate.
+
+## Publication contracts
+
+This skill is the sole release/image YAML template owner. Its
+`scripts/publication.py` centralizes strict versions, ancestry, changelog notes,
+asset hashes, provenance checks and registry observations. The helper never
+creates a release or pushes a tag; project workflows retain those effects and
+service-specific qualification. Standalone templates install the helper at
+`.github/scripts/publication.py` and keep their original workflow filenames.
+
+Release manifests are uploaded before publication. Existing releases must match
+those original hashes, while images must match original digests across every
+immutable alias. Image outputs use the registry digest after that comparison.
+Release and manual image lanes use separate aliases and one
+destination lock. Missing evidence, partial state and ambiguous errors block
+reconciliation without overwrite. See the [release](references/publish-release.md)
+and [image](references/container-image-publish.md) contracts for details.
+
+`test_publication.py` exercises failure and retry boundaries;
+`test_workflow_contracts.py` checks the repository policy, listeners, CI filters,
+publication ordering and reviewer/image behavior. The latter requires PyYAML
+and a repository checkout. Current actionlint 1.7.12 needs a narrowly scoped
+ignore for its unknown `concurrency.queue` key; contract tests still require
+`queue: max` with noncanceling publication locks.

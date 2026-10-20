@@ -65,6 +65,9 @@ without prompting, including on headless reruns; piped credentials must match
 or fail without mutation. A healthy rerun never rotates credentials or creates
 new package Jobs after successful acceptance. It verifies the installed tools
 and reconciles the same viewers.
+Candidate comparison normalizes shared protected namespace/source declarations
+on both sides. Removing an ordinary duplicate does not change the protected
+owner; actual changes to unrelated applications still stop installation.
 If an intact accepted receipt and exact cached package archives prove missing
 regular files under `/opt`, or a missing owned activation profile/hook, the same
 command restores only those omissions. Existing parent directories must be safe
@@ -197,6 +200,38 @@ Apply the generated Flux resources to retain these controls.
 
 ## Capture and view reports
 
+Course lab launchers deliver completed native reports automatically. Profiling
+install reconciles `/var/lib/nebius-cxcli/nsight-reports.json` in the accepted
+jail and a matching root-owned binding marker under the configured report root.
+Jobs discover the actual producer path from this nonsecret contract, verify its
+mount, and print the corresponding `/mnt/reports/...` paths. Private originals
+remain in each job's results directory; no per-job copy or environment export
+is required.
+
+Unchanged installs retain valid binding bytes and repair missing metadata without
+new package Jobs or credential rotation. During a binding change, a storage-local
+admission gate closes new profiling starts while already admitted jobs retain
+their old binding. The installer requires Slurm quiescence before invalidating
+that binding, publishes the marker before the descriptor, and reopens admission
+last. Interrupted transitions resume through the same install command. A kernel
+lock excludes surviving reconciliation writers, and the remote operation is
+bounded. Storage must support these locks and atomic no-overwrite directory
+promotion; unsupported behavior fails explicitly.
+
+New report roots are root-owned with mode `1777`. An existing unsafe root is
+reported without changing permissions. An operator must verify ownership and
+authorize a scoped migration of that exact directory before rerunning install;
+do not recursively change existing report permissions. New jail generations
+must reconcile this contract through profiling install before course profiling.
+Ordinary Apps reconciliation and `profiling show` never write it.
+
+Published course copies are readable by the existing viewer audience. The runner
+verifies hashes and exposes a complete successful stage atomically. Capture,
+viewer delivery and Grafana publication have separate outcomes; delivery failure
+fails the overall job while retaining successful captures. No automatic history
+backfill or retention deletion is performed.
+
+For an application outside the course launchers, use the native tools directly.
 Run the following inside a Slurm allocation with a GPU. Replace `./gpu_workload`
 with your application. Capture Systems and Compute reports in separate runs:
 
@@ -212,7 +247,8 @@ ncu --export "$report_dir/compute-${SLURM_JOB_ID}" ./gpu_workload
 For multi-rank work, include a rank identifier in every output prefix. Batch
 scripts that do not start a login shell should source the profile explicitly.
 The default reports directory is created with sticky shared-write permissions;
-existing permissions are preserved. Producers must make intended reports and
+unsafe existing permissions require the operator migration described above.
+Producers must make intended reports and
 their parent directories readable/traversable by the viewer's `nvidia` account.
 The installer does not recursively change ownership or file permissions.
 

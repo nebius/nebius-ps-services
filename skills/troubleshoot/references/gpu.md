@@ -5,7 +5,32 @@ collective communication, topology, performance, or hardware-health failures.
 Pin GPU model, firmware where visible, driver, CUDA, runtime, library, container
 toolkit, device plugin or operator, and workload image versions.
 
-## Architecture And Component Inventory
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| GPU errors or low throughput | stale Xid / active device fault / starvation / transfer or collective bottleneck | boot/device identity, current counter deltas, workload timeline and matching topology | high allocation or a historical Xid does not prove current compute utilization/failure | separate host input, transfers, kernels and collectives before active tests |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
+## Failing Path And Component Identity
 
 Trace the path from scheduler or orchestrator resource declaration through node
 inventory, device plugin or GRES, cgroup and device assignment, container
@@ -25,10 +50,10 @@ devices and nodes.
 A successful inventory query proves management-path visibility, not kernel
 execution, application correctness, collective communication, or hardware health.
 
-## Mandatory Logs And Evidence
+## Implicated Logs And Evidence
 
 Correlate job, pod, process, node, GPU UUID or index, MIG instance, rank, device,
-Xid, fabric endpoint, and timestamp. Examine:
+Xid, fabric endpoint, and timestamp. Select relevant evidence from:
 
 - application and framework logs, stack traces, core dumps, rank-specific
   stdout and stderr, and failure phase;

@@ -13,7 +13,14 @@ Use this reference for tag-driven GitHub Releases that publish built artifacts.
 - Verify the built artifact version matches the tag version.
 - Generate release notes from `CHANGELOG.md`.
 - Fail if the changelog section for the tag is missing or empty.
-- Skip duplicate release creation if the GitHub Release already exists.
+- Before creating a release, upload immutable `publication-release/v1` evidence
+  with tag object/commit, workflow run/attempt and each asset basename, size and
+  SHA-256. Existing releases must match downloaded bytes against that original
+  evidence; missing, expired, partial or conflicting evidence blocks recovery.
+- A complete authenticated release listing establishes absence. API failures do
+  not. Rebuilt assets must match any retained pre-publication manifest before
+  a retry can create a release. Never overwrite assets or backfill expected
+  hashes from remote bytes.
 - Upload a release manifest artifact and publish a short run summary.
 
 ## Local helper alignment
@@ -32,7 +39,7 @@ handoffs. Keep newly generated helpers aligned with that contract:
 - Missing/empty release notes and conflicting tags fail before publication.
 - Resume rechecks exact PR/tag/workflow identities and verifies downloaded assets.
   Existing release existence alone is not evidence that its assets are complete.
-- Approval gates remain on GitHub, with visible 600-second waits and resumable
+- Approval gates remain on GitHub, with visible 10800-second phase budgets and resumable
   timeouts. No admin bypass or implicit rerun/re-upload.
 
 Existing project helper examples below have their own interfaces; migrating them
@@ -44,3 +51,17 @@ requires explicit scope. Do not silently rewrite project copies during skill wor
 - `.github/workflows/vpngw-release.yml`
 - `services/nebius-cxcli/publish-release.sh`
 - `services/vpngw/publish-release.sh`
+
+## Shared implementation
+
+`github-workflows` is the sole owner of the release YAML template. Copy its
+`scripts/publication.py` to `.github/scripts/publication.py` when adopting the
+standalone template and replace `__WORKFLOW_FILE__` with the selected filename.
+Keep project-specific tests, package checks and asset sets in their workflows.
+The helper validates metadata and observes remote state; it cannot create a
+release or push a registry tag. Preserve existing publisher workflow filenames
+because local release observers use them to identify the exact tag run.
+
+Retain original evidence for the configured artifact lifetime (90 days here).
+Older releases without sufficient evidence require maintainer reconciliation;
+a green existence-only run is not a successful verification.

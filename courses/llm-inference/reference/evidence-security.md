@@ -9,8 +9,8 @@ model names, prompts, or environment details.
 
 1. Use synthetic or explicitly public prompts, datasets, and models. Do not use
    customer prompts, credentials, proprietary model inputs, or regulated data.
-2. Complete the preparation for your course and lab number in the
-   [Lab Guide](../../lab-guide.html#lab-preparation-scripts).
+2. Complete software preparation in the [Lab Guide](../../lab-guide.html#lab-preparation)
+   and review its completion summary. Follow the Lab Guide’s guidance for any failures or hardware skips before submitting.
    Its private parent directories protect scheduler logs even when Slurm opens
    them before the job body starts.
 3. Keep `results/`, checkpoints, model caches, metrics, server logs, and Slurm
@@ -19,6 +19,16 @@ model names, prompts, or environment details.
    unrelated secret-bearing environment variables according to site policy.
 5. Never commit generated evidence. The course `.gitignore` is not an access-control
    or redaction boundary.
+
+## Shared viewer copies
+
+A successful profiling stage automatically delivers a verified copy of its native
+reports to the installed Nsight viewer directory. These copies are readable by
+the existing shared viewer audience; the viewer does not provide per-user report
+isolation. Submit only workloads whose report contents are approved for that
+audience. Private originals, logs and other results remain in the job directory.
+Check `viewer_delivery` and use the exact viewer paths printed by the job;
+no manual copy or permission change is needed after `sbatch`.
 
 ## Share summaries, not raw artifacts
 
@@ -44,7 +54,8 @@ original.
 
 - JSON, checkpoints, client results, server logs, and metrics use a random run
   ID instead of a Slurm job ID.
-- New artifacts are created exclusively with owner-only permissions.
+- New private artifacts are created exclusively with owner-only permissions;
+  verified viewer copies use the shared access described above.
 - Serving endpoints are loopback-only; distributed worker traffic still
   requires a trusted private fabric and site-approved network controls.
 - The normal course validator performs static validation and does not execute

@@ -127,11 +127,11 @@ from agent_runtime import agent_home, claude_session_identity, normalize_payload
 
 OWNERS = (
     "agent-nebius-auth-setup", "commit", "config-codex",
-    "maintain-project-specs", "prompt-session-intake", "sdlc-start", "troubleshoot",
+    "maintain-project-specs", "sdlc-start", "troubleshoot",
 )
 HOOKS = (
     "pre_tool_use_nebius_auth.py", "commit_intent.py", "session_start_context.py",
-    "user_prompt_context.py", "project_specs_lifecycle.py", "prompt_session_intake.py",
+    "user_prompt_context.py", "project_specs_lifecycle.py",
     "pre_tool_use_sdlc_policy.py", "remediation_attempt_guard.py", "stop_lifecycle_arbiter.py",
 )
 
@@ -382,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
         # Advisory lifecycle/context hooks must never become blocking hooks.
         advisory = args.hook in {"project_specs_lifecycle.py", "session_start_context.py",
-                                 "user_prompt_context.py", "prompt_session_intake.py"}
+                                 "user_prompt_context.py"}
         print(json.dumps({"systemMessage": "Skills hook runtime unavailable; review installation."}
                          if advisory else {"continue": False, "stopReason":
                                            "Skills hook runtime unavailable; review installation."}))

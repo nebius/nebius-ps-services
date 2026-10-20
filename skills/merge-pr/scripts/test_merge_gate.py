@@ -422,10 +422,48 @@ class MergeTests(unittest.TestCase):
         self.api.open_prs.append(fork)
         self.api.review = {}
         self.assertEqual(
-            gate.ci_targets(self.api),
+            gate.ci_targets(self.api, {}, POLICY, recovery=True),
             [{"pr": 1, "head": HEAD}, {"pr": 2, "head": HEAD}],
         )
         self.assertFalse(self.api.effects)
+
+    def test_ci_events_target_only_current_associated_heads(self):
+        event = {"workflow_run": {"id": 300}}
+        run = {
+            "event": "pull_request",
+            "path": ".github/workflows/ci.yml",
+            "head_sha": HEAD,
+            "pull_requests": [{"number": 1}],
+        }
+        original = self.api.api
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}),
+            patch.object(
+                self.api,
+                "api",
+                side_effect=lambda path: run
+                if path == "actions/runs/300"
+                else original(path),
+            ),
+            patch.object(
+                self.api, "pages", side_effect=AssertionError("No global PR scan")
+            ),
+        ):
+            self.assertEqual(
+                gate.ci_targets(self.api, event, POLICY), [{"pr": 1, "head": HEAD}]
+            )
+            self.api.pr["head"]["sha"] = BASE
+            self.assertEqual(gate.ci_targets(self.api, event, POLICY), [])
+            for unrelated in ("push", "workflow_dispatch"):
+                run["event"] = unrelated
+                self.assertEqual(gate.ci_targets(self.api, event, POLICY), [])
+
+    def test_ci_start_clears_previous_success_for_same_sha_rerun(self):
+        self.api.runs[0]["run_attempt"] = 2
+        self.api.runs[0]["status"] = "in_progress"
+        self.api.runs[0]["conclusion"] = None
+        with self.assertRaises(gate.Pending):
+            gate.checks_ready(self.api, self.api.pr, self.api.files, POLICY)
 
     def test_missing_or_changed_intent_prevents_effects(self):
         self.api.intents = []

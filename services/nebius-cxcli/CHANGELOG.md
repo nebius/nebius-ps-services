@@ -6,6 +6,23 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Align the documentation contract inventory test with the verified profiling
+  report destination requirement and feature.
+
+- Normalize shared protected resources on both sides of profiling candidate
+  comparison, avoiding false unrelated-application failures after a full render
+  while retaining rejection of real application changes.
+
+- Fix deployment preview and application resolution to consume frozen Grafana
+  dashboard assets instead of reopening authored paths absent from private
+  execution directories. Preserve UID and content/folder hash checks and reject
+  missing or altered frozen inputs.
+
+- Publish and reconcile a verified nonsecret Nsight report destination contract
+  for automatic course delivery. Bind it to accepted storage and installation
+  identity, gate new admissions during changes, preserve report data and
+  credentials on reruns, and reject unsafe existing root permissions explicitly.
+
 - Validate setup-uv by repository and full immutable SHA rather than a duplicated
   release hash, retaining exact tool/cache inputs, conditions and setup ordering.
   Dependabot action updates no longer require matching test-only hash edits.

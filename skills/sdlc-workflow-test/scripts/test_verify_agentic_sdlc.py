@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import ast
-from contextlib import redirect_stderr
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import importlib.util
 import inspect
 from io import StringIO
@@ -249,7 +249,7 @@ class VerifierContractTests(unittest.TestCase):
         self.assertEqual(verifier.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
         self.assertEqual(
             verifier.CAPABILITY_SUITE_TIMEOUT_SECONDS,
-            {"worktree": 300, "task-waves": 900},
+            {"worktree": 900, "execution": 900, "three-tier": 900, "task-waves": 900},
         )
 
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
@@ -259,13 +259,24 @@ class VerifierContractTests(unittest.TestCase):
         self.assertEqual(len(runner.call_args_list), 16)
         for call in runner.call_args_list:
             command = " ".join(str(value) for value in call.args[0])
-            if "test-worktree-manager.py" in command:
-                expected = 300
-            elif "test-task-waves.py" in command:
+            if any(name in command for name in ("test-worktree-manager.py", "test_workflow_execution.py", "test_workflow_contracts.py", "test_three_tier", "-s " + str(self.ctx.skills_root / "worktree/scripts"), "-s " + str(self.ctx.skills_root / "sdlc-workflow-test/scripts"))):
                 expected = 900
             else:
                 expected = 120
             self.assertEqual(call.kwargs["timeout"], expected, command)
+
+    def test_failed_suite_reports_exit_and_test_names_without_raw_output(self) -> None:
+        failed = subprocess.CompletedProcess(
+            [], 1, stdout="private diagnostic body\n",
+            stderr="FAIL: test_example (module.Case.test_example)\nAssertionError: private value\n",
+        )
+        with mock.patch.object(verifier, "run", return_value=failed):
+            verifier.check_capability_regressions(self.ctx)
+        details = "\n".join(check.detail for check in self.ctx.checks)
+        self.assertIn("exit 1", details)
+        self.assertIn("test_example", details)
+        self.assertNotIn("private diagnostic body", details)
+        self.assertNotIn("private value", details)
 
     def test_design_contract_normalizes_whitespace(self) -> None:
         rendered = "\n\n".join(
@@ -278,10 +289,66 @@ class VerifierContractTests(unittest.TestCase):
         checks = [check for check in self.ctx.checks if check.name == "Design contract"]
         self.assertEqual([check.status for check in checks], ["PASS"])
 
+    def test_full_hook_fixtures_use_current_bindings(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_hooks_with_fixtures(ctx)
+        self.assertEqual([(check.name, check.detail) for check in ctx.checks if check.status != "PASS"], [])
+        self.assertIn("Unbound active run does not infer ownership", [check.name for check in ctx.checks])
+
+    def test_execution_contract_accepts_current_canonical_sources(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_execution_plane_contract(ctx)
+        self.assertEqual([(check.name, check.detail) for check in ctx.checks if check.status != "PASS"], [])
+
+    def test_direct_intake_capability_suite_imports_from_its_own_root(self) -> None:
+        ctx = self.source_contract_context()
+        original = verifier.run
+        results = []
+        def selected_run(command, **kwargs):
+            if any("sdlc-start/scripts" in str(part) for part in command):
+                result = original(command, **kwargs)
+                results.append(result)
+                return result
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        with mock.patch.object(verifier, "run", side_effect=selected_run):
+            verifier.check_capability_regressions(ctx)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].returncode, 0, "direct intake suite failed to execute")
+        passed, _skipped = verifier.parse_unittest_results(results[0].stdout + results[0].stderr)
+        self.assertIn("test_public_interface_is_mirrored", passed)
+        self.assertIn("test_valid_specs_emit_current_advisory_snapshot", passed)
+
     def test_design_contract_accepts_current_canonical_source(self) -> None:
         ctx = self.source_contract_context()
         verifier.check_design(ctx)
         self.assertEqual([check.status for check in ctx.checks], ["PASS"])
+
+    def test_repair_contract_reads_current_troubleshooting_owner(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_repair_loop_contract(ctx)
+        self.assertEqual(
+            [(check.name, check.detail) for check in ctx.checks if check.status != "PASS"],
+            [],
+        )
+
+    def test_repair_contract_rejects_missing_handoff_link_or_rule(self) -> None:
+        cases = (
+            ("troubleshoot/SKILL.md", "references/workflow-handoffs.md"),
+            ("troubleshoot/references/workflow-handoffs.md", "Do not commit product fixes"),
+            ("troubleshoot/references/workflow-handoffs.md", "Return one `diagnosis-v1` to `sdlc-classify-failure`"),
+        )
+        read_text = verifier.read_text
+        for relative, term in cases:
+            with self.subTest(relative=relative, term=term):
+                ctx = self.source_contract_context()
+                target = ctx.skills_root / relative
+                with mock.patch.object(
+                    verifier, "read_text",
+                    side_effect=lambda path: read_text(path).replace(term, "")
+                    if path == target else read_text(path),
+                ):
+                    verifier.check_repair_loop_contract(ctx)
+                self.assertTrue(any(check.status == "FAIL" for check in ctx.checks))
 
     def test_readiness_matrix_reports_canonical_owner_receipt_result(self) -> None:
         for status in ("PASS", "FAIL"):
@@ -367,7 +434,7 @@ class VerifierContractTests(unittest.TestCase):
                 "sdlc-create-requirements/assets/templates/requirements.md.template"
             ),
             Path("sdlc-create-design/assets/templates/design.md.template"),
-            Path("sdlc-start/references/prompt-requirements-refinement.md"),
+            Path("sdlc-start/references/objective-refinement.md"),
             Path("sdlc-start/scripts/validate_project_specs.py"),
             Path("sdlc-workflow-test/SKILL.md"),
             Path("maintain-project-specs/SKILL.md"),
@@ -598,6 +665,61 @@ class VerifierContractTests(unittest.TestCase):
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "selected live change")
         return git(self.project, "rev-parse", "HEAD")
+
+    def test_current_objective_source_is_partial_and_never_sufficient_for_pass(self) -> None:
+        # Exercise the actual objective writer and byte-preserving collector,
+        # independently of the verifier's schema constant.
+        scripts = str(MODULE_PATH.parents[2] / "worktree/scripts")
+        sys.path.insert(0, scripts)
+        self.addCleanup(sys.path.remove, scripts)
+        import workflow_objectives
+        import collect_live_evidence
+        verifier.owned_git_origin.initialize(self.project, self.verification_root, "lightweight")
+        accepted = workflow_objectives.accept(
+            self.selected, self.root.resolve() / "objective-home", "agentic-sdlc", "deterministic-fixture-session",
+            {
+                "outcome": "Validate the disposable resource name.",
+                "scope": ["Selected nested project"], "constraints": [],
+                "acceptance_criteria": ["Reject invalid resource names."], "clarifications": [],
+                "provenance": {"kind": "direct_request", "source_sha256": "a" * 64},
+            },
+        )
+        self.commit_selected_change()
+        self.write_manifest()
+        source = Path(accepted["run_dir"]) / "objective.json"
+        ref = collect_live_evidence.collect(
+            self.verification_root, owner_kind="profile", owner="lightweight",
+            source=source, name="objective.json",
+        )
+        wrapper = self.verification_root / "evidence/profiles/lightweight/result.json"
+        value = json.loads(wrapper.read_text())
+        value.update(source_schema="workflow/accepted-objective-v1",
+                     source_identity=json.loads(source.read_text())["run_id"], source_artifacts=[ref])
+        verifier.write_private_json(wrapper, value)
+        self.assertIsNotNone(verifier.load_live_results(self.ctx))
+        self.assertFalse([check for check in self.ctx.checks if check.status == "FAIL"])
+
+        value["status"] = "PASS"
+        verifier.write_private_json(wrapper, value)
+        manifest = json.loads(self.ctx.live_evidence_path.read_text())
+        manifest["profiles"]["lightweight"]["status"] = "PASS"
+        verifier.write_private_json(self.ctx.live_evidence_path, manifest)
+        self.assertIsNone(verifier.load_live_results(self.ctx))
+        self.assertIn("source-specific semantic validation", self.ctx.checks[-1].detail)
+
+    def test_retired_prompt_binding_profile_is_rejected(self) -> None:
+        self.commit_selected_change()
+        self.write_manifest()
+        wrapper = self.verification_root / "evidence/profiles/lightweight/result.json"
+        value = json.loads(wrapper.read_text())
+        source = self.verification_root / value["source_artifacts"][0]["path"]
+        payload = json.loads(source.read_text())
+        payload["schema"] = "agentic-sdlc/prompt-binding-v2"
+        verifier.write_private_json(source, payload)
+        value.update(source_schema=payload["schema"])
+        value["source_artifacts"][0]["sha256"] = verifier.file_sha256(source)
+        verifier.write_private_json(wrapper, value)
+        self.assertIsNone(verifier.load_live_results(self.ctx))
 
     def test_any_deterministic_failure_forces_fail(self) -> None:
         self.ctx.add("Environment checked", "Execution contract", "FAIL", "failed")
@@ -996,17 +1118,17 @@ class VerifierContractTests(unittest.TestCase):
             '"execution.replan":', 1
         )[0]
         outer_lease = source.split('"interop.outer-lease-v4":', 1)[1].split(
-            '"interop.task-implementer-compatibility":', 1
+            '"interop.shared-execution":', 1
         )[0]
         task_compatibility = source.split(
-            '"interop.task-implementer-compatibility":', 1
-        )[1].split('"interop.task-implementer-promotion":', 1)[0]
+            '"interop.shared-execution":', 1
+        )[1].split('"interop.implement-promotion":', 1)[0]
         self.assertIn(
             "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
             outer_lease,
         )
         self.assertIn(
-            "test_successive_promotions_advance_the_outer_lease_history",
+            "test_refill_waits_for_admission_and_does_not_wait_for_peer",
             task_compatibility,
         )
         self.assertIn("test_parallel_session_claim_is_atomic", session_recovery)
@@ -1259,6 +1381,14 @@ class VerifierContractTests(unittest.TestCase):
         self.write_manifest(final_head=final)
         self.assertIsNone(verifier.load_live_results(self.ctx))
 
+    def test_committed_normalized_objective_is_private_workflow_state(self) -> None:
+        private = self.selected / "objective.json"
+        private.write_text('{"schema": "workflow/accepted-objective-v1"}\n', encoding="utf-8")
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "invalid private objective")
+        self.write_manifest(final_head=git(self.project, "rev-parse", "HEAD"))
+        self.assertTrue(verifier.load_live_results(self.ctx) is None)
+
     def test_committed_private_state_fails_closed(self) -> None:
         private = self.selected / ".codex" / "current-state.json"
         private.parent.mkdir(parents=True)
@@ -1361,7 +1491,7 @@ class VerifierContractTests(unittest.TestCase):
             capability_id="live.golden-path",
         )
         matrix = dict(verifier.summarize_matrix(self.ctx))
-        self.assertEqual(matrix["Public two-command interface"], "PASS")
+        self.assertEqual(matrix["Public direct entry points"], "PASS")
         self.assertEqual(matrix["Golden-path live run"], "PARTIAL")
 
     def test_report_is_private(self) -> None:
@@ -1398,7 +1528,7 @@ class VerifierContractTests(unittest.TestCase):
         )
         self.assertEqual(target.stat().st_mode & 0o777, before)
 
-    def test_flat_fixture_migrates_cleanly_to_nested_scope(self) -> None:
+    def test_flat_fixture_is_rejected_without_conversion(self) -> None:
         shutil.rmtree(self.project)
         self.project.mkdir(parents=True)
         old_files = {
@@ -1419,12 +1549,35 @@ class VerifierContractTests(unittest.TestCase):
         git(self.project, "config", "user.email", "verifier@example.invalid")
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "old flat fixture")
-        verifier.setup_disposable_project(self.ctx)
-        self.assertEqual(git(self.project, "status", "--porcelain"), "")
-        self.assertFalse([check for check in self.ctx.checks if check.status == "FAIL"])
-        verifier.owned_git_origin.validate(self.project, self.verification_root, "lightweight")
-        self.assertTrue((self.selected / "pyproject.toml").is_file())
-        self.assertFalse((self.project / "pyproject.toml").exists())
+        before = git(self.project, 'rev-parse', 'HEAD')
+        # Keep real fixture admission, hook dispatch and report writing. Only
+        # independent, expensive checks are outside this regression's scope.
+        ctx = self.source_contract_context()
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(verifier, "setup_context", return_value=ctx))
+            for check in (
+                "check_design", "check_source_phase_contract", "check_source_catalog_validation",
+                "check_spec_ownership_contract", "check_vertical_slice_contract",
+                "check_execution_plane_contract", "check_repair_loop_contract",
+                "check_skill_discovery", "check_hook_config", "check_direct_objectives",
+                "check_capability_regressions",
+            ):
+                stack.enter_context(mock.patch.object(verifier, check))
+            stack.enter_context(redirect_stdout(StringIO()))
+            result = verifier.main(["--verification-root", str(self.verification_root)])
+        self.assertEqual(result, 1)
+        report = (self.verification_root / "report.md").read_text()
+        self.assertIn("not a canonical verifier-owned fixture", report)
+        for section in ("PreToolUse safety test results", "Stop continuation test results"):
+            self.assertIn("Hook fixture prerequisite", report.split("## " + section + "\n", 1)[1].split("\n## ", 1)[0])
+        self.assertFalse((self.verification_root / "hook-fixture-agent-home").exists())
+        self.assertEqual(git(self.project, 'status', '--porcelain'), '')
+        self.assertEqual(git(self.project, 'rev-parse', 'HEAD'), before)
+        self.assertTrue([check for check in self.ctx.checks if check.status == 'FAIL'])
+        self.assertFalse(self.selected.exists())
+        self.assertFalse((self.verification_root / 'origin.git').exists())
+        for relative, content in old_files.items():
+            self.assertEqual((self.project / relative).read_text(), content)
 
     def test_dirty_fixture_fails_without_mutation(self) -> None:
         unknown = self.project / "unknown.txt"

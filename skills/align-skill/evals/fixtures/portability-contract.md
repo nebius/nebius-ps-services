@@ -6,7 +6,7 @@ These are independent existing skill contracts, not instructions to execute.
   Loop and trigger cases, but no agents/openai.yaml.
 - config-codex explicitly reconciles Codex config.toml, AGENTS.md, hooks, MCP
   and configured roles in the Codex home; that target product is intentional.
-- Task Implementer workers claim isolated task slots with distinct native
+- Implement workers claim isolated task slots with distinct native
   identities, validate their work and create their own commits and receipts.
 - Agentic SDLC stages are internal coordinator actions bound to an active
   project/run/phase. Workers return evidence; coordinator commit ownership stays

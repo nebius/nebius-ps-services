@@ -2,169 +2,90 @@
 
 ## Failure Contract
 
-Define the failure before changing the system:
+Record expected behavior, actual symptom/signature, exact target/artifact,
+incident window, affected and unaffected examples, prior interventions,
+authority and success oracle. Preserve volatile evidence first. Separate incident
+stabilization from diagnosis. Do not silently redefine success after a mitigation.
 
-- **Expected behavior:** observable contract or invariant.
-- **Actual behavior:** exact deviation.
-- **Scope:** affected and unaffected inputs, users, workloads, environments,
-  versions, hosts, services, and boundaries.
-- **Reproduction or characterization:** smallest safe command, request, test,
-  state sequence, trace comparison, or evidence set.
-- **Signature:** exit code, error type, invariant breach, metric pattern, trace
-  boundary, or other evidence that separates this failure from unrelated ones.
-- **Timeline:** last known good, first known bad, deployments, migrations,
-  configuration changes, dependency changes, and mitigations.
-- **Success criteria:** evidence required to prove resolution.
-- **Constraints:** compatibility, safety, performance, time, and permitted
-  changes.
-- **Operational context:** exact target identity, ownership, environment class,
-  blast radius, reversibility, maintenance window, data sensitivity,
-  observability gaps, and allowed mutations.
-- **Assertion boundary:** included and excluded components and dependencies,
-  exercised control and data paths, and the incident-window start and end.
+## Adaptive Scope And Coverage
 
-Do not let an unstable symptom become the oracle for bisection, minimization,
-fuzzing, or repeated trials.
+Start with the implicated component, its effective configuration and immediate
+dependencies. Follow the failing operation through only the boundaries that can
+explain it. Expand for cross-boundary evidence, contradictory observations,
+unknown dependencies or unexplained intermittency. Avoid full-stack inventory
+before obtaining useful local evidence. Check versions and official documentation
+when commands or interpretations depend on them.
 
-## Stack And Architecture Inventory
+Record this compact working ledger, adding rows only as useful:
 
-Complete discovery before choosing technology-specific diagnostics. Record:
-
-| Field | Required evidence |
-| --- | --- |
-| Technologies and versions | Runtime-reported version, image or package identity, and matching official documentation version |
-| Deployment model | Bare metal, VM, container, orchestrator, managed service, or hybrid |
-| Configuration authorities | Active files, flags, environment inputs, generated resources, policies, and last-known changes |
-| Components and dependencies | Expected instance, owner, dependency direction, and failure propagation path |
-| Interfaces | Ports, protocols, DNS names or service identities, authentication, authorization, and encryption |
-| Flows | Control, data, job, event, storage, and observability paths |
-| Vendor comparison | Expected architecture, observed topology, drift, unsupported assumptions, and evidence gaps |
-
-Use current official vendor architecture and configuration documentation. Do
-not mark Design `PASS` merely because expected components exist: demonstrate
-that the observed versions, roles, dependencies, and flows match the supported
-model, or record `FAIL` or `UNKNOWN`.
-
-## Component Verification Matrix
-
-Create one row for every discovered component, including external dependencies
-that can cause the symptom:
-
-| Component | Exists and expected version | Active configuration | Process or workload health | Dependency reachability, authentication, and DNS | Resource pressure and time sync | Restart history and recent changes | Evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-
-Record negative evidence and partial access. A healthy status endpoint proves
-only that endpoint; corroborate the component's real control or data path and
-its incident-window logs.
-
-## Incident Timeline
-
-Establish the incident window before collecting logs. Normalize timestamps to
-one timezone and record clock source, offset, and uncertainty for each host or
-node. Do not correlate cross-host timestamps until synchronization is verified
-or the measured skew is included.
-
-Correlate with the strongest available identifiers: request, trace, job, pod,
-process, host, node, device, volume, connection, and restart identifiers.
-
-| Time | Source and clock basis | Identifier | Event | Evidence or inference |
+| Boundary/source | Target and window | Observation/evidence | Status and reason | Next decision |
 | --- | --- | --- | --- | --- |
+| Implicated component | Exact artifact/process | Bounded evidence reference | examined | Discriminating branch |
+| Material dependency | Exact scope or unknown | Missing/retained evidence | unexamined, unavailable or unsafe; reason | Impact on conclusion |
 
-Separate stale historical errors from events in the incident window.
+`unexamined` is `UNKNOWN`, not healthy or not applicable. `not applicable` needs a
+positive explanation why that boundary cannot affect the declared conclusion.
+A failed query is not a negative observation. Log layers are candidate sources
+(component, application/job, orchestrator, service manager, OS/kernel, network,
+storage, GPU/hardware), not eight mandatory records. Evidence must be complete
+for the conclusion, not for the entire environment. No status token substitutes
+for substantive evidence.
 
-## Layered Log-Coverage Ledger
+## Incident Timeline And Evidence Validity
 
-Investigate each relevant layer with bounded time and identifier filters:
+For each retained observation record source, exact target and artifact/config
+identity, collection time, incident window, correlation IDs, clock basis and
+uncertainty, query/command, effects, bounds and result. Keep observed facts,
+inferences, hypotheses, negative/contradictory evidence and unknowns distinct.
+Before cross-host correlation measure or account for clock skew; uncertain event
+ordering must remain uncertain. Check boot ID, retention and collection delay.
+Record `timeout`, `unavailable`, `truncated`, `stale`, `changed-during-read`, and
+`skipped` separately from a completed negative result.
 
-| Layer | Source or configured location | Window and filters | Finding | Coverage status |
-| --- | --- | --- | --- | --- |
-| Component | Native service or subsystem log | | | examined / unavailable / unsafe / not applicable |
-| Application or job | Application and job stdout or stderr | | | |
-| Container or orchestrator | Current and previous workload logs, events, runtime | | | |
-| Service manager | systemd journal or equivalent supervisor | | | |
-| OS and kernel | Kernel, OOM, cgroup, RAS, driver, boot | | | |
-| Network and firewall | DNS, routing, policy, firewall, CNI, fabric | | | |
-| Storage | Filesystem, block, network storage, CSI, device | | | |
-| GPU or hardware | Driver, Xid, ECC, RAS, PCIe, fabric | | | |
+Reuse observations only while their target, configuration, window and relevant
+state remain valid. Deployment, restart, configuration or topology change
+invalidates affected evidence. Preserve old observations as historical evidence;
+do not reuse them to establish current health. After interruption reconcile
+possibly completed actions against authoritative state before repetition.
 
-Every relevant row must name the source examined or why it was unavailable,
-unsafe, or not applicable. Absence of a configured file may require a syslog or
-journal fallback. Do not equate no matching lines with complete coverage unless
-the source, retention, window, clock, and filters are all proven.
+## Hypotheses And Experiments
 
-The canonical ledger contains exactly these eight rows in the documented
-order. Use only `examined`, `unavailable`, `unsafe`, or `not applicable` as the
-coverage status. Keep a row when its layer does not apply so the coverage gap
-is explicit. Primary local evidence such as configured component or application
-logs, container logs, journals, and kernel logs is baseline evidence gathering;
-it is not subject to Grafana provider-admission gates. Remote observability
-queries remain hypothesis-gated separately.
+Keep the strongest plausible alternatives supported by evidence; no minimum
+count. For each record support, contradiction, prediction, falsifier, confidence
+and next decision. Identify initiating faults, contributing conditions,
+downstream symptoms and independent blockers; multiple causes may coexist.
 
-## Evidence Ledger
-
-Keep these categories distinct:
-
-- **Observed fact:** directly measured, reproduced, or captured.
-- **Derived inference:** follows from observed facts and the current model.
-- **Hypothesis:** plausible causal explanation not yet proven.
-- **Unknown:** missing evidence that could change the diagnosis.
-- **Negative evidence:** observation that weakens or eliminates a hypothesis.
-
-For each hypothesis record:
+Before each consequential experiment record:
 
 ```text
-Hypothesis:
-Supporting evidence:
-Contradicting evidence:
-Prediction:
-Falsifying observation:
-Next experiment:
-Status:
-```
-
-Maintain three to seven plausible hypotheses when possible. Rank them by
-evidence and information value, not narrative appeal or recency.
-
-## Experiment Ledger
-
-Every consequential command or instrumentation change must answer a question:
-
-```text
-Question:
-Hypotheses addressed:
-Single changed variable:
-Prediction:
-Falsifying result:
-Expected supporting evidence:
-Timeout or output bound:
-Risk and rollback:
+Question and hypotheses addressed:
+Predicted distinguishing outcomes:
+Target, identity, window and relevant state:
+Timeout and output bounds:
+Effects, risk and rollback:
 Next branch for each material result:
-Observed result:
-Ledger update:
+Observed result and evidence validity:
+Model update and remaining alternatives:
 ```
 
-Prefer experiments with mutually exclusive outcomes. For example, capture a
-value immediately before and after a boundary to distinguish upstream
-production from boundary corruption.
+Rank by discriminatory value, safety, execution cost and availability. Use
+qualitative reasoning, not invented probabilities. Prefer observations with
+mutually exclusive results and comparisons immediately before/after a boundary.
+Change one relevant variable at a time unless a designed experiment requires more.
 
-Do not rerun an unchanged command unless repetition is the measurement. After
-three experiments that do not materially update the ledger, reconstruct the
-system model and choose another localization dimension.
+A low-information experiment is a completed observation that neither distinguishes
+hypotheses nor narrows the causal boundary. After three consecutive such results,
+rebuild the model or change localization dimension before another experiment.
+Failed/unavailable probes are data gaps, not completed low-information trials;
+repeated unavailable probes still require a new decision-changing reason.
+This rule never resets or extends an attempt/time budget.
 
-Never use indefinite `tail -f`, arbitrary sleeps, passive terminal waiting, or
-large unfiltered log dumps. A bounded follow operation is allowed only when it
-tests a stated event hypothesis, has a deadline, and records the correlation
-identifier and next branch.
-
-Diagnostic experiments are not remediation attempts. Once a remediation is
-applied and the original reproducer still shows the same blocker, record the
-failed attempt under [remediation-budget.md](remediation-budget.md) before
-another repair. Do not admit the retry until a new log observation, stack
-trace, code inspection, runtime-state observation, or equivalent evidence
-updates the model and supports a genuinely new falsifiable hypothesis.
-Rephrasing the previous hypothesis or reusing its evidence is not a retry plan.
-If the evidence or hypothesis gate cannot be satisfied, stop and return the
-structured investigation report with the missing evidence and next action.
+Do not rerun unchanged commands unless repetition itself measures frequency,
+latency or variance. Never use indefinite tails, passive waits or unfiltered
+large dumps. A bounded follow requires an event hypothesis, correlation ID,
+deadline and next branch. Retries of remediation require newly acquired evidence
+and a genuinely new falsifiable hypothesis; otherwise pursue another safe
+observation, or report the decisive missing evidence when none remains.
 
 ## Minimal System Model
 
@@ -221,7 +142,7 @@ next experiment. Do not convert incomplete access into false certainty.
 - **Change gate:** change one causally relevant variable at a time.
 - **Repetition gate:** repeat only to measure frequency, timing, or variance.
 - **Patch gate:** do not chain speculative functional fixes.
-- **Model-reset gate:** rebuild after three low-information experiments.
+- **Model-reset gate:** rebuild after three consecutive completed observations that neither distinguish hypotheses nor narrow the causal boundary; never reset the remediation budget.
 - **Scope gate:** broaden searches or rebuilds only after localization evidence.
 - **Evidence gate:** retain negative and contradictory evidence.
 - **Retry-admission gate:** require new evidence and a genuinely new

@@ -11,10 +11,6 @@ on:
         required: false
         default: "main"
         type: string
-      release_version:
-        description: "Optional release SemVer (X.Y.Z) for manual publishes"
-        required: false
-        type: string
       publish_latest:
         description: "Also publish :latest on manual runs from main"
         required: false
@@ -23,10 +19,12 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: nccl-test-image-publish-${{ github.ref }}
+  group: image-${{ github.repository }}-${{ vars.NB_REGISTRY_ID }}-images-nccl-test
   cancel-in-progress: false
+  queue: max
 
 env:
   APP_DIR: services/nccl-test
@@ -39,6 +37,7 @@ env:
 
 jobs:
   publish:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     name: nccl-test-image-publish
     runs-on: ubuntu-latest
     environment:
@@ -47,6 +46,14 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Checkout trusted publication owner
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .publication-owner
+          persist-credentials: false
+      - name: Freeze helper from workflow revision
+        run: cp .publication-owner/skills/github-workflows/scripts/publication.py "$RUNNER_TEMP/publication.py"
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -59,7 +66,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUBLISH_LATEST: ${{ inputs.publish_latest }}
           REF_NAME: ${{ github.ref_name }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
@@ -70,7 +76,7 @@ jobs:
           commit="$(git rev-parse HEAD)"
 
           if [[ "${EVENT_NAME}" == "push" ]]; then
-            if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]; then
               echo "::error::Tag '${REF_NAME}' must match ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
               exit 1
             fi
@@ -78,15 +84,10 @@ jobs:
             release_tag="${REF_NAME}"
             commit="$(git rev-list -n 1 "${REF_NAME}")"
           else
-            if [[ -n "${RELEASE_VERSION}" && ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::release_version must match X.Y.Z"
-              exit 1
-            fi
             if [[ "${PUBLISH_LATEST}" == "true" && "${SOURCE_REF}" != "${MAIN_BRANCH}" ]]; then
               echo "::error::publish_latest=true is only allowed with source_ref=${MAIN_BRANCH}"
               exit 1
             fi
-            publish_version="${RELEASE_VERSION}"
             publish_latest="${PUBLISH_LATEST}"
           fi
 
@@ -101,7 +102,7 @@ jobs:
       - name: Ensure publish commit belongs to main history
         run: |
           set -euo pipefail
-          git fetch origin "${MAIN_BRANCH}" --depth=1
+          git fetch origin "${MAIN_BRANCH}"
           if ! git merge-base --is-ancestor "${{ steps.release.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
             echo "::error::Publish commit ${{ steps.release.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
             exit 1
@@ -195,16 +196,6 @@ jobs:
               --username iam \
               --password-stdin
 
-      - name: Fail if immutable SemVer tag already exists
-        if: steps.release.outputs.publish_version != ''
-        run: |
-          set -euo pipefail
-          version_ref="${{ steps.registry.outputs.image_name }}:${{ steps.release.outputs.publish_version }}"
-          if docker manifest inspect "${version_ref}" >/dev/null 2>&1; then
-            echo "::error::Registry already contains ${version_ref}; refusing to overwrite an immutable release tag"
-            exit 1
-          fi
-
       - name: Resolve image metadata
         id: image
         env:
@@ -215,10 +206,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          tags="${FULL_IMAGE_NAME}:sha-${SHORT_SHA}"
           if [[ -n "${PUBLISH_VERSION}" ]]; then
-            tags="${tags}"$'\n'"${FULL_IMAGE_NAME}:${PUBLISH_VERSION}"
-            tags="${tags}"$'\n'"${FULL_IMAGE_NAME}:${PUBLISH_VERSION}-g${SHORT_SHA}"
+            tags="${FULL_IMAGE_NAME}:${PUBLISH_VERSION}"$'\n'"${FULL_IMAGE_NAME}:${PUBLISH_VERSION}-g${SHORT_SHA}"
+          else
+            tags="${FULL_IMAGE_NAME}:sha-${SHORT_SHA}"
           fi
           if [[ "${PUBLISH_LATEST}" == "true" ]]; then
             tags="${tags}"$'\n'"${FULL_IMAGE_NAME}:latest"
@@ -244,7 +235,20 @@ jobs:
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Check all immutable image aliases
+        id: existing
+        env:
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+          GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ steps.image.outputs.tags }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: >-
+          python3 "${RUNNER_TEMP}/publication.py" image-state --workflow nccl-test-image-publish.yml
+          --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG"
+
       - name: Build and push image
+        if: steps.existing.outputs.publish_needed == 'true'
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -263,19 +267,42 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify pushed tags
+      - name: Update explicitly requested latest from verified digest
+        if: steps.existing.outputs.latest_needed == 'true'
+        env:
+          LATEST_REF: ${{ steps.existing.outputs.latest_ref }}
+          VERIFIED_SOURCE: ${{ steps.existing.outputs.verified_source }}
+        run: docker buildx imagetools create --prefer-index=false --tag "$LATEST_REF" "$VERIFIED_SOURCE"
+
+      - name: Verify every remote tag digest
         env:
           TAGS: ${{ steps.image.outputs.tags }}
-        run: |
-          set -euo pipefail
-          while IFS= read -r tag; do
-            [[ -z "${tag}" ]] && continue
-            docker buildx imagetools inspect "${tag}" >/dev/null
-          done <<< "${TAGS}"
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+        run: python3 "${RUNNER_TEMP}/publication.py" image-verify
+
+      - name: Record verified image identity
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        env:
+          TAGS: ${{ steps.image.outputs.tags }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.commit }}
+        run: >-
+          python3 "${RUNNER_TEMP}/publication.py" image-manifest --workflow nccl-test-image-publish.yml
+          --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG" --output publication.json
+
+      - name: Preserve immutable image evidence
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: publication-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication.json
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Write publish manifest
         env:
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
           TAGS: ${{ steps.image.outputs.tags }}
         run: |
           set -euo pipefail
@@ -314,6 +341,7 @@ jobs:
             }' > publish-manifest.json
 
       - name: Upload publish manifest artifact
+        if: steps.existing.outputs.publish_needed == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: nccl-test-image-publish-manifest-${{ github.run_id }}
@@ -321,7 +349,7 @@ jobs:
 
       - name: Publish run summary
         env:
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
           PUBLISH_VERSION: ${{ steps.release.outputs.publish_version }}
           TAGS: ${{ steps.image.outputs.tags }}
         run: |

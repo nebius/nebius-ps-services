@@ -212,7 +212,7 @@ LAB_SECTIONS = (
 
 SHARED_GUIDE_SECTIONS = (
     "How to set up the lab",
-    "Lab Preparation Scripts",
+    "Lab Preparation",
     "How to run the labs",
     "Browsing Grafana and Nsight Profilers",
 )

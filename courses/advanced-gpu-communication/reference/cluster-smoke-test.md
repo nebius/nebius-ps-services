@@ -1,6 +1,6 @@
 # Advanced cluster readiness
 
-Complete [shared environment setup](../../lab-guide.html#lab-preparation-scripts) on the dedicated two-worker eight-H100 cluster. Qualification is a gate, not an optimization. Inspect each job's exit state and completed artifact; submitting a job does not pass this gate.
+Complete [Lab Preparation](../../lab-guide.html#lab-preparation) on the dedicated two-worker eight-H100 cluster and check the completion summary for failures or hardware skips affecting the selected labs. Qualification is a gate, not an optimization. Inspect each job's exit state and completed artifact; submitting a job does not pass this gate.
 
 For the Fundamentals Lesson 12 assignment, read through that lesson, run Lab 02
 and verify its placement and correctness before running Lab 08. This assignment

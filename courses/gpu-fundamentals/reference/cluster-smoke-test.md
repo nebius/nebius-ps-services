@@ -4,7 +4,7 @@
 
 Run from the `gpu-fundamentals` course root with the prepared runtime described in [VERSIONS.md](../VERSIONS.md); launchers restore it automatically. Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
 
-Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
+Complete shared software preparation in the [Lab Guide](../../lab-guide.html#lab-preparation). Review its completion summary and follow the Lab Guide’s guidance for any failures or hardware skips before submitting. Keep runtime evidence in those private result directories.
 
 This runbook is a complete platform-qualification checklist, not the teaching
 order. Follow the [course](../index.html) for the learning route. Run Lab 10 before

@@ -11,7 +11,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -32,45 +31,14 @@ def test_fabric_preparation_belongs_to_automatic_setup():
     assert "sbatch slurm/01_fabric_topology.sbatch" in guide
 
 
-def test_monitoring_verification_restores_course_from_a_new_terminal(tmp_path):
+def test_sync_owns_monitoring_handoff_before_preparation():
     guide = (ROOT / "README.md").read_text()
-    block = next(
-        block
-        for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
-        if "tools/verify_monitoring.py" in block
-    )
-    checkout = tmp_path / "checkout with spaces/courses"
-    course = checkout / "gpu-fundamentals"
-    (course / "tools").mkdir(parents=True)
-    (course / "tools/verify_monitoring.py").write_text("# fixture\n")
-    setup = tmp_path / "monitoring setup"
-    setup.mkdir()
-    (setup / "laptop-environment.sh").write_text(
-        f'export COURSE_SETUP_DIR="{setup}"\n'
-        'export KUBECONFIG="/fixture/kubeconfig"\n'
-        'export CLUSTER_CONTEXT="fixture-context"\n'
-    )
-    interpreter = tmp_path / ".gpu-course-tools/bin/python"
-    interpreter.parent.mkdir(parents=True)
-    interpreter.write_text(
-        f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-        "assert Path(sys.argv[1]).is_file(), 'verification must use the selected course'\n"
-        'assert sys.argv[-1] == "fixture-context"\n'
-        "print(Path.cwd())\n"
-    )
-    interpreter.chmod(0o700)
-    block = block.replace("<absolute setup directory>", str(setup))
-    block = block.replace("<absolute checkout path>/courses", str(checkout))
-    completed = subprocess.run(
-        ["bash", "-eu", "-c", f'source "{setup}/laptop-environment.sh"\n' + block],
-        cwd=tmp_path,
-        env={"HOME": str(tmp_path), "PATH": os.defpath},
-        text=True,
-        capture_output=True,
-        timeout=10,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == str(course)
+    assert "lab-setup.py monitoring" not in guide
+    assert "laptop-environment.sh" not in guide
+    assert "second terminal after synchronization" not in guide
+    assert "--configure" in guide and "--local-only" in guide
+    assert guide.index("./sync-labs.sh\n") < guide.index('python3.12 "$HOME/courses/tools/lab-setup.py"')
+    assert "discovers the complete catalog from its own location" in guide
 
 
 @pytest.mark.parametrize(
@@ -167,7 +135,7 @@ def test_shared_guide_matches_source_and_required_runtime_routes():
     assert (ROOT / "lab-guide.html").read_text() == cb_pages.render_shared_guide()
     owners = {
         "README.md": (
-            "regular-lab-setup.py",
+            "lab-setup.py",
             "--workload cuda",
             "--workload torch",
         ),
@@ -235,7 +203,7 @@ def test_shared_guide_and_lab_referrals_render_as_links():
     assert 'href="#browsing-grafana-and-nsight-profilers"' in document
     for course in PRACTICAL:
         page = (ROOT / course / "index.html").read_text()
-        assert 'href="../lab-guide.html#lab-preparation-scripts">Lab Guide</a>' in page
+        assert 'href="../lab-guide.html#lab-preparation">Lab Guide</a>' in page
 
 
 def test_shared_guide_toc_matches_topic_and_subsection_order():
@@ -268,8 +236,8 @@ def test_shared_guide_toc_matches_topic_and_subsection_order():
 
 def test_shared_guide_toc_ignores_fenced_headings(monkeypatch):
     source = cb_metadata.shared_guide_source().replace(
-        "### Regular labs\n",
-        "### Regular labs\n\n```bash\n### Example comment\n```\n",
+        "### What gets prepared\n",
+        "### What gets prepared\n\n```bash\n### Example comment\n```\n",
         1,
     )
     monkeypatch.setattr(cb_pages, "shared_guide_source", lambda: source)
@@ -277,7 +245,7 @@ def test_shared_guide_toc_ignores_fenced_headings(monkeypatch):
     assert "### Example comment" in document
     assert 'href="#example-comment"' not in document
     assert 'id="example-comment"' not in document
-    assert 'href="#regular-labs"' in document
+    assert 'href="#what-gets-prepared"' in document
 
 
 def test_readme_browser_pointer_and_attribution_have_distinct_html_homes(monkeypatch):
@@ -328,9 +296,9 @@ def test_inline_still_rejects_unrecognized_local_destinations(target):
 
 def test_documented_setup_uses_one_automatic_runtime_contract():
     source = (ROOT / "README.md").read_text()
-    assert 'python3.12 "$HOME/courses/tools/regular-lab-setup.py"' in source
+    assert 'python3.12 "$HOME/courses/tools/lab-setup.py"' in source
     assert "declare -p COURSE_PYTHON" not in source
-    assert "regular-lab-setup.py\" prepare" not in source
+    assert "lab-setup.py\" prepare" not in source
     assert not (ROOT / "advanced-gpu-communication/env/vendor-environment.sh").exists()
     assert not (ROOT / "advanced-gpu-communication/env/install-vendor-candidates.sh").exists()
     definitions = json.loads((ROOT / "tools/course_bootstrap/catalog.json").read_text())

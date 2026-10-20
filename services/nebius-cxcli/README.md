@@ -344,7 +344,7 @@ See [destruction](docs/mk8s.md#destruction) before either form.
 | `soperator onboard` | Config path or deployments path | Register an existing official Soperator installation |
 | `soperator status` | `CONFIG_YAML` | Show operation state and live health; `--no-live` uses recorded state |
 | `soperator upgrade` | `CONFIG_YAML` | Plan or execute an integrated Soperator/Kubernetes/OS/GPU upgrade |
-| `soperator profiling install` | `CONFIG_YAML` | Install the profiling stack and worker tooling |
+| `soperator profiling install` | `CONFIG_YAML` | Install profiling tools/viewers and reconcile automatic course report delivery |
 | `soperator profiling show` | `CONFIG_YAML` | Print access commands for deployed Nsight viewers |
 | `soperator profiling recover` | `CONFIG_YAML` and failed-job selectors | Preview or perform supported profiling-job recovery |
 
@@ -406,6 +406,8 @@ Observability verification is explicit (`soperator status --verify-observability
 and separate from lifecycle completion. See the [Soperator guide](docs/soperator.md)
 for discovery, profiles, job controls, recovery and diagrams, and the
 [Nsight guide](docs/nsight-profiling.md) for profiling installation and recovery.
+Profiling installation preserves existing application ownership, including
+namespaces shared with Soperator, and refuses unrelated application changes.
 
 ### Helm-chart (apps) upgrade
 
@@ -440,6 +442,10 @@ Collectors and datasources follow that routing and the target type.
 `--attach` additionally registers reusable catalog entries. Use the
 [dashboard guide](docs/grafana-dashboards.md) for import/export examples,
 datasource mapping, overwrite rules, and ownership.
+
+Deployment uses the dashboard assets frozen by `render`, validating their UID
+and content hash without reopening the authored files. Missing or changed frozen
+assets stop deployment; render again from valid project inputs before retrying.
 
 Repeated imports avoid redundant conversion of already-canonical dashboards;
 cached Kubernetes authentication avoids loading the full CLI for each request.

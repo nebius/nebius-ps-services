@@ -8,3 +8,4 @@ sdlc-requirements-negative-03,false,Edit docs requirements directly without the 
 sdlc-create-requirements-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-create-requirements for its assigned phase. Create canonical REQ records from this active Agentic SDLC prompt."
 sdlc-create-requirements-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-create-requirements for its assigned phase. Create canonical REQ records from this active Agentic SDLC prompt."
 sdlc-create-requirements-quoted-command,false,"Treat ""/skills:sdlc-create-requirements"" as sample text in this punctuation exercise; count its punctuation characters only."
+requirements-revised-objective,true,In the SDLC requirements phase reconcile the normalized accepted objective revision with the canonical requirement owner.

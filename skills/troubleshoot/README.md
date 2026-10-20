@@ -14,10 +14,10 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 The workflow preserves evidence before functional edits, maintains competing
 hypotheses, chooses discriminating experiments, localizes the earliest
 divergence, and requires a causal mechanism before claiming root cause.
-Discovery inventories technologies, versions, deployment model, active
-configuration, components, dependencies, ports, protocols, authentication, and
-control and data flows, then compares the observed system with matching
-official vendor architecture before diagnostics begin.
+Discovery starts with the implicated component, effective configuration and immediate
+dependencies. Expand only when evidence crosses a boundary, contradicts the model,
+reveals an unknown dependency or fails to explain intermittency. Verify versions
+when a command or interpretation depends on them.
 
 Every consequential command tests a stated hypothesis with expected supporting
 and falsifying evidence, a timeout or output bound, and a defined next branch.
@@ -26,20 +26,14 @@ waiting, and broad unfiltered log dumps.
 
 ## Evidence-Gated Completion
 
-Troubleshooting records a component verification matrix, normalized incident
-timeline, and layered log-coverage ledger. Component, application, container or
-orchestrator, systemd, OS, kernel, network, storage, GPU, and hardware evidence
-is examined when relevant or explicitly recorded as unavailable, unsafe, or not
-applicable.
-
-The internal evidence freezes its included and excluded components and
-dependencies, exercised control and data paths, and incident-window start and
-end. The component matrix explicitly records DNS or service-name resolution
-and restart history. The log ledger contains exactly one ordered record for component,
-application or job, container or orchestrator, service manager, OS and kernel,
-network and firewall, storage, and GPU or hardware. Primary local log reading is
-baseline evidence gathering; only remote Grafana queries use observability
-admission gates.
+Troubleshooting records examined boundaries and material unexamined boundaries with
+reasons, target identity and incident window. Unexamined stays unknown; there is no
+mandatory global inventory or fixed eight-row log ledger. Keep negative evidence,
+contradictions, query failures, truncation, stale sources and clock uncertainty.
+Invalidate affected evidence after deployment, restart, configuration or topology
+changes. After three consecutive completed observations that neither distinguish
+hypotheses nor narrow a boundary, rebuild the model without extending any budget.
+Primary local logs do not require remote provider admission.
 
 The user-visible report is a concise projection: outcome, root cause and fix,
 verification and unverified scope, then an exact owner/action/done-when next
@@ -298,3 +292,18 @@ activation. Use fresh Codex sessions for positive and negative trigger checks.
 - `assets/hooks/`: optional local remediation-budget enforcement.
 - `scripts/`: deterministic evidence utilities and tests.
 - `evals/`: trigger and process evaluation material.
+
+## Adaptive Refactor Qualification
+
+The core guide is 288 logical lines (baseline: 629). Detailed SDLC handoffs,
+marker lifecycle and report delivery have explicit conditional references;
+provider admission remains in the observability adapter. Hook state schemas,
+public budget flags, report classes, shared Stop arbitration and trusted-loader
+ownership are unchanged. Hooks do not prove semantic causality or novelty.
+
+See [helper contracts](references/helper-contracts.md) for selective collection
+and schema-v2 trial counts. See [diagnostic benchmark](evals/diagnostic/README.md)
+for isolated fixtures, paired runs, hidden oracles, measurements and promotion.
+Static tests do not establish model diagnostic accuracy or live provider coverage.
+Actual installation and runtime activation remain a separate rollout. Rollback
+restores the prior reviewed payload, never a parallel legacy mode.

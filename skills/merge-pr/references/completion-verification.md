@@ -216,8 +216,8 @@ outstanding check names, links, and start/deadline when reporting a timeout.
 
 ## Branch Cleanup and Reporting
 
-Keep deletion out of the initial merge/enqueue command. If explicitly requested,
-clean up only the PR's exact head branch after merged state and destination
+Keep deletion out of the initial merge/enqueue command. If explicitly requested, after the transaction owner completes checkout and closes
+the grant, clean up only the PR's exact head branch after merged state and destination
 containment are verified. Re-read its repository/ref and require it still matches
 the guarded head before deleting; never delete the target/default/protected
 branch or another actor's newer work. Already absent means already deleted.
@@ -236,7 +236,12 @@ are established, otherwise retain the local branch. Do not switch branches or
 repeat a merge command for cleanup. Report remote/local cleanup separately.
 Queue membership alone never authorizes cleanup.
 
-Always report merge outcome, destination proof, CI, and deletion separately.
+Return the authoritative merged result to create-pr for immediate owner recording.
+At outer return, delegate local checkout completion under the inherited policy,
+even after CI/Pages failure or timeout; pending observation retains its grant.
+Never repeat repair, push or merge after confirmed merge.
+Always report merge outcome, destination proof, CI/Pages, final checkout, each
+local branch update/skip, grant closure and deletion separately.
 `merged; destination verified; CI failed` is truthful. `merged; destination
 unverified` is not permission to rerun the merge. `queued` is not a completed
 merge for publishing callers. Verification does not authorize fixes, rollback,

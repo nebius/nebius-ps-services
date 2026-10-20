@@ -24,13 +24,15 @@ show_usage() {
   printf '  sync-labs.sh [options] [[user@]TARGET]\n\n'
   printf 'Sync courses, then open SSH in the synced folder. Run from a local terminal.\n'
   printf 'Without TARGET, discover the login LoadBalancer in namespace soperator\n'
-  printf 'using the current kubectl context. An explicit TARGET bypasses kubectl.\n'
+  printf 'using the saved explicit Kubernetes connection. TARGET overrides login discovery.\n'
   printf 'TARGET is a DNS name, IPv4/IPv6 address,\n'
   printf 'or SSH alias. Bare targets use root; user@TARGET selects another account.\n'
   printf 'SSH supplies name resolution and key defaults.\n\n'
   printf '%sOptions%s\n' "$S_BOLD" "$S_RESET"
+  printf '  --configure       Revisit saved setup inputs for normal synchronization\n'
+  printf '  --local-only      Prepare an unconfigured destination without publication\n'
   printf '  --dry-run         Preview without changing the destination or opening a shell\n'
-  printf '  --sync-only       Sync with existing SSH authentication; do not open a shell\n'
+  printf '  --sync-only       Sync sources only; no dependencies, settings changes or shell\n'
   printf '  --dest NAME       Direct subfolder of remote home (default: courses)\n'
   printf '  --port PORT       SSH port, from 1 through 65535\n'
   printf '  --identity FILE   SSH private-key file\n'
@@ -48,7 +50,8 @@ show_usage() {
   printf 'Discovery requires one Service, one external endpoint and one TCP port.\n'
   printf 'Ambiguous results require an explicit target; --port overrides the Service port.\n'
   printf 'Interactive login requires terminal stdin; --dry-run and --sync-only do not.\n'
-  printf 'Sync before submitting jobs. Run existing sbatch commands from a course root.\n'
+  printf 'After login, run the printed lab-setup.py command and read its summary.\n'
+  printf 'Then run existing sbatch commands from a course root.\n'
 }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
@@ -115,11 +118,13 @@ parse_target() {
 }
 
 discover_target() {
-  local context projection line name service_type ports ingress
+  local projection line name service_type ports ingress
   local count=0 selected_ports='' selected_ingress='' candidates=''
   local entry address seen='|' address_count=0 discovered_port
   require_cmd kubectl
-  if ! context=$(kubectl config current-context); then
+  local -a kube_args=()
+  if [[ -n $kubeconfig ]]; then kube_args+=(--kubeconfig "$kubeconfig"); fi
+  if [[ -z $context ]] && ! context=$(kubectl ${kube_args[@]+"${kube_args[@]}"} config current-context); then
     die 'Cannot read the current kubectl context. Configure access or supply an explicit target.'
   fi
   [[ -n $context ]] || die 'No current kubectl context. Configure access or supply an explicit target.'
@@ -127,7 +132,7 @@ discover_target() {
   # Kubernetes validates these scalar fields. Non-whitespace delimiters retain
   # empty ingress fields; Bash validates the projected records before using them.
   projection='{range .items[*]}{.metadata.name}{"|"}{.spec.type}{"|"}{range .spec.ports[*]}{.protocol}{":"}{.port}{","}{end}{"|"}{range .status.loadBalancer.ingress[*]}{.ip}{"/"}{.hostname}{","}{end}{"\n"}{end}'
-  if ! run_remote kubectl --context "$context" get svc -n soperator \
+  if ! run_remote kubectl ${kube_args[@]+"${kube_args[@]}"} --context "$context" get svc -n soperator \
     -l app.kubernetes.io/component=login --request-timeout=15s \
     -o "jsonpath=$projection" > "$work_dir/services"; then
     die 'Cannot query login Services. Check kubectl access or supply an explicit target.'
@@ -187,13 +192,13 @@ build_manifest() {
     pathspecs+=(":(literal)$name/")
   done
   [[ ${#courses[@]} -gt 0 ]] || die 'No courses found beside this script (expected reference/course.json and COURSE.md).'
-  for relative in index.html README.md lab-guide.html docs/grafana.png tools/regular-lab-setup.py tools/cuda-lab-setup.py tools/communication-lab-setup.py tools/serving-lab-setup.py tools/transformer-engine-lab-setup.py tools/verify_source_sync.py tools/course_publication_state.py tools/publish_results.py tools/course_execution.py tools/ensure_python312.sh tools/course_bootstrap/catalog.json; do
+  for relative in index.html README.md lab-guide.html docs/grafana.png tools/lab-setup.py tools/verify_source_sync.py tools/course_sync.py tools/workstation-requirements.txt tools/course_publication_state.py tools/publish_results.py tools/course_execution.py tools/ensure_python312.sh tools/course_bootstrap/catalog.json tools/fabric_guard.py tools/install_fabric_tools.py tools/inspect_results.py tools/managed_profilers.py tools/course_runtime.py tools/course_job.py tools/course_viewer.py tools/course_publication.py tools/course_publication_evidence.py tools/verify_monitoring.py tools/readiness.py; do
     [[ -f $source_root/$relative && ! -L $source_root/$relative ]] || die "Missing regular shared file: $relative"
   done
   git -C "$source_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'The script must be located in the courses directory of a Git clone.'
   # Check Git before consuming the list; process substitution would hide failures.
   git -C "$source_root" ls-files --cached --others --exclude-standard -z -- \
-    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/regular-lab-setup.py' ':(literal)tools/cuda-lab-setup.py' ':(literal)tools/communication-lab-setup.py' ':(literal)tools/serving-lab-setup.py' ':(literal)tools/transformer-engine-lab-setup.py' ':(literal)tools/verify_source_sync.py' ':(literal)tools/course_publication_state.py' ':(literal)tools/publish_results.py' ':(literal)tools/course_job_cache.sh' ':(literal)tools/course_runtime.py' ':(literal)tools/course_execution.py' ':(literal)tools/course_env.sh' ':(literal)tools/ensure_python312.sh' ':(literal)tools/course_bootstrap/' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
+    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/lab-setup.py' ':(literal)tools/verify_source_sync.py' ':(literal)tools/course_sync.py' ':(literal)tools/workstation-requirements.txt' ':(literal)tools/course_publication_state.py' ':(literal)tools/publish_results.py' ':(literal)tools/course_job_cache.sh' ':(literal)tools/course_runtime.py' ':(literal)tools/course_execution.py' ':(literal)tools/course_env.sh' ':(literal)tools/ensure_python312.sh' ':(literal)tools/course_bootstrap/' ':(literal)tools/fabric_guard.py' ':(literal)tools/install_fabric_tools.py' ':(literal)tools/inspect_results.py' ':(literal)tools/managed_profilers.py' ':(literal)tools/course_job.py' ':(literal)tools/course_viewer.py' ':(literal)tools/course_publication.py' ':(literal)tools/course_publication_evidence.py' ':(literal)tools/verify_monitoring.py' ':(literal)tools/readiness.py' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
   : > "$work_dir/files"
   while IFS= read -r -d '' relative; do
     [[ -e $source_root/$relative || -L $source_root/$relative ]] || continue
@@ -210,8 +215,10 @@ build_manifest() {
 
 main() {
   init_output_style
+  local -a original_args=("$@") resolved=()
+  local configure=0 local_only=0 kubeconfig='' context='' field
   local dry_run=0 sync_only=0 destination=courses port='' identity='' target='' options=1 target_given=0
-  local source_root ssh_target remote_code remote_command login_code login_command verify_code verify_command status
+  local source_root ssh_target remote_code remote_command verify_code verify_command status
   local -a courses=() ssh_args=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
   local -a rsync_args=(-rlptz --safe-links --from0 --itemize-changes --stats)
 
@@ -219,6 +226,8 @@ main() {
     if [[ $options == 1 ]]; then
       case $1 in
         -h|--help) show_usage; return 0 ;;
+        --configure) configure=1; shift; continue ;;
+        --local-only) local_only=1; shift; continue ;;
         --dry-run) dry_run=1; shift; continue ;;
         --sync-only) sync_only=1; shift; continue ;;
         --dest|--port|--identity)
@@ -248,7 +257,6 @@ main() {
   fi
   if [[ -n $identity ]]; then
     [[ -f $identity && -r $identity ]] || die '--identity must name a readable key file.'
-    ssh_args+=(-i "$identity")
   fi
   require_cmd git
   require_cmd ssh
@@ -257,7 +265,9 @@ main() {
   require_cmd mktemp
   require_cmd find
   [[ $dry_run == 1 || $sync_only == 1 || -t 0 ]] || die 'An interactive terminal is required to open SSH; use --sync-only for automation.'
-  if [[ $sync_only == 1 ]]; then ssh_args+=(-o BatchMode=yes); fi
+  # The normal Python handoff reuses source-only transport with interactive SSH
+  # authentication. The public --sync-only command remains noninteractive.
+  if [[ $sync_only == 1 && ${_COURSE_SYNC_INTERACTIVE_TRANSFER:-0} != 1 ]]; then ssh_args+=(-o BatchMode=yes); fi
   source_root=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   work_dir=$(mktemp -d /tmp/course-sync.XXXXXXXX)
   trap cleanup EXIT
@@ -266,6 +276,20 @@ main() {
   trap 'cancel_sync 129' HUP
   build_manifest
   python3 -B "$source_root/tools/verify_source_sync.py" manifest --root "$source_root" --files "$work_dir/files" > "$work_dir/verification.json"
+  if [[ $dry_run == 0 && $sync_only == 0 ]]; then
+    cleanup
+    work_dir=''
+    trap - EXIT INT TERM HUP
+    exec python3 -B "$source_root/tools/course_sync.py" ${original_args[@]+"${original_args[@]}"}
+  fi
+  [[ $local_only == 0 && $configure == 0 ]] || die '--configure and --local-only require normal synchronization.'
+  python3 -B "$source_root/tools/course_sync.py" _options ${original_args[@]+"${original_args[@]}"} > "$work_dir/options"
+  while IFS= read -r -d '' field; do resolved+=("$field"); done < "$work_dir/options"
+  [[ ${#resolved[@]} == 6 ]] || die 'Invalid saved synchronization options.'
+  target=${resolved[0]} destination=${resolved[1]} port=${resolved[2]} identity=${resolved[3]}
+  kubeconfig=${resolved[4]} context=${resolved[5]}
+  if [[ -n $target ]]; then target_given=1; parse_target "$target"; fi
+  if [[ -n $identity ]]; then ssh_args+=(-i "$identity"); fi
   if [[ $target_given == 0 ]]; then discover_target; fi
   if [[ -n $port ]]; then ssh_args+=(-p "$port"); fi
 
@@ -315,7 +339,7 @@ TRANSPORT
   else
     status=$?
     log_error 'SSH preflight failed. Check the target, account, key, port and remote rsync.'
-    if [[ $target != *@* ]]; then
+    if [[ $ssh_target == root@* ]]; then
       log_warn 'The default SSH user is root.'
       log_warn "For another cluster account, use user@${ssh_target#*@}."
     fi
@@ -351,21 +375,7 @@ TRANSPORT
     # shellcheck disable=SC2029 # Both command words are POSIX-quoted above.
     run_remote ssh -T "${ssh_args[@]}" "$ssh_target" "$verify_command" < "$work_dir/verification.json" || die 'Source verification failed; old entrypoints were preserved.'
   fi
-  if [[ $dry_run == 0 && $sync_only == 0 ]]; then
-    # Expand HOME/SHELL only remotely; stop if the synced directory is unavailable.
-    # shellcheck disable=SC2016
-    login_code='set -eu
-cd "$HOME/$1"
-bash tools/ensure_python312.sh
-exec "${SHELL:-/bin/sh}" -il'
-    login_command="sh -c $(shell_quote "$login_code") sync-labs $(shell_quote "$destination")"
-    cleanup
-    work_dir=''
-    trap - EXIT INT TERM HUP
-    # Foreground exec gives SSH terminal/signal ownership and preserves its status.
-    # shellcheck disable=SC2029 # Remote command contains only POSIX-quoted words.
-    exec ssh -t "${ssh_args[@]}" "$ssh_target" "$login_command"
-  fi
+
 }
 
 main "$@"

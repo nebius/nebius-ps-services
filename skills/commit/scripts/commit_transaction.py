@@ -630,28 +630,6 @@ def _validate_authorization(
             )
         if value["allow_default_branch"] != grant["allow_default_branch"]:
             raise TransactionError("default branch policy changed", "scope_changed")
-    elif owner == "task-implementer":
-        evidence_value = value.get("owner_evidence_path")
-        evidence_digest = value.get("owner_evidence_sha256")
-        if (
-            not isinstance(evidence_value, str)
-            or not Path(evidence_value).is_absolute()
-            or not isinstance(evidence_digest, str)
-            or DIGEST_RE.fullmatch(evidence_digest) is None
-        ):
-            raise TransactionError("Task Implementer commit evidence is invalid")
-        evidence_path = Path(evidence_value)
-        if not _safe_private_file(evidence_path, _codex_home() / "task-implementer"):
-            raise TransactionError("Task Implementer worker evidence path is unsafe")
-        evidence = _load_json(evidence_path, "Task Implementer worker evidence")
-        if (
-            evidence_digest != value["turn_sha256"]
-            or evidence.get("state") != "running"
-            or evidence.get("base_commit") != identity["head"]
-            or evidence.get("worker_session_sha256") != _digest_text(session_id)
-            or evidence.get("assignment_sha256") != value["turn_sha256"]
-        ):
-            raise TransactionError("Task Implementer worker authorization is stale")
     else:
         raise TransactionError("commit authorization owner is invalid")
 
@@ -664,40 +642,17 @@ def _validate_claim_owner(
     allow_exact_direct_child: bool = False,
 ) -> None:
     if claim["authorization_owner"] in ROOT_OWNERS:
-        _validate_task(
+        task_path, grant = _validate_task(
             claim,
             root,
             session_id,
             allow_closed=claim["state"] in {"COMMITTED", "REVIEW_REQUIRED"},
             validate_scope=claim["state"] not in {"COMMITTED", "REVIEW_REQUIRED"},
         )
+        if claim["state"] in EXECUTABLE_STATES:
+            _publication_open(_task_state(task_path, grant), claim["ref"])
         return
-    evidence_path = Path(str(claim["owner_evidence_path"]))
-    if not _safe_private_file(evidence_path, _codex_home() / "task-implementer"):
-        raise TransactionError("Task Implementer worker evidence path is unsafe")
-    evidence = _load_json(evidence_path, "Task Implementer worker evidence")
-    current_head = _identity(root)["head"]
-    expected_head = claim["base_head"]
-    if claim["state"] in {"REVIEW_REQUIRED", "COMMITTED"}:
-        commit_head = claim.get("commit_head")
-        if isinstance(commit_head, str) and OBJECT_RE.fullmatch(commit_head):
-            expected_head = commit_head
-    head_matches = current_head == expected_head
-    if (
-        not head_matches
-        and allow_exact_direct_child
-        and claim["state"] in EXECUTABLE_STATES
-    ):
-        head_matches = _exact_direct_child(root, claim["base_head"], current_head)
-    if (
-        claim["owner_evidence_sha256"] != claim["turn_sha256"]
-        or evidence.get("state") != "running"
-        or evidence.get("base_commit") != claim["base_head"]
-        or evidence.get("worker_session_sha256") != _digest_text(session_id)
-        or evidence.get("assignment_sha256") != claim["turn_sha256"]
-        or not head_matches
-    ):
-        raise TransactionError("Task Implementer worker commit ownership is stale")
+    raise TransactionError("commit claim authorization owner is invalid")
 
 
 def _attempt_authorization_path(claim: dict[str, Any]) -> Path:
@@ -864,7 +819,6 @@ def _validate_claim(
         raise TransactionError("commit claim failure state is invalid")
     if value.get("authorization_owner") not in {
         "direct",
-        "task-implementer",
         "create-pr",
     }:
         raise TransactionError("commit claim authorization owner is invalid")
@@ -883,7 +837,7 @@ def _validate_claim(
         or not isinstance(value.get("owner_evidence_sha256"), str)
         or DIGEST_RE.fullmatch(value["owner_evidence_sha256"]) is None
     ):
-        raise TransactionError("Task Implementer commit claim evidence is invalid")
+        raise TransactionError("commit claim evidence is invalid")
 
 
 def _coordination_sha(value: object, label: str) -> str:
@@ -1131,7 +1085,7 @@ def _worktree_manifest_path(value: dict[str, Any], path: Path, primary: Path) ->
             raise TransactionError("Worktree ownership lease is invalid")
     elif (
         lease_state not in {"active", "released"}
-        or lease_owner not in {"task-implementer", "agentic-sdlc"}
+        or lease_owner not in {"implement", "agentic-sdlc"}
         or not isinstance(lease_token, str)
         or TOKEN_RE.fullmatch(lease_token) is None
     ):
@@ -1305,8 +1259,8 @@ def _pr_origin_digest(root: Path) -> str:
 
 ROOT_AUTH_SCHEMA = "commit-transaction.root-authorization.v2"
 ROOT_CLAIM_SCHEMA = "commit-transaction.root-claim.v2"
-TASK_SCHEMA = "commit-transaction.task.v1"
-TASK_STATE_SCHEMA = "commit-transaction.task-state.v1"
+TASK_SCHEMA = "commit-transaction.task.v2"
+TASK_STATE_SCHEMA = "commit-transaction.task-state.v2"
 ROOT_OWNERS = {"direct", "create-pr"}
 
 
@@ -1336,7 +1290,7 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
         )
     state = _load_json(state_path, "task checkpoint")
     if (
-        set(state) != {"schema", "grant_sha256", "targets", "base_head"}
+        set(state) != {"schema", "grant_sha256", "targets", "base_head", "completion"}
         or state.get("schema") != TASK_STATE_SCHEMA
         or state.get("grant_sha256") != _digest_bytes(_stable_json(grant))
         or not isinstance(state.get("targets"), dict)
@@ -1354,9 +1308,22 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
     for value in state["targets"].values():
         if (
             not isinstance(value, dict)
-            or set(value) != {"head", "commits", "last_claim", "sync"}
+            or set(value)
+            != {
+                "head",
+                "commits",
+                "last_claim",
+                "sync",
+                "materialized",
+                "merged_result",
+            }
             or not isinstance(value["head"], str)
             or not OBJECT_RE.fullmatch(value["head"])
+            or type(value["materialized"]) is not bool
+            or (
+                value["merged_result"] is not None
+                and not _valid_object(value["merged_result"])
+            )
             or type(value["commits"]) is not int
             or value["commits"] < 0
             or (
@@ -1388,6 +1355,7 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
             raise TransactionError(
                 "pending sync checkpoint is invalid", "effect_unknown"
             )
+    _validate_completion(state["completion"], grant)
     return state
 
 
@@ -1524,6 +1492,7 @@ def _validate_task(
         "allow_default_branch",
         "validation_ref",
         "recovery_claim_sha256",
+        "completion",
     }
     if (
         set(grant) != keys
@@ -1551,17 +1520,34 @@ def _validate_task(
         ):
             raise TransactionError("task target is invalid", "scope_changed")
     _validate_grant_scope(grant, root)
+    _validate_completion_scope(grant, root)
     if _task_closed_path(path).exists() or _task_closed_path(path).is_symlink():
         closed = _task_closed_path(path)
         if not _safe_private_file(closed, private_root):
             raise TransactionError("task closure is unsafe", "scope_changed")
         closure = _load_json(closed, "task closure")
         if (
-            closure.get("schema") != "commit-transaction.task-closure.v1"
+            closure.get("schema") != "commit-transaction.task-closure.v2"
             or closure.get("grant_sha256") != evidence["owner_evidence_sha256"]
             or closure.get("status") not in {"completed", "cancelled", "superseded"}
+            or set(closure)
+            != (
+                {"schema", "status", "grant_sha256", "successor_sha256"}
+                if closure.get("status") == "superseded"
+                else {"schema", "status", "grant_sha256", "heads", "completion"}
+            )
         ):
             raise TransactionError("task closure changed", "scope_changed")
+        if closure["status"] != "superseded":
+            if (
+                not isinstance(closure["heads"], dict)
+                or set(closure["heads"]) != set(grant["targets"])
+                or any(not _valid_object(head) for head in closure["heads"].values())
+            ):
+                raise TransactionError(
+                    "task closure heads are invalid", "scope_changed"
+                )
+            _validate_completion(closure["completion"], grant)
         if not allow_closed or closure["status"] == "superseded":
             raise TransactionError("task is closed", "task_closed")
     if validate_scope and grant["requested_action"] != "commit":
@@ -1701,7 +1687,7 @@ def _retire_recovery_predecessor(root: Path, grant: dict[str, Any]) -> None:
         raise TransactionError("recovery predecessor changed", "effect_unknown")
     closed = _task_closed_path(Path(claim["owner_evidence_path"]))
     result = {
-        "schema": "commit-transaction.task-closure.v1",
+        "schema": "commit-transaction.task-closure.v2",
         "status": "superseded",
         "grant_sha256": claim["owner_evidence_sha256"],
         "successor_sha256": _digest_bytes(_stable_json(grant)),
@@ -1734,13 +1720,23 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
         path = _task_path(root, arguments.session_id, arguments.intent_sha256)
         if path.exists() or path.is_symlink():
             path, grant, _ = _task_from_arguments(arguments, root)
-            selected = set(arguments.target or [identity["branch"]])
+            selected = set(
+                arguments.target
+                or [ref.removeprefix("refs/heads/") for ref in grant["targets"]]
+            )
             if selected != {
                 ref.removeprefix("refs/heads/") for ref in grant["targets"]
             }:
                 raise TransactionError("task targets cannot change", "scope_changed")
             _task_state(path, grant)
-            supplied_edges = sorted(arguments.dependency or [])
+            supplied_edges = sorted(
+                arguments.dependency
+                or [
+                    f"{child.removeprefix('refs/heads/')}:{parent.removeprefix('refs/heads/')}"
+                    for child, parents in grant["dependencies"].items()
+                    for parent in parents
+                ]
+            )
             saved_edges = sorted(
                 f"{child.removeprefix('refs/heads/')}:{parent.removeprefix('refs/heads/')}"
                 for child, parents in grant["dependencies"].items()
@@ -1752,15 +1748,19 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                 or (
                     f"refs/remotes/origin/{arguments.pr_base}"
                     if arguments.pr_base
-                    else None
+                    else grant["base_ref"]
                 )
                 != grant["base_ref"]
                 or (
                     f"refs/heads/{arguments.validation_branch}"
                     if arguments.validation_branch
-                    else None
+                    else grant["validation_ref"]
                 )
                 != grant["validation_ref"]
+                or (
+                    arguments.checkout_policy is not None
+                    and arguments.checkout_policy != grant["completion"]["policy"]
+                )
             ):
                 raise TransactionError("task scope cannot change", "scope_changed")
             _retire_recovery_predecessor(root, grant)
@@ -1926,6 +1926,27 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
             if recovery
             else None,
         }
+        local_default = (
+            default_ref.replace("refs/remotes/origin/", "refs/heads/", 1)
+            if default_ref
+            else identity["ref"]
+        )
+        final_ref = identity["ref"]
+        new_targets = [ref for ref, item in targets.items() if item["kind"] == "new"]
+        if len(new_targets) == 1:
+            final_ref = new_targets[0]
+        grant["completion"] = {
+            "policy": arguments.checkout_policy
+            or ("ordinary" if action == "create-pr" else "preserve"),
+            "final_ref": final_ref,
+            "refs": {
+                ref: _local_head(root, ref) for ref in {identity["ref"], local_default}
+            },
+        }
+        if action != "create-pr" and grant["completion"]["policy"] != "preserve":
+            raise TransactionError(
+                "checkout policy requires a PR task", "scope_changed"
+            )
         # Checkpoint first: a crash before publishing the immutable grant grants no authority.
         _atomic_json(
             _task_state_path(path),
@@ -1933,12 +1954,23 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                 "schema": TASK_STATE_SCHEMA,
                 "grant_sha256": _digest_bytes(_stable_json(grant)),
                 "base_head": grant["base_head"],
+                "completion": {
+                    "phase": "active",
+                    "pending": None,
+                    "effects": [],
+                    "updates": {},
+                    "fetch": "not-requested",
+                    "destination_head": None,
+                    "checkout": None,
+                },
                 "targets": {
                     ref: {
                         "head": item["head"],
                         "commits": 0,
                         "last_claim": None,
                         "sync": None,
+                        "materialized": item["kind"] == "local",
+                        "merged_result": None,
                     }
                     for ref, item in targets.items()
                 },
@@ -1991,6 +2023,9 @@ def _bind_direct_intent(
     if identity["ref"] not in state["targets"]:
         raise TransactionError("branch is not a selected task target", "scope_changed")
     target = state["targets"][identity["ref"]]
+    _publication_open(state, identity["ref"])
+    if not target["materialized"]:
+        raise TransactionError("target requires owner checkout", "scope_changed")
     if target["sync"] is not None:
         raise TransactionError(
             "pending sync requires reconciliation or review", "review_required"
@@ -2082,6 +2117,690 @@ def _bind_direct_intent(
     _atomic_json(path, authorization)
 
 
+def _local_head(root: Path, ref: str) -> str | None:
+    if not _run_git(root, ("symbolic-ref", "-q", ref), check=False).returncode:
+        raise TransactionError("local branch must not be symbolic", "scope_changed")
+    result = _run_git(
+        root, ("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"), check=False
+    )
+    if result.returncode == 1:
+        return None
+    if result.returncode:
+        raise TransactionError("cannot inspect local branch", "scope_changed")
+    return result.stdout.decode().strip()
+
+
+def _validate_completion_scope(grant, root):
+    value = grant["completion"]
+    default = (grant["default_ref"] or grant["initial_ref"]).replace(
+        "refs/remotes/origin/", "refs/heads/", 1
+    )
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"policy", "final_ref", "refs"}
+        or value["policy"] not in {"ordinary", "preserve"}
+        or (grant["requested_action"] != "create-pr" and value["policy"] != "preserve")
+        or not isinstance(value["refs"], dict)
+        or set(value["refs"]) != {grant["initial_ref"], default}
+        or value["refs"].get(grant["initial_ref"]) != grant["initial_head"]
+        or any(
+            head is not None and not _valid_object(head)
+            for head in value["refs"].values()
+        )
+        or not _valid_ref(root, value["final_ref"], "refs/heads/")
+        or (
+            value["final_ref"] != grant["initial_ref"]
+            and grant["targets"].get(value["final_ref"], {}).get("kind") != "new"
+        )
+    ):
+        raise TransactionError("checkout completion scope is invalid", "scope_changed")
+
+
+def _validate_completion(value, grant):
+    refs = {*grant["targets"], *grant["completion"]["refs"]}
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "phase",
+            "pending",
+            "effects",
+            "updates",
+            "fetch",
+            "destination_head",
+            "checkout",
+        }
+        or value["phase"] not in {"active", "paused", "finalizing", "done"}
+        or value["fetch"]
+        not in {"not-requested", "pending", "verified", "unavailable", "not-applicable"}
+        or (
+            value["destination_head"] is not None
+            and not _valid_object(value["destination_head"])
+        )
+        or (value["checkout"] is not None and value["checkout"] not in refs)
+        or not isinstance(value["updates"], dict)
+        or not set(value["updates"]) <= set(grant["completion"]["refs"])
+        or not isinstance(value["effects"], list)
+        or len(value["effects"]) > 256
+    ):
+        raise TransactionError("completion checkpoint is invalid", "effect_unknown")
+    for ref, update in value["updates"].items():
+        if (
+            not isinstance(update, dict)
+            or set(update) != {"before", "after", "status"}
+            or any(
+                update[k] is not None and not _valid_object(update[k])
+                for k in ("before", "after")
+            )
+            or update["status"]
+            not in {
+                "fast-forwarded",
+                "unchanged",
+                "diverged",
+                "missing",
+                "unfinished-target",
+                "foreign-worktree",
+                "unavailable",
+                "not-applicable",
+                "preserved",
+            }
+        ):
+            raise TransactionError("completion update is invalid", "effect_unknown")
+    for effect in [
+        *value["effects"],
+        *([value["pending"]] if value["pending"] is not None else []),
+    ]:
+        if (
+            not isinstance(effect, dict)
+            or set(effect)
+            != {"kind", "ref", "old", "new", "from_ref", "from_head", "status_sha256"}
+            or effect["kind"] not in {"create", "switch", "fast-forward", "update-ref"}
+            or effect["ref"] not in refs
+            or effect["from_ref"] not in refs
+            or not _valid_object(effect["new"])
+            or not _valid_object(effect["from_head"])
+            or (effect["old"] is not None and not _valid_object(effect["old"]))
+            or not _valid_digest(effect["status_sha256"])
+        ):
+            raise TransactionError("completion effect is invalid", "effect_unknown")
+
+
+def _publication_open(state, ref):
+    if (
+        state["completion"]["phase"] in {"finalizing", "done"}
+        or state["completion"]["pending"]
+    ):
+        raise TransactionError(
+            "checkout completion must be reconciled first", "effect_unknown"
+        )
+    if state["targets"][ref]["merged_result"] is not None:
+        raise TransactionError("merged target is observation-only", "task_consumed")
+
+
+def _checkout_identity(root, grant):
+    identity = _identity(root)
+    if any(
+        identity[key] != grant[key] for key in ("repo_root", "worktree", "common_dir")
+    ):
+        raise TransactionError("checkout repository identity changed", "scope_changed")
+    if grant["origin_sha256"] is not None and (
+        _pr_origin_digest(root) != grant["origin_sha256"]
+        or _git_text(root, "symbolic-ref", "refs/remotes/origin/HEAD")
+        != grant["default_ref"]
+    ):
+        raise TransactionError(
+            "checkout origin or default identity changed", "scope_changed"
+        )
+    _safety_checks(root, allow_default_branch=True)
+
+
+def _occupied_elsewhere(root, ref):
+    # NUL-delimited records preserve spaces/newlines in registered worktree paths.
+    output = _run_git(root, ("worktree", "list", "--porcelain", "-z")).stdout
+    for record in output.split(b"\0\0"):
+        fields = record.split(b"\0")
+        branches = [part[7:].decode() for part in fields if part.startswith(b"branch ")]
+        paths = [
+            os.fsdecode(part[9:]) for part in fields if part.startswith(b"worktree ")
+        ]
+        if ref in branches and (len(paths) != 1 or Path(paths[0]).resolve() != root):
+            return True
+    return bool(_active_worktree_claims(_primary_worktree(root), ref))
+
+
+def _expected_checkout_head(grant, state, ref):
+    update = state["completion"]["updates"].get(ref)
+    if update:
+        return update["after"]
+    if ref in state["targets"]:
+        return state["targets"][ref]["head"]
+    return grant["completion"]["refs"].get(ref)
+
+
+def _known_checkout(root, grant, state):
+    identity = _identity(root)
+    expected = _expected_checkout_head(grant, state, identity["ref"])
+    if expected is None or identity["head"] != expected:
+        raise TransactionError(
+            "checkout is outside its recorded checkpoint", "history_changed"
+        )
+    return identity
+
+
+def _unresolved_claim(root, path, ref):
+    claim_path = expected_claim_path(root).parent / f"{_ref_key(ref)}.json"
+    if not claim_path.exists() and not claim_path.is_symlink():
+        return False
+    if not _safe_private_file(claim_path, _transaction_root(_common_dir(root))):
+        raise TransactionError("target claim is unsafe", "scope_changed")
+    claim = _load_json(claim_path, "target claim")
+    return claim.get("owner_evidence_path") == str(path) and (
+        claim.get("state") not in {"COMMITTED", "STALE"}
+        or (claim.get("state") == "STALE" and claim.get("commit_head") is not None)
+    )
+
+
+def _checkout_effect(
+    root, path, grant, state, *, kind=None, ref=None, new=None, carry=False
+):
+    """Replay only the exact before/after states of a journaled local effect."""
+    completion = state["completion"]
+    pending = completion["pending"]
+    if pending is None:
+        identity = _known_checkout(root, grant, state)
+        if _status(root) and not carry:
+            raise TransactionError(
+                "checkout effect requires a clean worktree", "candidate_changed"
+            )
+        expected = (
+            None if kind == "create" else _expected_checkout_head(grant, state, ref)
+        )
+        if _local_head(root, ref) != expected:
+            raise TransactionError("effect predecessor moved", "history_changed")
+        if len(completion["effects"]) >= 256:
+            raise TransactionError("checkout effect journal is full", "effect_unknown")
+        pending = {
+            "kind": kind,
+            "ref": ref,
+            "old": _local_head(root, ref),
+            "new": new,
+            "from_ref": identity["ref"],
+            "from_head": identity["head"],
+            "status_sha256": _digest_bytes(_status(root)),
+        }
+        completion["pending"] = pending
+        _atomic_json(_task_state_path(path), state)
+    _checkout_identity(root, grant)
+    if _digest_bytes(_status(root)) != pending["status_sha256"]:
+        raise TransactionError(
+            "worktree changed during checkout effect", "candidate_changed"
+        )
+    kind, ref, old, new = (pending[k] for k in ("kind", "ref", "old", "new"))
+    expected_old = (
+        None if kind == "create" else _expected_checkout_head(grant, state, ref)
+    )
+    expected_new = (
+        state["targets"][ref]["head"]
+        if kind == "create"
+        else _expected_checkout_head(grant, state, ref)
+        if kind == "switch"
+        else completion["destination_head"]
+    )
+    if old != expected_old or new != expected_new:
+        raise TransactionError(
+            "effect is not bound to its checkpoint", "effect_unknown"
+        )
+    if kind in {"fast-forward", "update-ref"} and (
+        completion["phase"] != "finalizing"
+        or completion["fetch"] != "verified"
+        or grant["completion"]["policy"] != "ordinary"
+        or grant["base_ref"] != grant["default_ref"]
+        or ref not in grant["completion"]["refs"]
+        or (ref in state["targets"] and not state["targets"][ref]["merged_result"])
+    ):
+        raise TransactionError(
+            "effect is outside completion authority", "scope_changed"
+        )
+    if _occupied_elsewhere(root, ref):
+        raise TransactionError(
+            "another worktree owns the checkout ref", "scope_changed"
+        )
+    identity = _identity(root)
+    actual = _local_head(root, ref)
+    before_checkout = (identity["ref"], identity["head"]) == (
+        pending["from_ref"],
+        pending["from_head"],
+    )
+    after_checkout = (identity["ref"], identity["head"]) == (ref, new)
+    if kind == "switch":
+        if actual != new or not (before_checkout or after_checkout):
+            raise TransactionError("switch checkpoint changed", "history_changed")
+        if not after_checkout:
+            _run_git(
+                root,
+                (
+                    "switch",
+                    "--no-overwrite-ignore",
+                    "--no-guess",
+                    ref.removeprefix("refs/heads/"),
+                ),
+            )
+    elif kind in {"create", "update-ref"}:
+        if not before_checkout or identity["ref"] == ref or actual not in {old, new}:
+            raise TransactionError("ref update checkpoint changed", "history_changed")
+        if actual != new:
+            if kind == "update-ref" and (
+                old is None
+                or _run_git(
+                    root, ("merge-base", "--is-ancestor", old, new), check=False
+                ).returncode
+            ):
+                raise TransactionError(
+                    "completion update is not a fast-forward", "history_changed"
+                )
+            if _occupied_elsewhere(root, ref):
+                raise TransactionError(
+                    "ref acquired by another worktree", "scope_changed"
+                )
+            _run_git(
+                root, ("update-ref", "--no-deref", ref, new, old or "0" * len(new))
+            )
+    else:
+        if (
+            actual not in {old, new}
+            or not (before_checkout or after_checkout)
+            or identity["ref"] != ref
+        ):
+            raise TransactionError("fast-forward checkpoint changed", "history_changed")
+        if actual != new:
+            if _run_git(
+                root, ("merge-base", "--is-ancestor", old, new), check=False
+            ).returncode:
+                raise TransactionError(
+                    "completion update is not a fast-forward", "history_changed"
+                )
+            _run_git(
+                root,
+                ("merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", new),
+            )
+    _checkout_identity(root, grant)
+    identity = _identity(root)
+    expected_checkout = (
+        (ref, new)
+        if kind in {"switch", "fast-forward"}
+        else (pending["from_ref"], pending["from_head"])
+    )
+    if (
+        _local_head(root, ref) != new
+        or (identity["ref"], identity["head"]) != expected_checkout
+        or _digest_bytes(_status(root)) != pending["status_sha256"]
+        or _occupied_elsewhere(root, ref)
+    ):
+        raise TransactionError(
+            "checkout effect result differs from intent", "effect_unknown"
+        )
+    if kind == "create":
+        state["targets"][ref]["materialized"] = True
+    if kind in {"fast-forward", "update-ref"}:
+        completion["updates"][ref] = {
+            "before": old,
+            "after": new,
+            "status": "fast-forwarded",
+        }
+    completion["effects"].append(pending)
+    completion["pending"] = None
+    _atomic_json(_task_state_path(path), state)
+
+
+def checkout_target(arguments):
+    root = _canonical_repo(arguments.repo_root)
+    with _repository_lock(_common_dir(root)):
+        path, grant, _ = _task_from_arguments(arguments, root)
+        state = _task_state(path, grant)
+        ref = f"refs/heads/{arguments.branch}"
+        if grant["requested_action"] != "create-pr" or ref not in state["targets"]:
+            raise TransactionError(
+                "checkout target is outside PR scope", "scope_changed"
+            )
+        if state["completion"]["pending"]:
+            pending = state["completion"]["pending"]
+            if pending["ref"] != ref or pending["kind"] not in {"create", "switch"}:
+                raise TransactionError(
+                    "another checkout effect is pending", "effect_unknown"
+                )
+            _checkout_effect(root, path, grant, state)
+        _publication_open(state, ref)
+        _checkout_identity(root, grant)
+        target = state["targets"][ref]
+        identity = _known_checkout(root, grant, state)
+        carry = (
+            grant["targets"][ref]["kind"] == "new"
+            and identity["ref"] == grant["initial_ref"]
+            and identity["head"] == target["head"] == grant["initial_head"]
+        )
+        if not target["materialized"]:
+            if _local_head(root, ref) is not None:
+                raise TransactionError(
+                    "unrecorded local target exists", "history_changed"
+                )
+            _checkout_effect(
+                root,
+                path,
+                grant,
+                state,
+                kind="create",
+                ref=ref,
+                new=target["head"],
+                carry=carry,
+            )
+        if _local_head(root, ref) != target["head"] or target["sync"]:
+            raise TransactionError(
+                "target is not at its publication checkpoint", "history_changed"
+            )
+        if identity["ref"] != ref:
+            if _unresolved_claim(root, path, identity["ref"]):
+                raise TransactionError(
+                    "current target has an unresolved claim", "effect_unknown"
+                )
+            _checkout_effect(
+                root,
+                path,
+                grant,
+                state,
+                kind="switch",
+                ref=ref,
+                new=target["head"],
+                carry=carry,
+            )
+        state["completion"]["phase"] = "active"
+        _atomic_json(_task_state_path(path), state)
+        return {
+            "checkout": ref,
+            "head": target["head"],
+            "materialized": target["materialized"],
+        }
+
+
+def _verify_local_completion(root, grant, state):
+    completion = state["completion"]
+    _checkout_identity(root, grant)
+    if completion["phase"] != "done" or completion["pending"] or _status(root):
+        raise TransactionError(
+            "checkout completion is unfinished or dirty", "effect_unknown"
+        )
+    if set(completion["updates"]) != set(grant["completion"]["refs"]):
+        raise TransactionError(
+            "completion ref outcomes are incomplete", "effect_unknown"
+        )
+    merged = any(target["merged_result"] for target in state["targets"].values())
+    expected_ref = (
+        grant["initial_ref"]
+        if merged and grant["completion"]["policy"] == "ordinary"
+        else grant["completion"]["final_ref"]
+    )
+    if completion["checkout"] != expected_ref:
+        raise TransactionError(
+            "final checkout violates immutable policy", "scope_changed"
+        )
+    if _identity(root)["ref"] != completion["checkout"]:
+        raise TransactionError("final checkout changed", "history_changed")
+    _known_checkout(root, grant, state)
+    for ref, update in completion["updates"].items():
+        predecessor = (
+            state["targets"][ref]["head"]
+            if ref in state["targets"]
+            else grant["completion"]["refs"][ref]
+        )
+        if update["before"] != predecessor:
+            raise TransactionError(
+                "completion predecessor differs from scope", "history_changed"
+            )
+        if update["status"] == "fast-forwarded":
+            if (
+                grant["completion"]["policy"] != "ordinary"
+                or not merged
+                or grant["base_ref"] != grant["default_ref"]
+                or completion["fetch"] != "verified"
+                or update["after"] != completion["destination_head"]
+                or not predecessor
+                or (
+                    ref in state["targets"]
+                    and not state["targets"][ref]["merged_result"]
+                )
+                or _run_git(
+                    root,
+                    ("merge-base", "--is-ancestor", predecessor, update["after"]),
+                    check=False,
+                ).returncode
+            ):
+                raise TransactionError(
+                    "completion fast-forward proof is invalid", "effect_unknown"
+                )
+        elif update["after"] != predecessor:
+            raise TransactionError(
+                "skipped completion changed history", "history_changed"
+            )
+        if _local_head(root, ref) != update["after"]:
+            raise TransactionError("completion ref changed", "history_changed")
+
+
+def complete_checkout(arguments):
+    root = _canonical_repo(arguments.repo_root)
+    with _repository_lock(_common_dir(root)):
+        # A failed base fetch/verification must not prevent a safe switch-back.
+        path, grant, _ = _task_from_arguments(arguments, root, validate_scope=False)
+        _checkout_identity(root, grant)
+        state = _task_state(path, grant)
+        completion = state["completion"]
+        mode = arguments.mode
+        if arguments.merged_target or arguments.result_sha:
+            if mode != "record-merge":
+                raise TransactionError(
+                    "merge evidence requires record-merge", "scope_changed"
+                )
+        if mode == "record-merge":
+            ref = f"refs/heads/{arguments.merged_target}"
+            if (
+                grant["requested_action"] != "create-pr"
+                or ref not in state["targets"]
+                or not _valid_object(arguments.result_sha)
+                or completion["phase"] in {"finalizing", "done"}
+                or completion["pending"]
+            ):
+                raise TransactionError(
+                    "merged result is outside active scope", "scope_changed"
+                )
+            target = state["targets"][ref]
+            if target["sync"] or _unresolved_claim(root, path, ref):
+                raise TransactionError(
+                    "merge target has unfinished local effects", "effect_unknown"
+                )
+            if target["merged_result"] not in {None, arguments.result_sha}:
+                raise TransactionError("merged result changed", "history_changed")
+            target["merged_result"] = arguments.result_sha
+            _atomic_json(_task_state_path(path), state)
+            return {
+                "status": "merged-recorded",
+                "target": ref,
+                "result_sha": arguments.result_sha,
+            }
+        if completion["phase"] == "done":
+            _verify_local_completion(root, grant, state)
+            return completion
+        if mode == "pause" and completion["phase"] == "finalizing":
+            raise TransactionError("resume terminal completion", "effect_unknown")
+        if completion["pending"]:
+            _checkout_effect(root, path, grant, state)
+        if _status(root):
+            raise TransactionError(
+                "switch-back requires a clean worktree", "candidate_changed"
+            )
+        _known_checkout(root, grant, state)
+        for ref, target in state["targets"].items():
+            if target["sync"] or _unresolved_claim(root, path, ref):
+                raise TransactionError(
+                    "target has unfinished effects", "effect_unknown"
+                )
+            actual = _local_head(root, ref)
+            expected = _expected_checkout_head(grant, state, ref)
+            if target["materialized"]:
+                if actual != expected:
+                    raise TransactionError(
+                        "publication target moved", "history_changed"
+                    )
+            elif (
+                actual is not None
+                or grant["targets"][ref]["kind"] != "remote"
+                or target["commits"]
+                or target["last_claim"]
+            ):
+                raise TransactionError(
+                    "target lacks no-local-effect proof", "effect_unknown"
+                )
+        merged = any(item["merged_result"] for item in state["targets"].values())
+        preserve = grant["completion"]["policy"] == "preserve"
+        final_ref = (
+            completion["checkout"]
+            if completion["phase"] == "finalizing"
+            else grant["completion"]["final_ref"]
+            if preserve
+            else grant["initial_ref"]
+            if merged or mode == "pause"
+            else grant["completion"]["final_ref"]
+        )
+        if _local_head(root, final_ref) is None:
+            raise TransactionError(
+                "original or intended final branch is missing", "history_changed"
+            )
+        if mode == "finalize":
+            completion["phase"] = "finalizing"
+            completion["checkout"] = final_ref
+            _atomic_json(_task_state_path(path), state)
+            eligible = (
+                merged and not preserve and grant["base_ref"] == grant["default_ref"]
+            )
+            if completion["fetch"] == "not-requested":
+                completion["fetch"] = "pending" if eligible else "not-applicable"
+                _atomic_json(_task_state_path(path), state)
+            if completion["fetch"] == "pending":
+                destination = grant["base_ref"].removeprefix("refs/remotes/origin/")
+                head = None
+                try:
+                    advertised = _run_git(
+                        root,
+                        ("ls-remote", "--refs", "origin", f"refs/heads/{destination}"),
+                    )
+                    lines = advertised.stdout.decode().splitlines()
+                    if len(lines) == 1:
+                        fields = lines[0].split("\t")
+                        if (
+                            len(fields) == 2
+                            and fields[1] == f"refs/heads/{destination}"
+                            and _valid_object(fields[0])
+                        ):
+                            head = fields[0]
+                    if head is None:
+                        raise TransactionError("destination advertisement is invalid")
+                    fetched = _run_git(
+                        root,
+                        (
+                            "fetch",
+                            "--no-write-fetch-head",
+                            "--no-tags",
+                            "--no-recurse-submodules",
+                            "origin",
+                            head,
+                        ),
+                        check=False,
+                    )
+                except TransactionError:
+                    # Git's bounded failure leaves the local branch policy intact.
+                    fetched = subprocess.CompletedProcess([], 1, b"", b"")
+                valid = head is not None and not fetched.returncode
+                if valid:
+                    valid = not _run_git(
+                        root,
+                        ("merge-base", "--is-ancestor", state["base_head"], head),
+                        check=False,
+                    ).returncode
+                for target in state["targets"].values():
+                    if valid and target["merged_result"]:
+                        valid = not _run_git(
+                            root,
+                            (
+                                "merge-base",
+                                "--is-ancestor",
+                                target["merged_result"],
+                                head,
+                            ),
+                            check=False,
+                        ).returncode
+                completion["fetch"] = "verified" if valid else "unavailable"
+                completion["destination_head"] = head if valid else None
+                _atomic_json(_task_state_path(path), state)
+            for ref in grant["completion"]["refs"]:
+                if ref in completion["updates"]:
+                    if _local_head(root, ref) != completion["updates"][ref]["after"]:
+                        raise TransactionError(
+                            "completed ref moved unexpectedly", "history_changed"
+                        )
+                    continue
+                expected = _expected_checkout_head(grant, state, ref)
+                actual = _local_head(root, ref)
+                if actual != expected:
+                    raise TransactionError(
+                        "completion ref moved unexpectedly", "history_changed"
+                    )
+                status = "preserved" if preserve else "not-applicable"
+                if actual is None:
+                    status = "missing"
+                elif eligible:
+                    target = state["targets"].get(ref)
+                    if target and not target["merged_result"]:
+                        status = "unfinished-target"
+                    elif completion["fetch"] != "verified":
+                        status = "unavailable"
+                    elif _occupied_elsewhere(root, ref):
+                        status = "foreign-worktree"
+                    else:
+                        head = completion["destination_head"]
+                        if actual == head:
+                            status = "unchanged"
+                        elif _run_git(
+                            root,
+                            ("merge-base", "--is-ancestor", actual, head),
+                            check=False,
+                        ).returncode:
+                            status = "diverged"
+                        else:
+                            kind = (
+                                "fast-forward"
+                                if _identity(root)["ref"] == ref
+                                else "update-ref"
+                            )
+                            _checkout_effect(
+                                root, path, grant, state, kind=kind, ref=ref, new=head
+                            )
+                            continue
+                completion["updates"][ref] = {
+                    "before": actual,
+                    "after": actual,
+                    "status": status,
+                }
+                _atomic_json(_task_state_path(path), state)
+        expected = _expected_checkout_head(grant, state, final_ref)
+        if _local_head(root, final_ref) != expected:
+            raise TransactionError("switch-back branch moved", "history_changed")
+        if _identity(root)["ref"] != final_ref:
+            _checkout_effect(
+                root, path, grant, state, kind="switch", ref=final_ref, new=expected
+            )
+        completion["phase"] = "paused" if mode == "pause" else "done"
+        completion["checkout"] = final_ref
+        _atomic_json(_task_state_path(path), state)
+        return completion
+
+
 def finish(arguments: argparse.Namespace) -> dict[str, object]:
     root = _canonical_repo(arguments.repo_root)
     with _repository_lock(_common_dir(root)):
@@ -2089,7 +2808,7 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
             arguments,
             root,
             allow_closed=True,
-            validate_scope=arguments.outcome != "cancelled",
+            validate_scope=False,
         )
         closed = _task_closed_path(path)
         if closed.exists():
@@ -2140,6 +2859,10 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                         },
                     )
         if arguments.outcome == "completed":
+            if grant["requested_action"] == "create-pr":
+                _verify_local_completion(root, grant, state)
+            else:
+                _checkout_identity(root, grant)
             validation_path = path.with_name(path.stem + ".validation.json")
             if validation_path.exists():
                 if (
@@ -2167,10 +2890,27 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                 )
             for ref, target in state["targets"].items():
                 current = _run_git(root, ("rev-parse", "--verify", ref), check=False)
+                claim_path = expected_claim_path(root).parent / f"{_ref_key(ref)}.json"
+                untouched_remote = (
+                    grant["targets"][ref]["kind"] == "remote"
+                    and not target["materialized"]
+                    and not target["commits"]
+                    and target["last_claim"] is None
+                    and target["sync"] is None
+                    and not claim_path.exists()
+                    and not claim_path.is_symlink()
+                )
+                expected_head = _expected_checkout_head(grant, state, ref)
                 if (
                     target["sync"] is not None
-                    or current.returncode
-                    or current.stdout.decode().strip() != target["head"]
+                    or (current.returncode and not untouched_remote)
+                    or (
+                        not current.returncode
+                        and (
+                            not target["materialized"]
+                            or current.stdout.decode().strip() != expected_head
+                        )
+                    )
                 ):
                     raise TransactionError(
                         "target is not at its verified checkpoint", "effect_unknown"
@@ -2191,10 +2931,11 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                             "target has an unresolved claim", "effect_unknown"
                         )
         result = {
-            "schema": "commit-transaction.task-closure.v1",
+            "schema": "commit-transaction.task-closure.v2",
             "status": arguments.outcome,
             "grant_sha256": _digest_bytes(_stable_json(grant)),
             "heads": {ref: item["head"] for ref, item in state["targets"].items()},
+            "completion": state["completion"],
         }
         _atomic_json(closed, result)
         return result
@@ -2215,6 +2956,9 @@ def sync(arguments: argparse.Namespace) -> dict[str, object]:
             raise TransactionError("sync target is not selected", "scope_changed")
         if _active_worktree_claims(_primary_worktree(root), identity["ref"]):
             raise TransactionError("Worktree owns this source ref", "scope_changed")
+        _publication_open(state, identity["ref"])
+        if not target["materialized"]:
+            raise TransactionError("sync requires owner checkout", "scope_changed")
         pending = target["sync"]
         if pending is None:
             if arguments.continue_sync or arguments.reviewed_tree:
@@ -2239,8 +2983,13 @@ def sync(arguments: argparse.Namespace) -> dict[str, object]:
                     )
                 _validate_claim(previous, root, claim_path, historical=True)
                 if previous["state"] == "STALE":
-                    if previous["commit_head"] is not None or previous["base_head"] != identity["head"]:
-                        raise TransactionError("stale predecessor lacks no-effect proof", "effect_unknown")
+                    if (
+                        previous["commit_head"] is not None
+                        or previous["base_head"] != identity["head"]
+                    ):
+                        raise TransactionError(
+                            "stale predecessor lacks no-effect proof", "effect_unknown"
+                        )
                     _archive_terminal_claim(root, claim_path, previous)
                     claim_path.unlink()
                     _fsync_directory(claim_path.parent)
@@ -2306,8 +3055,11 @@ def sync(arguments: argparse.Namespace) -> dict[str, object]:
                     )
                 candidate, _ = _preview_tree(root, path.parent)
                 if arguments.reviewed_tree is None:
-                    return {"status": "candidate-review-required", "candidate_tree": candidate,
-                            "next_action": "review this candidate and rerun sync --continue with --reviewed-tree"}
+                    return {
+                        "status": "candidate-review-required",
+                        "candidate_tree": candidate,
+                        "next_action": "review this candidate and rerun sync --continue with --reviewed-tree",
+                    }
                 if candidate != arguments.reviewed_tree:
                     raise TransactionError(
                         "merge candidate differs from reviewed tree",
@@ -2521,6 +3273,8 @@ def validate_order(arguments: argparse.Namespace) -> dict[str, object]:
                     "Worktree owns a validation source ref", "scope_changed"
                 )
         state = _task_state(path, grant)
+        for target_ref in state["targets"]:
+            _publication_open(state, target_ref)
         record_path = path.with_name(path.stem + ".validation.json")
         record = None
         if record_path.exists() or record_path.is_symlink():
@@ -3266,7 +4020,14 @@ def _parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--token", required=True)
     review_parser.add_argument("--reviewed-commit", required=True)
     review_parser.add_argument("--reviewed-tree", required=True)
-    for name in ("begin", "finish", "sync", "validate-order"):
+    for name in (
+        "begin",
+        "finish",
+        "sync",
+        "validate-order",
+        "checkout-target",
+        "complete-checkout",
+    ):
         task_parser = subparsers.add_parser(name)
         task_parser.add_argument("--repo-root", required=True)
         task_parser.add_argument("--session-id", required=True)
@@ -3276,7 +4037,18 @@ def _parser() -> argparse.ArgumentParser:
             choices=("commit", "commit-push", "create-pr"),
         )
         task_parser.add_argument("--intent-sha256", required=True)
-        if name == "begin":
+        if name == "checkout-target":
+            task_parser.add_argument("--branch", required=True)
+        elif name == "complete-checkout":
+            task_parser.add_argument(
+                "--mode", required=True, choices=("pause", "record-merge", "finalize")
+            )
+            task_parser.add_argument("--merged-target")
+            task_parser.add_argument("--result-sha")
+        elif name == "begin":
+            task_parser.add_argument(
+                "--checkout-policy", choices=("ordinary", "preserve")
+            )
             task_parser.add_argument("--target", action="append")
             task_parser.add_argument("--dependency", action="append")
             task_parser.add_argument("--validation-branch")
@@ -3303,6 +4075,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = {
             "begin": begin,
             "finish": finish,
+            "checkout-target": checkout_target,
+            "complete-checkout": complete_checkout,
             "sync": sync,
             "validate-order": validate_order,
             "prepare": prepare,

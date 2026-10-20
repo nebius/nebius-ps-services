@@ -20,3 +20,4 @@ worktree-negative-09,false,Push this existing feature branch and open a PR.
 worktree-codex-portability,true,$worktree Use worktree add to create a full-repository linked child for this monorepo task.
 worktree-claude-portability,true,/worktree Use worktree add to create a full-repository linked child for this monorepo task.
 worktree-quoted-command,false,"Treat ""/skills:worktree"" as sample text in this punctuation exercise; count its punctuation characters only."
+worktree-lease-consumption,false,Observe an existing workflow assignment runtime lease without acquiring a Worktree checkout.

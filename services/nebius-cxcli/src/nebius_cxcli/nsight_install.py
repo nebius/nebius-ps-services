@@ -31,6 +31,7 @@ from .nsight_profiling import (
     default_settings,
     parse_result,
 )
+from .nsight_report_destination import reconcile_report_destination
 from .nsight_runtime import NsightKubernetes, collect_nsight_status, prepare_nsight_viewers
 from .operation_config_authority import config_transition_from_payload
 from .soperator_operation_lock import SoperatorOperationLease, SoperatorOperationLocalLock
@@ -198,10 +199,12 @@ def prepare_generation(cli, paths, base, *, target_ref, settings):
     try:
         stage.generated_dir.rmdir()
         manifest = base.materialize(stage)
-        before = {
-            resource_identity(row): row
-            for row in resource_documents(flux_target_dir(stage, target_ref) / "ordinary")
-        }
+        directory = flux_target_dir(stage, target_ref)
+        if (directory / "ordinary" / "kustomization.yaml").is_file():
+            # Full renders may retain declarations shared with the protected
+            # bundle. Compare both sides after the same ownership normalization.
+            omit_shared_protected_resources(directory / "ordinary", directory)
+        before = {resource_identity(row): row for row in resource_documents(directory / "ordinary")}
         cli.render_flux(candidate, stage, ordinary_only=True)
         for target in manifest.get("deploy", {}).get("targets", []):
             directory = flux_target_dir(stage, target["target_ref"])
@@ -630,6 +633,16 @@ def install_profiling(
                     reconcile_accepted_installation(
                         cli, state, target_ref=target_ref, env=env, fence=accepted_fence
                     )
+            with progress.phase("nsight-reports", "Verify automatic report delivery destination"):
+                reconcile_report_destination(
+                    env=env,
+                    config=desired,
+                    target_ref=target_ref,
+                    generation=generation.identity,
+                    identity=identity,
+                    receipt=receipt,
+                    fence=accepted_fence,
+                )
             finish_installation(
                 cli,
                 paths,
@@ -757,6 +770,16 @@ def install_profiling(
             )
             reconcile_accepted_installation(
                 cli, state, target_ref=target_ref, env=env, fence=lease_fence
+            )
+        with progress.phase("nsight-reports", "Verify automatic report delivery destination"):
+            reconcile_report_destination(
+                env=env,
+                config=desired,
+                target_ref=target_ref,
+                generation=generation.identity,
+                identity=identity,
+                receipt=receipt,
+                fence=lease_fence,
             )
         finish_installation(
             cli,

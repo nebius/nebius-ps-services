@@ -17,10 +17,6 @@ _SOURCES = {
     "hook_runtime": "global-context-management/scripts/hook_runtime.py",
     "task_state_permissions": "global-context-management/scripts/task_state_permissions.py",
     "global_context_state": "global-context-management/assets/global_context_state.py.template",
-    "prompt_session_storage": "prompt-session-intake/assets/hooks/prompt_session_storage.py",
-    "prompt_session_event": "prompt-session-intake/assets/hooks/prompt_session_event.py",
-    "prompt_session_result": "prompt-session-intake/assets/hooks/prompt_session_result.py",
-    "prompt_session_state": "prompt-session-intake/assets/hooks/prompt_session_state.py",
     "lib": "sdlc-start/assets/hooks/lib/__init__.py",
     "lib.sdlc_state": "sdlc-start/assets/hooks/lib/sdlc_state.py",
     "lib.sdlc_policy": "sdlc-start/assets/hooks/lib/sdlc_policy.py",
@@ -31,8 +27,6 @@ _GROUPS = {
     "permissions": ("task_state_permissions",),
     "context-dependencies": ("agent_runtime", "task_state_permissions"),
     "global-context": ("agent_runtime", "task_state_permissions", "global_context_state"),
-    "prompt-intake": ("agent_runtime", "prompt_session_storage", "prompt_session_event",
-                      "prompt_session_result", "prompt_session_state"),
     "sdlc-hook-state": ("agent_runtime", "lib", "lib.sdlc_state", "lib.sdlc_policy"),
 }
 def _read_source(path):

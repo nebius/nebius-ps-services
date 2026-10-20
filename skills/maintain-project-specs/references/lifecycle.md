@@ -105,7 +105,7 @@ Stop, or session completion.
 
 ## Workflow Boundaries
 
-Task Implementer and Agentic SDLC own their accepted-intent, prompt-impact,
+Implement and Agentic SDLC own their accepted-intent, objective-impact,
 plan-basis, dispatch, resource, Git, validation, finalization, recovery, and
 Stop decisions. Their root coordinators use the canonical parser, paired
 publisher, and exact receipt for project truth without treating that receipt

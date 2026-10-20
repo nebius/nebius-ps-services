@@ -63,17 +63,12 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Real three-tier application test` and lifecycle `--resume`
 - `$sdlc-workflow-test`
 - `$sdlc-start`
-- `$sdlc-start workspace init [project-folder]`
-- `$sdlc-start run <prompt-ref-or-file>`
-- `agentic-sdlc/prompt-v3`, Ask-only required input, immutable raw and intent
-  revisions, requirements refinement, same-prompt steering, durable FIFO
-  queueing, linked completed follow-ups, `ALREADY_COMPLETE`, and fail-closed
-  `WORKFLOW_UPGRADE_REQUIRED`; private read-only `refinement-ready` must bind
-  the latest accepted intent to the exact compiled requirements before design.
-  Missing canonical documents receive an owner-managed draft-pair bootstrap
-  preserving existing counterparts. Full `refinement-verify` still requires
-  ready design and complete statement impact before planning or execution.
-- schema-v7 execution, exact initialized-folder scope, `task-arm`, direct
+- `$sdlc-start <objective>` and `$sdlc-start continue [project-folder]`
+- Normalized immutable objective revisions, explicit session bindings, requirements
+  readiness, complete impact settlement, execution bases, steering fences and
+  `ALREADY_COMPLETE`. Unsupported state fails without conversion.
+
+- immutable execution bases, exact initialized-folder scope, `task-arm`, direct
   `task-heartbeat`, read-only `task-watch`, confirmed-stopped `task-requeue`,
   `task-recover`, task-finish crash adoption, `replan-future`, process-group
   monitored sequential `codex exec` fallback, and `worktree-interop-v2`
@@ -142,7 +137,7 @@ Verify read-only:
   fixtures are not installed-runtime payloads.
 - Existing non-SDLC `SessionStart` and `UserPromptSubmit` hooks are preserved.
 - `UserPromptSubmit` does not perform SDLC routing.
-- Stop continuation routes through the explicit prompt-bound `sdlc-start run`
+- Stop continuation routes through the explicit session-bound `sdlc-start continue`
   action.
 - Active PR and merge authorization binds both the exact promoted head and the
   recorded symbolic remote-default branch and HEAD; later default drift fails
@@ -222,37 +217,26 @@ Continuation cases:
 - Critical or pause/no-PR steering is present.
 - UAT failed with an addressable classification.
 
-Continuation prompts must say to use the prompt-bound `$sdlc-start run`
+Continuation prompts must say to use the explicit `$sdlc-start continue [project-folder]`
 action, include current feature, current phase, next
 recommended skill, and instructions to read local state first, avoid
 locked-plan edits, and persist evidence before stopping. They must not expose
-prompt IDs, run IDs, prompt bodies, or private snapshot paths. An unfinished
-unbound run must stop with `WORKFLOW_UPGRADE_REQUIRED`.
+prompt IDs, run IDs, prompt bodies, or private snapshot paths. An unbound observer must not infer ownership or start execution.
 
-## Prompt Workspace
+## Direct Objective Intake
 
-Verify:
+Verify bare/current-plan and inline objective acceptance, same-session binding,
+explicit cross-session continuation, material steering, cancellation, and crash
+recovery. Persist normalized revisions and immutable execution bases, never raw
+turns. No capture hook is installed; global specification maintenance stays
+independent. Obsolete commands, formats and flat fixtures fail without conversion
+or mutation. Retain private history and foreign resources.
 
-- `workspace init` works before Git initialization, leaves the project tree
-  unchanged, creates one starter only when empty, and preserves prompt bytes,
-  mtime, revisions, and completed history on rerun.
-- The generated editor workspace exposes private new-prompt and metadata-only
-  history tasks. History is ordered by monotonic accepted activity and never
-  exposes bodies, IDs, digests, snapshots, or private run paths.
-- Exact manual rename repairs the binding and run mirror. Rename-plus-edit,
-  stale copies, duplicate IDs, or crash-time mirror disagreement fail closed;
-  Stop continuation uses the repaired filename.
-- Initializing Git later does not change the private workspace identity.
-- New, unchanged active, edited active, unchanged completed, and edited
-  completed prompts produce the canonical new/resume/steering/
-  `ALREADY_COMPLETE`/new-run transitions.
-- Each changed digest creates one adjacent immutable revision and exactly one
-  steering entry; repeating an unchanged revision creates no duplicate.
-- One unfinished prompt owns an exact project scope; conflicts, traversal,
-  foreign paths, symlinks, unsafe modes, malformed UTF-8/frontmatter, oversize
-  prompts, obvious secret material, and snapshot tampering fail closed.
-- Unfinished unbound history returns `WORKFLOW_UPGRADE_REQUIRED`; completed
-  unbound history remains readable.
+Verify publication ownership at the paired transaction boundary before and after
+delivery. Verify overlapping native workers, slot refill after admission, stable
+dependency order, conflicting resources, exclusive runtime leases and serial
+fallback. Reports separate deterministic, installed-hook, native-agent and live
+application evidence; missing proof remains `NOT_RUN` or `PARTIAL`.
 
 ## Golden Path
 
@@ -267,7 +251,7 @@ Use a disposable Python project that validates a Nebius-style resource name:
 - structured validation errors
 - tests and evaluation evidence
 
-Initialize the workspace and accept the managed prompt through `sdlc-start`
+Accept the normalized objective through the public `$sdlc-start` interface
 before invoking coordinator-only requirements authoring. Run the remaining
 SDLC skills in order through local disposable state. Passing evidence
 requires committed requirements/design, a locked local `TASK-*` graph,
@@ -291,10 +275,11 @@ primary path plus exact local `$worktree integrate` handoff. Verify the
 coordinator and Stop hook stop for a fresh explicit user invocation from that
 primary checkout, then record source-integration proof only after that separate
 action.
-For Task Implementer coexistence, verify replanning extends the active lane
-generation's claims before replacement state is written, and verify differently
-keyed external database, Kubernetes, Terraform, migration, and publication
-domains collide through class-wide sentinel claims across separate lanes.
+For Implement coexistence, verify both coordinators use the same Worktree
+transactions while retaining distinct run ownership. Replanning fences writers
+before changing claims. Shared external database, Kubernetes, Terraform,
+migration and publication resources must serialize through explicit conflicts
+and exclusive assignment-bound leases.
 Keep live Codex execution `PARTIAL` when binary/auth/capacity is
 unavailable rather than treating deterministic fake-process proof as live proof.
 
@@ -317,12 +302,12 @@ Verify before mutation:
   action, and every Compose action runs through the helper while it holds the
   lifecycle lock; a superseded invocation fails before its next mutation
 - the selected dynamic web port resolves to loopback only
-- the managed starter renders through the canonical prompt renderer and is
-  accepted by prompt intake as revision `r0001`
+- the fixture objective renders through the canonical objective renderer and is
+  accepted by public direct intake as its first immutable revision
 - fixed public base images can be pulled with the owned empty Docker CLI config
   without exporting that config to Compose
 
-Build and test `three-tier-task-board-v1` through the existing prompt-bound
+Build and test `three-tier-task-board-v1` through the direct objective
 Agentic SDLC workflow. Require a browser GUI, Django/Gunicorn web/API server,
 and PostgreSQL database, running as exactly two labelled Compose containers.
 Do not host-publish the database port.
@@ -355,7 +340,7 @@ the dynamic loopback port, refresh recorded endpoints, then launch a fresh
 post-restart browser against the same task ID/title/completion state.
 Independent API and PostgreSQL checks accompany blank rejection, creation,
 completion, and post-restart persistence. Use the frozen task-board DOM/API/table
-contract in the generated prompt. Before evaluation and separately before UAT,
+contract in the rendered fixture objective. Before evaluation and separately before UAT,
 use the declared disposable reset to establish an empty database; resets are
 fixture setup, never part of the product acceptance journey. Never reset between
 UAT stages.
@@ -386,10 +371,10 @@ instances are never cleanup targets.
 ## Deterministic Capability Lanes
 
 The verifier must execute named regression tests and report independent stable
-capabilities for the public interface, prompt workspace/history/rename/
+capabilities for the public interface, direct intake/objective revisions/continuation/
 lifecycle, exact execution scope, worker-session recovery, future replan,
-secret persistence gate, sequential fallback, managed outer lease, Task
-Implementer interoperability, steering continuation, and verifier self-tests.
+secret persistence gate, sequential fallback, managed outer lease, Implement
+interoperability, steering continuation, and verifier self-tests.
 
 The composed managed-outer regression must start from the real `worktree`
 manager, select a nested project folder, run the execution coordinator through
@@ -441,9 +426,10 @@ touched outside the selected nested project or in private SDLC state, including
 paths deleted again before the final tree. Never copy evidence bodies into the
 report. The verification root itself is private `0700` on POSIX.
 
-A clean canonical flat fixture from an older verifier may migrate once to the
-nested shape only when its tracked tree is exact and it has no remote. Any
-unknown tracked, staged, or untracked content fails closed and is preserved.
+Obsolete flat fixtures are rejected without conversion. Any unknown tracked,
+staged, or untracked content fails closed and is preserved. Failed fixture
+admission skips dependent hook fixtures, records their unmet prerequisite, and
+still produces the complete preflight report.
 The verification root must be dedicated, outside the source repository,
 non-symlinked, and carry the private ownership marker before chmod or writes;
 the disposable Git root must carry the exact fixture marker. Symlinked fixture
@@ -455,13 +441,13 @@ prevent report generation. A custom report path must remain under the private
 verification root.
 
 Capability regression subprocesses use a 120-second default timeout. The
-measured slow worktree and Task Implementer wave matrices use bounded 300- and
-900-second timeouts respectively, so their full crash/recovery coverage is not
+measured slow worktree, execution, three-tier and task-wave matrices use bounded
+900-second timeouts, so their full crash/recovery coverage is not
 misreported as a workflow failure.
 
 ## Idempotency And Change Request
 
-Repeat `run` with no prompt changes and verify no duplicate revisions, specs, plans, tests,
+Repeat `$sdlc-start continue [project-folder]` with no objective changes and verify no duplicate revisions, specs, plans, tests,
 commits, or evidence.
 
 The golden-path evidence must also prove that every persisted/emitted phase
@@ -496,8 +482,8 @@ Pause after the current feature. Do not create a PR.
 Verify `sdlc-start` reads `STEERING.md`, Stop continuation respects the
 instruction, no PR is created, and clearing steering allows resume.
 
-Edit the same prompt with a requirements change, design change, and docs update,
-repeating `run` after each change. Verify `sdlc-auto-steering` records each revision in private
+Accept a requirements change, design change and docs update as successive
+objective revisions, explicitly continuing after each change. Verify `sdlc-auto-steering` records each revision in private
 steering state, redacts unsafe material, assigns a disposition, and routes
 product-truth changes to `sdlc-create-requirements` or `sdlc-create-design`
 before implementation treats them as true.
@@ -535,7 +521,7 @@ The v3 manifest also requires an exact 20-skill matrix. Every row must bind to
 the verification identity and Git heads, declare its exact evidence profiles,
 and use owner-local digest-backed assertion artifacts. Cross-layer GUI/API/
 database and restart claims require `three-tier` provenance; lightweight
-terminal and prompt-bound claims require `lightweight` provenance.
+terminal and objective-bound claims require `lightweight` provenance.
 `sdlc-merge-pr` uses the deterministic explicit-authorization hook result plus
 safety evidence and never performs a real merge. `sdlc-tui-test` requires its
 own disposable terminal evidence and is not inferred from continuation state.
@@ -546,7 +532,7 @@ own disposable terminal evidence and is not inferred from continuation state.
   outside their checkout and inside their private scope. Its receipt binds
   owner, project, baseline and default branch; no other remote or push URL is
   accepted. The origin stays frozen as local implementation advances.
-- Real prompt intake and managed worktree admission must pass without mocking
+- Public direct intake and managed worktree admission must pass without mocking
   Git promotion. Check inherited command configuration before staging or
   transport; reject redirects, borrowed objects, unsafe paths and changed guards.
 - Creation, evidence recording, resume and cleanup share the same validator.
@@ -560,7 +546,9 @@ own disposable terminal evidence and is not inferred from continuation state.
   explicitly unverified by this local live trial.
 
 The live harness resolves the active feature through the isolated host's validated
-prompt workspace and canonical execution status. Before promotion, Compose and
+session/run binding, accepted objective revision and immutable execution basis.
+Worker access to shared application resources requires the current assignment's
+exclusive runtime lease. Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
 active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may

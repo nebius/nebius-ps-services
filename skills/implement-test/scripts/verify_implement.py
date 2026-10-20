@@ -1,0 +1,435 @@
+#!/usr/bin/env python3
+"""Run Implement's lightweight, local-only verification profile."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('runtime', __file__, 'implement-test/scripts/verify_implement.py')
+
+from implement_reporting import build_report, write_private  # noqa: E402 — verified bootstrap precedes runtime imports
+from implement_lifecycle import _ensure_root  # noqa: E402 — verified bootstrap precedes runtime imports
+
+
+from agent_runtime import agent_home, installed_skills_dir  # noqa: E402
+
+
+TEST_SCRIPTS = (
+    "implement/scripts/test_implement_contract.py",
+    "worktree/scripts/test_workflow_objectives.py",
+    "worktree/scripts/test_workflow_contracts.py",
+    "worktree/scripts/test_workflow_execution.py",
+    "worktree/scripts/test_workflow_dispatch.py",
+    "worktree/scripts/test_workflow_security.py",
+    "worktree/scripts/test-worktree-manager.py",
+)
+HARNESS_TEST_SCRIPTS = (
+    "test_app_objective.py",
+    "test_native_app_server.py",
+    "test_public_workflow_trial.py",
+    "test_collect_live_evidence.py",
+    "test_implement_lifecycle.py",
+    "test_implement_reporting.py",
+    "test_implement_semantics.py",
+    "test_implement_test_contract.py",
+    "test_verify_implement.py",
+)
+IGNORED_NAMES = {"__pycache__", ".install-source-id"}
+DEFAULT_SUITE_TIMEOUT_SECONDS = 900
+
+
+def default_private_root() -> Path:
+    return agent_home() / "implement-test"
+
+
+def _files(root: Path) -> dict[str, bytes]:
+    found: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or any(part in IGNORED_NAMES for part in path.parts):
+            continue
+        found[path.relative_to(root).as_posix()] = path.read_bytes()
+    return found
+
+
+def parity(source: Path, installed: Path) -> tuple[str, str]:
+    if not installed.is_dir():
+        return "PARTIAL", "installed Implement was not found"
+    return (
+        ("PASS", "source and installed Implement copies match")
+        if _files(source) == _files(installed)
+        else ("FAIL", "source and installed Implement copies differ")
+    )
+
+
+def dependency_parity(source: Path, installed: Path) -> tuple[str, str]:
+    if not source.is_dir():
+        return "FAIL", "worktree source was not found"
+    if not installed.is_dir():
+        return "PARTIAL", "installed worktree was not found"
+    return (
+        ("PASS", "source and installed worktree copies match")
+        if _files(source) == _files(installed)
+        else (
+            "FAIL",
+            "source and installed worktree copies differ",
+        )
+    )
+
+
+def contract(source: Path) -> tuple[str, str]:
+    skill = (source / "SKILL.md").read_text(encoding="utf-8")
+    metadata = (source / "agents" / "openai.yaml").read_text(encoding="utf-8")
+    required_commands = (
+        "$implement", "$implement <implementation request>",
+        "$implement continue [project-folder]", "$implement -h", "$implement --help",
+    )
+    frontmatter = re.match(r"\A---\n(?P<body>.*?)\n---\n", skill, re.DOTALL)
+    if source.name != "implement" or frontmatter is None:
+        return "FAIL", "the source folder or frontmatter is invalid"
+    name = re.search(r"(?m)^name:\s*([^\s]+)\s*$", frontmatter.group("body"))
+    if name is None or name.group(1) != "implement":
+        return "FAIL", "the source folder and frontmatter name do not match"
+    observed_commands = tuple(re.findall(r"(?m)^\$implement[^\n]*$", skill))
+    if observed_commands != required_commands:
+        return "FAIL", "the public interface is not exactly the direct-objective actions"
+    policy_block = re.search(
+        r"(?m)^policy:\s*(?:#.*)?\n(?P<body>(?:(?:[ \t]+[^\n]*|[ \t]*)\n?)*)",
+        metadata,
+    )
+    implicit_policy = (
+        []
+        if policy_block is None
+        else re.findall(
+            r"(?m)^[ \t]+allow_implicit_invocation:\s*(true|false)\s*(?:#.*)?$",
+            policy_block.group("body"),
+        )
+    )
+    if implicit_policy != ["false"]:
+        return "FAIL", "Implement is not explicit-only"
+    if any(
+        f"$implement {name}" in skill
+        for name in ("parallel", "merge", "cleanup", "upgrade")
+    ):
+        return "FAIL", "an unsupported public compatibility command is present"
+    return (
+        "PASS",
+        "explicit-only metadata and the exact direct-objective surface are present",
+    )
+
+
+def run_tests(source: Path, timeout: int) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    for name in TEST_SCRIPTS:
+        script = source.parent / name
+        if not script.is_file():
+            results.append(
+                {"name": name, "status": "FAIL", "detail": "test script is missing"}
+            )
+            continue
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=source.parent,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            results.append({"name": name, "status": "FAIL", "detail": "test timed out"})
+            continue
+        detail = (
+            "test suite passed"
+            if completed.returncode == 0
+            else f"test suite exited {completed.returncode}"
+        )
+        results.append(
+            {
+                "name": name,
+                "status": "PASS" if completed.returncode == 0 else "FAIL",
+                "detail": detail,
+            }
+        )
+    return results
+
+
+def run_harness_tests(harness: Path, timeout: int) -> dict[str, str]:
+    scripts = harness / "scripts"
+    missing = [name for name in HARNESS_TEST_SCRIPTS if not (scripts / name).is_file()]
+    if missing:
+        return {
+            "name": "implement-test helper suites",
+            "status": "FAIL",
+            "detail": "required helper test script is missing",
+        }
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                str(scripts),
+                "-p",
+                "test_*.py",
+            ],
+            cwd=harness.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "name": "implement-test helper suites",
+            "status": "FAIL",
+            "detail": "helper test suite timed out",
+        }
+    return {
+        "name": "implement-test helper suites",
+        "status": "PASS" if completed.returncode == 0 else "FAIL",
+        "detail": (
+            "helper test suite passed"
+            if completed.returncode == 0
+            else f"helper test suite exited {completed.returncode}"
+        ),
+    }
+
+
+def verify(
+    source: Path,
+    installed: Path,
+    timeout: int,
+    harness: Path | None = None,
+    dependency_source: Path | None = None,
+    dependency_installed: Path | None = None,
+) -> dict[str, Any]:
+    checks: list[dict[str, str]] = []
+    if not source.is_dir():
+        checks.append(
+            {
+                "name": "source",
+                "status": "FAIL",
+                "detail": "Implement source is missing",
+            }
+        )
+    else:
+        status, detail = contract(source)
+        checks.append({"name": "public contract", "status": status, "detail": detail})
+        status, detail = parity(source, installed)
+        checks.append({"name": "installed parity", "status": status, "detail": detail})
+        if dependency_source is not None and dependency_installed is not None:
+            status, detail = dependency_parity(dependency_source, dependency_installed)
+            checks.append(
+                {
+                    "name": "worktree parity",
+                    "status": status,
+                    "detail": detail,
+                }
+            )
+        checks.extend(run_tests(source, timeout))
+        if harness is not None:
+            checks.append(run_harness_tests(harness, timeout))
+    deterministic = (
+        "FAIL" if any(item["status"] == "FAIL" for item in checks) else "PASS"
+    )
+    if deterministic == "PASS" and any(item["status"] == "PARTIAL" for item in checks):
+        deterministic = "PARTIAL"
+    return {
+        "mode": "lightweight",
+        "overall": "FAIL" if deterministic == "FAIL" else "PARTIAL",
+        "deterministic": deterministic,
+        "live": "NOT_RUN",
+        "lifecycle": "UNCHANGED",
+        "stages": [
+            {
+                "id": re.sub(r"[^a-z0-9]+", "-", check["name"].lower()).strip("-"),
+                **check,
+            }
+            for check in checks
+        ]
+        + [
+            {
+                "id": "live-application",
+                "name": "live application",
+                "status": "NOT_RUN",
+                "detail": "no real application, Docker runtime, or workers were started",
+            }
+        ],
+        "next_action": (
+            "Resolve the first deterministic failure and rerun $implement-test."
+            if deterministic == "FAIL"
+            else "Run $implement-test --create only when live disposable verification is required."
+        ),
+    }
+
+
+def main() -> int:
+    skill_root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source-root", type=Path, default=skill_root.parent / "implement"
+    )
+    parser.add_argument(
+        "--installed-root",
+        type=Path,
+        default=installed_skills_dir() / "implement",
+    )
+    parser.add_argument(
+        "--worktree-source-root",
+        type=Path,
+        default=skill_root.parent / "worktree",
+    )
+    parser.add_argument(
+        "--worktree-installed-root",
+        type=Path,
+        default=installed_skills_dir() / "worktree",
+    )
+    parser.add_argument(
+        "--report", type=Path, default=default_private_root() / "report.md"
+    )
+    parser.add_argument("--timeout", type=int, default=DEFAULT_SUITE_TIMEOUT_SECONDS)
+    args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    summary = verify(
+        args.source_root.resolve(),
+        args.installed_root.expanduser().resolve(),
+        args.timeout,
+        skill_root,
+        args.worktree_source_root.resolve(),
+        args.worktree_installed_root.expanduser().resolve(),
+    )
+    report = args.report.expanduser().absolute()
+    summary["report_path"] = str(report.resolve())
+    if report.parent == default_private_root().expanduser().absolute():
+        _ensure_root(report.parent)
+    write_private(report, build_report(summary))
+    print(
+        json.dumps(
+            {"summary": summary, "report": str(report.resolve())}, sort_keys=True
+        )
+    )
+    return 1 if summary["deterministic"] == "FAIL" else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1851,6 +1851,66 @@ def test_installed_run_labs_payload_matches_source():
     assert payload(ROOT / ".agents/skills/run-labs") == source
 
 
+@pytest.mark.parametrize("private_root", ["relative-private", "", None, "/private/a/../b", "/private/b\n"])
+def test_campaign_rejects_noncanonical_private_roots(tmp_path, controller_modules, private_root):
+    controller, _ = controller_modules
+    environment = {
+        "schema": "run-labs-environment/v1",
+        "private_root": private_root,
+        "target_id": "target",
+        "workspace_id": "workspace",
+        "ssh": {"target": "student@example"},
+        "cxcli": "/bin/cxcli",
+        "config": "/private/config.yaml",
+        "target": "cluster",
+        "kube_context": "cluster",
+        "reports": {"producer_root": "/data/reports", "viewer_root": "/mnt/reports"},
+    }
+    receipt = tmp_path / "environment.json"
+    skill_common.write(receipt, environment)
+    with pytest.raises(ValueError, match="private_root"):
+        controller.private_environment(receipt)
+
+
+@pytest.mark.parametrize("location", ["inside", "ancestor", "external"])
+def test_campaign_checks_storage_boundary_before_creating_directories(
+    tmp_path, monkeypatch, controller_modules, location
+):
+    from types import SimpleNamespace
+
+    controller, _ = controller_modules
+    root = tmp_path / "courses"
+    root.mkdir()
+    private = {"inside": root / "private", "ancestor": tmp_path,
+               "external": tmp_path / "private"}[location]
+    env = {"private_root": str(private), "target_id": "target"}
+    monkeypatch.setattr(controller, "catalog", lambda root: {})
+    monkeypatch.setattr(controller, "select", lambda *args: [])
+    monkeypatch.setattr(controller, "freeze", lambda *args: {"units": []})
+    monkeypatch.setattr(controller, "private_environment", lambda path: env)
+    created = []
+    original_directory = controller.directory
+
+    def directory(path):
+        created.append(path)
+        return original_directory(path)
+
+    monkeypatch.setattr(controller, "directory", directory)
+    args = SimpleNamespace(courses_root=root, course=[], lab=[], all_courses=True,
+                           workload="small", environment=tmp_path / "environment.json", dry_run=False)
+    if location != "external":
+        with pytest.raises(ValueError, match="separate from the course checkout"):
+            controller.create(args)
+        assert created == []
+        if location == "inside":
+            assert not private.exists()
+    else:
+        result = controller.create(args)
+        state = controller.load(Path(result["campaign"]))
+        assert state["environment"] == env
+        assert state["status"] == "running"
+
+
 @pytest.mark.parametrize("conflict", [False, True])
 def test_interrupted_claim_acquisition_recovers_before_effects(
     tmp_path, monkeypatch, controller_modules, conflict

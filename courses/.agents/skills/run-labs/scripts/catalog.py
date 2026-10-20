@@ -127,7 +127,7 @@ def preparation(root, course, stages):
             runtime = selected_stage["runtime"]
             owner = definitions["runtimes"][runtime]
             group = owner["group"]
-            arguments = ["--launcher", launcher]
+            arguments = ["--launcher", f"{course}/{launcher}"]
             for flag in ("experiment", "profiler", "device"):
                 if flag == "device" and (
                     lab not in bindings["labs"]
@@ -140,7 +140,7 @@ def preparation(root, course, stages):
                 arguments += ["--sanitizer", requested["sanitizer"]]
             result[launcher, selected_stage["key"]] = {
                 "launcher": launcher, "stage": selected_stage["key"], "runtime": runtime,
-                "group": group, "script": f"{group}-lab-setup.py", "arguments": arguments,
+                "group": group, "script": "lab-setup.py", "arguments": arguments,
                 "optional": bool(owner.get("optional")),
             }
     if not result:

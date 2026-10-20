@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 
@@ -151,6 +153,7 @@ def test_native_job_refuses_unsafe_or_existing_output(tmp_path, unsafe):
         ("gpu-fundamentals", "08_operator_to_kernels", "nsys", "--external-only"),
         ("gpu-optimizations", "07_profile_workload", "nsys", "--external-only"),
         ("llm-training", "30_training_profiler", "ncu", "--external-only"),
+        ("advanced-gpu-communication", "19_gradient_overlap", "ncu", "--workload"),
     ],
 )
 def test_diagnostic_specializations_are_owned_by_the_job(
@@ -162,6 +165,8 @@ def test_diagnostic_specializations_are_owned_by_the_job(
     assert required in argv
     if required == "--device":
         assert argv[argv.index(required) + 1] == "cuda"
+    if course == "advanced-gpu-communication":
+        assert argv[0] == "labs/gradient_overlap_compute.py"
 
 
 def test_all_published_job_references_are_native_and_belong_to_the_lab():
@@ -185,6 +190,35 @@ def test_all_published_job_references_are_native_and_belong_to_the_lab():
                     or "compute_companion" in row
                 )
     assert total == 110
+
+
+@pytest.mark.parametrize(
+    "job",
+    sorted({
+        catalog.parents[1] / row["jobs"]["ncu"]
+        for catalog in ROOT.glob("*/reference/observability.json")
+        for row in json.loads(catalog.read_text())["labs"].values()
+        if "ncu" in row["jobs"]
+    }),
+    ids=lambda job: str(job.relative_to(ROOT)),
+)
+def test_every_published_compute_job_preserves_existing_reports(job):
+    source = job.read_text().replace("\\\n", " ")
+    commands = [
+        shlex.split(line)
+        for line in source.splitlines()
+        if re.search(r"(?:^|\s)ncu\s", line)
+    ]
+    assert commands, "Compute recipe must expose its native profiler command"
+    for command in commands:
+        arguments = command[command.index("ncu") + 1:]
+        assert "--export" in arguments
+        # This is a valueless enabling switch in NCU. Either spelling bypasses
+        # the default report protection; a trailing false becomes the program.
+        assert not any(
+            argument.split("=", 1)[0] in {"-f", "--force-overwrite"}
+            for argument in arguments
+        ), arguments
 
 
 def test_no_python_execution_wrapper_remains():

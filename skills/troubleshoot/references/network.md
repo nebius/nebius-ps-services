@@ -4,6 +4,34 @@ Use this playbook only after defining the failing source identity and network
 namespace, destination identity, protocol, port, expected response, incident
 window, and one affected and unaffected comparison.
 
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Name fails | resolver/search path / address family / split horizon / cached result | lookup from affected namespace and identity; compare direct destination preserving protocol identity | workstation success does not prove the affected resolver path | trace resolver configuration/answer lifetime; do not bypass TLS identity |
+| Connection times out | route / return path / policy / MTU / transport | source route and listener; bounded SYN/response metadata at both ends if authorized | forward delivery without return traffic narrows to return/policy; handshake success moves upward | test MTU only for size-dependent failures; scope capture and stop conditions |
+| Handshake or request fails | TCP refusal/reset / TLS trust/SNI/time / application protocol | phase-specific error, peer identity, handshake and server protocol evidence | TLS failure occurs before application response and is not an application exception | compare intended TLS termination and trust, never disable verification as a fix |
+| Intermittent latency | connection pool wait / stale reuse / retransmits / application queue | fresh versus reused connection timing, pool occupancy and transport counter deltas | healthy new connections can coexist with stale pooled ones | follow the first delayed phase before changing network capacity |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
 ## Path Model
 
 Trace the path in order:

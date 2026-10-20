@@ -1,6 +1,6 @@
 # Lab 10: Qualify an optional thread-block-cluster launch
 
-Hopper thread-block clusters introduce an additional execution grouping beyond independent blocks. This optional lab checks that the declared cluster launch can run and produce the expected block IDs; prepare this path with `COURSE_ENABLE_SM90A=ON`.
+Hopper thread-block clusters introduce an additional execution grouping beyond independent blocks. This optional lab checks that the declared cluster launch can run and produce the expected block IDs. Shared setup prepares its separate SM90a build; this GPU job qualifies the optional execution path.
 
 ## Run
 

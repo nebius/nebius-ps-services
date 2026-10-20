@@ -297,7 +297,7 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     workflow = _workflow("nebius-cxcli-release.yml")
 
     assert workflow["name"] == "nebius-cxcli-release-publish"
-    assert workflow["permissions"] == {"contents": "write"}
+    assert workflow["permissions"] == {"contents": "write", "actions": "read"}
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
     assert set(jobs) == {"release"}
@@ -326,7 +326,7 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     verify_env = verify_step["env"]
     assert isinstance(verify_env, dict)
     assert verify_env["DIFF_BASE"] == "${{ steps.revision.outputs.commit }}^"
-    manifest_upload = _uses_step(steps, "actions/upload-artifact@v7")
+    manifest_upload = _named_step(steps, "Upload release manifest artifact")
     manifest_with = manifest_upload["with"]
     assert isinstance(manifest_with, dict)
     assert manifest_with["if-no-files-found"] == "error"
@@ -375,7 +375,12 @@ def test_release_history_check_preserves_tip_and_historical_tags(tmp_path):
         result = subprocess.run(
             ["bash", "-c", script.replace("${{ steps.revision.outputs.commit }}", revision)],
             cwd=checkout,
-            env={**os.environ, "MAIN_BRANCH": "main"},
+            env={
+                **os.environ,
+                "MAIN_BRANCH": "main",
+                "RELEASE_COMMIT": revision,
+                "GITHUB_WORKSPACE": str(Path(__file__).resolve().parents[3]),
+            },
             text=True,
             capture_output=True,
         )

@@ -35,7 +35,7 @@ def test_health_query_never_infers_full_gpu_from_missing_mig_state(value, expect
 def test_fundamentals_onboarding_is_reproducible_not_workspace_history():
     readme = text("gpu-fundamentals", "README.md")
     assert "Existing local 2.13 files" not in readme
-    assert "(../lab-guide.html#lab-preparation-scripts)" in readme
+    assert "(../lab-guide.html#lab-preparation)" in readme
     assert "(VERSIONS.md)" in readme
     versions = text("gpu-fundamentals", "VERSIONS.md")
     assert "PyTorch | 2.14.0 manifest authority" in versions

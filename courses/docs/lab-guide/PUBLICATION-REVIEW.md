@@ -1,5 +1,18 @@
 # Lab Guide publication review
 
+## Unified lab preparation and TOC alignment — 2026-10-15
+
+Reviewed HTML SHA-256: `8fbe1efa210eec1e7a81e93397f9253cbc523a3892c292a06ace652647f0adb0`.
+The canonical README and generated guide retain one software-preparation command,
+with completion-summary interpretation before separate GPU/profiler qualification.
+All 24 guide TOC destinations pass at 1440px, 390px and 320px, with keyboard access,
+local command scrolling and 200% reflow. The complete catalog passes 507 focused
+tests and all nine native validators; both final browser suites pass 33 cases.
+See the [catalog preparation review](../catalog-preparation-validation.md#unified-lab-preparation-and-toc-alignment--2026-10-15)
+for exact evidence, final artifacts, harness history and separate live limits.
+No installation, live workload or external publication occurred. Earlier entries
+remain historical evidence for their recorded artifacts.
+
 ## Catalog correctness and navigation — 2026-10-13
 
 Current HTML SHA-256: `2fda4862875918e7f188333767bd6c462011f70dc27f65fe533b64c619453c29`.

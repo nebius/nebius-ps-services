@@ -25,7 +25,7 @@ def test_auxiliary_build_preparation_has_no_lab_device_lookup(monkeypatch):
     )
     assert len(selected) == 1
     assert selected[0]["stage"] == "auxiliary"
-    assert selected[0]["arguments"] == ["--launcher", "build_and_test.sbatch"]
+    assert selected[0]["arguments"] == ["--launcher", "custom-cuda-kernels/build_and_test.sbatch"]
     assert selected[0]["group"] == "cuda"
 
 
@@ -73,7 +73,7 @@ def managed_fixture(root):
         (tools / "course_bootstrap/catalog.json").write_text(json.dumps(catalog))
         shutil.copy2(ROOT / "tools/course_runtime.py", tools / "course_runtime.py")
         shutil.copy2(ROOT / "tools/course_execution.py", tools / "course_execution.py")
-        (tools / "regular-lab-setup.py").write_text(
+        (tools / "lab-setup.py").write_text(
             "raise AssertionError('never install')\n"
         )
     state = State(root)
@@ -148,7 +148,7 @@ def test_bound_workspace_rejects_unprepared_runtime(bound_workspace, defect):
             else {"fingerprint": "stale"}
         )
         atomic_json(receipt, record)
-    with pytest.raises(ValueError, match="regular-lab-setup.py"):
+    with pytest.raises(ValueError, match="lab-setup.py"):
         runtime.load(workspace, "01_example.sbatch", launcher=True)
 
 
@@ -227,8 +227,8 @@ def test_dry_run_prepares_actual_recipe_launchers_without_mutation(tmp_path):
         u for u in plan["units"] if u["key"] == "llm-inference:30_engine_profile"
     )
     optional = next(r for r in engine["preparation"] if r["optional"])
-    assert optional["script"] == "serving-lab-setup.py"
-    assert optional["arguments"] == ["--launcher", "30_engine_profile.sbatch", "--experiment", "trtllm", "--profiler", "none"]
+    assert optional["script"] == "lab-setup.py"
+    assert optional["arguments"] == ["--launcher", "llm-inference/30_engine_profile.sbatch", "--experiment", "trtllm", "--profiler", "none"]
 
 
 def test_source_owned_adapter_uses_copy_while_installation_stays_original(
@@ -259,7 +259,7 @@ def test_source_owned_adapter_uses_copy_while_installation_stays_original(
 
 
 @pytest.mark.parametrize(
-    "defect", ["copy-drift", "binding-drift", "workspace-symlink", "missing-runtime"]
+    "defect", ["copy-drift", "publisher-drift", "binding-drift", "workspace-symlink", "missing-runtime"]
 )
 def test_remote_sync_rechecks_existing_workspace(tmp_path, monkeypatch, defect):
     monkeypatch.syspath_prepend(str(ROOT / "skills/run-labs/scripts"))
@@ -269,6 +269,7 @@ def test_remote_sync_rechecks_existing_workspace(tmp_path, monkeypatch, defect):
     home = tmp_path / "home"
     prepared = home / "courses"
     managed_fixture(prepared)
+    shutil.copy2(ROOT / "tools/course_viewer.py", prepared / "example/tools/course_viewer.py")
     synchronized = home / "run-labs-fixture"
     shutil.copytree(prepared, synchronized, ignore=shutil.ignore_patterns(".runtime"))
     source = campaign_catalog.source_identity(synchronized, ["example"])
@@ -304,6 +305,16 @@ def test_remote_sync_rechecks_existing_workspace(tmp_path, monkeypatch, defect):
     proof = json.loads(first.stdout)
     prepare.validate_proof(query, proof)
     workspace = Path(proof["units"][0]["remote_root"])
+    publisher = workspace / "tools/course_viewer.py"
+    assert publisher.read_bytes() == (ROOT / "tools/course_viewer.py").read_bytes()
+    imported = subprocess.run(
+        [sys.executable, "-I", "-B", "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); import course_viewer; "
+         "assert course_viewer.SCHEMA == 'nebius-cxcli.nsight-reports/v1'",
+         str(publisher.parent)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert imported.returncode == 0, imported.stderr
     sentinel = workspace / "results/retained.json"
     sentinel.parent.mkdir()
     sentinel.write_text("existing result\n")
@@ -311,6 +322,8 @@ def test_remote_sync_rechecks_existing_workspace(tmp_path, monkeypatch, defect):
     before = receipt.read_bytes()
     if defect == "copy-drift":
         (workspace / "labs/01_example.py").write_text("changed source\n")
+    elif defect == "publisher-drift":
+        publisher.write_text("raise RuntimeError('stale publisher')\n")
     elif defect == "binding-drift":
         atomic_json(
             workspace / ".course-runtime-source.json",
@@ -326,7 +339,7 @@ def test_remote_sync_rechecks_existing_workspace(tmp_path, monkeypatch, defect):
     assert result.returncode != 0
     assert sentinel.read_text() == "existing result\n"
     if defect == "missing-runtime":
-        assert "regular-lab-setup.py" in json.loads(result.stdout)["error"]
+        assert "lab-setup.py" in json.loads(result.stdout)["error"]
         assert not receipt.exists()
     else:
         assert receipt.read_bytes() == before
@@ -394,7 +407,7 @@ def test_copied_cuda_source_tree_invalidates_existing_build(bound_workspace):
     assert runtime.load(workspace, "01_example.sbatch", launcher=True)[1] == record
     (workspace / "labs/01_example.py").write_text("changed compiled input\n")
     with pytest.raises(
-        ValueError, match="cuda-lab-setup.py --lab 01_example"
+        ValueError, match="lab-setup.py --lab example/01_example"
     ):
         runtime.load(workspace, "01_example.sbatch", launcher=True)
 

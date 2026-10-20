@@ -30,11 +30,10 @@ def standalone_course(tmp_path_factory, request):
     return copy_course(tmp_path_factory.mktemp("standalone-course"), request.param)
 
 
-@pytest.mark.parametrize("group", selection.GROUPS)
 def test_isolated_course_supports_every_preparation_plan(
-    standalone_course, group, tmp_path
+    standalone_course, tmp_path
 ):
-    script = f"{group}-lab-setup.py"
+    script = "lab-setup.py"
     process = subprocess.run(
         [
             sys.executable,
@@ -52,7 +51,6 @@ def test_isolated_course_supports_every_preparation_plan(
     )
     assert process.returncode == 0, process.stderr
     expected = selection.resolve(
-        group,
         {standalone_course.name: ROOT / standalone_course.name},
         catalog.load_catalog(),
     )
@@ -63,19 +61,15 @@ def test_isolated_course_supports_every_preparation_plan(
 
 
 def test_standalone_setup_and_campaign_copy_share_publication_authority(
-    standalone_course, tmp_path,
+    standalone_course, tmp_path, monitoring_settings,
 ):
     standalone_course = copy_course(tmp_path / "installation", standalone_course.name)
     settings = standalone_course / ".course-environment.sh"
-    settings.write_text(
-        "export COURSE_WORKSPACE=learner\n"
-        "export COURSE_PUSHGATEWAY=http://127.0.0.1:9091\n"
-        "export COURSE_METRICS_URL=http://127.0.0.1:8428\n"
-    )
+    settings.write_text(monitoring_settings())
     settings.chmod(0o600)
     campaign = tmp_path / "campaign" / standalone_course.name
     (campaign / "tools").mkdir(parents=True)
-    (campaign / "tools/regular-lab-setup.py").touch()
+    (campaign / "tools/lab-setup.py").touch()
     (campaign / "reference").mkdir()
     shutil.copy2(standalone_course / "reference/course.json", campaign / "reference/course.json")
     binding = campaign / ".course-runtime-source.json"
@@ -87,13 +81,14 @@ from pathlib import Path
 root, campaign = map(Path, sys.argv[1:])
 sys.path.insert(0, str(root / 'tools'))
 from course_bootstrap import controller
+controller.definitions.load_catalog = lambda: {"components": {"fixture": {"kind": "commands", "artifacts": [], "commands": []}}, "runtimes": {"shared-tools": {"components": ["fixture"], "environment": {"COURSE_PUBLISH_PYTHON": sys.executable}}}}
 controller.ubuntu = lambda: {}
 controller.capacity = lambda: []
 controller.install_packages = lambda *args, **kwargs: None
 controller.setup(
-    root / 'tools/regular-lab-setup.py',
+    root / 'tools/lab-setup.py',
     lambda **kwargs: (root / '.runtime').mkdir(mode=0o700, exist_ok=True),
-    plan={'group': 'regular', 'runtimes': []},
+    plan={'runtimes': ['shared-tools']},
 )
 from course_publication_state import authority
 directory, identity = authority(root)

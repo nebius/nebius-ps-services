@@ -126,7 +126,6 @@ def test_prepare_and_help_need_no_site_packages(tmp_path):
     path = course(tmp_path)
     for args in (
         ["--help"],
-        ["monitoring", "--help"],
         ["organize-history", "--help"],
     ):
         result = subprocess.run(
@@ -135,7 +134,7 @@ def test_prepare_and_help_need_no_site_packages(tmp_path):
                 sys.executable,
                 "-I",
                 "-S",
-                str(ROOT / "tools/regular-lab-setup.py"),
+                str(ROOT / "tools/lab-setup.py"),
                 *args,
             ],
             capture_output=True,
@@ -167,7 +166,7 @@ def test_malformed_metadata_fails_cleanly_before_any_write(tmp_path, document):
             sys.executable,
             "-I",
             "-S",
-            str(ROOT / "tools/regular-lab-setup.py"),
+            str(ROOT / "tools/lab-setup.py"),
             "prepare",
             "--courses-root",
             str(tmp_path),

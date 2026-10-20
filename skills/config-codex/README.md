@@ -38,7 +38,7 @@ $CODEX_HOME/
 |   |-- test_strategist.toml
 |   `-- risk_reviewer.toml
 |-- task-state/
-`-- task-implementer/  # optional private prompt workspace
+`-- implement/  # optional private execution state
 ```
 
 Normal session startup advertises task state lazily. Compaction and the first
@@ -82,7 +82,7 @@ $CODEX_HOME is patched or populated
   +--> hooks.json and hook scripts
   +--> read-only custom-agent config layers
   +--> private task-state directory
-  `--> optional private task-implementer directory
+  `--> optional private implement directory
   |
   v
 Codex is restarted and hooks are reviewed in /hooks
@@ -182,21 +182,21 @@ notice/TUI state, and config keys not verified by current official Codex
 documentation. Restore those private layers through their owning setup flow,
 not by adding them to the public template.
 
-### Private Prompt Workspace Is Explicitly Opt-In
+### Private Execution State Is Explicitly Opt-In
 
-When a user asks to enable the `task-implementer` private prompt workspace,
-create `$CODEX_HOME/task-implementer` outside every Git worktree and Git
+When a user asks to enable the `implement` private execution state,
+create `$CODEX_HOME/implement` outside every Git worktree and Git
 metadata directory with mode `0700`. Reject a symlink at that path and never
-print prompt bodies during setup or validation.
+print private objective contents during setup or validation.
 
-For an existing `workspace-write` sandbox, append the rendered absolute prompt
+For an existing `workspace-write` sandbox, append the rendered absolute execution-state
 root to `sandbox_workspace_write.writable_roots` while preserving all current
 roots. A `danger-full-access` setup needs no writable-root patch. Never switch
 the user's `sandbox_mode` or `approval_policy` for this integration. If access
 cannot be persisted, report this exact generic per-session alternative:
 
 ```bash
-codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
+codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"
 ```
 
 The normal idempotency preflight ignores this optional integration. Its opt-in
@@ -205,7 +205,7 @@ mode validates the location, symlink, mode, and sandbox access contract:
 ```bash
 python3 config-codex/scripts/check-local-idempotency.py \
   --codex-home "$CODEX_HOME" \
-  --require-task-implementer-workspace
+  --require-implement-state
 ```
 
 The public-safe MCP baseline in `assets/config.toml.template` covers reusable
@@ -448,9 +448,9 @@ setup.
      --codex-home "$CODEX_HOME"
    ```
 
-   If the user also requested private prompt-workspace access, create the
+   If the user also requested private execution-state access, create the
    `0700` directory, apply only the mode-appropriate writable-root patch, and
-   rerun with `--require-task-implementer-workspace`.
+   rerun with `--require-implement-state`.
 
 5. If the preflight fails, let Codex patch only the failed surfaces from the
    templates in `assets/`. Existing `AGENTS.md` and `config.toml` must be
@@ -654,8 +654,8 @@ setup.
   installed helper or its dependencies.
   Exact `AGENTS.md` template parity and public MCP baseline
   parity are explicit audit modes, not normal laptop setup requirements.
-  Private task-implementer directory and workspace access checks are likewise
-  opt-in through `--require-task-implementer-workspace`.
+  Private implement directory and workspace access checks are likewise
+  opt-in through `--require-implement-state`.
 
 Low-level hook file sync can use the root installer:
 
@@ -713,7 +713,7 @@ complete reviewed hook payloads into their own plugin data directory. Both
 routes use the same helpers, selected host's private state and native identity;
 never edit an installed plugin cache. Claude's Bash identity binding composes
 with the authentication hook and keeps worker identities distinct. Use the
-complete hook bundle for Task Implementer and SDLC on Claude.
+complete hook bundle for Implement and SDLC on Claude.
 
 Codex configuration reconciliation remains owned by `config-codex`. Its copied
 hook templates require these shared support files even though the configured

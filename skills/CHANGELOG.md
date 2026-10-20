@@ -4,6 +4,137 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Emit the independently observed image digest after verifying every immutable
+  alias against publication evidence; keep malformed and conflicting values blocked.
+
+- Stop catalog installation before replacing runtimes used by retained custom
+  capture registrations. Preserve their files and settings for owner
+  reconciliation, and cover both native hosts through the full installer.
+
+- Keep the shared workflow engine parseable on Python 3.11 and align commit
+  contract checks with coordinator-owned worker completion.
+
+- Preserve admitted SDLC phase receipts across owner-linked delivery-only spec
+  settlement. Keep new admission strict and reject changed execution contracts,
+  missing impact ancestry, altered records and unadmitted historical evidence.
+
+- Preserve rejected SDLC fixtures and report their failed admission without
+  entering dependent hook tests. Read lightweight evidence from the current
+  accepted-objective schema, reject retired prompt-binding evidence, and keep
+  semantic PASS requirements intact. Retain bounded failed-test identifiers and
+  exit codes in suite failures without exposing raw diagnostic output. Align runtime lease, session ownership,
+  coordinator schema and bounded test-budget documentation with the redesign.
+
+- Qualify the installed Codex Implement workflow in a fresh disposable
+  multi-tier trial: four isolated tasks, native overlap and slot refill,
+  specification ownership, local delivery, unchanged fresh continuation,
+  application/database/restart semantics, canonical validation and exact cleanup.
+  All 11 deterministic checks and 17 live lifecycle stages passed; preserve
+  failed-trial history and keep arbitrary-plan and live Claude limits explicit.
+
+- Wait for Implement Test service health before application checks and after
+  the API restart. Bound startup polling, reject invalid inventories and failed
+  services, and share lifecycle error types across imported helpers and the CLI.
+
+- Prepare Implement's integration checkout before initial specification
+  publication. Journal and verify the exact canonical-pair commit before
+  freezing execution; preserve source identity and unrelated dirt. Reject
+  uncommitted or ignored canonical inputs, unrelated bootstrap changes and
+  publication during incomplete allocation; recover only the journaled tree.
+
+- Validate completed Implement assignments against their immutable historical
+  bases and the hash-linked final owner specification reconciliation. Reject
+  changed execution contracts and broken lineage without mistaking a legitimate
+  final spec receipt for stale worker provenance.
+
+- Require self-contained Implement task contracts before plan locking and
+  dispatch. Carry concrete interfaces, schema, fixed values and constraints in
+  assignment fields, and include the verifier's tier contracts in its public
+  fixture request.
+
+- Keep Implement Test's public invocation receipt with the active fixture's
+  native observations so lifecycle semantic validation can consume the
+  launcher's output. Add a regression across the launcher and lifecycle
+  ownership boundary without writing verifier evidence into product run state.
+  Distinguish failed intake from incomplete native observation and retain only
+  bounded diagnostic counts and allowlisted blocker codes.
+  Preserve failed-test corrective actions when exact cleanup succeeds.
+  Replace the launcher's forced Git-read-only sandbox with a scoped native
+  permission profile for the owned fixture, with native effective-configuration
+  checks across active layers. Require runtime Git permission
+  before Implement edits canonical specs, and report unavailable permission.
+  Give the verifier exclusive ownership of the fresh post-delivery continuation.
+  Observe ephemeral workers through the owning native App Server, with bounded
+  metadata snapshots, terminal-failure handling, and exact process cleanup.
+  Preserve refill evidence across separate termination and admission snapshots,
+  while rejecting interrupted peers and replacement starts before admission.
+
+- Bind required workflow references, supporting owner instructions, and the
+  worker result schema to Implement's immutable execution basis. Reject changed,
+  missing, or symlinked contract inputs before dispatch, and include sensitive-data
+  regressions in the required Implement Test profile. Complete Implement's
+  stateful-workflow usage and input sections without changing its public interface.
+
+- Align merge recovery routing, release/image workflow ownership and publishing evidence; preserve exact-result CI and use disjoint release/manual image aliases. Match image trigger guidance and the repository example to those lanes.
+
+- Fix local skill ownership when switching between an individual skill and its
+  parent catalog, preserving unrelated-source and unmanaged destinations. Stop
+  reporting intentional identical shared-hook payloads as duplicate destinations;
+  conflicting payloads still fail preflight.
+
+- Replace prompt-file orchestration with direct conversation objectives and
+  explicit cross-session continuation. Rename Task Implementer and its verifier
+  to `implement` and `implement-test`; retire capture hooks, persistent lanes,
+  unrelated-objective queues and obsolete state without aliases or conversion.
+- Share Worktree execution primitives across Implement and Agentic SDLC: frozen
+  objective/spec/plan bases, fresh task worktrees, deterministic slot refill,
+  exclusive runtime leases, writer quiescence, retained recovery evidence and
+  verified local delivery. Guard canonical spec publication at its owner boundary.
+- Repair steering handoffs and retained-wave delivery, resumed verifier ownership,
+  worker-owned runtime lease consumption, result screening and whole-bundle
+  customized-hook preservation. Route steering through ordinary specification
+  reconciliation and reject obsolete worker commit authorization.
+- Align SDLC phase evidence, both verification skills, installers, metadata and
+  documentation with direct intake. Separate deterministic, installed, native
+  and application proof; retire only exactly owned capture payloads and preserve
+  customized hooks, private history and retained worktrees.
+
+- Reconcile Agentic SDLC verification evidence after the completed source live
+  trial. Record observed application and nested-workflow results while keeping
+  aggregate certification PARTIAL and installed-runtime limits explicit.
+
+- Resolve SDLC canonical-spec reconciliation against the registered integration
+  scope before promotion and the exact primary revision afterward. Preserve
+  delivery-only plan settlement, interrupted promotion recovery, primary-anchor
+  safety and strict worktree identity checks.
+
+- Repair the SDLC preflight's stale troubleshooting contract lookup after the
+  handoff rules moved into their canonical reference. Check both the reference
+  link and its rules, with regressions for missing handoffs and authority limits.
+
+- Repair Agentic SDLC post-promotion documentation routing and raw-commit
+  authorization guidance. Require owner-executed three-tier test receipts
+  instead of nonempty logs, derive GUI counts from owned Playwright UAT, and
+  repair stale diagnostic capability discovery. Preserve failed attempts and
+  exact promoted source/image identities without changing public commands.
+
+- Refactor troubleshooting around adaptive failing-path evidence, conditional domain
+  guides and preserved causal/authority contracts; introduce bounded selective
+  collection and schema-v2 repeated-trial accounting, plus isolated diagnostic
+  qualification fixtures and direct helper/hook CI coverage. Native qualification
+  and actual user installation are separate from deterministic source validation.
+
+- Preserve sanitized completion-candidate diagnostics and original failure exit
+  codes in the protected-merge template. Add executable workflow regressions
+  for target output, failure propagation, and environment-secret nondisclosure.
+
+- Enforce predictable PR checkout completion through the canonical transaction:
+  preserve remote-only reviews, switch back after local review, fast-forward only
+  eligible original/default refs after verified merge, and retain publication
+  checkout policy. Journal resumable effects separately from publication heads;
+  report local completion independently of exact-result CI/Pages and deletion.
+  Upgrade strict task/checkpoint/closure schemas together without legacy replay.
+
 - Make Grafana MCP setup fail closed on unreadable or malformed registration
   discovery, reject unapproved drift before identity/token writes, and require
   executable equivalent wrappers. Cover repeated setup, one-time renewal,
@@ -325,13 +456,13 @@ All notable changes to the reusable Agent Skills are tracked here.
   `UNAVAILABLE` instead of aborting skill evaluation; well-formed incomplete
   grades still report `FAIL`.
 
-- Corrected Task Implementer’s sequential and recovery worker fallback to use
+- Corrected Implement’s sequential and recovery worker fallback to use
   the executing agent, its private home and a fresh session identity. Claude
   uses native print mode without a permission override; existing exact-start,
   immutable-result and recovery guards remain enforced. Private launch flags
   now use host-neutral names without aliases.
 
-- Added the native Task Implementer and SDLC harness regression suites to
+- Added the native Implement and SDLC harness regression suites to
   skills CI, covering host selection, cross-host resume rejection, verifier
   fixtures and live-procedure routing. Corrected remaining shared-workflow
   README paths and session wording to use the selected agent.
@@ -437,7 +568,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   bounded read-only HTML/source checks and output-quality cases; removed the
   split-page and learner-history starter defaults. Hardware, language and
   runtime qualification remain course-specific, with separate evidence lanes.
-- Clarified `task-implementer --help` for lane retirement after the primary
+- Clarified `implement --help` for lane retirement after the primary
   checkout changes branches. Help now warns that default current-directory
   lookup may resolve another workspace and shows a public-safe placeholder
   example targeting the project directory inside the existing lane, without
@@ -459,7 +590,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   head destinations and remote-tracking refreshes prevent ref-like branch names
   from creating tags and prevent stale fetch configuration from authorizing a
   tag on outdated default-branch history.
-- Unified project-spec management across ordinary sessions, Task Implementer,
+- Unified project-spec management across ordinary sessions, Implement,
   and Agentic SDLC. The v2 owner contract separates requirement state, design
   readiness, and delivery; publishes both documents with Git/file-digest
   compare-and-set and split-write rollback; and records implementation and
@@ -476,14 +607,14 @@ All notable changes to the reusable Agent Skills are tracked here.
   and no longer emits `ADVISORY_UNAVAILABLE` because a private `lifecycle.json`
   is absent. Project-spec PreToolUse,
   PostToolUse, and Stop registrations are retired; hook failures remain
-  nonblocking. Canonical v1, Task Implementer v1, and Agentic SDLC v1 pairs
+  nonblocking. Canonical v1, Implement v1, and Agentic SDLC v1 pairs
   upgrade only through explicit migration, with no normal-path compatibility
   parser. Dedicated CI covers the canonical owner, transaction and hook paths,
   Task planning/resume, SDLC prompt/start/hook/execution paths, installer
   retirement, and project-instruction generation/retention.
 - Made historical project lifecycle phase state fully advisory. Ordinary hooks
   now emit bounded context only and never deny tools, continue Stop, or gate a
-  session. Task Implementer owns its prompt-impact schemas and no longer has a
+  session. Implement owns its prompt-impact schemas and no longer has a
   lifecycle authorization bridge, project-agent dispatch receipt, terminal
   seal, reload gate, or runtime contract-delta overlay. Agentic SDLC likewise
   excludes historical phase state and project-instruction lifecycle from its
@@ -562,7 +693,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   absolute trusted Python and installed-helper paths, and malformed-command
   feedback distinguishes that trust boundary from project-instructions inspect
   bundle flags without weakening coordinator validation.
-- Fixed prompt-session intake so an active Task Implementer or Agentic SDLC
+- Fixed prompt-session intake so an active Implement or Agentic SDLC
   objective can no longer bind an unrelated fresh Codex session. Capture now
   requires an exact init or run invocation in that same session; registry
   entries retain objective identity and writer provenance without acting as a
@@ -612,7 +743,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   required project-instructions workflow step, made authoring templates
   Markdownlint-safe, corrected requirements-adapter safety wording, and added
   real-source catalog and workflow ownership regressions.
-- Replaced the generated Task Implementer pending-change dump with a concise
+- Replaced the generated Implement pending-change dump with a concise
   human `Show Lane Status` task and hard-cut `lane-report-v2` machine view.
   Status now reports only persistent-lane generations, current or latest
   task/worker/wave progress, current and remaining steps, and the next public
@@ -621,11 +752,11 @@ All notable changes to the reusable Agent Skills are tracked here.
   lease-resource inspection, checkpointing, integration, and metadata writes.
   The exact previous four-task workspace shape migrates explicitly; all older
   or altered shapes remain tampered.
-- Fixed project-contract recovery after a Task Implementer worker commit. The
+- Fixed project-contract recovery after a Implement worker commit. The
   canonical lifecycle library now accepts the hook-owned
   `task-worker-delegated` waiver and lets a later prompt reopen normal planning,
   matching the state already produced and validated by the installed hook.
-- Fixed the Task Implementer aggregate verifier's per-suite timeout so the
+- Fixed the Implement aggregate verifier's per-suite timeout so the
   measured full wave and linked-worktree crash matrix completes within its
   bounded validation window instead of being reported as a false timeout.
 - Fixed project-instruction terminal sealing after another authorized workflow
@@ -633,7 +764,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   re-adopted only with explicit approval of the exact current target digest and
   unchanged project, Git root, scope, target path, and managed-body identity;
   subject drift, body drift, and missing or stale approval remain blocked.
-- Fixed final Task Implementer cleanup after a sealed terminal lifecycle commit
+- Fixed final Implement cleanup after a sealed terminal lifecycle commit
   carries the validated requirements, design, or project-instruction overlay.
   Prompt-impact settlement now accepts that exact journal-bound direct child in
   addition to the ordinary coordinator documentation commit; unrelated or
@@ -643,7 +774,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   non-final material impact continues to require replanning. Replay also
   recognizes the exact partially published state where the new impact receipt
   is current but its plan-basis binding is stale.
-- Fixed Task Implementer correction-contract preparation under an active
+- Fixed Implement correction-contract preparation under an active
   project lifecycle. A new hidden, journaled `coordinator-stage` transition
   admits only the complete canonical requirements/design pair in the exact
   registered integration worktree, and the existing coordinator commit owner
@@ -652,7 +783,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   hook authenticates both transitions during reconciliation while continuing
   to deny direct staging, direct commits, partial specs, extra paths, stale
   worktrees, and lookalike helpers.
-- Fixed Task Implementer resume deadlock when a resource-free `wave-prepare`
+- Fixed Implement resume deadlock when a resource-free `wave-prepare`
   publishes newer prompt-impact evidence that invalidates its plan. Resume now
   detects the exact stale impact, retires only a no-effect prepare intent with
   no worktree, assignment, or pending Git journal, and routes to a fresh
@@ -670,11 +801,11 @@ All notable changes to the reusable Agent Skills are tracked here.
   the plan, advances the write epoch, and reopens reconciliation. The
   current-session decision can then be corrected and replanned instead of
   remaining irrecoverably stuck in `planned`.
-- Fixed Task Implementer promotion-pending resource recovery so a missing
+- Fixed Implement promotion-pending resource recovery so a missing
   registered integration checkout can be safely rehydrated when immutable task
   history contains both merged corrections and superseded no-op predecessors.
   Every active or failed non-superseded task state still blocks recovery.
-- Fixed Task Implementer source integration after combined review requests
+- Fixed Implement source integration after combined review requests
   changes. The exact rejected two-parent candidate is now digest-bound to the
   blocking findings, archived behind compare-and-set proof, and released
   through an interruption-safe private journal before the lane becomes
@@ -718,7 +849,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   Recovery of such dirty scope expansion is now reporting-only and supplies no
   commit authorization, allowing a fresh worker to publish terminal
   `REPLAN_REQUIRED` evidence without silently discarding or adopting the dirt.
-- Fixed Task Implementer promotion after an adopted selected-lane contract was
+- Fixed Implement promotion after an adopted selected-lane contract was
   legitimately reconciled by the one claim-bound final coordinator commit.
   Resume now recognizes the exact unchanged lane overlay through its immutable
   adoption ancestry, promotion clears it for fast-forward, and failed promotion
@@ -730,14 +861,14 @@ All notable changes to the reusable Agent Skills are tracked here.
   impact rejection only when the clean selected lane exactly equals the sealed
   integration target; cleanup still performs exact reconciliation.
   Unrelated or materially plan-changing drift stays blocked.
-- Fixed Task Implementer lifecycle authorization after worker integration. The
+- Fixed Implement lifecycle authorization after worker integration. The
   coordinator can now validate its documented requirements, design, README,
   and changelog reconciliation at the sealed `promotion_pending` head, while
   product edits, untracked or deleted files, symlinks, and head drift remain
   rejected. A journaled private `coordinator-commit` now stages and creates the
   single claim-bound direct-child documentation commit, closing the same
   selected-lifecycle hook boundary without permitting raw Git mutation.
-- Fixed Task Implementer correction recovery for terminal
+- Fixed Implement correction recovery for terminal
   `REPLAN_REQUIRED` results. Resume now accepts and replays the immutable
   terminal result idempotently; an exact clean no-op failed task can be
   retained as first-class `superseded` history, have only its proven worker
@@ -747,19 +878,19 @@ All notable changes to the reusable Agent Skills are tracked here.
   restored by exact path before correction; the ref survives promotion and is
   deleted only by successful cleanup. Untracked, committed, mismatched, or
   unverifiable dirt remains blocked.
-- Fixed Task Implementer worker-result completion in two related failure
+- Fixed Implement worker-result completion in two related failure
   boundaries: commands without a `--json` option no longer crash during common
   output emission after publication, and `changed_paths` are now canonicalized
   as a sorted unique set so claim-order output cannot be misclassified as a
   scope expansion. An exact digest-and-commit-bound retry can recover only the
   prior ordering-only false-rejection state without rewriting private run data.
-- Fixed retained Task Implementer current-v7 workers becoming unreadable when
+- Fixed retained Implement current-v7 workers becoming unreadable when
   canonical worker guardrail wording grew after successful `task-start`.
   Unstarted assignments still require current guardrails; already-started
   assignments remain bound to their exact accepted digest and receive current
   recovery, commit, and result-publication contexts without private-state
   rewriting or an older-schema compatibility path.
-- Fixed Task Implementer delegated commits failing when a worker's canonical
+- Fixed Implement delegated commits failing when a worker's canonical
   Python version differed from the lifecycle hook runtime. Hook and adapter
   trust now accept only the hook interpreter or an exact PATH-canonical
   `python3`/`python3.N`, while retaining exact helper, digest, action, evidence,
@@ -779,7 +910,7 @@ All notable changes to the reusable Agent Skills are tracked here.
 - Added a claim-bound worker-result publisher that validates the complete draft,
   computes the canonical final digest, and atomically publishes the immutable
   result from its private external working directory.
-- Fixed explicit Task Implementer `run` failing after a package-manager Python
+- Fixed explicit Implement `run` failing after a package-manager Python
   upgrade removed the resolved interpreter recorded in the generated VS Code
   workspace. The exact stale-launcher failure now refreshes only that generated
   file through canonical workspace initialization and revalidates the complete
@@ -813,7 +944,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   skills, migrated legacy Markdown trigger authorities, and retained detailed
   workflow or output-quality scenarios as supplemental cases where needed.
   Invocation policy and workflow behavior are unchanged.
-- Added crash-safe Task Implementer `run-summary-v1` completion evidence with
+- Added crash-safe Implement `run-summary-v1` completion evidence with
   immutable replay, evidence-backed source movement, full-repository and scoped
   Git file/line/binary statistics, queue status, exact integration readiness,
   and sanitized structured next actions. The generated workspace now labels
@@ -850,10 +981,10 @@ All notable changes to the reusable Agent Skills are tracked here.
   without accepting a second handoff status or changing machine state.
   Coordinator-v1 through v6 remain unsupported and no public resume action or
   flag was added.
-- Raised the Task Implementer lightweight verifier's bounded per-suite default
+- Raised the Implement lightweight verifier's bounded per-suite default
   from 300 to 600 seconds so the full disposable linked-worktree interruption
   suite is not falsely reported as timed out.
-- Added a fail-closed Task Implementer correction transition for blockers found
+- Added a fail-closed Implement correction transition for blockers found
   by combined review before wave promotion. An exact clean
   `promotion_pending` integration can append one independent worker-owned
   correction round without advancing the persistent lane, rewriting prior
@@ -865,7 +996,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   carries to the correction base only when the authoritative receipt differs
   solely by an ancestral Git head and all spec, traceability, project,
   validator, and instruction identities remain exact.
-- Added owner-validated prompt-revision impact evidence for Task Implementer
+- Added owner-validated prompt-revision impact evidence for Implement
   and Agentic SDLC. Existing exact-byte and normalized-intent digests continue
   to detect editable prompt changes without a self-hash header; a shared pure
   validator now requires one bounded disposition for every extracted statement
@@ -878,7 +1009,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   preserve terminal history without fabricated evidence and expose only a
   sanitized public impact classification. Matching spec bytes or an
   unsubstantiated `no_effect` label no longer unlocks progression.
-- Added evidence-preserving recovery for Task Implementer active-wave paths
+- Added evidence-preserving recovery for Implement active-wave paths
   that disappear while their Worktree lease and locked Git registrations
   remain. A confirmed-stopped internal coordinator action now verifies the
   exact active generation, resource tuple, branch and registered head,
@@ -898,7 +1029,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   by the Task adapter instead of requiring the nested command to equal the
   outer lifecycle payload session, without admitting raw Git, future batches,
   mismatched sessions, or sibling roots.
-- Added a fail-closed Task Implementer lifecycle adapter for the active
+- Added a fail-closed Implement lifecycle adapter for the active
   prepared integration checkout. The Task helper now attests the exact run,
   wave, clean Git identity, selected project, co-located
   project-instructions helper, command digest, and run-owned evidence paths;
@@ -914,7 +1045,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   copying or user-managed lifecycle IDs. Its hook-only authorization command
   is parsed outside discoverable helper subcommands, so CLI help exposes
   neither the private action nor its flags.
-- Added `$task-implementer workspace reuse [project-folder]` as an explicit
+- Added `$implement workspace reuse [project-folder]` as an explicit
   existing-only reopen path. It resolves the same workspace from the primary
   source project or owning managed lane, validates the generated VS Code
   workspace, exact caller root, existing source ref, and authoritative live
@@ -923,7 +1054,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   checkpoints, migrates, queues, runs, integrates, removes, or creates state.
   Missing, unsafe, removed, or mismatched state fails closed, while editor
   launch failures remain non-fatal after validation.
-- Added a built-in Task Implementer pre-run checkpoint for resource-free
+- Added a built-in Implement pre-run checkpoint for resource-free
   persistent lanes. `run` now compiles planned claims, reserves the exact tree
   and path digest, pauses dirty candidates for complete review, claims every
   changed path, and uses a review-token-bound Worktree transaction to run
@@ -948,7 +1079,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   tree and clean result. Raw Git mutation remains denied, active Agentic SDLC
   keeps `sdlc-commit` ownership, Worktree preparations share the repository
   lock, Task workers receive assignment/session-bound commit authorization,
-  and dirty Task Implementer sources receive an explicit `$commit` handoff
+  and dirty Implement sources receive an explicit `$commit` handoff
   instead of auto-commit or project-scoped staging. Hook-modified direct-child
   commits now stay review-required until an exact private review transition
   acknowledges the inspected commit and tree; failed hooks that create no
@@ -957,7 +1088,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   and malformed Worktree ownership or coordination records fail closed. A
   successful prepare remains bound after its one-shot authorization is
   consumed, so PostToolUse does not incorrectly reopen lifecycle evidence.
-  Exact-child crash recovery now revalidates live Task Implementer worker
+  Exact-child crash recovery now revalidates live Implement worker
   ownership before completing a delegated claim. Caller-provided Git
   environment that can reshape repository discovery, worktree/common-dir,
   object storage, command configuration, or the real index now fails before
@@ -981,7 +1112,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   prose cannot make a placeholder satisfy the gate.
 - Added the internal explicit-only `prompt-session-intake` owner and its
   non-blocking `UserPromptSubmit` capture hook for sessions explicitly bound to
-  Task Implementer or Agentic SDLC. Every direct prompt continues to the
+  Implement or Agentic SDLC. Every direct prompt continues to the
   current agent; safe input records only metadata-only event-v2 session/turn
   provenance and never the submitted prompt body, while
   secrets, stale writer provenance, ambiguity, conflicts, unsafe state, and
@@ -1002,7 +1133,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   excludes an exact peer-generated Stop continuation without relying on an
   undocumented prompt-origin field.
 - Added the implicit `maintain-project-specs` skill as the single canonical
-  requirements/design owner for ordinary projects, Task Implementer, and
+  requirements/design owner for ordinary projects, Implement, and
   Agentic SDLC. It provides stable-ID managed regions, shared v3 receipts,
   committed project opt-out, exact-scope lifecycle state, journaled paired
   migration and recovery for both former formats, pre-implementation rule
@@ -1053,7 +1184,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   records, official-source verification, and logical-only implementation
   handoffs; adjacent `app-stack`, `design`, and `research` skills now route
   AI-specific decisions to it.
-- Added Prompt Durability v2 to Task Implementer and Agentic SDLC. Managed
+- Added Prompt Durability v2 to Implement and Agentic SDLC. Managed
   prompts now require only generated metadata plus a meaningful Ask; optional
   and custom sections feed a coordinator-owned requirements compiler with
   selective stable clarifications. Generated `00-START-HERE.md` hubs and
@@ -1065,7 +1196,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   indentation remains semantic, lineage and immutable snapshots are
   integrity-checked, and ready refinement state must match the exact compiled
   requirements contract before planning. Prompt-v1 execution is a hard cut
-  with read-only history and no migration. The disposable Task Implementer
+  with read-only history and no migration. The disposable Implement
   live-test prompt renderer now accepts only the same v2 managed frontmatter.
   Fence-aware parsing keeps Markdown examples inside Ask, revision and
   refinement writes recover at an explicit manifest/binding commit point, and
@@ -1134,7 +1265,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   modes, with strict dependency/configuration preflight and Python 3.11 minimum.
 - Converted `align-skill` to a portable core with Codex/Claude validation
   profiles. Retained OpenAI metadata, intentional `config-codex` behavior and
-  Task Implementer/SDLC authorization, commit, state and recovery contracts.
+  Implement/SDLC authorization, commit, state and recovery contracts.
 - Added Claude invocation metadata and native hook/worker identity adapters;
   retained one bounded Stop arbiter and preserved unrelated Claude settings.
 
@@ -1203,7 +1334,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   `Agent` from required runtime services rather than framework naming;
   authenticated resume and cancel mutations require optimistic concurrency,
   and the durable workflow owner is selected from workload evidence.
-- Replaced the Task Implementer README's text-only lifecycle map with a
+- Replaced the Implement README's text-only lifecycle map with a
   polished visual workflow that distinguishes long-lived and temporary Git
   roles, isolated worker commits, verified wave promotion, repeated dependency
   waves, run finalization, and explicit public source integration.
@@ -1219,7 +1350,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   fails closed. Nested selected projects now resolve instruction discovery from
   the nearest effective marker ancestor within the enclosing Git worktree
   while retaining their own receipt, evidence, and `AGENTS.md` target scope.
-- Upgraded Task Implementer and Agentic SDLC editable prompts to prompt-v3.
+- Upgraded Implement and Agentic SDLC editable prompts to prompt-v3.
   Every full prompt ID now has an exact collision-safe short reference stored
   in metadata and prefixed to its filename, and public `run` accepts the ref,
   full ID, exact filename, or managed path. Initialization performs a one-time
@@ -1283,7 +1414,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   existing byte; later human-prefix edits remain outside automation ownership,
   while marker or managed-body edits fail closed. Refresh preserves the exact
   prefix, retirement restores it or deletes a generated-only file, v1/v2
-  markers require manual resolution, and Task Implementer plus Agentic SDLC
+  markers require manual resolution, and Implement plus Agentic SDLC
   consume the shared v3 schemas and `attached` outcome.
 - Documented the current source-hook catalog in the root README: five
   installer-discovered bundles, 13 source entries converging to 11 distinct
@@ -1301,7 +1432,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   guidance, while deleted resize markers fail closed without suggesting a
   budget reset. Authorization binding, patch-only repair, terminal locks, and
   the one-continuation Stop bound remain unchanged.
-- Refactored Task Implementer around persistent Worktree-owned per-project
+- Refactored Implement around persistent Worktree-owned per-project
   lanes. `workspace init` is idempotent by canonical repository, named source
   ref, and scope; it permits dirty source state while basing the lane only on
   committed `HEAD`. Runs now acquire monotonic generations with repository-wide
@@ -1315,7 +1446,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   promotion plus same-lane rearm, and `workspace remove [project-folder]` for
   proof-gated explicit cleanup that preserves prompt/run history. General
   Worktree schema-v4 and public lifecycle behavior remain compatible, while
-  public Worktree integration/removal reject Task lanes. The Task Implementer
+  public Worktree integration/removal reject Task lanes. The Implement
   README now provides a generic post-run operator workflow covering source
   integration, primary-checkout manual acceptance, defect follow-up,
   independent publication, and optional lane retirement. It also defines the
@@ -1323,18 +1454,18 @@ All notable changes to the reusable Agent Skills are tracked here.
   source integration candidate, and private prompt state; distinguishes
   internal wave integration from public source integration; and explains that
   lane cleanliness is a managed precondition, not a request for a manual
-  `$commit` or destructive cleanup. The Task Implementer contract smoke test
+  `$commit` or destructive cleanup. The Implement contract smoke test
   now preserves those core README distinctions.
-- Changed `task-implementer workspace init` to ask VS Code to reuse its last
+- Changed `implement workspace init` to ask VS Code to reuse its last
   active window for the generated `CODE` + `PROMPTS` workspace instead of
   always opening a new window. Focused tests now lock the workspace and prompt
   editor arguments, and the runtime contract documents the extension-host
   restart boundary.
-- Clarified in the Task Implementer README that `workspace init` creates no
+- Clarified in the Implement README that `workspace init` creates no
   project documentation, while `run` creates or updates Task
   Implementer-managed `docs/requirements.md` and `docs/design.md` regions and
   rejects Agentic SDLC-owned specification schemas.
-- Hardened Task Implementer prestart recovery with a coordinator-owned,
+- Hardened Implement prestart recovery with a coordinator-owned,
   compare-and-swap lease rearm at the exact clean assigned base. A fresh lease
   preserves the immutable assignment and existing wave/generation resources,
   stale workers cannot start with the old lease, interrupted responses recover
@@ -1358,7 +1489,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   rendered body is unchanged. Empty root-marker lists follow Codex's
   no-parent-traversal semantics; ignored targets, untracked human instruction
   sources, control-character rule injection, incomplete requirement coverage,
-  and Agentic marker/body mapping drift now fail closed. Task Implementer and
+  and Agentic marker/body mapping drift now fail closed. Implement and
   Agentic SDLC issue receipts only for tracked specs, and Task dispatch proves
   specs plus active/ancestor project instructions belong to the exact clean
   integration contract commit. Project-file changes require a fresh Codex
@@ -1382,16 +1513,16 @@ All notable changes to the reusable Agent Skills are tracked here.
   interrupted handoffs, active attempts, unsafe dirt, and head races fail closed.
   Successful preparatory commits are retained for retry. Documented the serial
   child-integration topology and source-only publication boundary.
-- Aligned every Task Implementer and Agentic SDLC `worktree` composition
+- Aligned every Implement and Agentic SDLC `worktree` composition
   boundary with the explicit-only outer lifecycle. Coordinators now return the
   exact integration command and stop for a fresh user invocation; the Agentic
   Stop hook refuses to auto-continue `outer-integration-pending`; publication
   skills keep managed children local; and runtime allowlists plus a canonical
   static test reject public `add`, `integrate`, or `remove` calls from private
   coordinator interop.
-- Kept Task Implementer and Agentic SDLC as separate peer development domains
+- Kept Implement and Agentic SDLC as separate peer development domains
   over the shared Worktree lifecycle. Ordinary task leases and Agentic
-  preparation now reject Task Implementer persistent lanes before state or
+  preparation now reject Implement persistent lanes before state or
   resource mutation. Agentic execution hard-cuts to coordinator v7, task v4,
   and assignment v3; adds coordinator arm/watch, worker start/direct heartbeat,
   bounded prestart/read-only/stall/runtime enforcement, and coordinator-owned
@@ -1402,7 +1533,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   on every post-spawn failure; rejects incomplete live Task lane branch
   identity; and makes verifier capability names resolve to declared regression
   tests.
-- Closed two Task Implementer cross-lane claim gaps. Replanning now extends the
+- Closed two Implement cross-lane claim gaps. Replanning now extends the
   active generation's Worktree-owned claims before replacement state is
   persisted while retaining earlier claims conservatively. External database,
   Kubernetes, Terraform, migration execution, and publication domains now add
@@ -1431,7 +1562,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   use hard-cut schema v4 with an ordered promotion history, expected-head
   compare-and-set, resource-resurrection checks, terminal release receipts, and
   durable removal-intent snapshots across receipt/manifest deletion crashes.
-  Task Implementer and Agentic SDLC now reconcile local interop against live
+  Implement and Agentic SDLC now reconcile local interop against live
   clean Git plus durable lease truth, and Agentic promotion persists lease proof
   before local interop and coordinator `promoted` state. Deterministic gates now
   require removal-crash recovery, successive promotion history, both publication
@@ -1449,7 +1580,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   a starting-directory label. `integrate` uses a durable private recovery
   worktree, exact two-parent merge proof, non-mutating combined validation, and
   ff-only source promotion. Child push/PR actions are rejected and `remove`
-  now depends only on exact local unused-or-integrated proof. Task Implementer
+  now depends only on exact local unused-or-integrated proof. Implement
   and Agentic SDLC use managed-local promotion, release into this outer
   integration handoff, and record exact source-integration proof before
   completion. Older worktree, interop, and coordinator schemas are unsupported.
@@ -1469,7 +1600,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   canonical compact managed global policy, recognizes active ATX and Setext
   policy headings while ignoring fenced examples, rejects duplicate or
   override-like conflicting sections, and adds no hook.
-- Unified Git-worktree ownership across `worktree`, Task Implementer, and
+- Unified Git-worktree ownership across `worktree`, Implement, and
   Agentic SDLC. Workflows now resolve the actual symbolic `origin` default,
   automatically create deterministic `feature/*` promotion branches when
   starting there, reuse recorded non-default/managed identities, and bind PR
@@ -1480,7 +1611,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   clear that it selects an existing repository-relative operating scope, not a
   worktree destination or branch-naming input. Worker worktrees are removed
   after combined evidence, integration worktrees after promotion, and all
-  internal refs are deleted with expected-old SHAs. Upgraded Task Implementer
+  internal refs are deleted with expected-old SHAs. Upgraded Implement
   coordinator state to v5 and wave state to v4, Agentic SDLC coordinator state
   to v5, and made corresponding hard schema cuts to worktree ownership, lease,
   and reservation state.
@@ -1546,7 +1677,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   repository-root ownership. `app-stack` and `design` now emit one-way bounded
   scaffold handoffs after architecture approval without calling back from the
   scaffold workflow or starting Agentic SDLC.
-- Integrated `project-agent-instructions` into Task Implementer after managed
+- Integrated `project-agent-instructions` into Implement after managed
   specifications and before contract commit or worker dispatch, and into
   Agentic SDLC after design and before auto-steering or planning. Both
   workflows now checkpoint the conditional decision, invalidate it when
@@ -1728,7 +1859,7 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ### Fixed (earlier entries)
 
-- Fixed Task Implementer's run-owned project-contract lifecycle adapter after a
+- Fixed Implement's run-owned project-contract lifecycle adapter after a
   sealed promotion-review correction advances the retained integration checkout.
   The adapter now binds the initial prepared wave to its original base and an
   active correction to its exact recorded contract commit, admitting an adopted
@@ -1741,7 +1872,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   rejects unrelated descendants, forward or stale journal identity,
   original-base substitution, and an independent repository substituted at
   the retained integration path.
-- Fixed retained Task Implementer runs that were blocked when a sealed project-
+- Fixed retained Implement runs that were blocked when a sealed project-
   contract reconciliation left only canonical requirements/design and a
   provenance-only `AGENTS.md` dirty in the persistent lane. A hidden current-v7
   owner transition now binds the sealed lifecycle, instruction-state, impact,
@@ -1753,7 +1884,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   task may change only its dependencies when its correction target is indexed.
   Arbitrary, staged, untracked, partial, symlinked, or unsealed dirt remains
   blocked.
-- Fixed Task Implementer correction replanning after completed waves. The
+- Fixed Implement correction replanning after completed waves. The
   coordinator now hashes the final combined indexed wave plan instead of only
   the replacement tail. A private current-v7 owner recovery accepts only the
   proven historical tail-digest signature, exact caller-bound old and combined
@@ -1766,7 +1897,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   impact, and reaches normal resume planning after recovery. Repeating an
   unchanged retained-prefix replan is now byte-idempotent and never blocks its
   active replacement wave.
-- Fixed a long-running Task Implementer/project-contract deadlock at the Stop
+- Fixed a long-running Implement/project-contract deadlock at the Stop
   boundary. The initial project lifecycle Stop from `implementation-open` now
   atomically enters `reconciliation-required`, preserves the implementation
   write epoch, clears stale planning bindings, and admits canonical spec
@@ -1774,12 +1905,12 @@ All notable changes to the reusable Agent Skills are tracked here.
   Stop-generated synthetic turn will emit `UserPromptSubmit`; concurrent
   material-write accounting retries safely and recursive Stop remains
   fail-closed.
-- Fixed Task Implementer cross-wave contract refresh while the outer project
+- Fixed Implement cross-wave contract refresh while the outer project
   lifecycle remains implementation-open. The attested run-owned bridge now
   admits only exact read-only inspect/render at that phase as well as during
   reconciliation; terminal apply/verify and all existing run, checkout, path,
   command-digest, helper, and clean-worktree constraints remain unchanged.
-- Fixed Task Implementer prompt-session acceptance from a verified managed
+- Fixed Implement prompt-session acceptance from a verified managed
   worktree lane. The prompt validator now admits either the canonical primary
   project or the manifest-proven lane project for the same scope while retaining
   strict prompt-root, source-root, and unrelated-project rejection checks.
@@ -1960,13 +2091,13 @@ All notable changes to the reusable Agent Skills are tracked here.
   remain fail-closed. The agent auth hook now directs ordinary commands through
   its automatically selected profile and reserves direct token minting for the
   exact `/dev/null` verification form.
-- Tightened `task-implementer-test` integration-task guidance to require
+- Tightened `implement-test` integration-task guidance to require
   long-form service network object maps with empty option objects, matching the
   pre-Compose ownership validator instead of allowing ambiguous list syntax.
 - Finalized successful cleanup reports with an accurate no-action result, and
   made a later explicit destroy promote the cleanup stage to PASS instead of
   leaving stale retained-run wording or a NOT_RUN cleanup row.
-- Fixed Task Implementer post-integration correction handling so a cleaned
+- Fixed Implement post-integration correction handling so a cleaned
   final wave can append a new isolated correction tail before finalization,
   and clarified that the replacement worker—not the coordinator—must invoke
   `task-recover` so heartbeat and finish ownership bind to the right session.
@@ -2019,11 +2150,11 @@ All notable changes to the reusable Agent Skills are tracked here.
   evidence, measure repeated-command behavior and signature clusters, and
   compare known-good and known-bad snapshots with deterministic tests and
   process/trigger evaluation cases.
-- Added the explicit-only `task-implementer-test` verifier with a no-flag
-  lightweight Task Implementer contract and temporary-fixture profile plus
+- Added the explicit-only `implement-test` verifier with a no-flag
+  lightweight Implement contract and temporary-fixture profile plus
   opt-in `--create`, `--create --keep`, and idempotent `--destroy` modes for one
   replace-on-create, exactly owned local frontend/API/PostgreSQL fixture. The
-  live contract isolates Task Implementer private state, generation-fences
+  live contract isolates Implement private state, generation-fences
   mutations, digest-pins Compose input, validates exact dual-label runtime
   ownership and loopback/database exposure, derives frontend/API/database and
   restart evidence through fenced helpers, and gates PASS on canonical
@@ -2082,7 +2213,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   initialized-folder scope, hashed worker ownership and interrupted recovery,
   resource-free future-wave replanning, staged secret/private-endpoint gates,
   automatic sequential ephemeral `codex exec` fallback, and generic v2
-  Task Implementer/Agentic SDLC outer-worktree leases while preserving the
+  Implement/Agentic SDLC outer-worktree leases while preserving the
   public two-command `$sdlc-start` interface.
 - Added the explicit-only `sdlc-prepare-execution` phase and private Agentic
   SDLC execution engine for schema-v4 feature integration worktrees,
@@ -2174,7 +2305,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   docs, API and data model choices, reliability, security, observability,
   performance, cost, migration, and team-ownership decisions before
   implementation.
-- Added the `task-implementer` Codex skill for narrow brownfield implementation
+- Added the `implement` Codex skill for narrow brownfield implementation
   loops that order prompt-derived work as `task-1` through `task-n`, keep one
   write task active at a time, and hand off between fresh Codex sessions
   through private markdown checkpoints.
@@ -2269,7 +2400,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   Designs with an already approved stack now explicitly skip stack reselection,
   and scoped `app-stack` handoffs return to the active design workflow without
   recursive routing.
-- Changed Task Implementer worker assignments to the hard-cut v7 schema and
+- Changed Implement worker assignments to the hard-cut v7 schema and
   coordinator state to v4. Dependency-free `standard` workers receive
   240/300-second read-only warning/timeout budgets, while dependent
   `integration` workers receive 360/420-second budgets. Assignments now bind
@@ -2301,12 +2432,12 @@ All notable changes to the reusable Agent Skills are tracked here.
   forbids background or autonomous heartbeat loops. `task-start` is single-use,
   only in-claim mutations count as progress, and out-of-claim mutations stop as
   `WORKER_SCOPE_VIOLATION` rather than extending worker budgets.
-- Changed Task Implementer planned-tail replanning to remove superseded waves
+- Changed Implement planned-tail replanning to remove superseded waves
   from the active coordinator index while preserving their blocked private
   history. Final completion and semantic validation now see only completed
   waves plus the replacement schedule, preventing duplicate task ownership
   and impossible cleanup demands after safe pre-resource correction tasks.
-- Changed `task-implementer-test --create` planning to require four explicit,
+- Changed `implement-test --create` planning to require four explicit,
   self-contained verifier task contracts before dispatch, including frontend
   port 80, API-owned idempotent schema setup without bind mounts, and the exact
   strict Compose ownership/allowlist model. Workers no longer need forbidden
@@ -2359,7 +2490,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   dangerous-shell matching only to Bash payloads, with regression coverage for
   harmless Dockerfile command text in patches.
 - Enforced one never-reused worker session per implementation task in both
-  Task Implementer and Agentic SDLC, added immutable digest-bound dependency
+  Implement and Agentic SDLC, added immutable digest-bound dependency
   handoffs with structured prior-wave/prior-batch evidence, and made both
   workflows' capacity batches authoritative. Agentic worker authorization now derives
   identity from `CODEX_THREAD_ID` instead of caller-supplied session tokens;
@@ -2391,7 +2522,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   immutable revisions, exact-once steering linkage, prompt-bound Stop
   continuation, terminal rerun semantics, non-Git greenfield identity, and
   fail-closed unfinished legacy handling now preserve user prompt history
-  without adding a public workflow CLI or coupling to `task-implementer` state.
+  without adding a public workflow CLI or coupling to `implement` state.
 - Refactored Agentic SDLC end to end around task-level parallelism: locked plans
   now define stable `TASK-*` dependencies, write claims, and conflict domains;
   TDD and downstream evidence use a persistent integration checkout;
@@ -2401,7 +2532,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   remain under hook policy, unsafe resources are retained, unfinished schema v1
   fails closed without a migration shim, and the verifier covers scheduler,
   real-Git, registered-worktree, recovery, and golden-path behavior.
-- Composed `worktree` and `task-implementer` with fail-closed private lifecycle
+- Composed `worktree` and `implement` with fail-closed private lifecycle
   coordination: nested task workers now base on and promote only to the exact
   managed outer worktree branch, declare and clean internal resources per wave,
   retain the outer lease through final alignment, and block outer publication
@@ -2428,7 +2559,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   project-level Nebius `admin` role by default instead of `editor`; the
   existing `--role` override remains available for explicitly narrower setups.
 
-- Refactored the explicit-only `task-implementer` from sequential
+- Refactored the explicit-only `implement` from sequential
   execution-plane v1 into a resumable coordinator/worker v3. One unchanged
   `run <prompt-ref-or-file>` now builds deterministic dependency
   waves from locked write claims and conflict domains, dispatches isolated
@@ -2440,14 +2571,14 @@ All notable changes to the reusable Agent Skills are tracked here.
   unfinished v1 runs fail closed with `WORKFLOW_UPGRADE_REQUIRED` without a
   compatibility path.
 
-- Refactored the explicit-only `task-implementer` to two public actions:
+- Refactored the explicit-only `implement` to two public actions:
   idempotent `workspace init [project-folder]` and retry-safe
   `run <prompt-ref-or-file>`. Initialization creates a starter only
   when needed and preserves all prompt/run history; running privately creates,
   continues, or reconciles immutable revisions while implementing one task per
   fresh session. Stable prompt filenames are ordered in command output by
   private `last_invoked_at`, and users never supply internal IDs.
-- Added a durable per-task execution plane to `task-implementer`: the Skill now
+- Added a durable per-task execution plane to `implement`: the Skill now
   atomically claims one dependency-ready task in planning, requires and hashes a
   complete plan and queue before authorizing product edits, requires a clean
   claim-time Git baseline, validates exact changed-path and commit evidence,
@@ -2455,7 +2586,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   preserves reconciliation-safe completed checkpoint digests, enforces a
   bijection across completed tasks/checkpoints/stopped planes, and requires a
   distinct runtime Codex session before every other task in the scope.
-- Extended `task-implementer` with same-prompt steering and incremental
+- Extended `implement` with same-prompt steering and incremental
   specifications without adding a public command. Accepted edits are immutable
   ordered revisions with private dispositions; implementation-time steering is
   queued without changing the locked plane and is reconciled in the next fresh
@@ -2472,7 +2603,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   files while preserving each skill workflow and validation contract.
 - Updated `brainstorm` to route unresolved recommendation-changing source
   conflicts through a bounded `research` pass, and strengthened `design`,
-  `task-implementer`, and Agentic SDLC design/plan/implementation skills to
+  `implement`, and Agentic SDLC design/plan/implementation skills to
   prefer vertical end-to-end slices for serial multi-layer application work,
   with verifier coverage for the new SDLC template and phase contracts.
 - Aligned downstream Agentic SDLC skills with the vertical-slice architecture:
@@ -2482,7 +2613,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   requires evaluated slice evidence for multi-layer behavior, and
   `sdlc-align-specs` checks the slice across specs, plans, tests,
   implementation, docs, and evidence.
-- Hardened `task-implementer` so complex sequential loops explicitly require
+- Hardened `implement` so complex sequential loops explicitly require
   per-task context gathering, `design` routing for non-trivial choices, a short
   implementation plan before edits, and handoff fields for context, design,
   plan, validation, review, fixes, and `$commit` evidence; added a local static
@@ -2543,7 +2674,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   security-adjacent implementation issues, owner-review needs, and severity
   decisions while preserving boundaries with `review-pr`, `align`,
   `apply-security`, and `system-design-rules`.
-- Hardened `task-implementer` into an explicit-only sequential implementation
+- Hardened `implement` into an explicit-only sequential implementation
   loop where each task session validates the active task, runs `code-review`,
   fixes scoped findings, commits through `$commit`, records review and commit
   evidence in the private handoff, stops, and hands the markdown context to the

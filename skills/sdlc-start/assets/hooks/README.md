@@ -17,8 +17,8 @@ local Codex home.
 
 - Hooks are runtime guardrails, not skills. They must not make workflow phase
   decisions that belong to `sdlc-start`.
-- The Stop hook must route continuation through the explicit prompt-bound
-  `sdlc-start run` action and use canonical `sdlc-*` skill names in prompts. Short phase
+- The Stop hook must route continuation through the explicit objective-bound
+  `sdlc-start continue [project-folder]` action and use canonical `sdlc-*` skill names in prompts. Short phase
   aliases may be accepted as input, but they must not be emitted as the next
   recommended skill.
 - When `current-state.json` has an
@@ -33,11 +33,12 @@ local Codex home.
   documentation, alignment, or commit evidence.
 - `STEERING.md` pause and PR-control text, including `Pause after the current
   feature. Do not create a PR.`, must trigger a continuation through
-  the prompt-bound `sdlc-start run` command so the coordinator can persist the
+  the objective-bound `sdlc-start continue [project-folder]` command so the coordinator can persist the
   paused or no-PR decision.
-- An unfinished active run without a valid prompt binding stops with
-  `WORKFLOW_UPGRADE_REQUIRED`; the hook must not synthesize a prompt or emit a
-  bare resume command.
+- Runs without a valid binding to the current native session and accepted
+  objective are not owned by this hook invocation. Ignore them without inferring
+  intent, selecting a run, or synthesizing a continuation. Explicit workflow
+  intake remains responsible for rejecting unsupported private state.
 - The PreToolUse hook does not block file targets by path. Repo files,
   outside-repo files, credential directories, Codex runtime files, global
   `AGENTS.md`, locked SDLC plans, `$CODEX_HOME/task-state`, and private SDLC

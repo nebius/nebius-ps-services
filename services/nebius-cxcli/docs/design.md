@@ -7617,6 +7617,16 @@ Grafana 13.0.1; qualify the dashboard.grafana.app/v1 API explicitly.
 
 #### Design Details
 
+Frozen deployment resolution consumes packaged dashboard assets under the
+generation's generated directory, rather than reopening authored project paths.
+Initial render still validates authored files and freezes them. Deployment checks
+the packaged UID and content/folder digest, fails on missing or altered assets,
+and never substitutes an authored file for an invalid frozen input. Manual copies
+with replay disabled remain excluded. A resolver/renderer regression proves the
+private-cache path without authored files and rejects missing, changed and
+wrong-UID assets. This restores the existing frozen-input contract without a CLI,
+configuration-schema or ownership change.
+
 Version 10 reduces import latency without weakening the existing operation boundaries.
 The package entrypoint lazily dispatches an exact leading mk8s-token command to
 a lightweight canonical command/cache owner, also registered with the full CLI.
@@ -9903,6 +9913,75 @@ pass focused regressions and align current documentation and contracts.
 
 <!-- /FEATURE: FEAT-048 -->
 
+<!-- FEATURE: FEAT-049 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-049: Verified profiling report destination
+
+#### Requirements Covered
+
+- REQ-041: Verified profiling report destination.
+
+#### Context Evidence
+
+Before this change, successful course captures remained private and the guide required manual copying. The installed viewers already mounted accepted shared storage read-only. The shared runner and installer now provide the missing automatic delivery boundary.
+
+#### Design Details
+
+Add a self-contained standard-library report-contract program executed through the existing fenced active-login jail path. Retain independent PVC/PV observations from prepare_nsight_viewers, compare both viewer bindings, reconcile after accepted installation, and revalidate unchanged installs. Safe no-follow reads and atomic descriptor publication preserve prior complete metadata on failure. A root-owned storage-local lock excludes surviving reconciliation processes. A separate admission record closes new starts before the authoritative queue check; admitted jobs continue to validate the frozen descriptor and marker. Quiescence precedes invalidation, marker publication precedes descriptor publication, and admission reopens last. Exact inactive preimages and interrupted marker/descriptor/admission publication are recoverable. The remote process has a 45-second timeout and five-second termination bound inside the jail, below the outer 60-second command limit. New jail generations without metadata fail closed until profiling install reconciles the accepted binding; do not reuse stale node-local device IDs.
+
+Profiling candidate comparison normalizes the copied accepted ordinary resources
+and the rendered candidate with the same shared-protected-resource classifier.
+This avoids treating removal of a duplicate protected namespace declaration as
+an unrelated application change. Protected and infrastructure bytes remain
+unchanged, and actual unrelated application mutations still fail the existing
+guard. A real-renderer regression reproduces the false rejection before repair,
+then verifies shared-namespace preservation and unrelated-resource rejection.
+
+#### Selected Option
+
+Automatic post-stage delivery through existing Python, Slurm and shared storage. No new application or AI stack.
+
+#### Alternatives Considered
+
+Direct shared capture can expose unfinished reports. Per-launcher copy snippets duplicate lifecycle and failure behavior. Retaining manual copy does not meet the accepted learner workflow.
+
+#### Implementation Boundaries
+
+Nsight install, report-contract program, accepted-install tests, profiling documentation and changelog. Keep package repair receipts, credentials, show, ordinary Apps and report contents outside the mutation boundary.
+
+#### Test-First Success Criteria
+
+- TDD-001: Reproduce absent automatic delivery and reject stale or unsafe bindings before capture.
+- TDD-002: Preserve capture success and private originals through delivery errors and interrupted promotion.
+
+#### Validation Plan
+
+Run focused installer and runner suites, Linux process/filesystem fixtures, six-tree parity, all-course validation and generated-guide freshness.
+
+#### Test Plan
+
+Cover descriptor/marker agreement, mount removal/replacement, symlinks, permissions, full/read-only storage, nested reports, collisions, exact retries, timeout/quiescence, interrupted promotion, scheduler overrides and unchanged installation.
+
+#### Evaluation Plan
+
+Fresh representative authorized nonproduction submissions must create reports with independently matching private/viewer hashes and successfully open both native formats through Playwright. No manual copy may participate.
+
+#### Rollout And Rollback
+
+Reconcile installation and explicitly authorized unsafe-root migration before course synchronization. Binding changes require quiescent producers. Roll back matching installer/course versions without deleting reports, state or credentials. No automatic historical backfill.
+
+#### Done Definition
+
+Source, fixtures, copy parity and docs agree; live qualification is reported separately until independently observed.
+
+#### Implementation Evidence
+
+`nsight_reports.py` implements the self-contained safe report contract, admission gate, writer lock, no-op reconciliation and interruption recovery. `nsight_report_destination.py` independently reobserves both viewer storage bindings and executes fenced reconciliation in the accepted login jail. `nsight_install.py` invokes it after acceptance and on unchanged installs. Report-contract and installation tests, README, profiling documentation and changelog describe the same boundary.
+
+#### Verification Evidence
+
+The focused report-contract, installation, progress, profiling and architecture suites passed 133 tests. Three changed source modules pass scoped mypy; changed Python files pass Ruff. Cross-project fixture coverage exercises the actual course reader during admission closure. A separate Linux tmpfs fixture exercised actual mount discovery, reconciliation and downstream atomic delivery. Independent review found no remaining blocker after interrupted invalidation and active-job protection were repaired. Deployed filesystem lock/rename semantics, cross-node mounts, real GPU reports and browser opening remain unverified pending authorized nonproduction qualification.
+
+<!-- /FEATURE: FEAT-049 -->
 <!-- maintain-project-specs:design:end -->
 
 ## General Architecture and Runtime Design (Recovered Pre-Lifecycle Baseline)

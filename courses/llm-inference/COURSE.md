@@ -14,8 +14,9 @@ comparisons and request measurement.
 Local GPU practice uses one full H100; distributed serving and multi-worker
 placement belong to [Advanced Labs](../advanced-gpu-communication/index.html).
 Serving experiments require qualified runtimes and model artifacts before making
-performance claims. Use the shared Lab Guide's
-[environment setup](../lab-guide.html#lab-preparation-scripts) before practice.
+performance claims. Follow the shared [Lab Preparation](../lab-guide.html#lab-preparation)
+and check its completion summary before practice. Default setup includes optional
+engine dependencies; it does not start or qualify a model server.
 
 For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 

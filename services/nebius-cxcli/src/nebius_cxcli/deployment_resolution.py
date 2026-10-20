@@ -151,7 +151,12 @@ def _resolve(
         # Rendering covers the whole generation, even for a selected stage target.
         # Re-resolving any unchanged chart tag can select different package bytes.
         with use_generation_soperator_releases(generation, emit=lambda _: None):
-            cli.render_flux(config, staged, component_output_values=outputs or {})
+            cli.render_flux(
+                config,
+                staged,
+                component_output_values=outputs or {},
+                frozen_dashboard_inputs=True,
+            )
         bind_flux_artifacts(
             staged, manifest.get("render", {}).get("compatibility", {}).get("chart_inputs", {})
         )

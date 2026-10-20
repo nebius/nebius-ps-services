@@ -2,7 +2,7 @@
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Project Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001,REQ-005 status=ready delivery=unassessed priority=P0 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001,REQ-005 status=ready delivery=implemented priority=P0 version=2 -->
 ### FEAT-001: Source-owned skill and installation boundary
 
 #### Requirements Covered
@@ -26,6 +26,16 @@ The default local installation combines skills, reviewed hook payloads and
 registration for the selected host. Explicit hook-only modes remain available.
 Native plugin installation carries hooks; npx installation carries skills only.
 Fresh-process activation and host trust remain separate evidence.
+
+Local ownership comparison resolves the recorded source to its selected skill
+directory, either the source itself when it contains `SKILL.md` or its immediate
+child named for the selected skill. Only exact physical-directory equality can
+reconcile a single-skill source with a catalog source; unrelated local sources,
+GitHub identities and unmanaged destinations remain protected. The current
+selection owns the refreshed marker and manifest; single-skill installation
+must not prune sibling skills owned by a catalog. Shared hook bundles retain
+their standalone copies; collision preflight silently accepts identical bytes
+and rejects different bytes before mutation.
 
 #### Selected Option
 
@@ -61,6 +71,9 @@ checks before any runtime claim.
 
 Exercise default and explicit destinations, source ownership, idempotent
 updates, stale-source cleanup, and unrelated destination preservation.
+Exercise both hosts with individual-to-catalog and catalog-to-individual
+updates, paths containing spaces, unrelated same-name sources, unmanaged
+destinations, shared-hook uniqueness and conflicting-payload rejection.
 
 #### Evaluation Plan
 
@@ -80,11 +93,26 @@ activation boundary agree without a duplicate installed skill tree.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+`install-skills.sh` now compares exact physical local skill directories when
+individual and catalog source identities differ, then records the selected
+source after synchronization. Exact source ownership still governs pruning.
+Identical shared-hook payloads remain collision-checked without a duplicate
+notice. Installer help, README and changelog document these boundaries.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+The focused installer suite covers both hosts, both source-selection directions,
+physical-path aliases, foreign/unmanaged preservation, stale pruning, shared
+hook uniqueness, registration upgrades and idempotency. The original ownership
+and duplicate-notice regressions failed before the repair and passed afterward.
+Nine focused tests passed across installer and shared-arbiter checks; Bash
+syntax, ShellCheck, Ruff, Markdown lint and diff whitespace checks passed.
+The original default installation updated both affected skills. Independent
+comparison found all 71 source skills and 1,962 installed files equal, with
+matching source ownership. A repeated default installation reported zero
+updates, 71 unchanged skills, only the non-skill docs directory skipped, and
+unchanged hook JSON. All 10 installed Python event/script registrations were
+unique. Fresh native-session discovery and activation were not exercised.
 
 <!-- /FEATURE: FEAT-001 -->
 
@@ -365,7 +393,7 @@ user's global marker configuration or adding a bypass flag would alter runtime
 semantics outside the selected project. Relying on `UserPromptSubmit` after a
 Stop continuation preserves the observed deadlock, while admitting canonical
 spec edits throughout `implementation-open` weakens the phase boundary. A
-Task Implementer-only retry or bypass would leave the lifecycle defect in every
+Implement-only retry or bypass would leave the lifecycle defect in every
 other long-running consumer. Requiring byte identity forever strands corrected
 decisions, while deleting or blindly overwriting the old render would discard
 ownership evidence and weaken the fail-closed boundary. Requiring a new user
@@ -1416,7 +1444,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-007 -->
 
-<!-- FEATURE: FEAT-008 reqs=REQ-009 status=ready delivery=unassessed priority=P0 version=4 -->
+<!-- FEATURE: FEAT-008 reqs=REQ-009 status=superseded delivery=unassessed priority=P0 version=4 -->
 ### FEAT-008: Objective-owned hybrid prompt-session intake
 
 #### Requirements Covered
@@ -1425,7 +1453,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 #### Context Evidence
 
-Task Implementer and `sdlc-start` already own private editable prompt files,
+Implement and `sdlc-start` already own private editable prompt files,
 immutable execution revisions, explicit `run` routing, and workflow-specific
 state. Codex `UserPromptSubmit` supplies session and turn identity plus the
 direct prompt, while its command hook can add context or block but cannot
@@ -1438,17 +1466,17 @@ That body-first journal conflicts with data minimization and makes downstream
 classification too late to prevent over-capture. The repository already
 composes terminal workflow checks through one shared Stop arbiter.
 
-In the observed direct `$troubleshoot` session, no Task Implementer command was
-invoked, but the submit hook found one compatible active Task Implementer
+In the observed direct `$troubleshoot` session, no Implement command was
+invoked, but the submit hook found one compatible active Implement
 objective in its registry and silently bound the fresh session. That
-auto-attachment staged metadata, injected a Task Implementer adapter
+auto-attachment staged metadata, injected a Implement adapter
 instruction, and caused an unrelated adapter validation attempt.
 
 #### Design Details
 
 Keep the separately owned internal `prompt-session-intake` skill, but make its
 `UserPromptSubmit` process an unconditional pass-through boundary. After an
-exact Task Implementer or SDLC init/run invocation binds the current session,
+exact Implement or SDLC init/run invocation binds the current session,
 later direct turns in that same session may acquire only a bounded
 session-state lock and
 atomically stage an event-v2 metadata receipt with causal session/turn,
@@ -1509,7 +1537,7 @@ registry retains objective identity and bounded writer-session provenance for
 diagnostics and validation, but it neither creates a new session binding nor
 rejects a current turn because a different or stale writer value exists.
 
-For Task Implementer, resolve logical project identity through the validated
+For Implement, resolve logical project identity through the validated
 workspace manifest. Treat `primary_root + scope` and the manifest-proven lane
 `source_root` as aliases of one objective for explicitly bound capture,
 writer-provenance updates, objective replacement, and result validation.
@@ -1527,7 +1555,7 @@ manual edits. Each file transition is atomic, and an interrupted process
 finishes from the validated source or already-installed target before mutable
 pointers advance. After migration, only v3 reads and writes exist.
 
-Task Implementer and SDLC remain semantic and execution owners through thin
+Implement and SDLC remain semantic and execution owners through thin
 prompt adapters. Direct accepted turns may update the canonical prompt but do
 not call a start/resume path. Only the explicit public `run` action executes a
 workflow, and manual prompt edits remain inert until that action. The existing
@@ -1568,7 +1596,7 @@ the single canonical binding transition.
 #### Implementation Boundaries
 
 Owned surfaces are the new prompt-session-intake skill and hook payload, shared
-Stop-arbiter composition, Task Implementer and SDLC prompt-workspace adapters
+Stop-arbiter composition, Implement and SDLC prompt-workspace adapters
 and schema migrations, focused tests, installer/catalog metadata, workflow and
 root documentation, and changelog. Runtime installation, registration, trust,
 restart, and fresh-session validation require separate explicit authorization.
@@ -1585,7 +1613,7 @@ restart, and fresh-session validation require separate explicit authorization.
   field sets. The semantic corpus covers every allowlisted project-intent form,
   every no-op reason, mixed turns, commands as data, contextual clarification,
   duplicate intent, and secret-plus-intent input for both workflows.
-- TDD-004: Task Implementer and SDLC adapters merge only the accepted
+- TDD-004: Implement and SDLC adapters merge only the accepted
   project-intent projection exactly once, bind its digest to the operation
   marker, reject projection substitution, and never enter a start/resume path.
   Explicit `run` and manual-edit behavior remain unchanged.
@@ -1664,159 +1692,155 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=unassessed priority=P0 version=3 -->
-### FEAT-009: Evidence-intensive troubleshooting and technology playbooks
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=4 -->
+### FEAT-009: Adaptive troubleshooting with bounded helpers and measured qualification
 
 #### Requirements Covered
 
-- REQ-010: Discover and verify the deployed stack, layered evidence, relevant code paths, and technology-specific failure domains before completion.
+- REQ-010: Adaptive, evidence-complete diagnoses across infrastructure and code.
 
 #### Context Evidence
 
-The baseline troubleshoot workflow owns hypotheses, bounded experiments,
-earliest-divergence localization, causal proof, remediation budgets, and
-live-product evidence gates. The component matrix, timeline, layered log
-ledger, code-debugging gate, controlled escalation, and technology playbooks
-are internal decision evidence. Version 2 incorrectly coupled their complete
-rendering to the user-visible Stop report, causing report gaps to interrupt
-repair even when the missing detail did not change the next safe action.
+The prior 629-line core mandated broad discovery and eight log-layer rows.
+Existing causal proof, production boundaries, budget schemas, diagnosis-v1,
+report classes and clean replay are retained. The approved refactor changes
+investigation breadth and measurement, not the standard for a causal claim.
 
 #### Design Details
 
-Add `DISCOVERY` between intake and baseline. Discovery records deployed
-technology versions, topology, configuration sources, dependencies, ports,
-protocols, identities, and control/data flows, then compares them with
-version-matched official documentation. Keep emergency evidence preservation
-in intake so discovery cannot erase volatile incident state. Extend the
-investigation protocol with a component matrix, normalized timeline, layered
-log ledger, and experiment contract. Interpret mandatory logs as coverage
-accounting: retrieve each relevant source through bounded, filtered queries or
-record why it is unavailable, unsafe, or not applicable.
+Use one diagnostic agent and deterministic helpers. The compact core defines
+failure contract, evidence preservation, failing-path model, plausible alternatives,
+discriminating experiments, earliest divergence, proof, repair and independent
+verification. Detailed budget lifecycle, reporting and SDLC handoffs have explicit
+conditional references. No minimum hypothesis count or universal log inventory.
 
-Bind every internal conclusion to an explicit included and excluded system
-boundary, exercised control and data paths, and incident-window start and end
-with a clock basis. The generic component matrix names DNS or service-name
-resolution and restart history explicitly. The internal canonical log ledger
-contains exactly one record for each component, application/job,
-container/orchestrator, service-manager, OS/kernel, network/firewall, storage,
-and GPU or hardware layer. Missing, duplicate, unknown, or out-of-order layer
-names invalidate an internal coverage claim, and evidence-bearing cells remain
-independently substantive. The ordinary user-visible report projects only the
-root cause, fix, verification scope, material gaps, and next action. It does not
-serialize the internal ledgers or cross-validate their formatting at Stop.
+Evidence records bind identity, configuration, window, state and clock uncertainty;
+relevant changes invalidate affected observations. After three consecutive completed
+low-information observations, change the model or technique without extending
+remediation budgets. Preserve contradictions and multi-cause structure.
 
-Keep the main skill as the generic state machine and put product detail in
-`slurm.md`, `soperator.md`, `kubernetes.md`, `nebius.md`, `linux.md`,
-`network.md`, `storage.md`, `gpu.md`, and `code-debugging.md`. Product overlays
-reuse generic lower-layer playbooks instead of duplicating them. Soperator uses
-upstream terminology: ActiveChecks are separately scheduled Kubernetes or
-Slurm diagnostic jobs and commonly consume complete or exclusive GPU capacity;
-passive or workload-coupled checks execute through Slurm prolog, epilog, or
-`HealthCheckProgram` around customer jobs. Nebius guidance freezes tenant,
-project, region, resource, and service identity, then routes Compute, MK8s,
-Soperator, VPC, storage, quotas/capacity, IAM, AI services, observability, audit,
-and maintenance evidence to the exact current product documentation and
-existing Nebius skill authorities.
+Domain guides use symptom, alternatives, cheapest evidence, interpretation, next
+branch, escalation and verification. Combine resource utilization/saturation/errors
+with service latency/traffic/errors/saturation and workload-specific comparisons.
+Provider admission remains adapter-owned. Shared Stop and trusted-loader ownership
+are unchanged; hooks cannot mechanically prove causality or semantic novelty.
 
-When code is plausibly causal, require reproduction, entry/control/data/state
-tracing, stack or core evidence, effective inputs, recent-change comparison,
-focused tests/static analysis, and bounded instrumentation. Passing tests alone
-are supporting evidence, never universal correctness proof. Debug escalation
-records scope, expected decision, duration, resource and secret risk, original
-settings, rollback, and post-restoration verification.
+Collector schema 2 defaults to repository/platform with repeatable section/tool
+selection. Version probes use at most four workers, five seconds each and a
+30-second collection budget. Cap streams at 64 KiB, Git status at 2 MiB, manifests
+at 10 MiB each and 50 MiB total; no partial digest may look complete. Repeated trials
+separate launch errors and interruptions from completed executions; timeouts count
+as completed failures, empty completion rates are null, and timing/clusters retain
+outcomes. No independence assumption or compatibility output mode.
 
 #### Selected Option
 
-Use progressive disclosure through focused technology references and enforce
-causal rigor in the skill workflow. Keep criterion-level internal verdicts and
-project only decision-relevant proof into the concise outcome classification.
-The Stop hook enforces hard boundaries and report delivery, not investigative
-ledger completeness.
+Adaptive coverage with unchanged causal proof and conditional domain detail.
 
 #### Alternatives Considered
 
-Removing internal ledgers would allow aggregate health to hide component gaps.
-A universal cloud or cluster command runner would overreach authorization and
-encode stale vendor behavior. Requiring unconditional broad retrieval would
-conflict with observability admission and minimization. Keeping the full
-version-2 report as a compatibility path would retain two canonical outputs.
+A cosmetic prose rewrite would leave diagnostic behavior unchanged. A universal
+infrastructure runner would broaden authority risk and maintenance. New production
+agent frameworks, model routing and memory services are outside this refactor.
 
 #### Implementation Boundaries
 
-Owned surfaces are the troubleshoot state machine, investigation and
-verification references, technology playbooks, report hook and fallback,
-process rubric/cases/prompts, contract and hook tests, skill metadata, README,
-root catalog, project specs, and changelog. Existing authentication, marker,
-sidecar, observability-admission, design-handoff, and live-product authority
-contracts remain unchanged. Installation and fresh-runtime activation stay
-separate.
+Own the troubleshoot package, directly affected shared evaluation adapter, CI,
+metadata, catalog, README, specs and changelog. Preserve unrelated dirty edits.
+Actual user installation, runtime activation and provider redesign remain separate.
 
 #### Test-First Success Criteria
 
-- TDD-001: Contract tests require discovery, version-matched sources,
-  component/log/timeline ledgers, hypothesis-bound commands, code debugging,
-  debug rollback, and every technology reference.
-- TDD-002: Contract and process tests reject unsupported internal conclusions,
-  missing or duplicate canonical log layers, placeholder component identities
-  or evidence cells, and empty boundary or incident-window fields. Hook tests
-  accept a concise ordinary report without those tables and keep incomplete
-  ordinary output advisory.
-- TDD-003: Soperator cases distinguish resource-consuming ActiveChecks from
-  passive or workload-coupled job hooks and preserve node-local log gaps.
-- TDD-004: Nebius cases distinguish identity, quota, capacity, IAM, operation,
-  managed-control-plane, workload, and lower-layer evidence without mutating
-  cloud state during default diagnosis.
+- TDD-001: Freeze the existing payload before changing instructions. Establish
+  independently checkable local/service fixtures in code, compute, storage and
+  network, plus twelve qualification scenarios and separate platform replays.
+- TDD-002: Test bounded ingestion, deadlines, descendant cleanup, changed/incomplete
+  hashes, selective defaults, zero-completion rates, interruptions and clusters.
+- TDD-003: Preserve budget, report, Stop, loader, SDLC and provider gates while
+  replacing prose-coupled broad-coverage tests with adaptive contract checks.
+- TDD-004: Isolate scored agents in fresh Linux containers with read-only inputs,
+  writable trial state, no host repository/socket or oracle mounts; independent
+  checks and reviewers must not accept the agent's own success claim as proof.
 
 #### Validation Plan
 
-Run troubleshoot contract and hook suites, skill structure validation, Ruff,
-Markdown lint, changed-scope code and security review, adversarial process
-evaluations, `align-skill`, and project-wide alignment. Treat fresh-session
-graded scenarios as the behavioral gate beyond static contract tests.
+Run helper/hook and cross-skill suites, strict structure validation with declared
+PyYAML, lint, code/security review, align-skill and align. Add direct suites to CI.
 
 #### Test Plan
 
-Cover healthy-status hidden failures, clock skew and rotation, missing logs,
-MUNGE and controller-worker failures, Slurm accounting divergence, stale GPU
-errors, resource exhaustion, ActiveCheck contention, passive-check job impact,
-Nebius project/quota/IAM/VPC/MK8s/storage failures, misleading stack traces,
-and debug settings left enabled.
+Cover configuration precedence, intermittent concurrency, cgroup throttling,
+waiting mistaken for CPU shortage, inode/quota versus capacity, permissions/mount,
+source-namespace DNS, transport/TLS, compound cause, missing decisive evidence,
+contaminated recovery and instruction-bearing output. Label GPU, Kubernetes,
+Slurm/Soperator and cloud-control-plane replays separately from live qualification.
 
 #### Evaluation Plan
 
-In disposable or authorized read-only targets, require complete internal
-architecture, component, timeline, log, hypothesis, remediation, and validation
-evidence, then grade the accuracy and clarity of its concise projection. A
-healthy final state without causal replay remains mitigation, not a verified
-fix.
+Freeze payload/fixture hashes, host/model, tools, permissions and 600-second limit;
+run three alternating paired baseline/candidate trials per case and host. Separate
+fixture/auth failures. Measure causal accuracy/abstention, unsupported claims,
+unsafe effects, time/actions to decisive evidence, total time/actions, duplicates
+and available tokens. Independent review resolves explanation quality only.
+Promotion requires all deterministic checks, zero safety/false verified-fix events,
+90% correct outcomes and no core-domain regression. Target 20% lower median actions
+on jointly successful focused pairs; report all-case outcomes and latency/tokens
+separately without general statistical claims.
 
 #### Rollout And Rollback
 
-Land and validate source first. Installation, hook registration/trust, restart,
-and fresh-session behavior require a separate authorized rollout with parity
-checks and recoverable hook backups. Roll back only the exact installed payload
-if runtime validation fails; preserve reviewed source evidence for repair.
+Source first, then disposable distribution/fresh-host validation. Actual user
+installation is a subsequent rollout. Restore the prior reviewed payload to roll
+back; do not maintain dual old/new behavior.
 
 #### Done Definition
 
-Every troubleshooting run accounts internally for design, infrastructure,
-connectivity, configuration, runtime health, logs, and relevant code paths with
-evidence-backed verdicts. Every conclusion stays restricted to its declared
-boundary, exercised paths, and observation window. The user sees a compact,
-accurate projection of the fixed scope, material gaps, and next action rather
-than the full evidence ledger by default.
+Implemented adaptive guidance and bounded helpers preserve causal/authority
+contracts, pass deterministic validation and have honest qualification evidence.
+Missing native-host or live evidence stays explicitly unverified and cannot
+satisfy promotion criteria.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+Implemented a 288-line adaptive core with scoped evidence and conditional
+lifecycle/SDLC/report references; decision guides cover code, compute, storage,
+network and existing platform overlays. Selective collection and repeated trials
+use bounded POSIX subprocess helpers and schema 2 without compatibility shims.
+Shared hook payloads, Stop ownership, budget flags/state and diagnosis-v1 remain
+unchanged. The shared native evaluator now supports isolated paired diagnostics,
+independent repair oracles, bounded trace review, payload/evidence identity and
+fail-closed promotion. Supplemental platform replays remain separately labeled.
+Direct helper, hook and harness tests run in skills CI. Actual user installation
+and runtime activation were not performed.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+Baseline: 149 helper/hook tests passed and the pre-edit payload was frozen.
+Candidate source checks (2026-10-17): 58 helper/contract tests, 97 hook tests,
+9 diagnostic harness tests, 11 shared evaluation-adapter tests, 14 trusted-loader
+tests and 33 SDLC repair-control tests passed. Strict Codex/stateful, Claude and
+Agent Skills core structure checks passed with the declared PyYAML dependency.
+Scoped Python/Markdown checks, workflow actionlint and diff checks passed.
+All 9 hook asset files match the baseline. Read-only code/security review found
+no remaining blocker in the reviewed evaluator and helper changes.
+
+Disposable skills CLI 1.5.26 discovery, copied-file parity, repeated installation
+and isolation passed for Codex and Claude; this does not activate hooks. All 20 Linux
+fixture/oracle checks passed, covering faulty and corrected controls, serial and
+overlapping schedules, execution status and denied oracle access. The benchmark preflight reports UNAVAILABLE when the pinned fixture
+image lacks the native CLI and removes its containers and volume.
+
+Native trigger execution did not qualify: fresh Codex 0.163.0 timed out at the
+180-second limit; Claude 2.1.292 reported authentication unavailable. No reviewed
+container image with an authenticated inference route was available, so the
+paired baseline/candidate model trials and independent causal reviews were not
+run. Accuracy, action reduction, token/latency improvement and live provider
+coverage remain unproven. REQ-010 stays active and delivery stays implemented,
+not verified, pending that qualification and subsequent rollout.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=8 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=9 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -1829,7 +1853,7 @@ The `commit` contract requires repository-root `git add -A`, staged review,
 `git write-tree`, normal hooks, and final tree verification. Earlier project
 lifecycle enforcement denied that documented path before its transaction owner
 could run; the project-spec hook is now advisory. Worktree already uses durable
-preparation claims and direct-child/tree verification; Task Implementer
+preparation claims and direct-child/tree verification; Implement
 and Agentic SDLC retain separate lane and feature-promotion owners. The initial
 prompt matcher accepted only a bounded leading token sequence; action prose
 with a trailing skill mention and natural-language requests produced no fresh
@@ -1862,7 +1886,7 @@ A retained conflict supports a private temporary-index preview before reviewed
 continuation; preview never changes the real index.
 
 `prepare`, `execute` and `review` retain exact per-attempt tree claims. Direct
-root attempts use new schema identities; delegated Task Implementer and
+root attempts use new schema identities; delegated Implement and
 Worktree contracts stay unchanged. A corrected no-commit failure at the same
 base may prepare a fresh token under the existing grant. Any actual commit,
 including one requiring review, consumes the standalone one-commit allowance.
@@ -1894,7 +1918,7 @@ authorization, claim, and action flags match. Protect commit private state as
 control-plane data. Existing repository instructions, Worktree ownership, and
 active workflow commit policy remain independent gates.
 
-For delegated Task Implementer commits, trust the hook runtime or one exact
+For delegated Implement commits, trust the hook runtime or one exact
 executable named `python3` or `python3.N` that resolves to the same file by
 basename through the hook process PATH. This admits a canonical worker Python
 version different from the hook runtime while rejecting arbitrary same-name
@@ -1963,7 +1987,7 @@ Allowing raw repo-root Git is simpler but cannot bind explicit intent, reviewed
 tree, hook output, one-shot consumption, or recovery. Requiring any affected
 project to emit a lifecycle attestation adds user ceremony without improving
 the transaction's Git proof. Letting
-Task Implementer auto-commit dirty source state broadens its explicit
+Implement auto-commit dirty source state broadens its explicit
 integration authority. Allowing ordinary commit inside active Agentic SDLC
 invalidates coordinator evidence and exact-head guarantees.
 
@@ -1971,7 +1995,7 @@ invalidates coordinator evidence and exact-head guarantees.
 
 Owned surfaces are the `commit` helper, prompt hook, contract and real-Git
 tests; transaction-private authorization and protected state; shared Worktree
-ref coordination and delegated adapter; Task Implementer dirty-source handoff;
+ref coordination and delegated adapter; Implement dirty-source handoff;
 Agentic SDLC helper classification; corresponding README, installer
 registration, canonical specs, and changelog. Lane integration,
 feature sealing/promotion, publishing, and runtime installation remain with
@@ -2002,7 +2026,7 @@ their existing owners.
   `REVIEW_REQUIRED` until its actual commit and tree are reviewed; new dirt or
   a failed hook without a commit becomes stale without altering retained Git
   state.
-- TDD-005: Task Implementer workers and Worktree integrations use exact
+- TDD-005: Implement workers and Worktree integrations use exact
   delegated claims, dirty Task source reports the explicit `$commit` handoff,
   stale worker ownership blocks exact-child crash recovery, and competing
   same-ref owners serialize. Mixed canonical hook/worker Python versions pass;
@@ -2029,7 +2053,7 @@ their existing owners.
 #### Validation Plan
 
 Run commit contract and disposable-repository transaction tests first, then
-the neutral project-spec hook, Worktree, Task Implementer interoperability,
+the neutral project-spec hook, Worktree, Implement interoperability,
 SDLC policy and managed-outer integration, installer registration, security review, lint,
 changed-scope review, and project-wide alignment.
 
@@ -2068,6 +2092,24 @@ user action, while casual mentions and raw Git remain denied, workflow owners
 remain isolated, recovery is idempotent, and installation plus fresh-session
 behavior are reported as separate proof gates.
 
+#### Predictable Checkout Completion
+
+The existing deterministic commit transaction owns local checkout completion through create-pr; review-pr coordinates review and merge-pr supplies the authoritative merged result. No separate Git mutation implementation, mandatory worktree, new runtime or public skill flag is introduced. Immutable policy selects ordinary outer completion or publication-preserving checkout. Capture original/default identities and intended final ref at begin, separately from publication scope; resume reuses them and saved targets.
+
+Private checkout-target materializes a selected target only when checkout-dependent work is required. Private complete-checkout distinguishes temporary switch-back, recording a confirmed merge, and terminal finalization. Persist merged result evidence before any fetch; independently verify destination containment before local updates. A failed fetch/result verification still allows switch-back with explicit skipped updates. Once merged, the target cannot reenter repair/sync/publication. Pending CI or resumable interruption keeps its grant open.
+
+Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
+
+Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+
+Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
+
+Implementation evidence: this revision adds strict task, checkpoint and closure v2 schemas, immutable completion policy, journaled private checkout-target and complete-checkout operations, separate completion ref outcomes, merged-target guards and enforced final checkout to the existing commit transaction owner. PR orchestration and bounded publication handoffs inherit that policy. Runtime instructions, READMEs, evaluation cases and Unreleased changelog are aligned. No legacy parser or compatibility shim was introduced.
+
+Verification evidence (2026-10-14): the remote-only squash regression failed against the previous owner and passes with the implementation. All 90 transaction cases passed (86 in the complete run and four subsequent focused additions), together with 6 contract, 95 merge/completion/publication-helper and 57 release tests. Disposable installation passed all 28 tests, including the new Codex/Claude installed-hook and installed-owner lifecycle; that lifecycle was also rerun against the final helper. The rollout regressions preserve terminal old task/closure bytes and archive terminal claims unchanged, while rejecting unfinished old ownership. Strict paired-spec validation, scoped Ruff/syntax/Markdown checks, 21 portable/Codex/Claude skill profile checks, and actual isolated npx discovery, copy parity, repeat installation and isolation checks passed. Changed-scope code and security review found no remaining blocker after repairing and testing a shared FETCH_HEAD race with exact advertised destination fetching.
+
+Native-agent comparative quality probes on Codex and Claude were authentication-unavailable; native trigger/output behavior remains unverified. No personal installation, live GitHub merge, result CI/Pages run, repository commit or push was performed. Delivery remains implemented, not verified; earlier evidence below describes prior revisions only.
+
 #### Implementation Evidence
 
 Root task grants now precede branch or HEAD movement, including clean starts.
@@ -2097,7 +2139,7 @@ clean/zero-commit tasks, named and remote-only targets, default starts,
 multi-target repairs, dependency and base synchronization, conflict review,
 closure, exact-child crash recovery, inherited child locking, scratch cleanup,
 intervening user edits, ignored files and malformed or legacy records.
-Shared SDLC policy, Worktree and Task Implementer suites verify preserved
+Shared SDLC policy, Worktree and Implement suites verify preserved
 ownership boundaries. Scoped Python and Markdown lint, skill structure for
 both hosts, static plugin catalogs and paired project-spec validation cover
 source wiring. Installation fixtures and actual installed parity are reported
@@ -2106,16 +2148,16 @@ PR publication is claimed by these source checks.
 
 <!-- /FEATURE: FEAT-010 -->
 
-<!-- FEATURE: FEAT-011 reqs=REQ-012 status=ready delivery=unassessed priority=P0 version=1 -->
+<!-- FEATURE: FEAT-011 reqs=REQ-012 status=superseded delivery=unassessed priority=P0 version=1 -->
 ### FEAT-011: Run-owned whole-lane checkpoint and generation open
 
 #### Requirements Covered
 
-- REQ-012: Checkpoint a dirty persistent Task Implementer lane before a run.
+- REQ-012: Checkpoint a dirty persistent Implement lane before a run.
 
 #### Context Evidence
 
-Task Implementer currently captures the persistent lane `HEAD`, invokes
+Implement currently captures the persistent lane `HEAD`, invokes
 Worktree's private generation-acquire action, and registers repository claims
 afterward. Worktree rejects any dirty lane before acquisition, while resume
 reconciliation correctly requires an already-active generation to remain
@@ -2128,7 +2170,7 @@ checkpoint paths between review and publication.
 
 #### Design Details
 
-Keep the five public Task Implementer actions unchanged. During `run`, after
+Keep the five public Implement actions unchanged. During `run`, after
 prompt refinement, managed spec and instruction validation, and deterministic
 task/claim compilation, use a private two-phase Worktree transaction before
 the first generation and any worker resources. Preparation copies the real
@@ -2144,7 +2186,7 @@ interop/shared-commit order. It revalidates branch, head, status, index,
 candidate, claims, lane state, and absence of Git operations; stages the real
 index with `git add -A`; reruns cached checks; and creates one normal-hook
 direct-child commit with the fixed message
-`chore(task-implementer): checkpoint managed lane`. A clean candidate follows
+`chore(implement): checkpoint managed lane`. A clean candidate follows
 the same transition without creating a commit. Before releasing locks, publish
 the resulting post-checkpoint head as `lane_head`, lease and interop
 `initial_head`, coordinator baseline, first-wave base, and active generation
@@ -2153,7 +2195,7 @@ generation-open boundary; later replanning may only extend the active claim
 superset through the existing claims transition.
 
 Store the Worktree-owned checkpoint journal separately from exact-schema lane
-v1 state. Before open, archive a compact Task Implementer preparation receipt
+v1 state. Before open, archive a compact Implement preparation receipt
 that binds the journal token, candidate tree, canonical path digest, and planned
 claims digest; after open, archive the post-checkpoint run receipt. Peer claim
 scans, lane reuse, integration, removal, and new generation
@@ -2176,7 +2218,7 @@ remain readable because their schemas do not change.
 
 #### Selected Option
 
-Use a Task Implementer-orchestrated, Worktree-owned preparation plus atomic
+Use a Implement-orchestrated, Worktree-owned preparation plus atomic
 checkpoint-and-generation-open transaction with provisional whole-repository
 claims and exact crash recovery.
 
@@ -2193,7 +2235,7 @@ ownership and invalidate existing resume and integration evidence.
 
 #### Implementation Boundaries
 
-Task Implementer owns run timing, complete candidate review, private receipt,
+Implement owns run timing, complete candidate review, private receipt,
 post-checkpoint baseline propagation, user-visible status, and public contract.
 Worktree owns candidate/journal validation, lock ordering, provisional claim
 conflicts, Git mutation, recovery, lane state, lease acquisition, and the
@@ -2221,8 +2263,8 @@ unchanged.
 
 #### Validation Plan
 
-Run focused Worktree transaction and Task Implementer interoperability tests,
-then the full Worktree and Task Implementer suites, stateful skill validation,
+Run focused Worktree transaction and Implement interoperability tests,
+then the full Worktree and Implement suites, stateful skill validation,
 changed-scope security and code review, lint, and project-wide alignment.
 
 #### Test Plan
@@ -2252,7 +2294,7 @@ than deleting or rewriting it.
 
 #### Done Definition
 
-One explicit Task Implementer `run` can safely preserve a reviewed dirty
+One explicit Implement `run` can safely preserve a reviewed dirty
 persistent lane across project folders as its exact generation baseline, while
 the primary checkout and other public actions remain untouched and every
 failure retains recoverable evidence without automatic cleanup.
@@ -2267,12 +2309,12 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-011 -->
 
-<!-- FEATURE: FEAT-012 reqs=REQ-013 status=ready delivery=unassessed priority=P1 version=1 -->
+<!-- FEATURE: FEAT-012 reqs=REQ-013 status=superseded delivery=unassessed priority=P1 version=1 -->
 ### FEAT-012: Existing-only workspace reopen through the live lane anchor
 
 #### Requirements Covered
 
-- REQ-013: Reopen an existing Task Implementer workspace without lane mutation.
+- REQ-013: Reopen an existing Implement workspace without lane mutation.
 
 #### Context Evidence
 
@@ -2281,7 +2323,7 @@ primary checkout, exact source ref, and project scope, so source-project and
 owning-lane paths resolve the same private manifest. Current `workspace init`
 calls Worktree lane ensure before editor launch; ensure refreshes an idle lane
 and therefore rejects lane dirt even when the user only needs to reopen the
-editor. Worktree already exposes private `anchor-inspect`, and Task Implementer
+editor. Worktree already exposes private `anchor-inspect`, and Implement
 already invokes that read-only path during execution interop.
 
 #### Design Details
@@ -2304,7 +2346,7 @@ source-ref and incarnation checks, and require the recorded source ref still to
 exist. Permit only lifecycle states that retain a valid live worktree; reject
 creating, creation-recovery, removing, removed, or inconsistent state. Do not
 call idle refresh, lane ensure, lifecycle recovery, or another public Worktree
-action. Task Implementer compares the anchor with the verified workspace lane
+action. Implement compares the anchor with the verified workspace lane
 ID, incarnation, name, branch, worktree, scope, source ref, common directory,
 and primary checkout.
 
@@ -2328,7 +2370,7 @@ scanning would make source identity ambiguous.
 
 #### Implementation Boundaries
 
-Task Implementer owns public syntax, workspace lookup and validation, exact
+Implement owns public syntax, workspace lookup and validation, exact
 workspace-to-anchor comparison, result rendering, and editor launch. Worktree
 owns live managed-lane identity validation. Existing initialization, prompt,
 run, checkpoint, integration, removal, and editor-launch semantics remain
@@ -2350,7 +2392,7 @@ unchanged.
 #### Validation Plan
 
 Run focused prompt-workspace, Worktree anchor, and interoperability tests,
-then the complete Task Implementer and Worktree suites, skill validators,
+then the complete Implement and Worktree suites, skill validators,
 Python and Markdown lint, changed-scope security and code review, and final
 alignment.
 
@@ -2392,16 +2434,16 @@ No independent verification evidence was recorded before schema v2 migration.
 <!-- /FEATURE: FEAT-012 -->
 
 <!-- FEATURE: FEAT-013 reqs=REQ-014 status=superseded delivery=unassessed priority=P0 version=4 -->
-### FEAT-013: Attested Task Implementer lifecycle bridge
+### FEAT-013: Attested Implement lifecycle bridge
 
 #### Requirements Covered
 
-- REQ-014: Bridge Task Implementer project contracts through the owner lifecycle.
+- REQ-014: Bridge Implement project contracts through the owner lifecycle.
 
 #### Context Evidence
 
 The project lifecycle currently binds every project-instructions command to the
-current hook session's private bundle and selected checkout. Task Implementer
+current hook session's private bundle and selected checkout. Implement
 correctly retains its authoritative receipt and rendered state under the run
 orchestration root and targets the active wave's integration checkout. The two
 individually safe constraints are mutually exclusive when an explicit `run`
@@ -2413,7 +2455,7 @@ does not observe the repository write and leaves the outer lifecycle in
 #### Design Details
 
 Keep both authorities and add one narrow adapter validation path. A hidden,
-read-only Task Implementer helper action accepts the original canonical
+read-only Implement helper action accepts the original canonical
 project-instructions command on standard input. It resolves the workspace and
 run from the run-owned private root, validates current workspace/run/coordinator
 state, identifies the active wave and live integration worktree, and compares
@@ -2435,7 +2477,7 @@ to the recorded linked-worktree registration and common Git directory; an
 independent repository at the same path, branch, and commit fails closed.
 The checkout may be clean or contain only
 staged selected-project `docs/requirements.md` and `docs/design.md`, matching
-Task Implementer's contract-compilation sequence.
+Implement's contract-compilation sequence.
 Any unstaged, untracked, deleted, symlinked, sibling, renamed-from-another-path,
 or other staged delta fails closed before attestation.
 
@@ -2447,7 +2489,7 @@ reconciliation-required phase, and an inspect or render action. Ordinary lifecyc
 project-instructions commands retain their existing current-session rules, and
 coordinator-shaped failures still fail closed.
 
-Add a separate recognition path for a successful canonical Task Implementer
+Add a separate recognition path for a successful canonical Implement
 `wave-plan`. The hook uses the same trusted adapter boundary to prove that the
 command belongs to the current selected lane and that the generation-open
 checkpoint is durable. PostToolUse then advances the lifecycle from
@@ -2465,20 +2507,20 @@ selected project. Re-run the ordinary commit binding against only that
 attested worker root and the command-derived worker session that the adapter
 matched to the running plane and canonical authorization or claim. The outer
 hook payload session continues to bind direct commits and lifecycle state, but
-is not substituted for a nested worker's Task Implementer identity.
+is not substituted for a nested worker's Implement identity.
 Undispatched future tasks have no assignment and are not candidate owners;
 arbitrary sibling roots and raw Git remain denied.
 
 #### Selected Option
 
-Use a read-only Task Implementer attestation queried by the lifecycle hook,
+Use a read-only Implement attestation queried by the lifecycle hook,
 while keeping run evidence run-owned and lifecycle state lifecycle-owned.
 
 #### Alternatives Considered
 
 Copying run artifacts into the lifecycle session was rejected because their
 embedded absolute paths and digests remain bound to the original private root.
-Moving Task Implementer evidence into one transient lifecycle session was
+Moving Implement evidence into one transient lifecycle session was
 rejected because runs must resume across sessions and retain immutable dispatch
 evidence. Broadly allowing external project-instructions commands was rejected
 because it would turn a precise adapter into an arbitrary coordinator bypass.
@@ -2487,7 +2529,7 @@ coordination and users should only repeat `run`.
 
 #### Implementation Boundaries
 
-Task Implementer owns validation of workspace, run, active wave, integration
+Implement owns validation of workspace, run, active wave, integration
 identity, and run-private paths. `maintain-project-specs` owns helper trust,
 current session and selected-lane binding, phase policy, material-write
 accounting, and terminal reconciliation. `project-agent-instructions` keeps its
@@ -2508,8 +2550,8 @@ never derives a trust root from the command candidate.
 - TDD-004: A clean integration checkout and an exact staged requirements/design
   pair pass; any other Git delta or unsafe contract path is denied.
 - TDD-005: Successful `wave-plan` advances the current selected lane lifecycle
-  to reconciliation; failure and read-only Task Implementer actions do not.
-- TDD-006: Task Implementer's project-agent contract replay still verifies the
+  to reconciliation; failure and read-only Implement actions do not.
+- TDD-006: Implement's project-agent contract replay still verifies the
   owner receipt, render state, committed spec blobs, and instruction chain
   before dispatch.
 - TDD-007: Contract and metadata tests retain exactly five public actions and
@@ -2539,28 +2581,28 @@ authorized fresh-session behavior probe.
 Build one disposable primary checkout, persistent lane, active generation, and
 first-wave integration worktree. Exercise the real command shapes through
 PreToolUse and PostToolUse, including negative state/path permutations and
-failed command responses. Reuse Task Implementer's existing contract replay as
+failed command responses. Reuse Implement's existing contract replay as
 the boundary oracle rather than replacing it with a hook-only assertion.
 
 #### Evaluation Plan
 
 Resume a retained disposable run from the exact pre-dispatch checkpoint after
-installation and restart. Observe Task Implementer render and verify its
+installation and restart. Observe Implement render and verify its
 run-owned decision, dispatch the first worker, complete the run, and
 independently confirm the outer lifecycle reaches one current reconciliation
 and terminal seal without a user-authored adapter command.
 
 #### Rollout And Rollback
 
-Land lifecycle hook, Task Implementer adapter, tests, docs, and changelog
+Land lifecycle hook, Implement adapter, tests, docs, and changelog
 together. Install both skills and the hook from one reviewed source revision,
 verify parity, then restart and review hook trust before the fresh probe. Roll
 back the exact installed bundle if admission or reconciliation diverges;
-preserve all retained Task Implementer resources and private evidence.
+preserve all retained Implement resources and private evidence.
 
 #### Done Definition
 
-One explicit Task Implementer `run` crosses the run-owned integration contract
+One explicit Implement `run` crosses the run-owned integration contract
 boundary without weakening ordinary lifecycle evidence, reaches worker
 dispatch, and leaves the selected lane lifecycle ready for one final semantic
 reconciliation and seal.
@@ -2575,7 +2617,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-013 -->
 
-<!-- FEATURE: FEAT-014 reqs=REQ-015 status=ready delivery=unassessed priority=P0 version=1 -->
+<!-- FEATURE: FEAT-014 reqs=REQ-015 status=superseded delivery=unassessed priority=P0 version=1 -->
 ### FEAT-014: Evidence-preserving active-wave worktree rehydration
 
 #### Requirements Covered
@@ -2584,7 +2626,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 #### Context Evidence
 
-Task Implementer records each internal integration and worker checkout in the
+Implement records each internal integration and worker checkout in the
 Worktree-owned active lease before and after creation. A stopped run can retain
 those rows as `present` and retain locked Git administrative registrations
 even when the filesystem directories disappear. Existing `task-recover`
@@ -2646,7 +2688,7 @@ with replacement-worker session ownership.
 
 #### Implementation Boundaries
 
-Task Implementer owns run/wave/assignment proof, expected heads, journaled
+Implement owns run/wave/assignment proof, expected heads, journaled
 rehydration, lease tuple comparison, and the recovery result. Worktree owns
 outer anchor and lease identity; its lookup fix changes only candidate
 selection order. Git owns the retained locked-registration recovery primitive.
@@ -2671,7 +2713,7 @@ release, installation, and live run execution remain unchanged.
 #### Validation Plan
 
 Run focused missing-path and delegated-commit real-Git regressions, existing
-interrupted-worker tests, full Task Implementer wave and Worktree manager
+interrupted-worker tests, full Implement wave and Worktree manager
 suites, interoperability tests, Python and Markdown lint, changed-scope code
 and security review, and final alignment.
 
@@ -2693,7 +2735,7 @@ and promotion state before allowing a fresh worker to call `task-recover`.
 
 #### Rollout And Rollback
 
-Land Task Implementer, Worktree, tests, specs, docs, and
+Land Implement, Worktree, tests, specs, docs, and
 changelog together. Install the cooperating skills and hook from one reviewed
 source revision, verify parity, restart, and use a disposable probe before any
 retained real run. Roll back the exact installed payload if activation fails;
@@ -2715,7 +2757,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-014 -->
 
-<!-- FEATURE: FEAT-015 reqs=REQ-016 status=ready delivery=unassessed priority=P0 version=1 -->
+<!-- FEATURE: FEAT-015 reqs=REQ-016 status=superseded delivery=unassessed priority=P0 version=1 -->
 ### FEAT-015: Revision-to-contract impact ledger
 
 #### Requirements Covered
@@ -2724,7 +2766,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 #### Context Evidence
 
-Task Implementer and Agentic SDLC already snapshot editable prompts into
+Implement and Agentic SDLC already snapshot editable prompts into
 immutable revisions with exact-byte and normalized-intent identities. Their
 refinement state binds the accepted revision, but current readiness checks can
 accept unchanged requirements bytes after a semantic edit and Task
@@ -2738,7 +2780,7 @@ would not close that semantic gap.
 #### Design Details
 
 Add one internal pure impact validator owned by `maintain-project-specs` and
-thin persistence adapters in Task Implementer and Agentic SDLC. The validator
+thin persistence adapters in Implement and Agentic SDLC. The validator
 accepts the current canonical spec receipt and record inventory plus bounded
 refinement metadata. It enumerates a canonical multiset of statement
 occurrences and requires exactly one disposition for each occurrence:
@@ -2833,7 +2875,7 @@ without improving traceability.
 #### Implementation Boundaries
 
 `maintain-project-specs` owns the internal schema, canonical spec inventory,
-and pure validation rules. Task Implementer owns run-local attempts, steering
+and pure validation rules. Implement owns run-local attempts, steering
 settlement, coordinator plan-basis binding, progression gates, migration, and
 status projection. Agentic SDLC owns equivalent feature-plan binding,
 progression gates, migration, and status projection. Canonical project specs,
@@ -2868,7 +2910,7 @@ project-instructions ownership remain unchanged.
 
 #### Validation Plan
 
-Run the shared validator suite, focused Task Implementer and Agentic SDLC
+Run the shared validator suite, focused Implement and Agentic SDLC
 prompt/workflow suites, lifecycle owner tests, syntax and lint checks,
 adversarial security review, changed-scope code review, and final alignment.
 
@@ -2913,7 +2955,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-015 -->
 
-<!-- FEATURE: FEAT-016 reqs=REQ-017 status=ready delivery=unassessed priority=P0 version=1 -->
+<!-- FEATURE: FEAT-016 reqs=REQ-017 status=superseded delivery=unassessed priority=P0 version=1 -->
 ### FEAT-016: Sealed promotion-review correction round
 
 #### Requirements Covered
@@ -2922,7 +2964,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 #### Context Evidence
 
-Task Implementer already prevents coordinator-authored product fixes and
+Implement already prevents coordinator-authored product fixes and
 requires combined validation and review before promotion. Its existing
 `wave-replan` transition can replace only a resource-free planned tail or add a
 tail after a fully promoted and cleaned wave. A blocker reproduced while a
@@ -2986,11 +3028,11 @@ single retained-integration use case.
 
 #### Implementation Boundaries
 
-Task Implementer owns the private handoff, coordinator, wave, task plane,
+Implement owns the private handoff, coordinator, wave, task plane,
 assignment, worktree, result, integration, promotion, and cleanup transitions.
 Worktree continues to own generation claims and lane promotion primitives.
 Workers alone own product-code corrections and their direct-child commits.
-Public Task Implementer actions, project specification ownership, lifecycle
+Public Implement actions, project specification ownership, lifecycle
 sealing, and source-lane integration remain unchanged.
 
 #### Test-First Success Criteria
@@ -3007,7 +3049,7 @@ sealing, and source-lane integration remain unchanged.
 
 #### Validation Plan
 
-Run the focused correction cases, complete Task Implementer wave and contract
+Run the focused correction cases, complete Implement wave and contract
 suites, canonical spec validation, Python lint and formatting, Markdown lint,
 changed-scope code and security review, installed byte-parity checks, and a
 retained disposable correction round before using the transition on real run
@@ -3033,7 +3075,7 @@ passes and one fast-forward promotion completes.
 #### Rollout And Rollback
 
 Land source, focused state-machine tests, specs, docs, and changelog together;
-validate and install Task Implementer as one byte-matched bundle before using
+validate and install Implement as one byte-matched bundle before using
 the transition on retained evidence. Rollback the installed source only before
 opening a correction round; once state advances, retain it for a compatible
 runtime rather than rewriting private coordinator or Git state.
@@ -3054,16 +3096,16 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-016 -->
 
-<!-- FEATURE: FEAT-017 reqs=REQ-018 status=ready delivery=unassessed priority=P0 version=3 -->
-### FEAT-017: Digest-bound Task Implementer resume control
+<!-- FEATURE: FEAT-017 reqs=REQ-018 status=superseded delivery=unassessed priority=P0 version=3 -->
+### FEAT-017: Digest-bound Implement resume control
 
 #### Requirements Covered
 
-- REQ-018: Resume interrupted Task Implementer runs from authoritative state.
+- REQ-018: Resume interrupted Implement runs from authoritative state.
 
 #### Context Evidence
 
-Task Implementer already persists coordinator-v7, wave-v4, task-plane-v5,
+Implement already persists coordinator-v7, wave-v4, task-plane-v5,
 assignment-v7, result-v3, incoming-handoff-v1, and interop-v4 artifacts and
 uses narrow locks around private transitions. Repeated public `run` is intended
 to reuse those artifacts, but recovery decisions are currently distributed
@@ -3238,13 +3280,13 @@ improving the ordinary repeated-run experience.
 
 #### Implementation Boundaries
 
-Task Implementer owns the resume planner, sidecar, adoption, transition
+Implement owns the resume planner, sidecar, adoption, transition
 journaling, reentrant scope/execution fencing, machine status, handoff
 projection, immutable pending-plan staging, and focused crash harness.
 Worktree retains lease, generation, path, and promotion authority. Git retains
 ref, worktree, and commit truth. Maintain Project Specs retains canonical spec
 semantics and advisory validation. Workers retain product changes and
-direct-child commits. No public Task Implementer action or flag changes.
+direct-child commits. No public Implement action or flag changes.
 
 #### Test-First Success Criteria
 
@@ -3551,8 +3593,8 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-018 -->
 
-<!-- FEATURE: FEAT-019 reqs=REQ-020 status=ready delivery=unassessed priority=P0 version=2 -->
-### FEAT-019: Concise zero-write Task Implementer lane status
+<!-- FEATURE: FEAT-019 reqs=REQ-020 status=superseded delivery=unassessed priority=P0 version=2 -->
+### FEAT-019: Concise zero-write Implement lane status
 
 #### Requirements Covered
 
@@ -3562,7 +3604,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 `prompt_workspace_reporting.lane_report()` currently computes a full
 source-to-lane Git comparison and returns every changed path. The generated
-`Task Implementer: Show Pending Lane Changes` task forces `--json`, while the
+`Implement: Show Pending Lane Changes` task forces `--json`, while the
 generic emitter serializes the complete nested payload on one terminal line.
 The same function already reads the Worktree lane anchor, generation receipts,
 interop state, sealed summaries, and safe Git cleanliness through
@@ -3584,11 +3626,11 @@ prove a stable read without acquiring those mutation-adjacent interfaces.
 
 #### Design Details
 
-A narrow Task Implementer reporting module continues to own `run-summary-v1`,
+A narrow Implement reporting module continues to own `run-summary-v1`,
 source observations, finalization, handoff rendering, and lane inspection.
 Completion evidence and its existing detailed change statistics remain
 unchanged. Lane visibility becomes the separate hard-cut
-`task-implementer/lane-report-v2` projection and never embeds a sealed summary
+`implement/lane-report-v2` projection and never embeds a sealed summary
 or invokes Git diff/statistics parsing.
 
 Select exactly one current run from validated run, interop, and finalization
@@ -3614,7 +3656,7 @@ scope lock or call live lease-resource inspection. Use the existing bounded
 `--no-optional-locks` Git wrapper only for source/lane cleanliness needed by
 the next-action decision.
 
-The generated workspace task becomes `Task Implementer: Show Lane Status`,
+The generated workspace task becomes `Implement: Show Lane Status`,
 invokes the human renderer by default, clears and reuses a dedicated terminal,
 suppresses command echo and reuse messaging, and does not steal focus. Explicit
 `--json` returns the same concise v2 data. The current four-task generated
@@ -3638,7 +3680,7 @@ generation was rejected because legacy generations lack immutable totals.
 
 #### Implementation Boundaries
 
-Task Implementer reporting owns snapshot selection, validation, progress
+Implement reporting owns snapshot selection, validation, progress
 derivation, schema-v2 output, and human rendering. The generated workspace owns
 only the task label, invocation, presentation, and exact previous-shape
 migration. Coordinator, wave, task-plane, run-summary, Worktree, lease, hook,
@@ -3681,7 +3723,7 @@ after fingerprints of private and Git-owned state.
 
 #### Evaluation Plan
 
-Run a disposable multi-wave Task Implementer workflow and inspect it while
+Run a disposable multi-wave Implement workflow and inspect it while
 workers are queued/running, after results commit and merge, after each wave
 promotes, during finalization, after generation release, after source
 integration, and after lane removal. Confirm each report is short, actionable,
@@ -3690,7 +3732,7 @@ and truthful without displaying changed files or interfering with execution.
 #### Rollout And Rollback
 
 Validate source and all focused/broad suites first. Install only the updated
-Task Implementer skill through the repository installer, verify source/install
+Implement skill through the repository installer, verify source/install
 parity, and smoke-test a freshly generated or migrated workspace in a fresh
 session. Do not install or register hooks because their runtime contract is
 unchanged. Roll back lane-report-v2, its renderer, and the generated workspace
@@ -4319,7 +4361,7 @@ No independent verification evidence was recorded before schema v2 migration.
 #### Requirements Covered
 
 - REQ-003: Bind explicit helpers without restoring lifecycle authority.
-- REQ-024: Remove historical lifecycle-phase authority from ordinary work, Task Implementer, and Agentic SDLC.
+- REQ-024: Remove historical lifecycle-phase authority from ordinary work, Implement, and Agentic SDLC.
 
 #### Context Evidence
 
@@ -4339,7 +4381,7 @@ PreToolUse, PostToolUse, and Stop registrations do not exist. Hook failure or
 unsafe input skips intake without denying tools or completion, while shared
 Stop arbiters retain independent troubleshooting and SDLC decisions.
 
-Task Implementer removes hook-facing lifecycle authorization,
+Implement removes hook-facing lifecycle authorization,
 project-instruction readiness, and terminal lifecycle seals from its
 authoritative state and transition predicates. Its root coordinator still
 binds the canonical v2 project-spec receipt as project-truth evidence before
@@ -4362,11 +4404,11 @@ advisory outcome under the instructions already loaded.
 Explicit project-instruction mutation remains separate from the observer. Its
 helper keeps canonical path, ownership, digest, concurrency, and recovery
 checks, but a refusal or `reload_required` result cannot terminate an enclosing
-Task Implementer or SDLC run.
+Implement or SDLC run.
 
 #### State And Migration
 
-No authoritative Task Implementer or SDLC schema migration is required because
+No authoritative Implement or SDLC schema migration is required because
 the removed lifecycle receipts and overlays were adjunct evidence rather than
 workflow identity. Loaders no longer import or evaluate them. Historical
 lifecycle-only files are ignored; no successor record, no dual execution path,
@@ -4394,7 +4436,7 @@ unsnapshotted sibling module into import resolution.
 
 An auto-steering disposition for future project instructions remains advisory
 unless the current user explicitly invokes the separate mutation workflow.
-Task Implementer removes its orphaned owner-receipt validator instead of
+Implement removes its orphaned owner-receipt validator instead of
 keeping a second blocked validation path. Its transient worker commit context
 uses `scope_cwd` under a hard-cut v2 schema rather than retaining a lifecycle-
 named field. Both stateful skill contracts expose
@@ -4422,7 +4464,7 @@ diagnostics and explicit mutation service remain useful.
 #### Implementation Boundaries
 
 Owned changes are the lifecycle hooks and maintenance helpers, duplicated Stop
-arbiters, Task Implementer spec/prompt/terminal adapters, ordinary commit
+arbiters, Implement spec/prompt/terminal adapters, ordinary commit
 guidance and transient Task commit context, Agentic SDLC phase and prompt-impact
 adapters, explicit project-instruction integration, tests, skill metadata,
 references, README guidance, installer surfaces, and release notes. Unrelated
@@ -4432,7 +4474,7 @@ service work and workflow-owned safety state are excluded.
 
 - TDD-001: Every lifecycle phase and lifecycle evidence failure allows an
   ordinary project write and Stop completion.
-- TDD-002: Task Implementer completes planning through promotion and cleanup
+- TDD-002: Implement completes planning through promotion and cleanup
   without lifecycle receipts or a terminal seal, while stale prompt, missing
   evidence, ownership mismatch, dirty integration, and branch drift still
   fail.
@@ -4445,7 +4487,7 @@ service work and workflow-owned safety state are excluded.
   adjunct fields ignored and without predecessor rewriting or a compatibility
   execution path.
 - TDD-006: Project-instruction render, ownership, or reload failure is reported
-  without stopping Task Implementer or SDLC.
+  without stopping Implement or SDLC.
 - TDD-007: Current-bundle storage accounting and sibling-project bootstrap
   regressions remain covered.
 - TDD-008: No production import or public command exposes lifecycle transition
@@ -4468,14 +4510,14 @@ service work and workflow-owned safety state are excluded.
 #### Validation Plan
 
 Run focused deterministic tests for each changed hook and workflow adapter,
-then the complete Task Implementer and Agentic SDLC verifiers. Validate every
+then the complete Implement and Agentic SDLC verifiers. Validate every
 changed skill with the stateful alignment profile where applicable, run
 Markdown and Python checks, perform code and security review, and finish with
 changed-scope alignment and `git diff --check`.
 
 #### Test Plan
 
-Cover lifecycle-missing and lifecycle-faulted ordinary, Task Implementer, and
+Cover lifecycle-missing and lifecycle-faulted ordinary, Implement, and
 SDLC paths; composed Stop arbitration; old-state migration; explicit
 project-instruction failure; and the independent maintenance regressions. Pair
 each permissive lifecycle case with a workflow-owned failure that must remain
@@ -4499,7 +4541,7 @@ enforcing layers.
 #### Done Definition
 
 Historical project lifecycle state can be observed and reported but cannot
-deny, continue Stop, or gate ordinary, Task Implementer, or SDLC completion.
+deny, continue Stop, or gate ordinary, Implement, or SDLC completion.
 Canonical spec validity remains required at spec-dependent planning and
 dispatch boundaries, workflow-owned safety controls remain proven by paired
 negative tests, and activation claims remain separated from source validation.
@@ -4524,7 +4566,7 @@ No independent verification evidence was recorded before schema v2 migration.
 #### Context Evidence
 
 The former implementation split semantic parsing between the canonical owner
-and Task Implementer, bound prompt capture only after explicit workflow startup,
+and Implement, bound prompt capture only after explicit workflow startup,
 used schema v1 documents, and derived SessionStart/UserPromptSubmit advice from
 an optional historical `lifecycle.json`. The installer merged current source
 registrations but did not retire source-owned event registrations removed from a
@@ -4552,7 +4594,7 @@ SessionStart reads actual document markers through
 bounded, no-follow, owner-controlled regular-file reads and stays silent when
 v2 ownership is current. Neither event supplies tool or Stop authority.
 
-Ordinary root agents classify and publish. Task Implementer and Agentic SDLC
+Ordinary root agents classify and publish. Implement and Agentic SDLC
 are authoring adapters over the owner contract and reconstruct required syncing
 from immutable workflow prompts when needed. Workers receive the root intent
 identity and canonical spec receipt; they may return typed `spec_gap` proposals
@@ -4579,7 +4621,7 @@ reliably distinguish durable requirements from conversational requests.
 #### Implementation Boundaries
 
 Owned surfaces are the canonical contract/parser/renderer/migration/transaction,
-project-spec hooks and manifest, hook installer retirement, Task Implementer and
+project-spec hooks and manifest, hook installer retirement, Implement and
 Agentic SDLC adapters/templates/contracts, project instruction schema references,
 focused tests, READMEs, the root project contract, and release notes. Unrelated
 service projects and their dirty specification documents remain excluded.
@@ -4598,7 +4640,7 @@ service projects and their dirty specification documents remain excluded.
   boundary-time Git/document changes, cannot follow a swapped `docs` path,
   restores exact unchanged originals after a later write failure, and blocks an
   owner-aware reader until the pair is complete.
-- TDD-005: Task Implementer and Agentic SDLC accept the same v2 receipt and do
+- TDD-005: Implement and Agentic SDLC accept the same v2 receipt and do
   not carry independent schema/semantic validation paths. Both reject a
   protected spec rename even when its destination is broadly claimed, and
   typed gaps containing sensitive text fail before persistence or output.
@@ -4624,7 +4666,7 @@ controls for authorization, state, and evidence failures.
 
 #### Evaluation Plan
 
-Verify an ordinary direct implementation request, Task Implementer prompt, and
+Verify an ordinary direct implementation request, Implement prompt, and
 Agentic SDLC prompt all reach the same canonical contract semantics. Separately
 probe a question/status prompt, secret-bearing prompt, and worker result to prove
 they do not create lifecycle writes.
@@ -4638,7 +4680,7 @@ manifest; it does not reintroduce dual normal parsers or lifecycle phase state.
 
 #### Done Definition
 
-One v2 project-contract owner serves ordinary, Task Implementer, and Agentic SDLC
+One v2 project-contract owner serves ordinary, Implement, and Agentic SDLC
 work; direct prompts receive best-effort root classification; paired documents
 record requirements, design, implementation, and verification honestly; workers
 cannot fork project truth; obsolete hook authority is absent; and focused source,
@@ -4655,7 +4697,7 @@ install, and activation evidence is reported independently.
   root-turn intake.
   The project-spec manifest has no tool or Stop event, and installer
   reconciliation retires only its obsolete exact registrations.
-- Task Implementer and Agentic SDLC assignments bind the root intent and the
+- Implement and Agentic SDLC assignments bind the root intent and the
   accepted project-spec receipt. Worker results carry typed `spec_gaps` and
   cannot publish or independently reclassify project intent. Their path checks
   disable rename folding and their gap fields reject sensitive text.
@@ -4668,7 +4710,7 @@ install, and activation evidence is reported independently.
   10, and 38 cases respectively, including committed-exact disable policy,
   boundary races, reader serialization, and rejection of symlinked or oversized
   canonical documents.
-- Task Implementer passes 65 wave, 13 worktree-interoperability, 13 spec, and
+- Implement passes 65 wave, 13 worktree-interoperability, 13 spec, and
   49 resume cases plus its contract smoke check.
 - Agentic SDLC passes 79 execution, 108 hook, 45 prompt-workspace, 9 canonical
   validation, 11 start-contract, and 12 worker-dispatch cases.
@@ -4681,16 +4723,16 @@ install, and activation evidence is reported independently.
 
 <!-- /FEATURE: FEAT-024 -->
 
-<!-- FEATURE: FEAT-025 reqs=REQ-026 status=ready delivery=verified priority=P1 version=1 -->
-### FEAT-025: Branch-aware lane-removal guidance in Task Implementer help
+<!-- FEATURE: FEAT-025 reqs=REQ-026 status=superseded delivery=unassessed priority=P1 version=1 -->
+### FEAT-025: Branch-aware lane-removal guidance in Implement help
 
 #### Requirements Covered
 
-- REQ-026: Explain branch-aware Task Implementer lane removal in help.
+- REQ-026: Explain branch-aware Implement lane removal in help.
 
 #### Context Evidence
 
-Task Implementer workspace identity binds the Git common directory, primary
+Implement workspace identity binds the Git common directory, primary
 checkout, recorded source ref, and selected project scope. A no-argument lookup
 from the primary checkout therefore follows its current branch; after that
 checkout moves to another branch, it can identify a different workspace. The
@@ -4708,7 +4750,7 @@ primary checkout on a different branch may resolve another workspace when
 example:
 
 ```text
-$task-implementer workspace remove "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>"
+$implement workspace remove "/Users/<username>/repos/<repository>-worktrees/<lane>/services/<project>"
 ```
 
 Label every angle-bracketed path component as a placeholder and prohibit
@@ -4737,7 +4779,7 @@ environment-neutral.
 
 #### Implementation Boundaries
 
-`task-implementer/SKILL.md` owns the report-only help response contract. The
+`implement/SKILL.md` owns the report-only help response contract. The
 skill README and workflow cases own human and evaluation guidance, while the
 contract smoke test owns deterministic cross-surface assertions. Workspace
 resolution, Worktree lane removal, metadata, public actions, and private state
@@ -4756,7 +4798,7 @@ schemas remain unchanged.
 
 #### Validation Plan
 
-Run the Task Implementer contract smoke test, strict stateful skill validation,
+Run the Implement contract smoke test, strict stateful skill validation,
 Markdown lint, project-spec validation, changed-scope code and security review,
 final alignment, and `git diff --check`.
 
@@ -4781,13 +4823,13 @@ it does not alter persistent lanes or private history.
 
 #### Done Definition
 
-Task Implementer help concisely explains how to target the project inside an
+Implement help concisely explains how to target the project inside an
 existing lane when primary-branch lookup would select another workspace, using
 only the existing public syntax and public-safe placeholders.
 
 #### Implementation Evidence
 
-- `task-implementer/SKILL.md` directs the report-only help renderer to explain
+- `implement/SKILL.md` directs the report-only help renderer to explain
   the different-primary-branch lookup risk and show the existing public
   `[project-folder]` fallback with generic angle-bracketed placeholders.
 - The skill README, workflow cases, deterministic contract test, parent skill
@@ -4796,7 +4838,7 @@ only the existing public syntax and public-safe placeholders.
 
 #### Verification Evidence
 
-- The Task Implementer contract smoke test and strict stateful-skill validator
+- The Implement contract smoke test and strict stateful-skill validator
   passed. Markdownlint, Ruff, Python source compilation, canonical project-spec
   validation, and `git diff --check` also passed for the changed scope.
 - Changed-scope code and security review found no blocking issues, real local
@@ -5666,7 +5708,7 @@ metadata retains explicit public and internal coordinator boundaries.
 Converted align-skill's core, host validation profiles, authoring references,
 README and portability evals. Added bounded native trigger/quality runner and
 independent evidence checks. Preserved intentional config-codex target behavior
-and Task Implementer versus SDLC commit ownership. Updated the existing CI
+and Implement versus SDLC commit ownership. Updated the existing CI
 workflow with cross-agent static/installed checks; real user homes and external
 publication were not changed.
 
@@ -5743,7 +5785,7 @@ Historical verification performed in disposable environments on 2026-09-11:
   each native installed package. All 70 installed skill definitions and shared
   runtime files match source.
 - Existing regression suites pass: installer (29), config-codex (70), commit
-  transaction (22), remediation guard (97), Task Implementer waves (65), SDLC
+  transaction (22), remediation guard (97), Implement waves (65), SDLC
   hooks (110), SDLC execution (79), prompt sessions (27), project hooks (38),
   and global-context template validation.
 - Native CLI: Codex 0.154.0 and Claude Code 2.1.236 marketplace installation,
@@ -5764,7 +5806,7 @@ reviews found no serious remaining issue in those repaired paths.
 
 The alignment rechecked both 70-skill host profiles and native manifests;
 validator (35), eval adapters (9), cross-agent runtime/installation (21),
-installer (29), config-codex (70), Commit (22), Worktree (91), Task Implementer
+installer (29), config-codex (70), Commit (22), Worktree (91), Implement
 waves (65), SDLC hooks (111), SDLC execution (79), prompt-session (27), project-hook (38), and context-template
 checks pass. Python AST/Ruff, Bash/ShellCheck, changed Markdown and workflow YAML
 also pass. Fresh isolated native installs for both hosts match all 70 skill
@@ -5849,7 +5891,7 @@ Reuse existing hooks without adding a new owner or source copy. Preflight the
 full source/runtime dependency closure before hook setup. Local and plugin
 routes remain exclusive; plugin configuration must not add local duplicates.
 Preserve one Stop arbiter and all existing workflow authority. Delegation policy
-and private Task Implementer workspace remain opt-in. Before a first hook
+and private Implement workspace remain opt-in. Before a first hook
 installation, create a missing disabled local policy unless delegation was
 selected. The existing installer treats global_context_policy.json as
 operator-owned data: create it when absent, preserve it on reinstalls for both
@@ -6060,9 +6102,9 @@ occurred. Existing native controls and installer interfaces remain intact.
 
 Passed 35 existing validator checks, 13 standard/YAML/resource tests, 11 offline
 installation-harness tests and 10 evaluation-adapter tests. Configuration and
-workflow regressions passed: Codex 70, Claude 25, Task Implementer recovery 22,
+workflow regressions passed: Codex 70, Claude 25, Implement recovery 22,
 SDLC contract 11, SDLC dispatch 12, installed runtime/hooks 25 and Claude roles 8,
-plus the Task Implementer contract smoke and native manifest/catalog checks.
+plus the Implement contract smoke and native manifest/catalog checks.
 Both host policies validate all 71 skills with no failures; the three existing
 soft size warnings remain. Scoped Python/Markdown lint, syntax, CI YAML and
 canonical-pair validation passed.
@@ -7683,7 +7725,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=5 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=8 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -7710,9 +7752,17 @@ Cxcli workflow tests select exactly one astral-sh/setup-uv repository reference,
 
 Only an explicit trusted numeric operator workflow_dispatch can initiate a merge. Independently fetch and validate the positive GitHub COMMENT review ID, author, repository/PR/head/base and validation before intent and again before effects. Bot identity, metadata, labels and CI cannot replace review. Remove metadata admission and rollout toggles without compatibility paths; MERGE_OPERATOR_IDS is the only merge-specific variable. Preserve same-feature reuse, canonical repository-wide commits and preparation-only publication modes.
 
-PR, CI and scheduled events maintain the CI-only Required CI aggregate for ordinary and fork PRs and return no merge candidates. Upload an immutable admission receipt before approval. Keep per-job least privilege, protected asynchronous merge with bypass_rules false, exact-head approval, repeated CI/objection checks and maintainer handoff for queues or workflow-file permission denial. The shared Actions identity is a trust boundary.
+PR, CI and completion recovery events maintain the CI-only Required CI aggregate for ordinary and fork PRs and return no merge candidates. Upload an immutable admission receipt before approval. Keep per-job least privilege, protected asynchronous merge with bypass_rules false, exact-head approval, repeated CI/objection checks and maintainer handoff for queues or workflow-file permission denial. The shared Actions identity is a trust boundary.
 
 Completion schedules recover only already-authorized operator-dispatched positive-review intents. Resolve the authoritative result through GraphQL mergeCommit.oid after independently binding merged state, PR number, reviewed head and base repository/ref; the pinned REST version has no result field. Missing or inconsistent result evidence stops before completion effects. Preserve duplicate suppression, uncertain-effect journals, authoritative result ancestry, explicit result CI and Pages dispatch. Each CI execution job loads its checkout validator from the trusted workflow revision and validates receipt and authoritative result before setup/cache restoration; fetch credentials remain process-local. Release publishers tag only the verified actual merge result. Agentic SDLC, existing credentials and Dependabot scheduling/configuration stay unchanged.
+
+The workflow rationalization retains the useful fifteen repository workflow boundaries. Protected merge drops its cron and routes PR and CI in_progress/completed events to affected current open PR heads only. Completion owns hourly recovery at minute 17 and manual recovery; a separate least-privilege job repairs all-open-PR Required CI. Event jobs are filtered before runner allocation and use producer-run artifact discovery. Keep bounded effect-journal reconciliation where needed. Immutable early result-CI routing receipts bind repository/workflow/run/attempt, original broker/PR/result and correlation. Failed test runs may route recovery; only independently validated latest-attempt success evidence can complete it. Target receipt errors yield blocked target diagnostics and a failing summary while valid targets proceed. Global transport/authentication/permission/listing failures stop discovery before effects.
+
+Preserve seven CI workflow names, dispatch fields, setup ordering and successful result artifacts. Policy is the workflow inventory authority; baseline CI checks listeners, filters and publishing definitions. Shared pure publication helpers own validation, ancestry, notes, manifests and verification without a generic privileged shell workflow. Release publishers upload immutable pre-effect manifests with exact tag object/commit, run provenance and asset SHA-256/size before publishing. Existing releases download and compare assets against trusted original evidence. Classify absent, verified-existing, conflict and unverifiable explicitly; missing/expired legacy evidence blocks automated repair, never manufactures expected hashes from remote assets.
+
+Image tag builds exclusively own X.Y.Z and X.Y.Z-gSHA; manual builds own sha-SHA and optional main-only latest. Delete release_version without an alias. One destination image lock uses cancel-in-progress:false and queue:max across preflight, publication, verification and manifest. Inspect all immutable aliases, block partial/conflicting/unverifiable states, and verify every remote digest equals the build digest. Preserve existing remote tags, registry targets/credentials, Helm exact-package/anonymous-pull/digest checks and service-specific release qualification. The github-workflows release template is the sole YAML owner; publish-release delegates setup, and release observation uses the existing 10800-second phase budgets.
+
+Reviewer routing uses trusted base policy to add configured nonauthor reviewers to same-repository nondraft PRs, preserving manually requested users and teams. No PR checkout or removal effect. Validate local source, template parity and installed payloads separately from GitHub deployment or live publication; this change does not authorize those effects.
 
 #### Selected Option
 
@@ -7734,6 +7784,7 @@ Ordinary review/merge/create and publication owners, reusable workflows, broker/
 - TDD-004: Interrupted completion, exact checkout, duplicate suppression, Pages and verified-result tags retain their safeguards.
 - TDD-005: Plain create/review stops at readiness; explicit combined intent delegates once, preserves ownership and does not recurse. Final candidate analysis precedes publication; repairs invalidate analysis.
 - TDD-006: Valid immutable setup-uv updates pass; invalid identity/pinning/inputs/conditions/order fail. Pending/cancelled orchestration checks are excluded only with authoritative provenance; same-name validation and forged/ambiguous producers still gate.
+- TDD-007: Execute the actual candidate shell block with offline helper stubs: empty/populated success arrays, blocked/pending/arbitrary nonzero statuses, empty failure output, unchanged output files on failure, one invocation and no environment-secret disclosure.
 
 #### Validation Plan
 
@@ -7755,11 +7806,37 @@ Capture current repository settings and reconcile old broker effects before reti
 
 Code, instructions, templates and tests agree; independent review passes. Report local implementation separately from Actions policy setup, bootstrap approval and live merge proof.
 
+#### Predictable Checkout Completion
+
+The existing deterministic commit transaction owns local checkout completion through create-pr; review-pr coordinates review and merge-pr supplies the authoritative merged result. No separate Git mutation implementation, mandatory worktree, new runtime or public skill flag is introduced. Immutable policy selects ordinary outer completion or publication-preserving checkout. Capture original/default identities and intended final ref at begin, separately from publication scope; resume reuses them and saved targets.
+
+Private checkout-target materializes a selected target only when checkout-dependent work is required. Private complete-checkout distinguishes temporary switch-back, recording a confirmed merge, and terminal finalization. Persist merged result evidence before any fetch; independently verify destination containment before local updates. A failed fetch/result verification still allows switch-back with explicit skipped updates. Once merged, the target cannot reenter repair/sync/publication. Pending CI or resumable interruption keeps its grant open.
+
+Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
+
+Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+
+Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
+
+Implementation evidence: this revision adds strict task, checkpoint and closure v2 schemas, immutable completion policy, journaled private checkout-target and complete-checkout operations, separate completion ref outcomes, merged-target guards and enforced final checkout to the existing commit transaction owner. PR orchestration and bounded publication handoffs inherit that policy. Runtime instructions, READMEs, evaluation cases and Unreleased changelog are aligned. No legacy parser or compatibility shim was introduced.
+
+Verification evidence (2026-10-14): the remote-only squash regression failed against the previous owner and passes with the implementation. All 90 transaction cases passed (86 in the complete run and four subsequent focused additions), together with 6 contract, 95 merge/completion/publication-helper and 57 release tests. Disposable installation passed all 28 tests, including the new Codex/Claude installed-hook and installed-owner lifecycle; that lifecycle was also rerun against the final helper. The rollout regressions preserve terminal old task/closure bytes and archive terminal claims unchanged, while rejecting unfinished old ownership. Strict paired-spec validation, scoped Ruff/syntax/Markdown checks, 21 portable/Codex/Claude skill profile checks, and actual isolated npx discovery, copy parity, repeat installation and isolation checks passed. Changed-scope code and security review found no remaining blocker after repairing and testing a shared FETCH_HEAD race with exact advertised destination fetching.
+
+Native-agent comparative quality probes on Codex and Claude were authentication-unavailable; native trigger/output behavior remains unverified. No personal installation, live GitHub merge, result CI/Pages run, repository commit or push was performed. Delivery remains implemented, not verified; earlier evidence below describes prior revisions only.
+
 #### Implementation Evidence
+
+Implemented workflow rationalization locally: one hourly recovery, targeted PR CI start/completion aggregation, run-scoped completion discovery, early routing receipts and target-isolated blocked diagnostics. Preserved exact-result evidence and effect journals. Retained the fifteen workflow boundaries and seven CI identities, added inventory/filter/listener contracts and add-only reviewer routing. Shared publication helpers enforce original asset hashes, tag-object identity, digest equality and fail-closed retries. Image release/manual aliases are disjoint under one destination queue; manual builds freeze the helper from the workflow revision. An explicit main-only latest request reuses a verified existing manual digest under the same lock, then rechecks every tag; it never rebuilds immutable aliases. Helm retains package/anonymous-pull/digest qualification with structured duplicate-repository observation. Release/image YAML templates have one source owner. Updated docs and installed the five affected skills from source.
+
+Implemented candidate diagnostic visibility in the deployed completion workflow and its reusable template. Both capture the helper status, print a generic exit-status message plus nonempty sanitized output on failure, preserve the status, and publish targets only on success. The helper, transport-error suppression, API deadline, receipt gates and permissions are unchanged.
 
 Revision 5 implements PR-only create-pr defaults, complete nested code-review before publication, early one-time combined review-and-merge delegation and mandatory parent-owned review-pr for every unmerged PR. Updated instructions, metadata, evaluations, direct release/image/Helm callers and documentation preserve receipts, grants, deadlines, publication checkpoints and SDLC isolation. Removed the redundant create-pr preparation flag and check-name exclusions. CI now resolves orchestration producer provenance; cxcli workflow tests enforce structural immutable action pinning without a golden release hash. Refreshed all eight affected installed skill payloads while preserving their owners. No commit, deployment, PR update or live merge was performed.
 
 #### Verification Evidence
+
+Local workflow rationalization verification: 58 merge-gate, 37 completion, 10 publication primitive, 18 publication evidence, 5 workflow contract, 2 template ownership, 57 release-session/doer, 39 cxcli publication/workflow/catalog and 11 VPN release tests pass (237 tests plus 56 release subtests). The VPN frozen-binary test initially lacked PyInstaller; it passed with the declared build dependency supplied through an isolated uv environment. Python lint/format, Markdown, paired-spec validation, core/Codex/Claude skill structure and workflow/template actionlint pass. Actionlint 1.7.12 does not recognize the currently documented concurrency.queue key: only that exact syntax diagnostic was excluded, with queue:max/noncanceling locks checked separately by contract tests. Independent read-only code/security review findings were repaired and covered by regressions. These are local source, fixture and installed-payload results; no GitHub deployment, live merge, release, registry push or native skill-trigger behavior is certified.
+
+Candidate diagnostic visibility: the new executable shell regressions failed against the original workflow for all four failure scenarios, then passed after the repair. All 32 completion tests and 56 merge-gate tests pass, including deployed/template parity. Independent read-only code/security review found no blocking issue and separately passed the three new regression tests. Actionlint, Bash syntax, ShellCheck, Ruff lint/format, scoped Markdown and paired-spec validation pass. This proves the local logging repair only; the original API failure remains unconfirmed, and the repaired workflow has not been published or executed on GitHub.
 
 Revision 5 source evidence (2026-10-14): new regression tests failed on the original code, then passed after the repairs. 182 focused tests pass: 95 merge/completion/publication-helper, 57 release, 2 workflow-asset, 9 code-review contract and 19 cxcli workflow tests. The two formerly failing cxcli contract tests also pass against read-only workflow payloads from PR #223 at 43df54d42dd416ccdf4022070fce3c7291c0e18d; this is artifact-bound local proof, not live Actions execution. Ruff check/format, changed Markdown, diff checks and paired spec validation pass. Read-only code/security review found no blocking source issue; the unknown fork-base provenance limitation remains explicit and fail-closed. Follow-up align corrected the skill picker description and clarified action requests phrased as questions versus informational questions, with paired evaluation cases. Independent final review found no authority or delegation regression; the 182-test suite, 24 profile checks, scoped lint and source/installed parity passed again. Native execution of the new semantic cases remains unverified.
 
@@ -7907,5 +7984,432 @@ checks passed, while Linux unit activation and personal installed-host behavior
 remain unverified. REQ-044 remains active pending fresh-host routing evidence.
 
 <!-- /FEATURE: FEAT-043 -->
+
+<!-- FEATURE: FEAT-044 reqs=REQ-045 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-044: Promotion-safe documentation and owner-executed test evidence
+
+#### Requirements Covered
+
+- REQ-045: Preserve SDLC evidence across promotion and verification.
+
+#### Context Evidence
+
+The coordinator routes late documentation edits to an already removed
+integration checkout. The commit phase overgeneralizes raw-commit admission.
+The verifier references a renamed troubleshooting test. The three-tier
+semantic reader accepts distinct nonempty logs as PASS without checking their
+outcome; a failing-log substitution reproduces that gap.
+
+#### Design Details
+
+Preserve the existing immutable promotion boundary. Post-UAT document review
+records no-op evidence or returns DOCUMENTATION_DRIFT through the classifier
+for a corrective run from the exact promoted SHA. Normal document writes stay
+in the new run's registered integration worktree and pass fresh gates.
+
+The generation-locked outer verifier executes each non-GUI test class once
+against the clean promoted deployment. A fixed Django DiscoverRunner adapter
+records unittest result counters directly; it never infers success from log
+text. Private receipts bind the class, dotted test label, runner digest, exact
+source/deployment identity, exit status, counters and verification ID. Missing,
+interrupted or failed attempts remain nonpassing and require a fresh trial.
+The semantic reader validates the canonical receipt digest and checks declared
+counts against observed completed tests. GUI evidence reuses the two owned
+Playwright UAT receipts and their validated test reports. No raw test output
+or credential values enter receipts or reports.
+
+#### Selected Option
+
+Use deterministic owner execution and existing image/browser provenance.
+Keep the phase graph and public workflow actions unchanged.
+
+The execution owner resolves canonical-spec reads to the registered integration
+scope during prepared execution and the exact primary checkout after promotion.
+Refinement verifies the recorded integration HEAD; execution transitions retain
+their own journal-based HEAD recovery checks. Delivery-only paired publication
+refreshes impact through refinement verification and unchanged-plan settlement.
+The primary anchor remains unchanged until promotion; unsafe records, foreign
+registration, primary spec drift and incomplete final cleanup fail closed.
+
+#### Alternatives Considered
+
+Trusting PASS strings or parsing arbitrary logs retains the false-success gap.
+Marking every test PARTIAL forever prevents legitimate qualification. Moving
+promotion after UAT or reopening completed execution would change ownership
+and recovery across the workflow without necessity.
+
+#### Implementation Boundaries
+
+Change the coordinator, document and commit instructions, private three-tier
+runner/semantic reader, test fixtures, capability mapping, trigger/quality
+cases, workflow docs and changelog. Preserve dirty working bytes and installed
+runtime. Models, agent topology and application stack are fixed. The coordinator
+remains a bounded agent; test execution, receipts and admission are deterministic.
+No AI-stack, application-stack or provider selection is needed. Design review
+focuses on ownership, immutable evidence, interrupted attempts and regression
+proof; no new service, dependency or infrastructure is introduced.
+
+#### Test-First Success Criteria
+
+- TDD-001: Failing or modified test artifacts and inflated counts fail admission.
+- TDD-002: Clean owner-produced passing results pass, while failure, zero tests,
+  skipped tests, stale revisions and replaced images cannot pass.
+- TDD-003: Post-UAT edits cannot target completed execution; private sealing
+  remains independent of raw Git authorization and capability mappings resolve.
+
+#### Validation Plan
+
+Run focused negative controls, all relevant SDLC offline suites, static
+stateful skill checks for both hosts, lint, security and final alignment.
+
+#### Test Plan
+
+Exercise runner parsing, receipt immutability, source/image drift, class and
+count binding, GUI evidence reuse, and promotion/routing contract checks.
+
+#### Evaluation Plan
+
+Compare deterministic outcomes with the captured working-byte baseline. Live
+Docker, fresh agent invocation and hosted publication are separate evidence.
+
+#### Rollout And Rollback
+
+Review source changes before installing. Start a fresh owned live trial when
+qualifying the new receipt contract; old free-form logs grant no PASS. Preserve
+historical failed trials and use their exact owner for cleanup.
+
+#### Done Definition
+
+All reproduced issues have focused proof and applicable offline gates pass;
+unobserved runtime and publication surfaces are reported explicitly.
+
+#### Implementation Evidence
+
+The coordinator and document phase preserve read-only post-promotion review.
+The failure classifier routes sealed, promoted and completed execution to a
+new corrective run; earlier documentation drift invalidates documentation,
+alignment and commit. Private sealing no longer inherits raw-commit admission.
+The three-tier lifecycle owns the fixed test runner and immutable receipts;
+semantic and partial reports validate their provenance and observed counts.
+The stale capability mapping, regression fixtures, trigger cases and workflow
+reference documents are aligned. The execution-owned canonical-spec resolver
+binds refinement and impact to the registered integration scope, then to the
+exact promoted primary, preserving delivery-only settlement and interrupted
+transition recovery.
+
+#### Verification Evidence
+
+Failing-before negative controls reproduce artifact substitution, inflated
+counts, incorrect terminal routing and authorization ambiguity. Repaired
+controls pass. Targeted offline suites pass, including 216 verifier tests,
+86 execution tests, 34 repair-control tests and 14 coordinator contract tests.
+All 21 SDLC skills pass standard-field and native host-policy checks; native
+frontmatter extensions remain intentional. Disposable skills@1.5.26 discovery,
+copy parity, repeated installation and isolation pass for Codex and Claude.
+Scoped Python/Markdown checks and independent read-only review pass.
+
+Subsequent source verification passed all 23 deterministic capability groups
+with zero failures. The disposable source-selected Docker/Django/PostgreSQL
+trial passed all 18 lifecycle phases, 17 owner-executed product tests and four
+fresh frozen headless Chrome stages. GUI/API/database correlation and restart
+persistence passed; owned runtime cleanup was independently verified. A nested
+project and its requirements follow-up passed native-worker implementation,
+local promotion, terminal UAT, steering/resume and selected-scope history checks.
+
+These are historical observations from the completed source trial. Its raw
+three-tier evidence and runtime were removed after validation; retained reports
+do not certify a new live target. Aggregate readiness remains PARTIAL because
+the lightweight semantic validator is incomplete and the full failure-category
+matrix has deterministic coverage rather than separate native live repairs.
+Delivery remains implemented: fresh-agent trigger and comparative quality
+evaluations, installed-hook activation, Claude runtime, locked-screen
+continuity and hosted publication remain unverified.
+
+<!-- /FEATURE: FEAT-044 -->
+<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-045: Shared objective and run execution boundary
+
+#### Requirements Covered
+
+- REQ-046: Direct intake, immutable execution basis, run-owned worktrees and aligned verification/installation.
+
+#### Context Evidence
+
+The replaced implementation used persistent lanes; SDLC already retained one feature integration checkout. Worktree owns promotion/lease/recovery primitives and spec publication already validates the integration boundary.
+
+#### Design Details
+
+Share normalized accepted objectives and explicit session bindings. Coordinators own objectives, plans and completion; Global Context Management owns continuity/delegation; Maintain Project Specs owns paired interpretation/publication. Reuse and extract existing execution machinery without invoking one coordinator from the other. Freeze objective/spec/plan/base/helper/instruction/assignment evidence; stale effects fail before mutation. Fence steering/cancellation, then prove writer quiescence before replanning. Use ordered slot refill over frozen waves with resource leases and stable integration. Implement delivers automatically to an unchanged clean non-default checkout or retains a verified feature checkout for default/unknown-default starts. Retire prompt capture and lane state rather than converting it.
+
+Steering uses the same root-user statement classification and canonical owner
+workflow as initial intent. An accepted material objective revision additionally
+fences dispatch and promotion until affected writers are quiescent and the
+replacement basis is settled. Retired work remains evidence, not a delivered
+dependency. Explicit continuation validates the original run and objective
+ancestry while allowing a newly bound coordinator; startup receipts stay immutable.
+
+A live-test worker acquires and holds the exclusive assignment lease across the
+whole runtime sequence, including teardown. The outer verifier consumes that
+existing lease without impersonating its native owner. A per-resource use lock
+precedes short run/resource-state locks; only the use lock spans a synchronous
+action, allowing worker heartbeat and observation to continue. Lease release and
+reassignment cannot race consumption, and completion rejects an active lease
+before committing or changing evidence.
+
+#### Selected Option
+
+One breaking direct-input path, shared Worktree execution primitives, workflow-specific adapters and one integration tree per Implement run.
+
+#### Alternatives Considered
+
+Prompt adapters, aliases, lane generations and history conversion preserve multiple authorities and are rejected. Nested coordinators and duplicated Git transactions are rejected.
+
+#### Implementation Boundaries
+
+Implement, both verification skills, SDLC phases, shared objective/spec ownership, Worktree/commit ownership, global hooks, installers, catalogs, CI, docs and evaluations.
+
+#### Test-First Success Criteria
+
+- TDD-001: Stale/foreign/obsolete state fails before effects and preserves source dirt/history/custom hooks.
+- TDD-002: Real Git and scheduling tests prove delivery, refill, leases and recovery.
+- TDD-003: Harness-authored transitions and declared concurrency cannot establish native workflow PASS.
+
+#### Validation Plan
+
+Run focused tests, lint/syntax, canonical specs, code/security review, both-host structure and installer checks before updating owned installations.
+
+#### Test Plan
+
+Exercise all REQ-046 scenarios while preserving existing identity, repair, database migration, browser evidence and cleanup safety tests.
+
+#### Evaluation Plan
+
+Report static, installation, native triggering/workers, comparative quality and live application evidence separately.
+
+#### Rollout And Rollback
+
+Update source first, then owned Codex/Claude payloads/hooks. Preserve customized registrations and old private state; unsupported runs require a new run without conversion. If a retained capture registration depends on the retired runtime, stop installation before replacing that runtime and require owner reconciliation. Unregistered custom payloads remain preserved; settings without a hooks section remain valid first-install inputs.
+
+#### Done Definition
+
+Renamed skills are discoverable, capture hooks and obsolete commands are absent, both verifiers exercise current contracts, and fresh live or exact unavailable evidence is recorded.
+
+#### Implementation Evidence
+
+Implemented direct intake and explicit bindings, shared immutable execution bases and Worktree transactions, ready-slot scheduling, assignment runtime leases, fenced steering/cancellation, automatic local delivery, guarded paired spec publication, both verifier contracts and exact owned capture retirement. Historical runtime results do not certify this replacement.
+
+PR validation repaired the shared engine's Python 3.11 syntax, the CI worker-schema path, obsolete commit contract assertions and retained-hook upgrade handling. Eight retirement regressions pass, including both full native-host installers blocking before runtime replacement, missing provenance, unchanged retirement, unregistered customization and first-install settings. Source-only Python 3.11 compilation verifies the shared execution modules; this does not establish live agent execution.
+
+The source repair now includes mandatory workflow references, supporting owner
+instructions, and the worker result schema in execution-basis identities.
+Changed inputs require replanning; missing or symlinked inputs fail before
+worker dispatch. Implement Test now executes the existing sensitive-data
+regression suite. Implement's usage and input sections retain its existing
+explicit-only public interface while satisfying the stateful skill profile.
+
+#### Verification Evidence
+
+Deterministic shared execution: 128 tests passed; final publication/completion boundary matrix: 17 passed; objective contracts: 15 passed; Worktree lifecycle: 55 passed; Implement verifier: 78 passed; SDLC verifier: 102 passed; SDLC phase lifecycle: 78 passed; hooks: 111 passed; hook installer: 29 passed. Both complete deterministic preflights passed with zero failures; SDLC retains seven missing-live-evidence warnings. Changed-scope standard/Codex/Claude structures passed for 36 skills and 466 static trigger cases; six primary skills passed pinned npx installation checks. These are distinct and overlapping evidence sets, not a combined test count.
+
+Owned Codex and Claude installations were updated and independently checked: all 218 source files across seven primary skills match, both renamed skills are present, the three obsolete payloads and capture registrations are absent, and independent specification hooks remain registered. Fresh public Implement and SDLC launches were attempted in isolated native homes; both exited before objective acceptance while native authentication was unavailable. Process-group cleanup was proven and both exact fixtures were destroyed. Native workflow completion, genuine native concurrency, application/database/restart/Playwright acceptance and comparative quality remain NOT_RUN; overall runtime qualification is PARTIAL. No source commit, push or remote publication was performed.
+
+Fresh alignment clarified ordinary root-user steering and repaired retired-wave
+handoffs/delivery, continued verifier ownership, exclusive runtime consumption
+without heartbeat starvation, completion-before-release rejection, result
+screening and whole-bundle preservation for customized capture dependencies.
+The current direct/objective/dispatch/security matrix passes 52 tests; canonical
+specification and explicit document-migration transactions pass 38; commit
+transactions pass 90; hook tests pass 111; both-host installation tests pass 37.
+Ten affected skills pass structural checks with 150 static trigger cases and
+pinned npx discovery/copy/repeat/isolation checks. All 206 payload files per
+installed host match source, and 25 owned hook files match provenance. These
+remain deterministic/installation observations; native workflow, live application
+and comparative quality qualification remain NOT_RUN/PARTIAL as stated above.
+
+Scoped source-repair verification reproduced omitted-input acceptance and a
+false deterministic PASS when an unlisted security suite failed. The repaired
+no-flag verifier passes all eight test suites; its complete stage matrix is
+nine PASS, two installation-parity FAIL, and one live NOT_RUN. Both parity
+failures are expected source-versus-installation drift: the preceding installed
+parity observations predate this source-only repair, which did not update the
+installed payloads. The private lifecycle remains unchanged.
+
+A final stable-source replay passes all 21 direct execution contract tests,
+including 24 changed/missing/symlink cases that assert unchanged Git refs,
+worktrees, and execution state on rejected dispatch. The three Implement
+public-contract tests, scoped Ruff/Markdown/syntax checks, and core/Codex/Claude
+structure checks for three affected skills pass. Read-only code and security
+review found no introduced blocking finding. Native worker execution,
+installation activation, live application/database behavior, and comparative
+quality remain NOT_RUN; these source results do not certify them.
+
+A subsequent verifier repair keeps the immutable public invocation receipt and
+its native observation files in the active fixture generation. Previously the
+launcher wrote them into product run state, which the lifecycle ownership gate
+correctly rejected. A regression reproduces that exact rejection before the
+repair and passes afterward through the real launcher/lifecycle filesystem
+boundary. All nine launcher tests and all 80 verifier helper tests pass. Native
+invocation and semantic content are stubbed only in the handoff regression;
+these tests do not establish live product behavior. Source-installed parity and
+isolated native authentication remain separate live-trial prerequisites.
+
+A fresh deterministic profile passed all eight suites and both installed-parity
+checks after refreshing the selected skills. The first public native trial
+completed its session but created no accepted objective or binding, so intake
+failed and all downstream stages remain unverified; the generation was cleaned
+through its owner. The verifier now distinguishes that failure from incomplete
+native observation and retains only bounded diagnostic counters and allowlisted
+codes, never commands or output. Two added regressions fail before this observer
+repair and pass afterward. Diagnostic mentions do not prove product transitions.
+The same failed live report exposed a separate reporting defect: successful
+cleanup erased the corrective next action even when the test failed. The
+cleanup rewriter now clears that action only for an overall PASS. Its regression
+fails before the repair and passes afterward; all 82 verifier helper tests pass.
+
+A second fresh native trial again completed without accepted intake and recorded
+permission-denied command output. An independent native probe isolated a required
+capability defect: the forced workspace-write sandbox allowed project and private
+state writes but denied Git metadata writes. A scoped native permission profile
+allowed that exact Git path. The launcher now extends the native workspace
+profile with only the owned fixture Git and isolated-home writes and rejects
+legacy sandbox settings that override it. The launcher queries native effective
+configuration for the fixture across all active layers before each invocation,
+rejecting inherited legacy settings or scoped-profile drift without logging
+configuration values. Native counterfactuals accept the intended profile and
+reject both workspace-write and unrestricted legacy settings in trusted project
+configuration. Implement documents this prerequisite before spec edits.
+Fifteen launcher and 86 verifier helper tests pass. Preflight cleanup also
+proves exact process-group quiescence, including a child that ignores TERM and
+a transient native process-reaping race. Complete native delivery remains
+unverified until a new public trial. Both failed generations were owner-cleaned.
+Cleanup retry reporting also replaces obsolete destroy instructions once exact
+cleanup succeeds, while preserving the underlying failed test outcome.
+
+The next native generation delivered all four tasks, integrated and promoted a
+clean source head, and independently passed frontend/API/PostgreSQL CRUD,
+database correlation, and API-restart persistence. The overall generation failed:
+the fixture assigned fresh continuation to the initial coordinator, transferring
+ownership before the harness could bind it, and the exec event stream omitted
+current worker-tool identities. The owner cleaned the exact generation; completed
+application evidence does not repair missing native concurrency proof.
+
+The fixture now ends its initial request at delivery and cleanup, reserving
+fresh continuation exclusively for the verifier. Codex invocation uses one owning
+foreground stdio App Server with ephemeral threads, effective scoped permissions,
+and bounded metadata-only reads of loaded children. Two native snapshots bracket
+unchanged product state; native status/turn transitions, inventory changes, or
+rounds exceeding 500 ms invalidate the sample. Shared absolute deadlines bound
+all requests, failed terminal turns stop immediately, and exact process-group
+cleanup remains mandatory. Raw protocol content is hashed and discarded.
+A separate native diagnostic observed two ephemeral children active and then idle;
+a public-launch smoke test completed with clean shutdown. These qualify the
+adapter only; a fresh complete public workflow trial remains required.
+
+A subsequent fresh public trial completed delivery and a fresh unchanged
+continuation with clean native shutdown. The owning App Server captured genuine
+two-worker overlap and a refill, but the evaluator returned a false negative
+because an intermediate terminated-but-unadmitted snapshot replaced its prior
+running set. A single-snapshot omission counterfactual reproduced that exact
+cause without altering the artifact. The repaired evaluator retains a departed
+candidate only while the same peer remains active; disappearance, restart, or a
+replacement started before admission invalidates it. The unchanged native
+artifact and fail-before/pass-after regression now recognize the refill. That
+generation remains FAIL and was owner-cleaned; it is not retroactively certified.
+A new complete native/application trial is required for the repaired bundle.
+
+A later fresh trial was stopped after independent inspection found incomplete
+assignment contracts: schema types and API connection settings were absent from
+the task fields. The verifier reference required self-contained tier contracts,
+but its public request did not explicitly require copying them into assignments;
+Implement's general planning instructions also left that boundary underspecified.
+The source now requires a pre-lock task-context audit and a serialized-assignment
+check before dispatch, with concrete interfaces, data shapes, fixed values and
+acceptance checks in Goal, Validation and Done criteria. The fixture request now
+repeats the tier-specific contracts, including exact GET/POST/PATCH paths,
+request bodies and task response shapes used by the application collector.
+This generation remains FAIL and was cleaned;
+its prematurely recorded planning PASS was explicitly invalidated in the failure
+analysis. Fresh native verification is required for the revised instructions.
+
+The next fresh trial preserved the concrete contracts in all four assignments,
+completed all workers and ordered integration, promoted a clean source head and
+removed worker worktrees. Native observations proved two-worker overlap and slot
+refill; fresh public continuation preserved the completed objective and delivery.
+Independent frontend/API/PostgreSQL checks, database correlation and API restart
+persistence also passed. Final semantic validation nevertheless failed because
+it compared completed assignments with the latest basis after legitimate owner
+specification reconciliation. The stored task bases remained immutable; only
+impact and specification lineage hashes changed. That generation remains FAIL
+and was owner-cleaned, including all runtime resources.
+
+The verifier now checks historical basis and admission bindings and follows
+hash-linked owner reconciliation receipts to the current verified basis. All
+non-spec execution identities must remain equal, including objective, plan,
+committed base, helpers, inputs and ownership. The receipt chain preserves
+objective revision, intent, effects and plan action. A real temporary-Git
+regression reproduces the former failure using owner spec publication and
+settlement, then passes with the repair; negative controls reject contract drift,
+tampered or missing bases, mismatched admission and broken transitions. Native
+termination in that regression is explicitly synthetic. A fresh complete live
+trial remains required for this repaired verifier.
+
+A fresh public trial exposed an initial specification ordering gap: acceptance
+froze source HEAD before spec publication, while execution cloned committed
+history and immediately sealed that base. Canonical specs could be omitted from
+declared input dependencies, leaving the receipt and integration bytes unequal.
+No worker started; the failed generation and its exact resources were cleaned.
+
+Implement now allocates its one integration checkout through the shared private
+prepare-specs transition immediately after acceptance, before impact settlement
+and plan freezing. This pre-plan state permits paired publication only by the
+bound root at the verified integration checkout, with the current objective and
+no basis yet. Existing prepare verifies the paired receipt, journals the exact
+canonical-pair tree, commits a direct child, and only then freezes execution and
+waves. It preserves source HEAD and unrelated dirt. Canonical specs are implicit
+committed inputs; ignored files, unrelated integration changes, incomplete
+allocation, foreign resources and changed bootstrap objectives fail closed.
+Interrupted allocation and commit use their existing shared ownership and exact
+journal recovery. Initial spec commits do not reopen a sealed base. Deterministic
+regressions cover the original omission, source preservation, worker spec bytes,
+publication authority, premature dispatch, allocation/commit interruptions and
+ignored canonical files. A subsequent fresh native trial independently proved
+initial owner spec publication and the journaled direct-child spec commit,
+matching worker bytes, all four task admissions, native overlap and slot refill,
+ordered integration, clean delivery and unchanged fresh-session continuation.
+
+That trial remains FAIL: the application collector performed successful CRUD and
+database correlation, then checked container health while startup was still in
+progress. All three services became healthy shortly afterward. This was a
+verifier readiness race, not a product implementation failure. The CLI also
+failed to catch the collector exception because direct script execution created
+a second lifecycle exception class. The failed generation was owner-cleaned.
+The collector now requires exactly one running container per required service,
+healthy when a healthcheck is configured, before HTTP checks and after the API
+restart. It polls only startup health for at most 60 seconds, bounds Docker
+inspection by the remaining deadline and rejects late results. Invalid
+inventories and failed services fail immediately. Shared error types preserve bounded CLI failure handling. Both
+original failures have fail-before/pass-after regressions; deadline and invalid
+inventory controls are also covered.
+
+A subsequent fresh installed Codex trial passed the full declared workflow with
+no intervention: initial paired-spec bootstrap, four self-contained tasks in
+fresh worker sessions and worktrees, genuine two-worker overlap, admission-led
+slot refill, dependency-barrier integration, final alignment and clean local
+delivery. A distinct fresh public continuation returned ALREADY_COMPLETE with
+unchanged objective and delivery identity. Both native invocations shut down
+cleanly without forced cleanup. The verifier then passed strict Compose
+validation, frontend/API create-list-update behavior, exact PostgreSQL row
+correlation and API-restart persistence. Generation-fenced semantic validation
+accepted the complete evidence, including immutable historical task bases and
+final owner specification lineage. All 11 deterministic checks and all 17 live
+lifecycle stages passed. Exact owner cleanup removed the fixture, isolated home
+and runtime resources while preserving the sanitized report and failed-trial
+history. All ten installed dependency skills matched the reviewed source before
+and after the trial. This qualifies the tested Codex multi-tier workflow and
+regressions; it does not guarantee arbitrary plans or establish live Claude
+qualification.
+
+<!-- /FEATURE: FEAT-045 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

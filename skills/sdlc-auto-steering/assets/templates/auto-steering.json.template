@@ -18,9 +18,9 @@
     {
       "id": "STEER-001",
       "received_at": "<ISO-8601>",
-      "prompt_id": "<prompt-id>",
+      "objective_id": "<prompt-id>",
       "prompt_revision": "<rNNNN>",
-      "prompt_sha256": "<digest>",
+      "objective_sha256": "<digest>",
       "prompt_snapshot": "<inputs/rNNNN/prompt.md>",
       "source_phase": "<phase>",
       "current_feature": "<FEAT-ID or null>",

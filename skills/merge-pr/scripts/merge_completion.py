@@ -18,6 +18,7 @@ import zipfile
 
 from merge_gate import (
     ACTIONS_BOT_ID,
+    ApiFailure,
     Blocked,
     GitHub,
     INTENT_SCHEMA,
@@ -29,6 +30,7 @@ from merge_gate import (
 )
 
 CI_SCHEMA = "merge-result-ci/v1"
+ROUTE_SCHEMA = "merge-result-route/v1"
 FIELDS = (
     "result_sha",
     "merge_pr",
@@ -419,96 +421,194 @@ def verify_pages(api, intent, request=False, journal=None):
     }
 
 
+def route_target(api, policy, run):
+    """Route a result dispatch from early identity evidence, never success."""
+    workflow = run["path"].removeprefix(".github/workflows/")
+    require(
+        workflow in {w["file"] for w in policy["ci_workflows"]},
+        "Unknown routing workflow",
+    )
+    trusted_run(api, run, workflow, api.repo_info()["default_branch"])
+    require(
+        run["event"] == "workflow_dispatch" and run["actor"]["id"] == ACTIONS_BOT_ID,
+        "Untrusted routing producer",
+    )
+    name = f"result-route-{run['id']}-{run['run_attempt']}"
+    artifacts = [
+        a
+        for a in api.pages(f"actions/runs/{run['id']}/artifacts", "artifacts")
+        if a["name"] == name
+    ]
+    require(
+        len(artifacts) == 1 and not artifacts[0]["expired"],
+        "Missing result routing receipt",
+    )
+    value = api.artifact(artifacts[0]["id"], "route.json")
+    require(
+        value["schema"] == ROUTE_SCHEMA
+        and value["repository"] == api.repo
+        and value["workflow"] == workflow
+        and value["run_id"] == run["id"]
+        and value["run_attempt"] == run["run_attempt"],
+        "Invalid result routing identity",
+    )
+    pr = api.api(f"pulls/{int(value['merge_pr'])}")
+    intent = read_intent(
+        api,
+        value["broker_run_id"],
+        value["broker_run_attempt"],
+        value["merge_pr"],
+        pr["head"]["sha"],
+        policy,
+    )
+    result = merged_result(api, intent)
+    corr = correlation(api.repo, intent["pr"], result, workflow)
+    require(
+        workflow in intent["ci_workflows"]
+        and value["result_sha"] == result
+        and value["checkout_sha"] == result
+        and value["correlation_id"] == corr
+        and run["display_title"] == ci_name(corr),
+        "Result routing drift",
+    )
+    return {
+        "pr": intent["pr"],
+        "head": intent["head"],
+        "run_id": intent["run_id"],
+        "run_attempt": intent["run_attempt"],
+    }
+
+
 def targets(api, policy, event):
-    # Run metadata and JSON artifacts only: no executable artifact is extracted.
-    artifacts = api.pages("actions/artifacts", "artifacts")
+    # Listing/transport failures remain global. Receipt errors are isolated by
+    # artifact identity and become failing matrix entries, not successful skips.
     default = api.repo_info()["default_branch"]
-    completed = set()
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
+        source = event["workflow_run"]
+        run = api.api(
+            f"actions/runs/{int(source['id'])}/attempts/{int(source['run_attempt'])}"
+        )
+        if run["event"] != "workflow_dispatch":
+            return []
+        if run["path"] != workflow_path(policy["merge_workflow"]):
+            if not run.get("display_title", "").startswith("post-merge-"):
+                return []
+            return [route_target(api, policy, run)]
+        trusted_run(api, run, policy["merge_workflow"], default)
+        artifacts = api.pages(f"actions/runs/{run['id']}/artifacts", "artifacts")
+    else:
+        artifacts = api.pages("actions/artifacts", "artifacts")
+    completed, blocked, selected = set(), {}, {}
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     for artifact in artifacts:
-        if not artifact["name"].startswith("merge-complete-") or artifact["expired"]:
-            continue
-        run = api.api(f"actions/runs/{artifact['workflow_run']['id']}")
-        if (
-            not producer_matches(api, run, policy["completion_workflow"], default)
-            or run["status"] != "completed"
-        ):
-            continue
-        trusted_run(api, run, policy["completion_workflow"], default)
-        value = api.artifact(artifact["id"], "completion.json")
-        require(
-            value["schema"] == "merge-completion/v1"
-            and value["repository"] == api.repo
-            and value["run_id"] == run["id"]
-            and value["source_sha"] == run["head_sha"]
-            and artifact["name"]
-            == f"merge-complete-{value['pr']}-{value['head']}-{run['id']}-{value['run_attempt']}",
-            "Invalid terminal completion receipt",
-        )
-        jobs = api.pages(
-            f"actions/runs/{run['id']}/attempts/{value['run_attempt']}/jobs", "jobs"
-        )
-        if not any(
-            j["name"] == f"verify-pages-{value['pr']}" and j["conclusion"] == "success"
-            for j in jobs
-        ):
-            continue
-        pr = api.api(f"pulls/{value['pr']}")
-        require(
-            pr["merged"]
-            and pr["head"]["sha"] == value["head"]
-            and api.merged_commit(value["pr"], value["head"], default)
-            == value["result_sha"],
-            "Terminal completion identity drift",
-        )
-        completed.add((value["pr"], value["head"]))
-    selected = {}
-    for artifact in artifacts:
         match = re.fullmatch(
-            r"merge-intent-(\d+)-([0-9a-f]{40}(?:[0-9a-f]{24})?)-(\d+)",
+            r"merge-(intent|complete)-(\d+)-([0-9a-f]{40}(?:[0-9a-f]{24})?)-(\d+)(?:-(\d+))?",
             artifact["name"],
         )
         if not match:
             continue
-        number, head, attempt = int(match[1]), match[2], int(match[3])
-        if (number, head) in completed:
-            continue
-        # Recovery is bounded to the advertised receipt-retention window. Older
-        # missing evidence is an explicit manual reconciliation case, not replay.
+        kind, number, head = match[1], int(match[2]), match[3]
+        key = (number, head)
+        producer = artifact["workflow_run"]["id"]
+        attempt = int(match[4] if kind == "intent" else match[5] or "0")
+        target = {
+            "pr": number,
+            "head": head,
+            "run_id": producer,
+            "run_attempt": attempt,
+        }
+        run = api.api(f"actions/runs/{producer}")
+        filename = policy[
+            "merge_workflow" if kind == "intent" else "completion_workflow"
+        ]
         if (
-            datetime.fromisoformat(artifact["created_at"].replace("Z", "+00:00"))
+            not producer_matches(api, run, filename, default)
+            or run["status"] != "completed"
+        ):
+            continue
+        if (
+            kind == "intent"
+            and datetime.fromisoformat(artifact["created_at"].replace("Z", "+00:00"))
             < cutoff
         ):
             continue
-        producer = artifact["workflow_run"]["id"]
-        # Ignore lookalike artifacts from unrelated workflows without trusting them.
-        run = api.api(f"actions/runs/{producer}")
-        if not producer_matches(api, run, policy["merge_workflow"], default):
-            continue
-        if run["status"] != "completed":
-            continue
-        trusted_run(api, run, policy["merge_workflow"], default)
-        pr = api.api(f"pulls/{number}")
-        if pr["merged"] and pr["head"]["sha"] == head:
-            intent = read_intent(api, producer, attempt, number, head, policy)
-            merged_result(api, intent)
-            key = (number, head)
-            value = {
-                "pr": number,
-                "head": head,
-                "run_id": producer,
-                "run_attempt": attempt,
-            }
-            if key not in selected or (producer, attempt) > (
-                selected[key]["run_id"],
-                selected[key]["run_attempt"],
-            ):
-                selected[key] = value
+        try:
+            trusted_run(api, run, filename, default)
+            if kind == "complete":
+                if artifact["expired"]:
+                    continue
+                value = api.artifact(artifact["id"], "completion.json")
+                require(
+                    value["schema"] == "merge-completion/v1"
+                    and value["repository"] == api.repo
+                    and value["run_id"] == run["id"]
+                    and value["source_sha"] == run["head_sha"]
+                    and value["pr"] == number
+                    and value["head"] == head
+                    and value["run_attempt"] == attempt
+                    and int(match[4]) == producer,
+                    "Invalid terminal completion receipt",
+                )
+                jobs = api.pages(
+                    f"actions/runs/{producer}/attempts/{attempt}/jobs", "jobs"
+                )
+                if not any(
+                    j["name"] == f"verify-pages-{number}"
+                    and j["conclusion"] == "success"
+                    for j in jobs
+                ):
+                    continue
+                pr = api.api(f"pulls/{number}")
+                require(
+                    pr["merged"]
+                    and pr["head"]["sha"] == head
+                    and api.merged_commit(number, head, default) == value["result_sha"],
+                    "Terminal completion identity drift",
+                )
+                completed.add(key)
+            else:
+                pr = api.api(f"pulls/{number}")
+                if not pr["merged"] or pr["head"]["sha"] != head:
+                    continue
+                intent = read_intent(api, producer, attempt, number, head, policy)
+                merged_result(api, intent)
+                if key not in selected or (producer, attempt) > (
+                    selected[key]["run_id"],
+                    selected[key]["run_attempt"],
+                ):
+                    selected[key] = target
+        except ApiFailure:
+            raise
+        except (Blocked, KeyError, TypeError, ValueError, zipfile.BadZipFile):
+            blocked[key] = {**target, "blocked": True}
+    result = [v for k, v in selected.items() if k not in completed and k not in blocked]
+    result.extend(blocked.values())
     require(
-        len(selected) <= 200,
+        len(result) <= 200,
         "Completion matrix capacity exceeded; reconcile older receipts",
     )
-    return list(selected.values())
+    return result
+
+
+def emit_route(api, policy, event, workflow):
+    identity = ci_inputs(api, policy, event, workflow)
+    require(
+        identity["post_merge"] == "true", "Routing requires validated result inputs"
+    )
+    values = event["inputs"]
+    return {
+        "schema": ROUTE_SCHEMA,
+        "repository": api.repo,
+        "workflow": workflow,
+        "result_sha": values["result_sha"],
+        "checkout_sha": identity["checkout_sha"],
+        "merge_pr": int(values["merge_pr"]),
+        "broker_run_id": int(values["broker_run_id"]),
+        "broker_run_attempt": int(values["broker_run_attempt"]),
+        "correlation_id": values["correlation_id"],
+        "run_id": int(os.environ["GITHUB_RUN_ID"]),
+        "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+    }
 
 
 def ci_inputs(api, policy, event, workflow):
@@ -667,6 +767,7 @@ def main():
             "ci-inputs",
             "ci-checkout",
             "ci-evidence",
+            "ci-route",
         ],
     )
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"))
@@ -708,6 +809,8 @@ def main():
             with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
                 for key, value in result.items():
                     stream.write(f"{key}={value}\n")
+        elif args.action == "ci-route":
+            result = emit_route(api, policy, event, args.workflow)
         elif args.action == "ci-evidence":
             result = emit_ci_evidence(
                 api,

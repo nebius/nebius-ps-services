@@ -1,6 +1,6 @@
 ---
 name: sdlc-update-documents
-description: "Use only as part of the Agentic SDLC workflow; after evaluation, resolved steering, UAT, or final evidence, update README, changelog, usage docs, examples, or generated docs without editing requirements/design."
+description: "Use only as part of the Agentic SDLC workflow; update evaluated feature documentation before promotion, assess later documentation read-only, and route required corrections without editing requirements/design."
 user-invocable: false
 ---
 
@@ -77,6 +77,11 @@ after feature evaluation or UAT.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - `docs/requirements.md`.
 - `docs/design.md`.
 - `STEERING.md` and `steering/auto-steering.json` when present.
@@ -100,9 +105,15 @@ after feature evaluation or UAT.
 
 ## Process
 
-- Resolve and verify the registered integration worktree before editing project
-  documentation. Keep the original project checkout unchanged until final
-  promotion, and record the resulting integration HEAD in document evidence.
+- Reload execution status first: post-promotion documentation assessment is
+  read-only. Inspect the clean promoted checkout and record no-op evidence when
+  documentation is accurate. If edits are needed, return `DOCUMENTATION_DRIFT`
+  through `sdlc-classify-failure` to `sdlc-start` for a corrective run from the
+  exact promoted commit. Never recreate the removed integration worktree or
+  edit the promoted checkout; require fresh gates and UAT for the correction.
+- Before promotion, resolve and verify the registered integration worktree
+  before editing project documentation. Keep the original project checkout
+  unchanged until promotion and record the integration HEAD in evidence.
 - Reload active run state and evidence before editing any documentation.
 - Determine whether the scope is `feature` or `run`: feature scope runs after
   evaluation; run scope runs after UAT or before final handoff.
@@ -143,6 +154,8 @@ after feature evaluation or UAT.
   `HUMAN_INPUT_REQUIRED`.
 - Documentation conflicts that cannot be resolved from evidence map to
   `DOCUMENTATION_DRIFT`.
+- Any required post-promotion edit maps to `DOCUMENTATION_DRIFT`, even when its
+  wording is clear. Return the corrective-run handoff without project writes.
 
 ## Must Not
 

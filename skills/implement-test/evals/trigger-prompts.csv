@@ -1,0 +1,21 @@
+id,should_trigger,prompt
+task-test-positive-01,true,$implement-test
+task-test-positive-02,true,$implement-test --create
+task-test-positive-03,true,$implement-test --create --keep
+task-test-positive-04,true,$implement-test --destroy
+task-test-positive-help,true,$implement-test --help
+task-test-positive-help-short,true,$implement-test -h
+task-test-positive-natural,true,Use implement-test to verify Implement without making a real app.
+task-test-negative-01,false,Run Implement on this real feature prompt.
+task-test-negative-02,false,Verify the complete Agentic SDLC workflow.
+task-test-negative-03,false,Test this application's frontend API and PostgreSQL stack.
+task-test-negative-04,false,$implement-test --keep
+task-test-negative-05,false,$implement-test --resume
+task-test-negative-06,false,$implement-test create
+task-test-negative-07,false,$implement-test --create --destroy
+task-test-negative-08,false,Run a quick unit test for this feature.
+task-test-negative-09,false,Use Agentic SDLC to build the application.
+task-test-negative-10,false,"Create a production frontend, API, and database."
+implement-test-codex-portability,true,$implement-test $implement-test
+implement-test-claude-portability,true,/implement-test $implement-test
+implement-test-quoted-command,false,"Treat ""/skills:implement-test"" as sample text in this punctuation exercise; count its punctuation characters only."

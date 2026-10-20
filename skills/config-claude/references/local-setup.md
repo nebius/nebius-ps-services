@@ -96,8 +96,8 @@ Never delete a custom handler to resolve a conflict without authorization.
 Create `task-state/` with mode `0700`; leave it empty. Hooks own lazy creation
 of session scaffolds and the parent owns rolling summaries. Audit descendants
 without printing contents. Preserve the existing remediation protocol marker.
-The Task Implementer workspace is optional, must remain outside Git and have
-private modes. If explicitly selected, create `task-implementer/` and add its
+The Implement workspace is optional, must remain outside Git and have
+private modes. If explicitly selected, create `implement/` and add its
 exact path to `permissions.additionalDirectories` only when access is needed;
 preserve existing entries and permissions. With enabled Bash sandboxing,
 inspect whether that exact path also needs `sandbox.filesystem.allowWrite`.
@@ -144,7 +144,7 @@ Paths here are placeholders, not literal setup targets. Flags:
 | `--native-only` | Omit hook/dependency checks; never proves complete setup. |
 | `--require-trusted-local` | Check the two explicitly selected profile values. |
 | `--require-delegation` | Check the existing policy enables delegation. |
-| `--require-task-implementer-workspace` | Check private storage outside Git; verify effective tool access separately. |
+| `--require-implement-state` | Check private storage outside Git; verify effective tool access separately. |
 | `--require-mcp NAME` | Repeat for selected catalog servers; checks registration presence/shape. |
 | `--mcp-config PATH` | Exact native application JSON for selected user MCP checks; required with `--require-mcp`. |
 | `-h, --help` | Print helper usage without inspecting configuration. |

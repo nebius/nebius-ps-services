@@ -7,6 +7,8 @@ repair path. Bot metadata never substitutes for review. No scheduler or unattend
 agent initiates review or merging; existing completion schedules recover only
 previously authorized operations.
 
+Read [checkout completion](checkout-completion.md) before intake and outer return.
+
 1. Use the live default branch. Reuse the current feature branch; when on the
    default, begin canonical create-pr intake before creating the frozen feature
    at the receipt HEAD. Carry dirty changes with it. Never push the default.
@@ -35,7 +37,7 @@ previously authorized operations.
    with the structured COMMENT attestation described by merge-pr when eligible.
    This is an authenticated operator attestation, not independent proof of model
    execution. Ineligible/report-only reviews return findings without admission.
-6. **Plain create-pr stops at the reviewed PR and closes its grant here.** Only
+6. **Plain create-pr stops at the reviewed PR, completes local checkout and closes its grant here.** Only
    explicit semantic intent to merge delegates merge-pr with the PR, exact
    head/base, review ID and original authority. An explicit action request such
    as "Can you create a PR and merge it?" authorizes the requested sequence.
@@ -61,7 +63,9 @@ previously authorized operations.
    resume renews release budgets. Preserve checkpoints, leave GitHub work running
    and report the exact resume command on timeout. Keep short API timeouts,
    bounded polling and minute progress. Verify exact-result CI and configured
-   Pages through the completion helper before reporting complete. Missing setup,
+   Pages through the completion helper before reporting complete. Record confirmed
+   merge results immediately and perform outer local completion independently of
+   failed/timed-out result verification; pending verification keeps the grant open. Missing setup,
    permissions, merge queues or unsupported workflow-file merges stop for a
    maintainer; never use PAT, admin, auto-merge, direct push or CLI merge fallback.
 

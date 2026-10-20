@@ -7,69 +7,15 @@ on:
     paths:
       - "skills/**" # Include resource-only changes in installed payload checks.
       - ".github/workflows/skills-project-specs-ci.yml"
-      - "skills/maintain-project-specs/**"
-      - "skills/task-implementer/**"
-      - "skills/worktree/**"
-      - "skills/sdlc-create-requirements/**"
-      - "skills/sdlc-create-design/**"
-      - "skills/sdlc-align-specs/**"
-      - "skills/sdlc-start/**"
-      - "skills/sdlc-prepare-execution/**"
-      - "skills/sdlc-implement-plan/**"
-      - "skills/project-agent-instructions/**"
-      - "skills/align-skill/**"
-      - "skills/global-context-management/**"
-      - "skills/config-codex/**"
-      - "skills/config-claude/**"
-      - "skills/commit/**"
-      - "skills/prompt-session-intake/**"
-      - "skills/troubleshoot/**"
-      - "skills/.codex-plugin/**"
-      - "skills/.claude-plugin/**"
       - ".agents/plugins/marketplace.json"
       - ".claude-plugin/marketplace.json"
-      - "skills/agent-nebius-auth-setup/**"
-      - "skills/**/SKILL.md"
-      - "skills/**/agents/openai.yaml"
-      - "skills/install-skills.sh"
-      - "skills/docs/requirements.md"
-      - "skills/docs/design.md"
-      - "skills/README.md"
-      - "skills/CHANGELOG.md"
   push:
     branches: [main]
     paths:
       - "skills/**" # Include resource-only changes in installed payload checks.
       - ".github/workflows/skills-project-specs-ci.yml"
-      - "skills/maintain-project-specs/**"
-      - "skills/task-implementer/**"
-      - "skills/worktree/**"
-      - "skills/sdlc-create-requirements/**"
-      - "skills/sdlc-create-design/**"
-      - "skills/sdlc-align-specs/**"
-      - "skills/sdlc-start/**"
-      - "skills/sdlc-prepare-execution/**"
-      - "skills/sdlc-implement-plan/**"
-      - "skills/project-agent-instructions/**"
-      - "skills/align-skill/**"
-      - "skills/global-context-management/**"
-      - "skills/config-codex/**"
-      - "skills/config-claude/**"
-      - "skills/commit/**"
-      - "skills/prompt-session-intake/**"
-      - "skills/troubleshoot/**"
-      - "skills/.codex-plugin/**"
-      - "skills/.claude-plugin/**"
       - ".agents/plugins/marketplace.json"
       - ".claude-plugin/marketplace.json"
-      - "skills/agent-nebius-auth-setup/**"
-      - "skills/**/SKILL.md"
-      - "skills/**/agents/openai.yaml"
-      - "skills/install-skills.sh"
-      - "skills/docs/requirements.md"
-      - "skills/docs/design.md"
-      - "skills/README.md"
-      - "skills/CHANGELOG.md"
   workflow_dispatch:
     inputs:
       result_sha:
@@ -131,6 +77,20 @@ jobs:
           else
             printf 'post_merge=false\ncheckout_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           fi
+      - name: Freeze result routing identity before tests
+        if: steps.identity.outputs.post_merge == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 skills/merge-pr/scripts/merge_completion.py ci-route --workflow skills-project-specs-ci.yml --output "$RUNNER_TEMP/route.json"
+      - name: Preserve result routing identity
+        if: steps.identity.outputs.post_merge == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: result-route-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/route.json
+          retention-days: 30
+          if-no-files-found: error
 
   python-testing-contracts:
     needs: [merge-inputs]
@@ -289,12 +249,12 @@ jobs:
           set -euo pipefail
           bash -n install-skills.sh
           python -m json.tool maintain-project-specs/assets/hooks.json.template >/dev/null
-          python -m json.tool sdlc-implement-plan/assets/worker-result.schema.json >/dev/null
+          python -m json.tool worktree/assets/worker-result.schema.json >/dev/null
           python -B maintain-project-specs/scripts/validate_project_specs.py \
             --project-root .
           for skill in \
             maintain-project-specs \
-            task-implementer \
+            implement \
             sdlc-create-requirements \
             sdlc-create-design \
             sdlc-align-specs \
@@ -308,16 +268,9 @@ jobs:
           ruff check \
             maintain-project-specs/scripts/project_specs_lib \
             maintain-project-specs/assets/hooks/project_specs_lifecycle.py \
-            task-implementer/scripts/prompt_workspace_specs.py \
-            task-implementer/scripts/prompt_workspace_execution.py \
-            task-implementer/scripts/prompt_workspace_waves.py \
-            task-implementer/scripts/prompt_workspace_resume.py \
-            task-implementer/scripts/prompt_workspace.py \
-            task-implementer/scripts/test-task-resume.py \
-            sdlc-start/scripts/prompt_workspace.py \
-            sdlc-prepare-execution/scripts/sdlc_evidence_security.py \
-            sdlc-prepare-execution/scripts/sdlc_execution_core.py \
-            sdlc-implement-plan/scripts/worker_dispatch.py
+            worktree/scripts/workflow_*.py \
+            implement/scripts/test_implement_contract.py \
+            implement-test/scripts/public_workflow_trial.py
 
       - name: Validate cross-agent distribution and evaluation adapters
         env:
@@ -354,23 +307,25 @@ jobs:
           python -B -m unittest discover \
             -s maintain-project-specs/assets/hooks/tests -p 'test_*.py'
 
+      - name: Run troubleshooting helper, hook and diagnostic harness tests
+        run: |
+          set -euo pipefail
+          python -B -m unittest discover -s troubleshoot/scripts -p 'test_*.py'
+          python -B -m unittest discover -s troubleshoot/assets/hooks/tests -p 'test_*.py'
+          python -B -m unittest discover -s troubleshoot/evals/diagnostic -p 'test_*.py'
+
       - name: Run workflow adapter tests
         run: |
           set -euo pipefail
           python -B commit/scripts/test-commit-contract.py
           python -B commit/scripts/test-commit-transaction.py
-          python -B task-implementer/scripts/test-task-specs.py
-          python -B task-implementer/scripts/test-task-implementer-contract.py
-          python -B task-implementer/scripts/test-task-waves.py
-          python -B task-implementer/scripts/test-worktree-interoperability.py
-          python -B task-implementer/scripts/test-task-resume.py
+          python -B implement/scripts/test_implement_contract.py
           python -B sdlc-start/scripts/test_validate_project_specs.py
-          python -B sdlc-start/scripts/test_prompt_workspace.py
           python -B sdlc-start/scripts/test_sdlc_start_contract.py
           python -B -m unittest discover \
             -s sdlc-start/assets/hooks/tests -p 'test_*.py'
-          python -B sdlc-implement-plan/scripts/test_worker_dispatch.py
-          python -B sdlc-prepare-execution/scripts/test_sdlc_execution.py
+          python -B -m unittest discover -s worktree/scripts -p 'test_workflow_*.py'
+          python -B -m unittest discover -s implement-test/scripts -p 'test_*.py'
           python -B project-agent-instructions/scripts/test_project_agent_instructions.py
           python -B project-agent-instructions/scripts/test_project_specs_retention.py
           python -B agent-nebius-auth-setup/scripts/test_install_hook_registration.py
@@ -382,14 +337,14 @@ jobs:
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
           set -euo pipefail
-          python -B task-implementer-test/scripts/test_task_implementer_lifecycle.py
-          python -B task-implementer-test/scripts/test_verify_task_implementer.py
+          python -B implement-test/scripts/test_implement_lifecycle.py
+          python -B implement-test/scripts/test_verify_implement.py
           python -B sdlc-workflow-test/scripts/test_three_tier_browser.py
           python -B sdlc-workflow-test/scripts/test_owned_git_origin.py
           python -B sdlc-workflow-test/scripts/test_three_tier_target.py
           python -B sdlc-workflow-test/scripts/test_collect_live_evidence.py
           python -B sdlc-workflow-test/scripts/test_three_tier_lifecycle.py
-          python -B sdlc-workflow-test/scripts/test_three_tier_prompt.py
+          python -B sdlc-workflow-test/scripts/test_three_tier_objective.py
           python -B sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py
 
   npx-installation:

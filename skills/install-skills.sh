@@ -24,6 +24,7 @@ set -euo pipefail
 #     non-meaningful timestamp noise is ignored; reruns converge to "Unchanged".
 #   - Source safety: each installed skill writes .install-source-id; existing folders
 #     owned by another source (or unmanaged) are skipped, never overwritten.
+#     Local single-skill and catalog selections match by physical skill directory.
 #   - Scoped cleanup: per-source manifests remove stale skills only when the recorded
 #     owner matches the current SOURCE_ID.
 #   - Drift visibility: destination skills missing from the selected source are
@@ -174,6 +175,8 @@ show_usage() {
   printf '%b\n' "  - A valid skill is a directory containing ${S_CYAN}SKILL.md${S_RESET}."
   printf '%b\n' "  - Existing unmanaged or other-source-owned destination folders are skipped,"
   printf '%b\n' "    never overwritten."
+  printf '%b\n' "  - Local single-skill and catalog sources share ownership only when they"
+  printf '%b\n' "    resolve to the same physical skill directory."
   printf '%b\n' "  - Source-owned skills missing from the selected source are removed, so"
   printf '%b\n' "    source-owned renames converge on reinstall."
   printf '%b\n' "  - Other extra destination skills are listed at the end with a"
@@ -276,6 +279,27 @@ read_target_owner() {
   fi
 
   printf ''
+}
+
+source_owns_skill() {
+  local recorded_source="$1"
+  local selected_source="$2"
+  local skill_dir="$3"
+  local recorded_dir=""
+  local recorded_skill=""
+  local selected_skill=""
+
+  [[ "${recorded_source}" == "${selected_source}" ]] && return 0
+  [[ "${recorded_source}" == local:/* && "${selected_source}" == local:/* ]] || return 1
+
+  recorded_dir="${recorded_source#local:}"
+  if [[ ! -f "${recorded_dir}/SKILL.md" ]]; then
+    recorded_dir="${recorded_dir}/$(basename "${skill_dir}")"
+  fi
+  [[ -f "${recorded_dir}/SKILL.md" ]] || return 1
+  recorded_skill="$(cd -- "${recorded_dir}" 2>/dev/null && pwd -P)" || return 1
+  selected_skill="$(cd -- "${skill_dir}" 2>/dev/null && pwd -P)" || return 1
+  [[ "${recorded_skill}" == "${selected_skill}" ]]
 }
 
 read_skill_declared_name() {
@@ -2123,7 +2147,6 @@ validate_hook_dest_collisions() {
   local dest_rel=""
   local key=""
   local first=""
-  local duplicate=""
 
   require_command "cmp" "for hook collision checks"
   require_command "find" "for hook source discovery"
@@ -2141,13 +2164,11 @@ validate_hook_dest_collisions() {
   while IFS= read -r key; do
     [[ -n "${key}" ]] || continue
     first=""
-    duplicate=0
     while IFS=$'\t' read -r _ src; do
       if [[ -z "${first}" ]]; then
         first="${src}"
         continue
       fi
-      duplicate=1
       if ! cmp -s "${first}" "${src}"; then
         log_error "--install-all-hooks found conflicting hook destination: ${key}"
         log_note "First source: ${first}"
@@ -2156,9 +2177,8 @@ validate_hook_dest_collisions() {
         exit 1
       fi
     done < <(awk -F '\t' -v k="${key}" '$1 == k { print $0 }' "${manifest}")
-    if [[ "${duplicate}" -eq 1 ]]; then
-      log_note "Duplicate hook destination has identical content: ${key}"
-    fi
+    # Standalone bundles intentionally share identical payloads. They converge
+    # on one destination; only differing content is a collision to report.
   done < <(cut -f 1 "${manifest}" | sort -u)
 
   rm -f "${manifest}"
@@ -2520,7 +2540,14 @@ if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
   preflight_agent_install
   configure_hook_support "${DEFAULT_SRC_DIR}" 1
   CODEX_HOME_DIR="${AGENT_HOME_DIR}"
+  retirement_helper="${DEFAULT_SRC_DIR}/global-context-management/scripts/retire_workflow_capture.py"
+  if [[ "${REGISTER_HOOKS}" -eq 1 && -f "${retirement_helper}" ]]; then
+    python3 "${retirement_helper}" --source "${DEFAULT_SRC_DIR}" --home "${AGENT_HOME_DIR}" --agent "${AGENT}" --preflight
+  fi
   install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" "${REPLACE_HOOKS_JSON}" "${REFRESH_HOOK_REGISTRATIONS}"
+  if [[ "${REGISTER_HOOKS}" -eq 1 && -f "${retirement_helper}" ]]; then
+    python3 "${retirement_helper}" --source "${DEFAULT_SRC_DIR}" --home "${AGENT_HOME_DIR}" --agent "${AGENT}"
+  fi
   exit 0
 fi
 
@@ -2656,6 +2683,11 @@ if [[ "${#combined_hook_dirs[@]}" -gt 0 ]]; then
   preflight_register_hooks_manifests "${AGENT_HOME_DIR}" 0 1 "${combined_hook_dirs[@]}"
 fi
 
+retirement_helper="${SRC_DIR}/global-context-management/scripts/retire_workflow_capture.py"
+if [[ -f "${retirement_helper}" ]]; then
+  python3 "${retirement_helper}" --source "${SRC_DIR}" --home "${AGENT_HOME_DIR}" --agent "${AGENT}" --preflight
+fi
+
 mkdir -p "${DEST_DIR}"
 DEST_DIR="$(cd "${DEST_DIR}" && pwd -P)"
 
@@ -2706,7 +2738,7 @@ for d in "${skill_dirs[@]}"; do
   if [[ -d "${target}" ]]; then
     target_owner="$(read_target_owner "${target}")"
     if [[ -n "${target_owner}" ]]; then
-      if [[ "${target_owner}" != "${SOURCE_ID}" ]]; then
+      if ! source_owns_skill "${target_owner}" "${SOURCE_ID}" "${d}"; then
         log_note "Skip (owned by different source): ${name}"
         skipped=$((skipped + 1))
         continue
@@ -2809,4 +2841,10 @@ if [[ "${#combined_hook_dirs[@]}" -gt 0 ]]; then
 else
   sync_hook_support "${AGENT_HOME_DIR}"
   log_note "No reviewed hook bundles in the selected source."
+fi
+
+# Registration updates succeeded. Retire only exactly owned unchanged capture
+# payloads; unrelated/custom hooks and private workflow state are preserved.
+if [[ -f "${retirement_helper}" ]]; then
+  python3 "${retirement_helper}" --source "${SRC_DIR}" --home "${AGENT_HOME_DIR}" --agent "${AGENT}"
 fi

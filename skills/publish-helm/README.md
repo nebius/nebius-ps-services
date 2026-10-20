@@ -76,3 +76,20 @@ Published OCI chart
 
 See [ordinary publication](references/ordinary-publication.md) for preparation,
 exact-result tagging, protected merge, resume and verification boundaries.
+
+### Local checkout completion
+
+The canonical commit transaction owns safe target checkout and outer completion.
+See [the completion contract](../create-pr/references/checkout-completion.md) for
+review switch-back, create-only behavior, verified-result fast-forwards, resumed
+work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
+are reported independently. No public skill flags are added.
+
+## Publication evidence
+
+Delegate workflow YAML and shared publication helper setup to `$github-workflows`.
+Preserve catalog selection, chart metadata, packaged-byte equality, anonymous
+pull and OCI digest checks. Only authoritative absence permits publication;
+transport/authentication failures and generic HTTP 404 responses are unverifiable.
+A nested repository guard uses the public OCI tag listing: an empty successful
+list or structured NAME_UNKNOWN response is distinct from an inaccessible list.

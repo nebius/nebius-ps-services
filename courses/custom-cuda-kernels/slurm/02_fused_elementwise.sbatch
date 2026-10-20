@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=01:02:00
+#SBATCH --time=01:12:40
 
 #SBATCH --no-requeue
 #SBATCH --output=results/02_fused_elementwise/logs/%j.out
@@ -31,7 +31,7 @@ started=$(date +%s)
 srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s ncu --target-processes all --nvtx --nvtx-include course_measure/ \
   --kernel-name-base demangled --rename-kernels off --kernel-name "regex:${COURSE_PROFILE_KERNEL:-.*}" \
   --launch-count 1 --set basic --section SpeedOfLight --section MemoryWorkloadAnalysis --section Occupancy \
-  --clock-control none --force-overwrite false \
+  --clock-control none \
   --export "$COURSE_PROFILES_DIR/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" "$executable" --workload "$workload" "$@" >"$raw"
 ended=$(date +%s)
 "${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"

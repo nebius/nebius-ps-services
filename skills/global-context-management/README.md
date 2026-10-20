@@ -7,6 +7,11 @@ Shared runtime loading and source-only permission inspection follow the
 [trusted runtime contract](references/trusted-runtime.md). Install and use each
 agent independently; within-agent workflow coordination remains supported.
 
+Catalog installation retires only unchanged, owned workflow-capture hooks.
+Retained capture registrations block shared-runtime replacement until their
+owner reconciles them. Unregistered custom payloads and private histories remain
+untouched.
+
 `global-context-management` is a reusable Codex skill plus local runtime setup
 for keeping long or complex coding sessions focused.
 It reduces context pollution by separating runtime policy, task-state
@@ -515,7 +520,7 @@ complete reviewed hook payloads into their own plugin data directory. Both
 routes use the same helpers, selected host's private state and native identity;
 never edit an installed plugin cache. Claude's Bash identity binding composes
 with the authentication hook and keeps worker identities distinct. Use the
-complete hook bundle for Task Implementer and SDLC on Claude.
+complete hook bundle for Implement and SDLC on Claude.
 
 Standalone copied helpers resolve support from the selected home's `hooks/`
 when package-local support is absent. That fallback requires owned, regular

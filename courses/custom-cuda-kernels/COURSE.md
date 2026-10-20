@@ -14,8 +14,9 @@ decision.
 
 All executable labs use one full H100; even Hopper thread-block clusters operate
 within one GPU. Optional extensions retain their own prerequisites. Start with
-the shared Lab Guide's [environment setup](../lab-guide.html#lab-preparation-scripts),
-then follow the course's runtime preparation and lab order.
+[Lab Preparation](../lab-guide.html#lab-preparation) in the shared Lab Guide.
+Read the single setup command's completion summary, then follow the course's
+readiness checks and lab order. Setup builds software; GPU jobs check correctness.
 
 For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 

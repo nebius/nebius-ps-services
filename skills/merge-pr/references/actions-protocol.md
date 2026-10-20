@@ -90,6 +90,12 @@ their historical event base. Never broaden the exclusion to a name prefix.
 
 ## Result CI, Pages and recovery
 
+Candidate discovery preserves every nonzero helper exit status and displays its
+sanitized diagnostic. Empty failure output still reports the exit status. It
+publishes targets only on success, so a global discovery failure cannot start downstream
+CI or Pages effects. The workflow does not expose raw transport errors, add
+retries, or extend the API deadline to conceal a failure.
+
 An accepted request is pending. Confirm actual merge and the authoritative
 result SHA through identity-bound GraphQL `mergeCommit.oid`, then remote
 default-branch containment. REST `2026-03-10` omits the old result field;
@@ -165,3 +171,25 @@ Official contracts: [built-in token](https://docs.github.com/en/actions/concepts
 [workflow dispatch](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event),
 [Pages build](https://docs.github.com/en/rest/pages/pages#request-a-github-pages-build),
 [Dependabot Actions](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions).
+
+## Targeted events and hourly recovery
+
+Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
+`completed` events update only affected current heads. Starts must remain wired
+so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
+runs do not enter that aggregate path.
+
+Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
+recovery. A separate default-branch-only status-write job repairs Required CI
+for all open default-base PRs. Completion event discovery reads the producer
+run's artifacts; ordinary CI and CI-only broker runs are filtered before runner
+allocation. GitHub may still display skipped workflow-run rows.
+
+Validated result inputs produce an immutable `merge-result-route/v1` receipt
+before tests. It binds repository, workflow/run/attempt, broker/PR/result and
+correlation; a failed CI run can route recovery but cannot prove successful CI.
+Latest-attempt exact-result success evidence remains mandatory. Recovery retains
+bounded journal scans for uncertain effects. Target-specific malformed receipts
+produce blocked matrix entries and failing run status while valid independent
+targets proceed. Global API, authentication and incomplete-listing errors stop
+all candidate effects and preserve sanitized diagnostics.

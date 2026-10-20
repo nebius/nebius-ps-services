@@ -618,8 +618,8 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         path = self.codex_home / "agents" / f"{role_name}.toml"
         path.write_text(f"{rendered}\n", encoding="utf-8")
 
-    def create_task_implementer_workspace(self, mode: int = 0o700) -> Path:
-        path = self.codex_home / "task-implementer"
+    def create_implement_state(self, mode: int = 0o700) -> Path:
+        path = self.codex_home / "implement"
         path.mkdir()
         path.chmod(mode)
         return path
@@ -634,14 +634,14 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def add_task_implementer_writable_root(self) -> None:
+    def add_implement_writable_root(self) -> None:
         config_path = self.codex_home / "config.toml"
         config_path.write_text(
             config_path.read_text(encoding="utf-8").replace(
                 'writable_roots = ["{{CODEX_HOME}}/task-state"]',
                 (
                     'writable_roots = ["{{CODEX_HOME}}/task-state", '
-                    f'"{self.codex_home / "task-implementer"}"]'
+                    f'"{self.codex_home / "implement"}"]'
                 ),
             ),
             encoding="utf-8",
@@ -1714,58 +1714,58 @@ config_file = "agents/{private_config_name}"
             "global_context_policy.json must contain a JSON object", result.stdout
         )
 
-    def test_default_does_not_require_task_implementer_workspace(self) -> None:
-        self.assertFalse((self.codex_home / "task-implementer").exists())
+    def test_default_does_not_require_implement_state(self) -> None:
+        self.assertFalse((self.codex_home / "implement").exists())
         self.assert_check_passes()
 
-    def test_opt_in_requires_private_task_implementer_directory(self) -> None:
-        result = self.run_check("--require-task-implementer-workspace")
+    def test_opt_in_requires_private_implement_directory(self) -> None:
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("task-implementer private directory is missing", result.stdout)
+        self.assertIn("implement private directory is missing", result.stdout)
         self.assertIn(
-            'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"',
+            'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"',
             result.stdout,
         )
         self.assertNotIn(str(self.codex_home), result.stdout)
 
-    def test_opt_in_rejects_loose_task_implementer_permissions(self) -> None:
-        self.create_task_implementer_workspace(0o755)
-        result = self.run_check("--require-task-implementer-workspace")
+    def test_opt_in_rejects_loose_implement_permissions(self) -> None:
+        self.create_implement_state(0o755)
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("private directory mode is not 0700", result.stdout)
         self.assertNotIn(str(self.codex_home), result.stdout)
 
     def test_opt_in_accepts_existing_full_access_without_config_patch(self) -> None:
-        self.create_task_implementer_workspace()
-        result = self.run_check("--require-task-implementer-workspace")
+        self.create_implement_state()
+        result = self.run_check("--require-implement-state")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("private directory mode is 0700", result.stdout)
         self.assertIn("existing danger-full-access sandbox", result.stdout)
 
     def test_opt_in_workspace_write_requires_private_writable_root(self) -> None:
-        self.create_task_implementer_workspace()
+        self.create_implement_state()
         self.set_sandbox_mode("workspace-write")
-        result = self.run_check("--require-task-implementer-workspace")
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
-            "writable_roots does not include the private task-implementer directory",
+            "writable_roots does not include the private implement directory",
             result.stdout,
         )
         self.assertIn(
-            'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"',
+            'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"',
             result.stdout,
         )
         self.assertNotIn(str(self.codex_home), result.stdout)
 
     def test_opt_in_accepts_workspace_write_private_writable_root(self) -> None:
-        self.create_task_implementer_workspace()
+        self.create_implement_state()
         self.set_sandbox_mode("workspace-write")
-        self.add_task_implementer_writable_root()
+        self.add_implement_writable_root()
         config_before = (self.codex_home / "config.toml").read_bytes()
-        result = self.run_check("--require-task-implementer-workspace")
+        result = self.run_check("--require-implement-state")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
-            "writable_roots includes the private task-implementer directory",
+            "writable_roots includes the private implement directory",
             result.stdout,
         )
         self.assertNotIn(str(self.codex_home), result.stdout)
@@ -1776,43 +1776,43 @@ config_file = "agents/{private_config_name}"
         )
 
     def test_opt_in_preserves_stricter_read_only_sandbox(self) -> None:
-        self.create_task_implementer_workspace()
+        self.create_implement_state()
         self.set_sandbox_mode("read-only")
-        result = self.run_check("--require-task-implementer-workspace")
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
             "keep stricter sandbox and approval settings unchanged", result.stdout
         )
         self.assertIn(
-            'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"',
+            'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"',
             result.stdout,
         )
 
-    def test_opt_in_rejects_symlinked_task_implementer_directory(self) -> None:
+    def test_opt_in_rejects_symlinked_implement_directory(self) -> None:
         target = Path(self.tmp.name) / "prompt-state"
         target.mkdir()
         target.chmod(0o700)
-        (self.codex_home / "task-implementer").symlink_to(
+        (self.codex_home / "implement").symlink_to(
             target, target_is_directory=True
         )
-        result = self.run_check("--require-task-implementer-workspace")
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("private directory must not be a symlink", result.stdout)
 
-    def test_opt_in_rejects_task_implementer_directory_inside_git(self) -> None:
+    def test_opt_in_rejects_implement_directory_inside_git(self) -> None:
         subprocess.run(
             ["git", "init", "-q", str(Path(self.tmp.name))],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        self.create_task_implementer_workspace()
-        result = self.run_check("--require-task-implementer-workspace")
+        self.create_implement_state()
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("must be outside every Git worktree", result.stdout)
         self.assertNotIn(str(self.codex_home), result.stdout)
 
-    def test_opt_in_rejects_task_implementer_directory_inside_git_metadata(
+    def test_opt_in_rejects_implement_directory_inside_git_metadata(
         self,
     ) -> None:
         foreign_repo = Path(self.tmp.name) / "foreign"
@@ -1825,8 +1825,8 @@ config_file = "agents/{private_config_name}"
         self.codex_home = foreign_repo / ".git" / "private-codex"
         self.codex_home.mkdir()
         self.render_valid_home()
-        self.create_task_implementer_workspace()
-        result = self.run_check("--require-task-implementer-workspace")
+        self.create_implement_state()
+        result = self.run_check("--require-implement-state")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("metadata directory", result.stdout)
         self.assertNotIn(str(self.codex_home), result.stdout)

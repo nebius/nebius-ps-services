@@ -15,7 +15,7 @@
 course_stage() {
   set -euo pipefail
   umask 077
-  local selection=$1 workload=$2
+  local selection=$1
   shift 2
   export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
   case "$selection" in
@@ -210,7 +210,7 @@ with socket.socket() as listener:
 PY
 server_log="${COURSE_JOB_DIR}/logs/vllm-server-run-${COURSE_RUN_ID}.log"
 
-setsid "${COURSE_VLLM:?run serving-lab-setup.py}" serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+setsid "${COURSE_VLLM:?run lab-setup.py}" serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
   --served-model-name "${model}" "${owned_model}" \
   --max-model-len 2048 >"${server_log}" 2>&1 &

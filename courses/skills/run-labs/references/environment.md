@@ -11,6 +11,10 @@ workspace ownership. No separate connection receipt is needed.
 Create the following **outside Git**, mode 600 in a mode 700 directory. Fields
 are examples, not defaults. There are no secret values in this schema:
 
+`private_root` must be an absolute path without `..` components or symlinks.
+It must be separate from the course checkout: neither inside it nor an ancestor
+of it. The controller checks this boundary before creating campaign directories.
+
 ```json
 {
   "schema": "run-labs-environment/v1",
@@ -27,26 +31,35 @@ are examples, not defaults. There are no secret values in this schema:
 }
 ```
 
+The `reports` roots record the cxcli-installed destination; read them from the
+accepted installation contract instead of assuming the example paths. Each lab
+job independently validates that contract before profiling and records delivery
+in `result.json`. A campaign preflight receipt does not replace this job-level
+check or prove that a native report was delivered. Preserve failed-job evidence;
+only a successful fresh job can qualify a repaired delivery path.
+
 ## Managed lab preparation
 
-Use the checkout's `lab-guide.html#lab-preparation-scripts` for the five scripts,
-course/lab-number lookup and installation instructions. The regular script runs
-without arguments; specialized scripts select a lab, a launcher or default labs
-with `--all`. Their `--plan` mode is read-only. Preparation does not qualify GPU,
-fabric, profiling or monitoring behavior.
+Use the checkout's `lab-guide.html#lab-preparation` for the unified
+`lab-setup.py` command. Its default prepares every declared runtime variant and
+auxiliary launcher across the available courses, including optional container
+dependencies. `--plan` is read-only; targeted repairs use `--lab` or `--launcher`
+and any required execution flags. Preparation does not qualify GPU, fabric,
+profiling or monitoring behavior.
 
-All five setup scripts initialize automatic publication when private worker
-monitoring settings are present in the prepared root. Copy those settings before
-setup; if they arrive later, rerun the owning setup command outside the campaign.
-Missing settings allow local-only preparation. Existing publication identity and
-ordering state are reused; campaign workspaces share that prepared authority.
+Setup initializes automatic publication when private worker monitoring settings
+and its prepared dependencies are available, including after unrelated component
+failures. Normal laptop synchronization delivers those settings. If they arrive
+later, rerun setup outside the campaign. Missing settings allow local-only
+preparation. Existing publication identity and ordering state are reused;
+campaign workspaces share that prepared authority.
 
 The dry-run plan's per-unit `preparation` entries resolve every actual recipe
-launcher to its runtime, script and arguments, including dependencies and
-profiling. Use those selections instead of inferring one group per course.
-Optional launchers require explicit preparation: Inference Lab 30's recipe
-includes TensorRT-LLM as well as native vLLM, so serving `--all` alone does not
-prepare that complete recipe. Do not drop the optional comparison to pass.
+launcher to its runtime, single setup script and course-qualified arguments,
+including dependencies and profiling. Use these selections for repair rather
+than inferring scope from course labels. Inference Lab 30's recipe includes
+TensorRT-LLM as well as native vLLM; both must have valid receipts before jobs.
+Do not drop the optional comparison to pass.
 
 An optional top-level `prepared_root` is an absolute path to the existing remote
 prepared catalog. If omitted, it is the remote login account's `~/courses`.
@@ -120,12 +133,11 @@ they cover; retain independent checks for the prepared runtime rather than
 claiming an incompatible setup check passed. Do not reduce GPU inventory or
 accept missing, ambiguous, stale or foreign runtime evidence.
 
-The Lab Guide's explicit `regular-lab-setup.py monitoring` action owns new connection discovery and
-the current `gpu-course-monitoring/v2` receipt. Do not rerun setup solely to resume
-a prepared campaign, convert old receipts, or change the setup helper's ownership
-checks. If new connections are needed, use that workflow and its explicit
-`verify_monitoring.py` check with `--receipt PRIVATE_JSON`,
-`--kubeconfig PRIVATE_KUBECONFIG` and `--context ACCEPTED_CONTEXT`. Missing runtime prerequisites still block
+Normal laptop `sync-labs.sh` owns connection discovery, the current
+`gpu-course-monitoring/v2` receipt and verified private worker settings delivery.
+Do not rerun setup solely to resume a prepared campaign, convert old receipts,
+or change ownership checks. If connections need configuration, return to normal
+sync and its verification workflow. Missing runtime prerequisites still block
 execution. Existing Grafana, Nsight viewer/streamer, `nsys`/`ncu` runtime and task-owned
 forward recovery is part of the campaign under
 [service and profiler recovery](tool-recovery.md);

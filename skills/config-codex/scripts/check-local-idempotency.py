@@ -210,8 +210,8 @@ TEMPLATE_ASSETS = {
     "agents/test_strategist.toml": "agents/test_strategist.toml.template",
     "agents/risk_reviewer.toml": "agents/risk_reviewer.toml.template",
 }
-TASK_IMPLEMENTER_ADD_DIR = (
-    'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"'
+IMPLEMENT_ADD_DIR = (
+    'codex --add-dir "${CODEX_HOME:-$HOME/.codex}/implement"'
 )
 
 
@@ -249,10 +249,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--require-task-implementer-workspace",
+        "--require-implement-state",
         action="store_true",
         help=(
-            "Opt in to validating the private task-implementer directory and "
+            "Opt in to validating the private implement directory and "
             "its workspace-write access. This check never changes sandbox or "
             "approval settings."
         ),
@@ -746,12 +746,12 @@ def check_config_toml(
     return config
 
 
-def fail_task_implementer_workspace(
+def fail_implement_state(
     message: str,
     failures: list[str],
 ) -> None:
     fail(
-        f"{message}; runtime remediation: {TASK_IMPLEMENTER_ADD_DIR}",
+        f"{message}; runtime remediation: {IMPLEMENT_ADD_DIR}",
         failures,
     )
 
@@ -787,30 +787,30 @@ def is_inside_git_storage(path: Path, failures: list[str]) -> bool | None:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         fail(
-            "task-implementer storage location could not be checked for Git safety",
+            "implement storage location could not be checked for Git safety",
             failures,
         )
         return None
     return git_dir.returncode == 0
 
 
-def check_task_implementer_workspace(
+def check_implement_state(
     codex_home: Path,
     config: dict,
     failures: list[str],
 ) -> None:
-    workspace = codex_home / "task-implementer"
+    workspace = codex_home / "implement"
     if workspace.is_symlink():
-        fail_task_implementer_workspace(
-            "task-implementer private directory must not be a symlink",
+        fail_implement_state(
+            "implement private directory must not be a symlink",
             failures,
         )
         return
     if not workspace.is_dir():
-        fail_task_implementer_workspace(
+        fail_implement_state(
             (
-                "task-implementer private directory is missing; create "
-                "${CODEX_HOME:-$HOME/.codex}/task-implementer with mode 0700"
+                "implement private directory is missing; create "
+                "${CODEX_HOME:-$HOME/.codex}/implement with mode 0700"
             ),
             failures,
         )
@@ -818,15 +818,15 @@ def check_task_implementer_workspace(
 
     mode = stat.S_IMODE(workspace.stat().st_mode)
     if mode != 0o700:
-        fail_task_implementer_workspace(
+        fail_implement_state(
             (
-                "task-implementer private directory mode is not 0700; run "
-                'chmod 700 "${CODEX_HOME:-$HOME/.codex}/task-implementer"'
+                "implement private directory mode is not 0700; run "
+                'chmod 700 "${CODEX_HOME:-$HOME/.codex}/implement"'
             ),
             failures,
         )
         return
-    ok("task-implementer private directory mode is 0700")
+    ok("implement private directory mode is 0700")
 
     inside_git = is_inside_git_storage(workspace, failures)
     if inside_git is None:
@@ -834,27 +834,27 @@ def check_task_implementer_workspace(
     if inside_git:
         fail(
             (
-                "task-implementer private directory must be outside every Git "
+                "implement private directory must be outside every Git "
                 "worktree and metadata directory"
             ),
             failures,
         )
         return
-    ok("task-implementer private directory is outside Git storage")
+    ok("implement private directory is outside Git storage")
 
     if not config:
         return
     sandbox_mode = config.get("sandbox_mode")
     if sandbox_mode == "danger-full-access":
         ok(
-            "task-implementer private directory is writable under the "
+            "implement private directory is writable under the "
             "existing danger-full-access sandbox"
         )
         return
     if sandbox_mode != "workspace-write":
-        fail_task_implementer_workspace(
+        fail_implement_state(
             (
-                "task-implementer private directory is not writable under "
+                "implement private directory is not writable under "
                 "the existing sandbox; keep stricter sandbox and approval "
                 "settings unchanged"
             ),
@@ -864,14 +864,14 @@ def check_task_implementer_workspace(
 
     workspace_write = config.get("sandbox_workspace_write")
     if not isinstance(workspace_write, dict):
-        fail_task_implementer_workspace(
+        fail_implement_state(
             "sandbox_workspace_write is missing from config.toml",
             failures,
         )
         return
     roots = workspace_write.get("writable_roots")
     if not isinstance(roots, list):
-        fail_task_implementer_workspace(
+        fail_implement_state(
             "sandbox_workspace_write.writable_roots is missing from config.toml",
             failures,
         )
@@ -879,13 +879,13 @@ def check_task_implementer_workspace(
     if any(configured_writable_root_matches(value, workspace) for value in roots):
         ok(
             "sandbox_workspace_write.writable_roots includes the private "
-            "task-implementer directory"
+            "implement directory"
         )
         return
-    fail_task_implementer_workspace(
+    fail_implement_state(
         (
             "sandbox_workspace_write.writable_roots does not include the "
-            "private task-implementer directory"
+            "private implement directory"
         ),
         failures,
     )
@@ -1062,8 +1062,8 @@ def main(argv: list[str]) -> int:
         failures,
     )
     check_runtime_files(codex_home, failures)
-    if args.require_task_implementer_workspace:
-        check_task_implementer_workspace(codex_home, config, failures)
+    if args.require_implement_state:
+        check_implement_state(codex_home, config, failures)
     if failures:
         print(f"Idempotency preflight failed: {len(failures)} issue(s)")
         return 1

@@ -89,7 +89,7 @@ def test_ambiguous_lesson_content_fails_before_rendering(tmp_path, body, message
 
 
 @pytest.mark.parametrize("intro", ["Keep this example.\n\n", ""])
-def test_fenced_lesson_syntax_remains_literal_source(tmp_path, intro):
+def test_fenced_lesson_syntax_remains_literal_source(tmp_path, monkeypatch, intro):
     source = tmp_path / "COURSE.md"
     body = (
         f"**Objective** Explain.\n**How it works** {intro}"
@@ -105,6 +105,15 @@ def test_fenced_lesson_syntax_remains_literal_source(tmp_path, intro):
         f"{intro}```markdown\n## 2. Literal heading\n"
         "**How it works** Literal field.\n```\n\nRetain the conclusion."
     )
+    import validate_course_template as validator
+
+    monkeypatch.setattr(validator, "ROOT", tmp_path)
+    parsed = validator.source_lessons()
+    assert len(parsed) == 1
+    title, fields, word_count = parsed[0]
+    assert title == "1. Example lesson"
+    assert fields == {key: value.strip() for key, value in lessons[0].items() if key != "title"}
+    assert word_count == len(validator.words("1. Example lesson\n\n" + body))
 
 
 @pytest.mark.parametrize("course", ["soperator", "gpu-performance-tools", "pytorch-gpu-performance-engineering"])

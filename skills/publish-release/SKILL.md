@@ -114,7 +114,8 @@ setup. Complete follows every step below.
    destinations, unfinished Git operations and missing required capabilities.
 2. Reconcile any existing release checkpoint before doing preparation. A
    completed record still requires fresh remote release/asset verification.
-3. For a new release, begin the canonical create-pr grant before branch changes.
+3. For a new release, begin the canonical create-pr grant with private
+   `--checkout-policy preserve` before branch changes; nested PR calls inherit it.
    Reuse the feature branch; from default, create `release/<tag>` at the captured
    head. Create missing setup assets and prepare release notes/metadata.
 4. Use the serialized content-only preparation helper, then create-pr's review,
@@ -222,4 +223,14 @@ timeout and exact resume command. Report skipped or unverified lanes explicitly.
 - `references/orchestration.md`: owner handoffs, helper calls and recovery.
 - `scripts/release_session.py`: private checkpoints, observation and deadlines.
 - `scripts/publish-release-doer.sh`: content, local tag, exact push and wheel checks.
-- `assets/`: optional changelog, runnable helper and tag-workflow templates.
+- `assets/`: optional changelog and runnable helper templates.
+
+## Workflow ownership and existing releases
+
+Use `$github-workflows` for release YAML setup and its canonical
+`project-name-release-publish.yml.template`; this skill owns the local publication
+sequence. Preserve the exact workflow filename and service asset contract.
+Existing releases require trusted pre-publication hashes and downloaded-byte
+verification. Missing or expired evidence is a reconciliation blocker, not a
+reason to overwrite or recreate a release. The workflow must compare any
+retained original manifest before a rebuilt retry can publish.

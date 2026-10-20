@@ -77,6 +77,9 @@ Read-only wait       Remote destination ancestry
   and rebase. Verification uses GitHub's GraphQL `mergeCommit.oid`, bound to the
   merged PR identity. REST `2026-03-10` has no result SHA field; missing result
   evidence stops completion without dispatching CI or Pages.
+- Completion candidate failures display the helper's sanitized reason and retain
+  its nonzero exit status without publishing targets. An already verified merge
+  remains distinct from a later recovery scan failure.
 - CI polling uses a fixed 10,800-second deadline and a 30-second interval.
   Release callers retain this deadline in their checkpoint until explicit resume;
   delayed checks, repairs and observed reruns do not reset it. Result settlement is
@@ -122,3 +125,33 @@ validation and fresh evidence after every head/base change. Safe source repairs
 use create-pr. Bot metadata and green CI alone cannot authorize merging.
 Only trusted explicit dispatch initiates a merge; scheduled events observe CI
 and recover already-authorized completion.
+
+### Local checkout completion
+
+The canonical commit transaction owns safe target checkout and outer completion.
+See [the completion contract](../create-pr/references/checkout-completion.md) for
+review switch-back, create-only behavior, verified-result fast-forwards, resumed
+work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
+are reported independently. No public skill flags are added.
+
+## Targeted events and hourly recovery
+
+Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
+`completed` events update only affected current heads. Starts must remain wired
+so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
+runs do not enter that aggregate path.
+
+Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
+recovery. A separate default-branch-only status-write job repairs Required CI
+for all open default-base PRs. Completion event discovery reads the producer
+run's artifacts; ordinary CI and CI-only broker runs are filtered before runner
+allocation. GitHub may still display skipped workflow-run rows.
+
+Validated result inputs produce an immutable `merge-result-route/v1` receipt
+before tests. It binds repository, workflow/run/attempt, broker/PR/result and
+correlation; a failed CI run can route recovery but cannot prove successful CI.
+Latest-attempt exact-result success evidence remains mandatory. Recovery retains
+bounded journal scans for uncertain effects. Target-specific malformed receipts
+produce blocked matrix entries and failing run status while valid independent
+targets proceed. Global API, authentication and incomplete-listing errors stop
+all candidate effects and preserve sanitized diagnostics.

@@ -17,7 +17,7 @@ from test_course_review_fixes import COURSES, ROOT
 def test_readme_gates_live_submission_before_first_job(course):
     document = (ROOT / course / "README.md").read_text()
     before_submit = document[: re.search(r"^sbatch ", document, re.M).start()]
-    assert "../lab-guide.html#lab-preparation-scripts" in before_submit
+    assert "../lab-guide.html#lab-preparation" in before_submit
     assert "umask 077" not in document
     assert "VERSIONS.md" in before_submit
     assert "qualified" in before_submit or "approved" in before_submit

@@ -8,3 +8,4 @@ context-negative-03,false,Answer this one-line translation question.
 global-context-management-codex-portability,true,$global-context-management Use global context management for this complex multi-file implementation.
 global-context-management-claude-portability,true,/global-context-management Use global context management for this complex multi-file implementation.
 global-context-management-quoted-command,false,"Treat ""/skills:global-context-management"" as sample text in this punctuation exercise; count its punctuation characters only."
+context-steering-ownership,false,"Classify this one sentence as a product requirement or a status question; do not plan, edit files, or maintain task state."

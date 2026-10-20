@@ -8,7 +8,10 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import Mock, patch
 
@@ -208,7 +211,6 @@ class CompletionTests(unittest.TestCase):
                     self.api, self.api.intent, POLICY, True
                 ),
                 lambda: completion.verify_pages(self.api, self.api.intent, True),
-                lambda: completion.targets(self.api, POLICY, {}),
                 lambda: completion.ci_inputs(self.api, POLICY, self.inputs(), "ci.yml"),
             ):
                 with self.subTest(operation=operation), self.assertRaises(gate.Blocked):
@@ -457,8 +459,7 @@ class CompletionTests(unittest.TestCase):
                 ]
                 with self.assertRaises(gate.Blocked):
                     completion.read_intent(self.api, 100, 1, 1, HEAD, POLICY)
-                with self.assertRaises(gate.Blocked):
-                    completion.targets(self.api, POLICY, {})
+                self.assertTrue(completion.targets(self.api, POLICY, {})[0]["blocked"])
                 with self.assertRaises(gate.Blocked):
                     completion.ci_checkout(self.api, POLICY, self.inputs(), "ci.yml")
                 run.assert_not_called()
@@ -476,6 +477,101 @@ class CompletionTests(unittest.TestCase):
         self.api.pr.update(merged=False, state="open")
         self.assertEqual(completion.targets(self.api, POLICY, {}), [])
         self.assertFalse(self.api.effects)
+
+    def test_event_discovery_never_scans_repository_artifacts(self):
+        original = self.api.pages
+
+        def scoped(path, key=None):
+            self.assertNotEqual(path, "actions/artifacts")
+            return original(path, key)
+
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}),
+            patch.object(self.api, "pages", side_effect=scoped),
+        ):
+            result = completion.targets(
+                self.api, POLICY, {"workflow_run": {"id": 100, "run_attempt": 1}}
+            )
+        self.assertEqual(
+            result, [{"pr": 1, "head": HEAD, "run_id": 100, "run_attempt": 1}]
+        )
+
+    def test_failed_result_ci_routes_with_identity_but_cannot_prove_success(self):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "200"}):
+            route = completion.emit_route(self.api, POLICY, self.inputs(), "ci.yml")
+        self.api.values[902] = route
+        self.api.ci["conclusion"] = "failure"
+        original = self.api.pages
+
+        def scoped(path, key=None):
+            if path == "actions/runs/200/artifacts":
+                return [self.api.artifact_meta(902, "result-route-200-1", 200)]
+            self.assertNotEqual(path, "actions/artifacts")
+            return original(path, key)
+
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}),
+            patch.object(self.api, "pages", side_effect=scoped),
+        ):
+            result = completion.targets(
+                self.api, POLICY, {"workflow_run": {"id": 200, "run_attempt": 1}}
+            )
+            self.assertEqual(result[0]["pr"], 1)
+        self.api.runs = [self.api.ci]
+        with self.assertRaises(gate.Blocked):
+            completion.verify_or_dispatch(self.api, self.api.intent, POLICY)
+        self.assertFalse(self.api.effects)
+
+    def test_unrelated_manual_ci_does_not_route(self):
+        self.api.ci.update(display_title="manual tests", actor={"id": 123})
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}):
+            self.assertEqual(
+                completion.targets(
+                    self.api, POLICY, {"workflow_run": {"id": 200, "run_attempt": 1}}
+                ),
+                [],
+            )
+
+    def test_bad_target_does_not_hide_valid_independent_target(self):
+        self.api.artifacts = [
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100),
+            self.api.artifact_meta(906, f"merge-intent-2-{BASE}-1", 100),
+        ]
+        other = {**self.api.intent, "pr": 2, "head": BASE}
+        original = self.api.api
+
+        def lookup(path):
+            if path == "pulls/2":
+                return {**self.api.pr, "number": 2, "head": {"sha": BASE}}
+            return original(path)
+
+        with (
+            patch.object(self.api, "api", side_effect=lookup),
+            patch.object(
+                completion,
+                "read_intent",
+                side_effect=[gate.Blocked("Invalid target receipt"), other],
+            ),
+            patch.object(completion, "merged_result", return_value=RESULT),
+        ):
+            values = completion.targets(self.api, POLICY, {})
+        self.assertEqual({v["pr"] for v in values}, {1, 2})
+        self.assertTrue(next(v for v in values if v["pr"] == 1)["blocked"])
+        self.assertNotIn("blocked", next(v for v in values if v["pr"] == 2))
+
+    def test_global_transport_failure_never_emits_partial_matrix(self):
+        self.api.artifacts = [
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100)
+        ]
+        with patch.object(
+            completion, "read_intent", side_effect=gate.ApiFailure("Transport failed")
+        ):
+            with self.assertRaises(gate.ApiFailure):
+                completion.targets(self.api, POLICY, {})
+        api = gate.GitHub(REPO)
+        with patch.object(api, "api", return_value={"jobs": "invalid"}):
+            with self.assertRaises(gate.ApiFailure):
+                api.pages("actions/runs/100/jobs", "jobs")
 
     def test_checkout_rejects_wrong_source_or_dirty_workspace_before_fetch(self):
         for outputs in [(HEAD + "\n",), (BASE + "\n", " M changed\n")]:
@@ -696,6 +792,91 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(completion.targets(self.api, POLICY, {}), [])
         self.api.jobs[0]["conclusion"] = "failure"
         self.assertEqual(len(completion.targets(self.api, POLICY, {})), 1)
+
+
+class CandidateWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[3]
+        workflow = root / ".github/workflows/merge-completion.yml"
+        if not workflow.exists():
+            raise unittest.SkipTest("Installed skill without repository deployment")
+        cls.workflow = workflow.read_text()
+
+    def candidate_script(self):
+        jobs = re.findall(r"(?ms)^  candidates:\n(.*?)(?=^  \S|\Z)", self.workflow)
+        self.assertEqual(len(jobs), 1, "Expected one candidates job")
+        steps = re.findall(r"(?ms)^      - id: plan\n(.*?)(?=^      - |\Z)", jobs[0])
+        self.assertEqual(len(steps), 1, "Expected one candidate plan step")
+        blocks = re.findall(
+            r"(?m)^        run: \|\n((?:          [^\n]*(?:\n|$))*)", steps[0]
+        )
+        self.assertEqual(len(blocks), 1, "Expected one candidate shell block")
+        self.assertTrue(blocks[0].strip(), "Candidate shell block is empty")
+        return textwrap.dedent(blocks[0])
+
+    def run_candidates(self, payload, status):
+        script = self.candidate_script()
+        stub = """\
+python3() {
+  [ "$#" -eq 2 ] &&
+    [ "$1" = skills/merge-pr/scripts/merge_completion.py ] &&
+    [ "$2" = targets ] || return 99
+  printf 'called\n' >> "$CALL_LOG"
+  printf '%s' "$HELPER_OUTPUT"
+  return "$HELPER_STATUS"
+}
+"""
+        sentinel = "synthetic-secret-not-for-logs"
+        initial = "existing=value\n"
+        with tempfile.TemporaryDirectory(prefix="completion-candidates-") as folder:
+            output = Path(folder) / "output"
+            output.write_text(initial)
+            calls = Path(folder) / "calls"
+            result = subprocess.run(
+                ["bash", "--noprofile", "--norc", "-c", stub + script],
+                cwd=folder,
+                env={
+                    "PATH": os.defpath,
+                    "GITHUB_OUTPUT": str(output),
+                    "CALL_LOG": str(calls),
+                    "HELPER_OUTPUT": payload,
+                    "HELPER_STATUS": str(status),
+                    "GH_TOKEN": sentinel,
+                },
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            written = output.read_text()
+            self.assertEqual(calls.read_text(), "called\n")
+        self.assertNotIn(sentinel, result.stdout + result.stderr + written)
+        self.assertEqual(result.stdout, "")
+        return result, written, initial
+
+    def test_success_publishes_exact_targets(self):
+        for payload in ("[]", '[{"pr":1,"head":"' + HEAD + '"}]'):
+            with self.subTest(payload=payload):
+                result, written, initial = self.run_candidates(payload + "\n", 0)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(written, initial + f"targets={payload}\n")
+
+    def test_failure_shows_diagnostic_without_publishing_targets(self):
+        for status, outcome in ((1, "blocked"), (2, "pending"), (7, "blocked")):
+            with self.subTest(status=status):
+                payload = json.dumps({"outcome": outcome, "reason": "Safe diagnostic"})
+                result, written, initial = self.run_candidates(payload + "\n", status)
+                self.assertEqual(result.returncode, status)
+                self.assertIn(f"failed (exit {status})", result.stderr)
+                self.assertIn(payload + "\n", result.stderr)
+                self.assertEqual(written, initial)
+
+    def test_empty_failure_output_still_reports_exit_status(self):
+        result, written, initial = self.run_candidates("", 1)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Completion candidate discovery failed (exit 1).", result.stderr)
+        self.assertEqual(written, initial)
 
 
 if __name__ == "__main__":

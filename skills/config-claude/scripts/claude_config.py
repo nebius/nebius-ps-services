@@ -17,7 +17,7 @@ END = "<!-- END config-claude managed context -->"
 ROLES = ("repo-mapper", "test-strategist", "risk-reviewer")
 OWNERS = (
     "agent-nebius-auth-setup", "commit", "config-codex", "maintain-project-specs",
-    "prompt-session-intake", "sdlc-start", "troubleshoot",
+    "sdlc-start", "troubleshoot",
 )
 MCP_NAMES = (
     "context7", "playwright", "terraform", "markitdown", "microsoftdocs",
@@ -326,13 +326,13 @@ def inspect(home: Path, source: Path, *, route: str = "local", native_only: bool
         check("requested delegation policy", delegation_policy)
     if workspace:
         def task_workspace():
-            private_tree(home / "task-implementer")
+            private_tree(home / "implement")
             # Git metadata can live in any ancestor of the private workspace.
             if any((part / ".git").exists() for part in (home, *home.parents)):
                 raise ValueError("private workspace is inside a Git worktree")
-            if (home / "task-implementer/.git").exists():
+            if (home / "implement/.git").exists():
                 raise ValueError("private workspace contains Git metadata")
-        check("requested private Task Implementer workspace", task_workspace)
+        check("requested private Implement workspace", task_workspace)
     if mcp_names:
         def selected_mcp():
             if mcp_config is None:

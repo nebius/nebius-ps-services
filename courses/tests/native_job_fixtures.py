@@ -20,12 +20,14 @@ def prepare_job(root, course, lab):
     )
     for name in (
         "course_job.py",
+        "course_viewer.py",
         "course_execution.py",
         "course_publication.py",
         "course_publication_state.py",
         "course_publication_evidence.py",
     ):
         shutil.copyfile(ROOT / "tools" / name, root / "tools" / name)
+    viewer_fixture(root)
     (root / "reference").mkdir(exist_ok=True)
     capabilities = json.loads((ROOT / course / "reference/execution.json").read_text())
     capabilities["course"] = root.name
@@ -45,6 +47,75 @@ def prepare_job(root, course, lab):
     if not source.exists():
         source.touch()
     return ROOT / course / "slurm"
+
+
+def viewer_fixture(root):
+    """Explicit synthetic installation; never write host /var/lib or fake live proof."""
+    root = root.resolve()
+    reports = root / "viewer-reports"
+    reports.mkdir(exist_ok=True)
+    reports.chmod(0o1777)
+    metadata = reports / ".cxcli-nsight"
+    metadata.mkdir(exist_ok=True)
+    metadata.chmod(0o755)
+    installed = root / "viewer-installation"
+    installed.mkdir(exist_ok=True)
+    installed.chmod(0o755)
+    descriptor = installed / "nsight-reports.json"
+    value = {
+        "schema": "nebius-cxcli.nsight-reports/v1",
+        "installation": {
+            "generation": "fixture",
+            "target": "fixture",
+            "kubernetes_uid": "fixture",
+        },
+        "storage": {
+            key: "fixture"
+            for key in ("namespace", "pvcName", "pvcUid", "pvName", "pvUid")
+        },
+        "producer_path": str(reports),
+        "viewer_path": "/mnt/reports",
+        "mount_point": str(root),
+        "filesystem_type": "fixture",
+        "token": "1" * 64,
+    }
+    for path in (descriptor, metadata / "binding.json"):
+        path.write_text(json.dumps(value))
+        path.chmod(0o644)
+    admission = metadata / "admission.json"
+    admission.write_text(
+        json.dumps(
+            {
+                "schema": value["schema"] + "/admission",
+                "token": value["token"],
+                "open": True,
+            }
+        )
+    )
+    admission.chmod(0o644)
+    source = (ROOT / "tools/course_viewer.py").read_text()
+    source = source.replace(
+        'DESCRIPTOR = "/var/lib/nebius-cxcli/nsight-reports.json"',
+        f"DESCRIPTOR = {str(descriptor)!r}",
+    ).replace("ROOT_UID = 0", f"ROOT_UID = {os.getuid()}")
+    fixture = f"""\ndef mount_identity(fd):
+    return {{"id": "fixture", "device": str(os.fstat(fd).st_dev), "point": {str(root)!r}, "type": "fixture"}}
+"""
+    if sys.platform != "linux":
+        fixture += """\ndef rename_noreplace(source_parent, source, destination_parent, destination):
+    # Single-process orchestration double only. Linux tests use real renameat2.
+    try:
+        os.stat(destination, dir_fd=destination_parent, follow_symlinks=False)
+    except FileNotFoundError:
+        os.rename(source, destination, src_dir_fd=source_parent, dst_dir_fd=destination_parent)
+    else:
+        raise FileExistsError(destination)
+"""
+    source = source.replace(
+        'if __name__ == "__main__":', fixture + '\nif __name__ == "__main__":'
+    )
+    (root / "tools/course_viewer.py").write_text(source)
+    return descriptor
 
 
 def executable(path, code):
@@ -90,7 +161,7 @@ raise SystemExit(int(os.environ.get('WORKLOAD_STATUS','0')))
     for tool in ("nsys", "ncu"):
         executable(
             binaries / tool,
-            r"""import json,os,re,subprocess,sys
+            r"""import argparse,json,os,re,subprocess,sys
 from pathlib import Path
 args=sys.argv[1:]
 Path('profiler.json').write_text(json.dumps(args))
@@ -98,8 +169,24 @@ tool=Path(sys.argv[0]).name
 key='--output' if tool=='nsys' else '--export'
 index=args.index(key)
 report=re.sub(r'%q\{([^}]+)\}',lambda m:os.environ.get(m[1],''),args[index+1]).replace('%p',str(os.getpid()))
-start=next(i for i,a in enumerate(args) if a.endswith('python-spy'))
-status=subprocess.call(args[start:])
+if tool=='ncu':
+    # NCU's overwrite option is a switch, unlike Nsight Systems' boolean.
+    # Stop parsing at the application, as the real CLI does; a stray "false"
+    # must execute false rather than silently skipping ahead to python-spy.
+    parser=argparse.ArgumentParser(allow_abbrev=False)
+    for option in ('--target-processes','--nvtx-include','--kernel-name-base',
+                   '--rename-kernels','--kernel-name','--launch-count','--set',
+                   '--section','--clock-control','--export','--config-file',
+                   '--nvtx-push-pop-scope','--replay-mode','--kill'):
+        parser.add_argument(option)
+    parser.add_argument('--nvtx',action='store_true')
+    parser.add_argument('--force-overwrite',action='store_true')
+    parser.add_argument('application',nargs=argparse.REMAINDER)
+    application=parser.parse_args(args).application
+else:
+    start=next(i for i,a in enumerate(args) if a.endswith('python-spy'))
+    application=args[start:]
+status=subprocess.call(application)
 mode=os.environ.get('REPORT_MODE','present')
 if mode!='missing': Path(report+('.nsys-rep' if tool=='nsys' else '.ncu-rep')).write_text('native report fixture' if mode=='present' else '')
 raise SystemExit(status or int(os.environ.get('PROFILER_STATUS','0')))

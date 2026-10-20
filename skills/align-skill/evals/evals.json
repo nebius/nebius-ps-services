@@ -57,7 +57,7 @@
       "assertions": [
         "A minimal portable skill passes agentskills policy without repository Help, Learning Loop or OpenAI metadata; repository Codex checks retain the metadata policy, and malformed present metadata is never ignored.",
         "config-codex remains a Codex configuration skill when invoked from Claude; config-claude remains a separate Claude configuration skill.",
-        "Task Implementer workers retain their own commits while Agentic SDLC commits remain coordinator-owned; native identity, receipts, checkpoints, Stop arbitration and recovery are preserved.",
+        "Implement workers retain their own commits while Agentic SDLC commits remain coordinator-owned; native identity, receipts, checkpoints, Stop arbitration and recovery are preserved.",
         "Public explicit skills use disable-model-invocation on Claude; internal SDLC stages stay coordinator-available with user-invocable false and verified active workflow context.",
         "The result distinguishes static checks, installed artifacts, native CLI installation, fresh model triggers and baseline quality evidence, marking missing proof UNAVAILABLE."
       ]
@@ -74,7 +74,7 @@
         "The result retains native Claude restrictions and useful OpenAI metadata, reports strict standard-only exceptions and does not coerce away a functional host extension.",
         "The required metadata.json resource excluded by skills CLI copy is a compatibility failure; a rename requires tracing and preserving every reader, never ignoring or deleting the resource.",
         "npx discovery and copying are tested separately for codex and claude-code in disposable locations; file installation does not register hooks or prove runtime behavior.",
-        "The result preserves config product targets, Task Implementer worker commits, SDLC coordinator commits, native identity, checkpoints and recovery.",
+        "The result preserves config product targets, Implement worker commits, SDLC coordinator commits, native identity, checkpoints and recovery.",
         "Absent host capabilities remain explicit limitations; feature removal or weaker behavior requires a concrete conflict and explicit user decision.",
         "The result remains report-only and does not claim executed native, quality or installation evidence."
       ]

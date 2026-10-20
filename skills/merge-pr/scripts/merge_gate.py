@@ -29,6 +29,10 @@ class Blocked(Exception):
     """Safe diagnostic, never raw subprocess output."""
 
 
+class ApiFailure(Blocked):
+    """Global transport or incomplete-listing failure; never isolate per target."""
+
+
 class Pending(Blocked):
     """A later authoritative observation may allow continuation."""
 
@@ -38,7 +42,7 @@ def require(condition, message):
         raise Blocked(message)
 
 
-def gh(args, payload=None, binary=False):
+def _gh(args, payload=None, binary=False):
     # Never log raw CLI errors or tokens, or buffer an unbounded API response.
     with subprocess.Popen(
         ["gh", *args],
@@ -65,7 +69,7 @@ def gh(args, payload=None, binary=False):
                         "GitHub operation timed out; reconcile remote state",
                     )
                     if not selector.select(remaining):
-                        raise Blocked(
+                        raise ApiFailure(
                             "GitHub operation timed out; reconcile remote state"
                         )
                     chunk = os.read(process.stdout.fileno(), 65536)
@@ -77,10 +81,10 @@ def gh(args, payload=None, binary=False):
                         "GitHub response exceeds the bounded response limit",
                     )
                     chunks.append(chunk)
-            require(
-                process.wait(timeout=max(0.1, deadline - time.monotonic())) == 0,
-                "GitHub operation failed; reconcile remote state before retry",
-            )
+            if process.wait(timeout=max(0.1, deadline - time.monotonic())) != 0:
+                raise ApiFailure(
+                    "GitHub operation failed; reconcile remote state before retry"
+                )
             output = b"".join(chunks)
         finally:
             if process.poll() is None:
@@ -89,6 +93,15 @@ def gh(args, payload=None, binary=False):
     if binary:
         return output
     return json.loads(output) if output.strip() else {}
+
+
+def gh(args, payload=None, binary=False):
+    try:
+        return _gh(args, payload, binary)
+    except (Blocked, ValueError, OSError, subprocess.TimeoutExpired) as error:
+        raise ApiFailure(
+            "GitHub transport or response failed; no effects permitted"
+        ) from error
 
 
 class GitHub:
@@ -120,12 +133,15 @@ class GitHub:
         for page in range(1, 101):
             sep = "&" if "?" in path else "?"
             response = self.api(f"{path}{sep}per_page=100&page={page}")
+            if key and (not isinstance(response, dict) or key not in response):
+                raise ApiFailure("Invalid paginated response")
             rows = response[key] if key else response
-            require(isinstance(rows, list), "Invalid paginated response")
+            if not isinstance(rows, list):
+                raise ApiFailure("Invalid paginated response")
             items.extend(rows)
             if len(rows) < 100:
                 return items
-        raise Blocked("Pagination limit reached; evidence is incomplete")
+        raise ApiFailure("Pagination limit reached; evidence is incomplete")
 
     def repo_info(self):
         return gh(["api", "--hostname", "github.com", self.prefix])
@@ -663,15 +679,47 @@ def candidates(api, event):
     return [{"pr": number, "head": head, "review_id": review_id, "method": method}]
 
 
-def ci_targets(api):
+def ci_targets(api, event, policy, *, recovery=False):
     default = api.repo_info()["default_branch"]
-    targets = [
-        {"pr": p["number"], "head": p["head"]["sha"]}
-        for p in api.pages(f"pulls?state=open&base={quote(default, safe='')}")
+    if recovery:
+        require(
+            os.environ.get("GITHUB_EVENT_NAME") in {"schedule", "workflow_dispatch"},
+            "CI recovery requires manual or scheduled invocation",
+        )
+        prs = api.pages(f"pulls?state=open&base={quote(default, safe='')}")
+    elif os.environ.get("GITHUB_EVENT_NAME") == "pull_request_target":
+        prs = [api.api(f"pulls/{int(event['number'])}")]
+    elif os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        prs = [api.api(f"pulls/{int(event['inputs']['pr'])}")]
+    elif os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
+        run = api.api(f"actions/runs/{int(event['workflow_run']['id'])}")
+        if run["event"] != "pull_request":
+            return []
+        require(
+            run["path"]
+            in {f".github/workflows/{w['file']}" for w in policy["ci_workflows"]},
+            "Unrecognized PR CI producer",
+        )
+        require(bool(SHA.fullmatch(run["head_sha"])), "Invalid PR CI head")
+        # GitHub may omit pull_requests on fork runs. The commit association is
+        # still bounded to the triggering head, never a repository-wide scan.
+        associated = run.get("pull_requests") or api.pages(
+            f"commits/{run['head_sha']}/pulls"
+        )
+        prs = [api.api(f"pulls/{int(p['number'])}") for p in associated]
+        prs = [p for p in prs if p["head"]["sha"] == run["head_sha"]]
+    else:
+        return []
+    targets = {
+        p["number"]: {"pr": p["number"], "head": p["head"]["sha"]}
+        for p in prs
         if p["head"]["repo"]
-    ]
+        and p["state"] == "open"
+        and p["base"]["ref"] == default
+        and p["base"]["repo"]["full_name"] == api.repo
+    }
     require(len(targets) <= 200, "Too many open PRs for one CI reconciliation")
-    return targets
+    return list(targets.values())
 
 
 def publish_ci(api, number, head, policy):
@@ -755,6 +803,7 @@ def main():
     parser.add_argument(
         "--method", choices=["squash", "merge", "rebase"], default="squash"
     )
+    parser.add_argument("--recovery", action="store_true")
     parser.add_argument("--evidence")
     parser.add_argument("--intent")
     args = parser.parse_args()
@@ -767,7 +816,8 @@ def main():
         policy = json.loads(Path(args.policy).read_text())
         require(policy["schema"] == "merge-policy/v1", "Unsupported merge policy")
         if args.action == "ci-targets":
-            result = ci_targets(api)
+            event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+            result = ci_targets(api, event, policy, recovery=args.recovery)
         elif args.action == "publish-ci":
             result = publish_ci(api, args.pr, args.head, policy)
         elif args.action == "intent":

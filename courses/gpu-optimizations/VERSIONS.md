@@ -49,7 +49,7 @@ control tests check loop logic; they do not establish concurrent device executio
 
 ## Shared profiling qualification
 
-Use the [Lab Guide](../lab-guide.html#lab-preparation-scripts) for the preparation
+Use the [Lab Guide](../lab-guide.html#lab-preparation) for the preparation
 and cluster-managed profiling route. Keep the matching CLI/viewer identities
 recorded with each run. Installation does not qualify the driver, either worker,
 the selected native runtime or optional container, or hardware-counter access;

@@ -394,7 +394,8 @@ os._exit(0)
 """
     child = lifecycle_fixture(
         tmp_path,
-        f"{shlex.quote(sys.executable)} -c {shlex.quote(program)}; return 0",
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(program)}; "
+        'printf "fixture native report" > "$COURSE_PROFILES_DIR/report.$COURSE_PROFILE_TOOL-rep"; return 0',
         timeout=10,
     )
     stdout, stderr = child.communicate(timeout=15)
@@ -403,6 +404,7 @@ os._exit(0)
     assert document["status"] == "completed"
     assert [row["status"] for row in document["stages"]] == ["completed", "completed"]
     assert all("cleanup_error" not in row for row in document["stages"])
+    assert document["viewer_delivery"]["status"] == "ready"
 
 
 @pytest.mark.parametrize(

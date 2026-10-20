@@ -100,6 +100,12 @@ SHA updates while preserving tool-version, cache, condition and ordering checks.
 
 ## Completion and recovery
 
+Candidate discovery failures display the helper's sanitized diagnostic and
+preserve its nonzero exit status. Empty failure output still reports the exit
+status. Global discovery failure publishes no targets, so downstream CI dispatch and
+Pages jobs cannot proceed. Inspect the diagnostic before considering recovery;
+a discovery failure alone does not invalidate an already verified merge.
+
 The shared helper reads the authoritative result from GraphQL `mergeCommit.oid`
 and verifies the merged PR number, head and target identity. REST API
 `2026-03-10` removed the old result field. Missing result evidence stops before
@@ -122,8 +128,7 @@ After CI passes, a separate Pages-write job preserves legacy main/root hosting
 and explicitly requests a build. It verifies a built commit containing the
 result. Pre-effect journals make unknown dispatch/Pages outcomes stop for
 inspection rather than repeat effects. Successful per-PR completion receipts
-survive unrelated matrix failures. Scheduled reconciliation runs every 15
-minutes, subject to GitHub scheduling delays and the 30-day receipt window.
+survive unrelated matrix failures. Scheduled reconciliation runs hourly at minute 17 UTC, subject to GitHub scheduling delays and the 30-day receipt window.
 A timed-out local observer can resume read-only verification; it must not infer
 that another merge or publication is needed. Local release skills still own
 exact-result tags and downstream release verification.
@@ -144,3 +149,25 @@ Public examples use placeholders; repository-specific settings stay local.
 Official contracts: [built-in token](https://docs.github.com/en/actions/concepts/security/github_token),
 [branch protection](https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection),
 [async merge](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously).
+
+## Targeted events and hourly recovery
+
+Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
+`completed` events update only affected current heads. Starts must remain wired
+so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
+runs do not enter that aggregate path.
+
+Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
+recovery. A separate default-branch-only status-write job repairs Required CI
+for all open default-base PRs. Completion event discovery reads the producer
+run's artifacts; ordinary CI and CI-only broker runs are filtered before runner
+allocation. GitHub may still display skipped workflow-run rows.
+
+Validated result inputs produce an immutable `merge-result-route/v1` receipt
+before tests. It binds repository, workflow/run/attempt, broker/PR/result and
+correlation; a failed CI run can route recovery but cannot prove successful CI.
+Latest-attempt exact-result success evidence remains mandatory. Recovery retains
+bounded journal scans for uncertain effects. Target-specific malformed receipts
+produce blocked matrix entries and failing run status while valid independent
+targets proceed. Global API, authentication and incomplete-listing errors stop
+all candidate effects and preserve sanitized diagnostics.

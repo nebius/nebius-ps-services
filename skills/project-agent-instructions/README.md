@@ -66,7 +66,7 @@ explicit managed-generation request or authorized spec-owner route
     -> inspect context -> decide -> render -> apply safely -> verify
 ```
 
-Task Implementer and Agentic SDLC do not invoke, wait for, or seal this
+Implement and Agentic SDLC do not invoke, wait for, or seal this
 workflow; they read only the instruction chain already effective in their
 session and treat project-instruction lifecycle status as advisory. Helper
 commands and flags are not a user-facing interface. Use
@@ -76,7 +76,7 @@ inspection, mutation, or private-state write.
 
 When repository instruction bytes are created, attached, refreshed, or
 retired, this workflow recommends a fresh native agent session before relying on the
-new rules. That recommendation never halts Task Implementer or Agentic SDLC.
+new rules. That recommendation never halts Implement or Agentic SDLC.
 
 ## Decision And Ownership Model
 

@@ -44,7 +44,7 @@ def test_every_published_link_preserves_reading_context(name):
         assert "rel" not in anchor, anchor
 
 
-@pytest.mark.parametrize("target", ["https://example.com/doc?q=1&v=2#section", "../lab-guide.html#lab-preparation-scripts", "../soperator/index.html"])
+@pytest.mark.parametrize("target", ["https://example.com/doc?q=1&v=2#section", "../lab-guide.html#lab-preparation", "../soperator/index.html"])
 def test_markdown_cross_page_destinations_and_escaping(target):
     # Link rewrites choose the final destination before navigation is classified.
     document = markdown.inline("[Read](guide.md)", {"guide.md": target})

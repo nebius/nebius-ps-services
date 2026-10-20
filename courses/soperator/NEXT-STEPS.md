@@ -8,9 +8,10 @@ Choose an optional direction that matches the work you want to do next.
   [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
   before GPU Fundamentals.
   The tools reference introduces the profiler commands and evidence used in labs.
-  Follow the
-  [shared environment setup](../lab-guide.html#lab-preparation-scripts), then use its lab
-  guides for exact resource requests and performance investigations.
+  When you choose to run a practical lab, follow
+  [Lab Preparation](../lab-guide.html#lab-preparation) for the single setup command
+  and completion summary. Use the owning course's lab guides for exact resource
+  requests and performance investigations.
   This introduction explains the scheduler behavior behind those commands.
 
 - **Explore job arrays**

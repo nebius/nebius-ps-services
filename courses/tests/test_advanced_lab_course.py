@@ -116,4 +116,4 @@ def test_supporting_guide_resolves_advanced_link_from_its_markdown_directory():
             ),
         )
         assert 'href="../advanced-gpu-communication/index.html"' in rendered
-        assert 'href="../lab-guide.html#lab-preparation-scripts"' in rendered
+        assert 'href="../lab-guide.html#lab-preparation"' in rendered

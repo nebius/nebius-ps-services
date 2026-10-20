@@ -446,6 +446,29 @@
         "No scheduler or unattended initiating agent exists; an operator must start the local workflow.",
         "Major updates are eligible for the same complete review, bounded safe repair and protected merge path; metadata/green CI cannot replace review."
       ]
+    },
+    {
+      "id": "checkout-merge-ci-timeout",
+      "prompt": "Offline contract simulation only. Read $merge-pr and required local references; do not contact GitHub, mutate files or execute publication. The selected ordinary remote-only PR was squash merged to a verified destination. Exact-result CI timed out. The original branch and local default have no unique commits. Describe local completion and continuation.",
+      "expected_output": "Describes the inherited checkout policy and truthful outer-owner completion with independent outcomes.",
+      "files": [],
+      "assertions": [
+        "Keeps merge success, exact-result CI timeout and local checkout outcomes separate.",
+        "Uses the canonical transaction owner for result recording and guarded completion; never repairs or merges the confirmed PR again.",
+        "Ordinary policy fast-forwards eligible existing local refs and switches back, while an inherited publication preserve policy leaves its declared checkout and refs unchanged.",
+        "Keeps the grant open while verification is pending and does not create an unnecessary local PR branch."
+      ]
+    },
+    {
+      "id": "checkout-review-pause",
+      "prompt": "Offline contract simulation only. Read $merge-pr and required local references; do not contact GitHub, mutate files or execute publication. A batch visited a PR branch for validation, and now pauses with no merge. The original branch remains an unfinished publication target. Describe the safe return and resume.",
+      "expected_output": "Describes the inherited checkout policy and truthful outer-owner completion with independent outcomes.",
+      "files": [],
+      "assertions": [
+        "Uses temporary owner switch-back without integrating default history or advancing the unfinished original target.",
+        "Retains the original grant, saved targets and policy for resume; never recaptures the current checkout as the starting context.",
+        "Nested calls return evidence and do not finalize independently; report-only and already-merged observation restrictions remain."
+      ]
     }
   ]
 }

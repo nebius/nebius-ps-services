@@ -69,6 +69,11 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 
 ## Required Reads
 
+- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
+  assignment/ownership and evidence to the current immutable execution basis.
+  Before preparation, bind evidence to the accepted objective and applicable
+  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+
 - Evaluation plan.
 - Acceptance criteria.
 - Existing Playwright config if any.

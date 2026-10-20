@@ -7,10 +7,12 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: nebius-cxcli-release-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 env:
   APP_DIR: services/nebius-cxcli
@@ -38,14 +40,7 @@ jobs:
         id: version
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${REF_NAME}" =~ ^${TAG_PREFIX}-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::error::Tag '${REF_NAME}' must match ${TAG_PREFIX}-vMAJOR.MINOR.PATCH"
-            exit 1
-          fi
-          echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"
-          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+        run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" version --tag "$REF_NAME" --prefix "$TAG_PREFIX"
 
       - name: Resolve tagged commit
         id: revision
@@ -54,25 +49,16 @@ jobs:
           echo "commit=$(git rev-list -n 1 "${{ steps.version.outputs.tag }}")" >> "$GITHUB_OUTPUT"
 
       - name: Ensure tag commit belongs to main history
-        run: |
-          set -euo pipefail
-          git fetch origin "${MAIN_BRANCH}"
-          if ! git merge-base --is-ancestor "${{ steps.revision.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
-            echo "::error::Tag commit ${{ steps.revision.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
-            exit 1
-          fi
+        env:
+          RELEASE_COMMIT: ${{ steps.revision.outputs.commit }}
+        run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" ancestry --commit "$RELEASE_COMMIT" --branch "$MAIN_BRANCH"
 
-      - name: Check release existence
+      - name: Verify existing release or establish absence
         id: state
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "release_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "release_exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" release-state --workflow nebius-cxcli-release.yml --tag "$RELEASE_TAG"
 
       - name: Set up Python
         if: steps.state.outputs.release_exists == 'false'
@@ -235,45 +221,31 @@ jobs:
       - name: Generate release notes from changelog
         if: steps.state.outputs.release_exists == 'false'
         id: notes
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          python - "${{ steps.version.outputs.tag }}" "${{ steps.version.outputs.version }}" <<'PY'
-          import pathlib
-          import re
-          import sys
+          python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" notes --tag "$RELEASE_TAG" --prefix "$TAG_PREFIX" --output release-notes.md
+          echo 'path=release-notes.md' >> "$GITHUB_OUTPUT"
 
-          tag = sys.argv[1]
-          version = sys.argv[2]
+      - name: Freeze asset hashes before publication
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: >-
+          python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" release-manifest --workflow nebius-cxcli-release.yml --tag "$RELEASE_TAG"
+          --asset "${{ steps.asset.outputs.path }}" --asset "${{ steps.asset.outputs.catalog_path }}"
+          --output publication.json
 
-          lines = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
-          patterns = [
-              re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
-              re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
-          ]
-          any_heading = re.compile(r"^##\s+")
-
-          capture = False
-          notes = []
-          for line in lines:
-              stripped = line.strip()
-              if not capture and any(p.match(stripped) for p in patterns):
-                  capture = True
-                  continue
-              if capture and any_heading.match(stripped):
-                  break
-              if capture:
-                  notes.append(line)
-
-          if not capture:
-              raise SystemExit(f"Missing changelog section for {tag} in CHANGELOG.md")
-
-          notes_text = "\n".join(notes).strip()
-          if not notes_text:
-              raise SystemExit(f"Changelog section for {tag} is empty")
-
-          pathlib.Path("release-notes.md").write_text(notes_text + "\n", encoding="utf-8")
-          PY
-          echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
+      - name: Preserve immutable pre-publication evidence
+        if: steps.state.outputs.release_exists == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: publication-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.APP_DIR }}/publication.json
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Create GitHub release
         if: steps.state.outputs.release_exists == 'false'
@@ -286,6 +258,13 @@ jobs:
             "${{ steps.asset.outputs.catalog_path }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "${{ steps.notes.outputs.path }}"
+
+      - name: Verify published release against original evidence
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" release-verify --workflow nebius-cxcli-release.yml --tag "$RELEASE_TAG"
 
       - name: Write release manifest
         if: steps.state.outputs.release_exists == 'false'
@@ -329,7 +308,7 @@ jobs:
       - name: Release already exists
         if: steps.state.outputs.release_exists == 'true'
         run: |
-          echo "Release ${{ steps.version.outputs.tag }} already exists. Skipping."
+          echo "Release ${{ steps.version.outputs.tag }} already exists and its assets match trusted original hashes."
 
       - name: Publish run summary
         run: |

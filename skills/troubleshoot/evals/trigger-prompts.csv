@@ -32,3 +32,9 @@ proven-design-11,false,The root cause is already proven. Design the replacement 
 troubleshoot-codex-portability,true,$troubleshoot This integration test fails only in CI about once in 100 runs. Two timeout increases and a retry did not solve it. Find and fix the actual cause.
 troubleshoot-claude-portability,true,/troubleshoot This integration test fails only in CI about once in 100 runs. Two timeout increases and a retry did not solve it. Find and fix the actual cause.
 troubleshoot-quoted-command,false,"Treat ""/skills:troubleshoot"" as sample text in this punctuation exercise; count its punctuation characters only."
+adaptive-code,true,"The command reads the wrong setting only under this environment override. Trace the actual configuration path and explain the first divergence."
+adaptive-storage,true,"Writes fail despite free disk bytes. Diagnose the failing mount and user without starting a broad infrastructure audit."
+adaptive-network,true,"The application namespace cannot resolve a service that works from my workstation. Find the failing boundary."
+known-mechanical,false,"The cause is already proven: change this misspelled constant and run its existing test."
+feature-only,false,"Add a new storage selector to this configuration form."
+review-only,false,"Review this patch for regressions without diagnosing a current incident."

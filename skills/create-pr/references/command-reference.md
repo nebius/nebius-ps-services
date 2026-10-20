@@ -66,7 +66,7 @@ checks, or PR creation.
 Use the canonical installed transaction helper's private `validate-order` with
 its existing task key and ordered `--branch` arguments. Intake must already
 have frozen `--validation-branch`. It records source SHAs, performs normal-hook
-merges on that ref and restores/removes only its exact recorded state. Do not
+merges on that ref, switches back and removes only its exact recorded scratch state. Do not
 run ad hoc switches, merge aborts or scratch-ref deletion around the helper.
 
 ## Pull Request
@@ -80,3 +80,10 @@ run ad hoc switches, merge aborts or scratch-ref deletion around the helper.
 - PR creation:
   - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
   - draft variant: `gh pr create --draft ...`
+
+## Checkout and outer completion
+
+Use the canonical private operations in [checkout completion](checkout-completion.md)
+for selected target checkout, merge recording, safe pause and terminal completion.
+No public skill flags are added. Never advance or delete a local branch through
+an ad hoc command to work around an incomplete owner checkpoint.

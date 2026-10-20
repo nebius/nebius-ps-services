@@ -111,6 +111,9 @@ helper template, not a documentation stub. Keep it behaviorally aligned with
 the skill-owned `scripts/publish-image-doer.sh`, which remains the canonical
 doer path.
 
+Before PR intake, read the inherited checkout policy in `references/ordinary-publication.md`;
+publication uses private `preserve` policy across nested calls.
+
 ## Guardrails
 
 - Agentic SDLC is excluded; preserve its owners and exact promoted SHA.
@@ -152,3 +155,12 @@ Return:
 - `assets/CHANGELOG.md.template`
 - `assets/publish-image.sh.template`
 - `$github-workflows` for image-publish workflow YAML
+
+## Publication evidence
+
+Tag-triggered releases publish `X.Y.Z` and `X.Y.Z-g<shortsha>`; manual builds
+publish `sha-<shortsha>` and optional main-only `latest`. Manual SemVer input is
+not supported. Delegate YAML and shared helper setup to `$github-workflows`.
+Require destination-image serialization, complete immutable alias preflight,
+trusted original digest evidence for reuse and equality of every remote tag to
+the build digest. Partial or unverifiable state blocks retries without overwrite.

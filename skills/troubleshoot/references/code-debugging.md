@@ -5,6 +5,34 @@ client code remains a plausible owner. Passing tests, lint, or static analysis
 does not prove code is bug-free; it proves only the exercised checks reported no
 finding.
 
+## Adaptive Decision Guide
+
+Use only rows implicated by the failing path; record material unexamined boundaries.
+
+<!-- markdownlint-disable MD013 -->
+
+| Symptom | Competing explanations | Cheapest distinguishing evidence | Interpretation | Next branch |
+| --- | --- | --- | --- | --- |
+| Wrong result | wrong artifact / configuration precedence / transformation defect | executed build identity, effective input/configuration and values across the suspect boundary | earliest incorrect value identifies the owner; repository HEAD may not be deployed | reduce input while preserving the oracle and compare one unaffected case |
+| Intermittent crash or lost update | race / lifetime / memory corruption / process ordering | symbolized failure and ordering evidence; bounded race or memory diagnostic if supported | a sanitizer changes timing; a clean run is not absence proof | reduce schedule/state sequence and confirm repair with relevant instrumentation |
+| Regression between revisions | code / dependency / environment drift | stable oracle on equivalent good/bad builds and fixed inputs | untestable revisions must be skipped, not classified bad | bisect only with stable oracle; retain build and dependency identity |
+| Slow code | CPU execution / allocation / wait / changed workload | matched workload, wall/CPU split and differential profiles | hot frames show cost, not necessarily cause of the regression | compare same inputs/build settings; investigate waiting through its owner |
+
+<!-- markdownlint-enable MD013 -->
+
+### Escalation Conditions
+
+Escalate only if the next observation can separate remaining explanations. Bound
+time, output, target and effects; preserve evidence and original settings. Treat
+production or unconfirmed targets as read-only without exact action authority.
+
+### Verification
+
+Replay the original operation from the same relevant identity and workload, compare
+an unaffected control, and verify the implicated boundary independently. Invalidate
+pre-change observations and state material unverified scope. A passing status
+command cannot replace the workload oracle.
+
 ## Reproduce Or Characterize
 
 Freeze the exact revision, build or image, runtime, entry point, arguments,
@@ -63,9 +91,9 @@ and runtime cleanup before closure.
 
 Mark Relevant code paths `PASS` only when evidence identifies the executed path,
 compares inputs and state at the suspected boundaries, addresses stack or crash
-evidence when available, examines relevant recent changes, runs focused dynamic
-and static checks, and either proves the causal repair or eliminates code with a
-supported boundary handoff. Use `UNKNOWN` when the runtime artifact, reproducer,
+evidence when available, examines relevant recent changes, runs relevant
+checks, and either proves the causal repair or eliminates code with a supported
+boundary handoff. Use `UNKNOWN` when the runtime artifact, reproducer,
 symbols, inputs, or decisive path evidence is unavailable.
 
 ## Controlled Debug Escalation

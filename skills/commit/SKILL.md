@@ -68,7 +68,7 @@ Agentic SDLC checkpoints.
 
 - The exact Git worktree and current branch selected by the user's session.
 - A current nonauthorizing root-turn receipt from the prompt hook, or exact delegated
-  owner evidence from Task Implementer or Worktree. The root agent binds the receipt to an authorized
+  owner evidence from Implement or Worktree. The root agent binds the receipt to an authorized
   commit or commit-push task with private `begin`; delegated owners retain
   their existing evidence path.
 - An optional user-provided commit message; otherwise the reviewed candidate
@@ -151,20 +151,12 @@ Agentic SDLC checkpoints.
      already-effective repository instructions, and the transaction's own Git,
      branch, Worktree, secret, and workflow-conflict checks. Project lifecycle
      attestations are not required for the current or any sibling scope.
-   - A Task Implementer worker does not use root-user intent. Its exact
-     one-direct-child authorization is minted by `task-start` from the immutable
-     assignment, running task plane, worker session, branch, and base `HEAD`;
-     the helper revalidates that evidence before preparation, execution, and
-     interrupted-commit recovery.
+   - Implement and Agentic SDLC workers leave changes uncommitted. Their shared
+     coordinator-owned `task-finish` transition validates and commits the exact
+     assignment. Workers do not invoke this root commit transaction.
    - Use the canonical installed `commit_transaction.py prepare` helper with
      the hook-provided authorization and claim paths, exact Git root, and
-     current session. Task Implementer returns the same two paths from its
-     owner transition inside a transient canonical `commit_context`. A worker
-     runs that context's exact `prepare_argv` from its `scope_cwd` and uses
-     the returned raw `session_id` from the native host adapter (`CODEX_THREAD_ID` on Codex;
-     hook-bound `SKILLS_SESSION_ID` on Claude); it must never use the
-     `worker_session_fingerprint_sha256` as `--session-id`. Never invoke a
-     source-tree or alternate helper.
+     current session. Never invoke a source-tree or alternate helper.
    - The helper copies the current real index into a private temporary index,
      runs repo-root `git add -A` there, validates the candidate, and returns the
      exact `git write-tree` candidate plus a one-shot private claim token.
@@ -176,10 +168,6 @@ Agentic SDLC checkpoints.
    - Use the canonical installed `commit_transaction.py execute` helper with
      the same root, session, claim and token, the exact reviewed candidate tree,
      and the final commit message. Run one uncomposed command.
-   - For delegated workers, keep the exact Python executable and helper from
-     `commit_context`. The hook admits its own interpreter or an exact
-     PATH-canonical `python3`/`python3.N`; arbitrary same-name paths and
-     wrappers remain denied.
    - Under the selected installation's common-repository lock, the helper revalidates ref, `HEAD`, real
      index, complete porcelain status, candidate tree, and Worktree ownership.
      Any drift makes the claim stale before real staging.
@@ -246,7 +234,7 @@ Agentic SDLC checkpoints.
 A calling skill may use this shared transaction when the root user's authorized
 task includes the commit. Interpret the parent task semantically; do not demand
 another standalone `$commit` phrase. Skill invocation alone is not authority.
-Use the existing delegated Worktree or Task Implementer route for their commits.
+Use the existing delegated Worktree or Implement route for their commits.
 For an unmanaged `create-pr` task (including authorized complete publish-*,
 review-pr repair and merge-pr review delegation), read
 `../create-pr/references/commit-continuation.md`: its private grant permits
@@ -315,7 +303,7 @@ commit authority or permit raw Git fallback.
   alone grants permission. The task contains no prompt or commit-message text.
   Closed tasks cannot reopen; a fresh authorized task needs its own receipt.
   Root task/authorization/claim schemas never import old root authority.
-  Delegated Task Implementer and Worktree protocols stay unchanged.
+  Worktree integration retains its separate exact transaction protocol.
 - Do not use the helper to bypass already-effective repository instructions,
   unresolved Git state, active Worktree ownership, or workflow-owned commit
   policy. Project lifecycle status remains advisory in every case.
@@ -323,9 +311,7 @@ commit authority or permit raw Git fallback.
   the eligible child/source commits that its read-only preflight orders. Do not
   infer delegated permission from a coordinator handoff, active reservation,
   restart, candidate, or ordinary implicit skill selection.
-- Treat a Task Implementer worker authorization as permission only in its exact
-  assigned worktree/session while the task plane is still running at the
-  assigned base. It never authorizes primary-source dirt or another worker.
+- Reject obsolete worker commit authorizations without converting or deleting them.
 - Never push, create a PR, dispatch CI, publish artifacts, or call external
   write APIs from this skill.
 - Never run `git add -A` outside the repository root.
@@ -347,7 +333,7 @@ commit authority or permit raw Git fallback.
 - In delegated worktree mode, stop if the observed branch or head differs from
   preflight. Never commit a nested/coordinated child or any dirty checkout after
   an integration reservation exists.
-- When Task Implementer integration finds dirty primary-source state, require a
+- When Implement integration finds dirty primary-source state, require a
   separate fresh explicit `$commit`, then repeat integration. Never auto-commit
   that dirt.
 

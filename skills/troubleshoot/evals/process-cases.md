@@ -58,26 +58,26 @@ verification.
 
 ### Healthy Status But Layered Evidence Reveals The Cause
 
-Provide fixtures whose status commands and health endpoints look healthy while
-incident-window logs reveal configuration drift, resource exhaustion, a stale
-or previous-container failure, or an application exception. Expect stack and
-vendor-architecture discovery first, a complete component matrix, bounded log
-coverage at every relevant layer, timestamp and identifier correlation, and no
-healthy conclusion from the status surface alone.
+Provide fixtures whose status commands look healthy while bounded incident evidence
+reveals configuration drift, resource exhaustion, a stale event or application
+exception. Expect failing-path discovery and affected/unaffected comparison first.
+Record the included path, window, clock uncertainty and material unexamined
+boundaries. Missing evidence must remain unknown without compulsory eight-layer
+collection or report formatting loops. Expand only for evidence or contradictions.
 
-Require an explicit included and excluded system boundary, exercised control
-and data paths, incident-window start and end, DNS or service-name resolution,
-and restart history. The internal evidence ledger must contain each canonical
-log layer exactly once and in order. Remove, duplicate, rename, or reorder one
-layer in separate fixtures; the corresponding internal coverage claim must be
-rejected rather than inferred from prose. A missing source stays `unavailable`
-and prevents a decisive internal `Logs` pass, but it does not make the ordinary
-concise Stop report block the agent.
+### Evidence Invalidation And Adaptive Scope
+
+Start with a deterministic code/configuration defect and no infrastructure clues;
+expect no cloud or unrelated log inspection. Add a dependency timeout and expect
+scope expansion only to that boundary. Restart the target between observations;
+require invalidation of prior process/boot-dependent evidence. Present three
+completed observations that distinguish nothing; require a new localization
+technique without resetting budget counters. Interrupted writes must be reconciled
+before repeating them. Preserve conflicting evidence and compound causes.
 
 For Slurm, include separate MUNGE authentication or clock skew,
 controller-to-worker network failure, `slurmdbd` accounting failure, stale log
-errors outside the incident window, and worker GPU Xid events. Require discovery
-of configured `SlurmctldLogFile`, `SlurmdLogFile`, `slurmdbd`, MUNGE, job stdout
+errors outside the incident window, and worker GPU Xid events. When implicated, inspect configured `SlurmctldLogFile`, `SlurmdLogFile`, `slurmdbd`, MUNGE, job stdout
 and stderr, prolog and epilog output, node state reasons, journal and kernel,
 network or fabric, and GPU evidence. The expected branch must distinguish
 scheduler health from job launch, accounting, authentication, and hardware.
