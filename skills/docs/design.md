@@ -8411,5 +8411,662 @@ qualification.
 
 <!-- /FEATURE: FEAT-045 -->
 
+<!-- FEATURE: FEAT-046 reqs=REQ-047 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-046: Nebius capacity assessment and report skill
+
+#### Requirements Covered
+
+- REQ-047: Design-first sizing, resource allocation, optional quota comparison and a complete project report.
+
+#### Context Evidence
+
+The catalog already owns Nebius read-only inspection and portable skill
+validation. Quota inspection reports collection completeness rather than
+workload sufficiency; compute inventory does not provide a preset sizing catalog.
+
+#### Design Details
+
+The skill inventories design components, establishes environment/load/retention/
+availability inputs, and maps evidenced or explicitly estimated allocations to
+current Nebius resources. Focused references own Kubernetes effective requests,
+node allocatable, storage/network ledgers, quota/capacity separation and prices.
+A local standard-library helper checks normalized per-Pod resource budgets,
+counts, node capacity and explicit scenarios; it never simulates the scheduler
+or accesses the cloud. Known demand subtotals still expose proven overloads
+when complete runtime/limit totals are unknown; complete totals and margins
+remain null. Official Nebius documentation uses the documentation MCP when
+available, with a disclosed direct-documentation fallback. The report template starts with Executive Summary and a
+linked TOC and ends with risks, validation actions and source/calculation notes.
+
+#### Selected Option
+
+Use one report-owning skill with optional delegation to the existing Nebius
+inspection owner. Keep arithmetic offline and platform/pricing facts refreshed
+at assessment time instead of maintaining a second provider catalog or auth stack.
+
+#### Alternatives Considered
+
+Instruction-only arithmetic is harder to verify repeatedly. A full placement
+optimizer or duplicated SDK/auth runtime adds unsupported claims and coupling.
+A mandatory cloud connection prevents useful design-stage estimates.
+
+#### Implementation Boundaries
+
+Own the new skill folder, catalog/plugin registration, this specification pair
+and release notes. Leave infrastructure, authentication, existing Nebius helpers
+and generic evaluation runners unchanged. Normal operation writes only the
+selected project's capacity report; no-write contexts receive a chat report.
+
+#### Test-First Success Criteria
+
+- TDD-001: Arithmetic rejects ambiguous quantities and catches oversized Pods and failure-induced deficits even when steady-state totals fit.
+- TDD-002: Missing CPU limits remain unbounded; absent evidence cannot become validated capacity or quota sufficiency.
+- TDD-003: Packaging retains templates, references, tests and optional-dependency disclosure on both hosts.
+
+#### Validation Plan
+
+Run focused helper tests, structure checks for portable/Codex/Claude policies,
+plugin catalogs, spec validation, scoped lint, npx parity and review lanes.
+
+#### Test Plan
+
+Use synthetic CPU and GPU pools, workload and overhead inputs, node-failure and
+rollout counts, storage/network budgets and malformed input controls.
+
+#### Evaluation Plan
+
+Use canonical positive/near-miss triggers and at least two report-quality cases.
+Compare fresh generated reports with a no-skill baseline when supported; never
+infer runtime activation or output quality from static tests.
+
+#### Rollout And Rollback
+
+Register the source-owned skill through the existing catalogs. No installed
+home, hook or cloud changes are included. Revert only this scoped addition if
+its contract fails validation; preserve unrelated source changes.
+
+#### Done Definition
+
+All supported report fields and safety boundaries are wired, deterministic and
+static checks pass, reviews have no unresolved blocking findings, and unavailable
+runtime/cloud evidence is stated separately.
+
+#### Implementation Evidence
+
+Implemented `nebius-capacity-planning` with a concise core, host metadata,
+methodology references, executive-summary-first report template, normalized
+standard-library arithmetic helper, 27 unit tests, twelve trigger prompts and
+two synthetic output-quality cases. Registered both plugin catalogs and the
+human catalog, added release notes and an offline CI test/lint step. Live
+inspection remains delegated to the optional Nebius owner; no cloud/auth or
+real installed-home changes were made.
+
+#### Verification Evidence
+
+Static validation passed portable, Codex and Claude structure/metadata/evals,
+all 27 calculator tests, scoped Ruff/Markdown checks, plugin catalogs and paired
+spec validation. Disposable pinned npx checks passed discovery, copy parity,
+repeat installation and isolation for both hosts. Independent code/security
+review found one catalog-ordering defect, repaired with a failing-before and
+passing-after proof. Follow-up alignment reproduced and repaired a defect
+where unknown runtime or limit terms hid already-proven overloads. Four new
+regressions cover partial totals and inactive terms; the two overload cases
+failed before the repair and passed afterward.
+
+Two fresh explicit-skill read-only subagent assessments were compared against
+independent no-skill baselines. All thirteen numerical, coverage and safety
+assertions passed, including sidecar overlap, per-node placement, quota deficit
+and incomplete-price handling. Both arms reached core numerical conclusions;
+the skill arm added explicit allocation and qualification ledgers. This scoped
+QUALITY_PASS does not establish native implicit triggering or arbitrary report
+quality. The isolated native runner lacked usable authentication; its attempted
+batch was interrupted without completed trigger evidence. Native activation
+is UNAVAILABLE. Actual report refresh/persistence, live quotas and workload
+performance remain NOT_RUN. Requirement remains active and delivery implemented
+rather than claiming full runtime qualification.
+
+<!-- /FEATURE: FEAT-046 -->
+
+<!-- FEATURE: FEAT-047 reqs=REQ-048 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-047: Nebius documentation MCP configuration and routing
+
+#### Requirements Covered
+
+- REQ-048: Configure the public server through native setup and prefer its documentation tools.
+
+#### Context Evidence
+
+Codex supports HTTP MCP URL tables and AGENTS.md routing guidance. Claude
+supports native user-scope HTTP registrations and CLAUDE.md instructions.
+The public Nebius endpoint exposes documentation search/retrieval plus a
+separate feedback tool; documentation lookup uses only the read tools.
+
+#### Design Details
+
+Add nebiusDocs at [the public endpoint](https://docs.nebius.com/mcp) to the Codex create-only baseline
+and Claude optional catalog. Preserve selection-only reconciliation on existing
+homes and native ownership of Claude application/authentication state. Carry a
+compact routing/fallback/citation rule in native templates and the Nebius skill.
+Use nebiusDocs tools already available in the current session, then Tavily
+Search/Extract against official Nebius documentation, then disclosed official
+web retrieval when Tavily is unavailable or insufficient. Preserve higher-priority
+host requirements; never install a server just to answer a lookup.
+Codex accepts its equivalent rule outside managed markers without duplication;
+Claude retains its canonical managed-block check. Keep MCP registration optional
+in ordinary preflights and report shape-only versus endpoint checks accurately.
+
+#### Selected Option
+
+Extend the existing three owners and their tests; use no new installer or auth
+layer. Keep detailed setup and evidence boundaries in conditional references.
+
+#### Alternatives Considered
+
+Connection configuration alone leaves tool preference unstated. Mandatory
+installation during documentation lookup expands effects beyond the task.
+
+#### Implementation Boundaries
+
+Own the three skill folders and directly related catalog documentation/evals.
+Preserve unrelated working changes, hooks, installed homes and native controls.
+
+#### Test-First Success Criteria
+
+- TDD-001: Ordinary preflight accepts an unselected missing server; selected or full-baseline checks expose missing or malformed definitions without edits.
+- TDD-002: Current routing is recognized, stale routing is detected, and approved user-owned Codex guidance satisfies the rule without a second copy.
+- TDD-003: Both host packages preserve resources, invocation restrictions and unrelated installed sentinels in disposable locations.
+
+#### Validation Plan
+
+Run focused fixture tests, non-writing syntax/lint, strict skill policies,
+canonical eval validation, actual disposable npx checks and code/security review.
+
+#### Test Plan
+
+Use synthetic homes and public definitions. No live cloud mutations or personal
+configuration writes are part of these checks.
+
+#### Evaluation Plan
+
+Cover selected setup, existing custom definitions, documentation-first lookup
+and unavailable/insufficient retrieval. Native and comparative runs require
+clean authenticated runners; record unavailable evidence explicitly.
+
+#### Rollout And Rollback
+
+Apply source first, validate and synchronize the selected skill payloads.
+Reconcile authorized native instruction clauses through their setup owners;
+preserve unrelated settings and hooks. Revert only scoped edits if validation
+fails, checking for concurrent changes before restoration.
+
+#### Done Definition
+
+Source, tests, eval definitions and human documentation agree; mandatory static
+checks and review lanes pass, with native and quality limitations stated.
+
+#### Implementation Evidence
+
+Version 2 is implemented. Both setup instruction templates and the Nebius
+skill route available current-session nebiusDocs tools to Tavily official-page
+search/extraction, then disclosed built-in official-web fallback. The native
+Codex Nebius clause and both native research policies agree. Optional server
+selection, user-owned custom definitions and native host boundaries remain
+intact. Source and installed copies are synchronized.
+
+Prior version implementation evidence (historical) follows.
+
+Updated the three source skills, native instruction templates, Codex recovery
+baseline, Claude optional MCP catalog, selected-registration checks and lookup
+reference. Added focused setup regressions and canonical trigger/quality cases.
+Preserved explicit-only setup policies, native formats, hooks and unrelated
+working changes. No installed home or live cloud configuration was changed.
+
+#### Verification Evidence
+
+Version 2 STATIC_PASS: 80 Codex and 30 Claude fixture tests; portable,
+Codex and Claude structure/eval validation for all six skills; actual pinned
+skills@1.5.26 discovery, copied-resource parity, repeat-install convergence and
+isolation. All twelve real installed copies match source. Markdown, Python
+syntax, added-line privacy and diff checks pass. Scoped Ruff has no new
+findings relative to captured working bytes (36 pre-existing findings remain).
+Native setup invocation extensions and the intentional Nebius tests directory
+are retained. Review fixed a missing required reference load for small
+standalone brainstorm documentation lookups; no other blocking source or
+security finding remained. The earlier shared-hook smoke failed its total-hint
+length assertion; a fresh standard-temporary-path run passes. A bounded
+reproduction confirms that longer temporary parents can fail the same limit
+because three absolute state paths are counted. The delegation suffix is
+unchanged, and the hook does not read documentation-routing instructions.
+This path-sensitive test limitation is independent of these routing changes.
+
+NATIVE_TOOLS_PASS: a fresh Codex process connects to hosted Tavily through
+native OAuth, discovers five tools, returns official-domain Search results
+and successfully extracts a discovered official page. One attempted known URL
+returned a page-fetch failure; per-page coverage is not assumed from connection
+status. Claude native inspection reports Tavily Connected. Native Context7
+registration, selected local package/cache and worker absence were checked;
+parsed Codex values differ only by that server's removal and unrelated native
+file fingerprints are unchanged. Existing running sessions can retain older
+in-memory tools and instructions; fresh sessions load the new configuration.
+
+Fresh isolated trigger and comparative quality attempts on both native hosts
+are UNAVAILABLE because model authentication is absent in the clean runners;
+no account credentials were copied or repaired. This does not negate the
+separately observed Tavily OAuth and native tool results, and those results do
+not establish model routing or output quality. Delivery is implemented, not
+fully runtime-qualified.
+
+Prior version verification evidence (historical) follows.
+
+STATIC_PASS: 77 Codex and 27 Claude fixture tests, shared global-template
+validation, all three portable/Codex/Claude structure profiles, non-writing
+Python compilation, scoped Ruff and Markdown checks. Disposable skills@1.5.26
+installation passed discovery, resource parity, repeated installation and
+isolation for all three skills on both hosts. Code-review and security lanes
+found no blocking issue. Canonical cases total 11/12/30 triggers and 2/6/8
+quality cases for config-codex/config-claude/nebius respectively.
+
+The setup skills retain the recognized disable-model-invocation native
+extension; strict standard-only consumers may reject that field. Nebius keeps
+its intentional tests directory. RUNTIME and QUALITY are UNAVAILABLE because
+clean native runners have no configured authentication; no personal account
+state was copied. Endpoint checks earlier in the configuration task do not
+establish fresh-host skill routing. Requirement remains active and delivery
+implemented, with native qualification explicitly outstanding.
+
+<!-- /FEATURE: FEAT-047 -->
+
+<!-- FEATURE: FEAT-048 reqs=REQ-049 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-048: Native Tavily OAuth and structured research guidance
+
+#### Requirements Covered
+
+- REQ-049: Optional Tavily OAuth and task-directed research routing.
+
+#### Context Evidence
+
+[Tavily MCP](https://docs.tavily.com/documentation/mcp) documents the remote
+OAuth endpoint and five tools. Native Codex and Claude MCP commands own
+registration and authorization; their application formats differ.
+
+#### Design Details
+
+Keep the Codex Tavily URL example commented in the recovery baseline and add
+an optional Claude catalog entry. Configure only selected integrations with
+native OAuth; explicitly selected Codex keyring storage fails rather than
+falling back to a plaintext token file. Do not change unrelated login storage.
+
+Carry compact documentation and research routing in both instruction templates.
+For a routing-only request, reconcile only that section in the existing managed
+context; do not bootstrap unrelated roles, hooks or settings. An absent Claude
+instruction file can contain only the selected guidance inside managed markers;
+full-home convergence remains a separate operation.
+
+Prefer local evidence and vendor documentation MCP tools already available in
+the current session, then Tavily against official version-appropriate sources,
+then disclosed official web fallback when tools, authentication or coverage are
+insufficient. Mere registration is not tool availability. Apply this to small
+documentation lookups too; builtin search may handle unrelated quick facts.
+Preserve higher-priority platform requirements without retaining obsolete
+user-owned exceptions that bypass the selected Tavily route. Use Search
+for discovery, Extract for chosen URLs, Map for URL discovery, Crawl for bounded
+multi-page content and Research for substantial synthesis. No fixed pipeline is
+required. Discover actual schemas, limit cost and breadth, protect private data,
+verify decisive claims and cite original pages.
+
+Version 3 adds adaptive checkpoints and an explicit optional Research workflow.
+The research skill owns question framing, source ranking, verification and
+recommendations; Tavily contributes public synthesis. Inspect relevant local
+files before conditional internal searches. Define subquestions, versions,
+timeframe and hard limits, retrieve a small relevant batch, then expand only
+for a named decision-changing gap. Stop early when supported or when further
+retrieval cannot resolve stated uncertainty; no numeric global quota applies.
+
+For substantial synthesis, send a sanitized brief with objectives, exclusions,
+known public facts and expected evidence. Choose mini for focused work and pro
+only for justified breadth; skill depth labels do not automatically select a
+vendor model. Reuse prior results and start one initial job per scope. Discover
+the actual schema; request identifiers, polling, cancellation and limits exist
+only when exposed. An ambiguous timeout never licenses a duplicate job. Job
+counts are not cost, domain, duration or internal query/page guarantees. Use a
+suitable direct path or disclose when a hard constraint cannot be enforced.
+Verify decisive claims against original sources, then reconcile private local
+context without sending it externally. Keep unsupported conclusions uncertain.
+
+Keep core rules in research/SKILL.md and detailed guidance in its methodology.
+Update both setup templates and routing references compactly; preserve the
+builtin quick-fact route. Use current working-byte baselines and focused copy
+of changed files for existing unmanaged installed directories, with destination
+hash checks, symlink rejection and permission preservation. Do not invoke the
+broader installer, claim ownership or refresh hooks. Patch only the two global
+research sections. No new public flags, wrapper service or job store is added.
+
+#### Selected Option
+
+Extend existing native setup owners and conditionally loaded references. Keep
+Tavily optional and use native credential stores without a custom auth wrapper.
+
+#### Alternatives Considered
+
+Default installation adds an unrequested authentication dependency. A mandatory
+Search/Map/Crawl chain wastes work. API keys in URLs or TOML expose secrets and
+do not meet the selected OAuth workflow.
+
+#### Implementation Boundaries
+
+Own config-codex, config-claude and directly affected routing in design,
+brainstorm, research and nebius, plus related catalogs and specs. Remove
+Context7 from public recovery/catalog definitions and supported Claude
+selection names, with no legacy alias. Keep historical specs and changelogs.
+Explicit native retirement logs out Context7 before removing Codex registration;
+use scoped native Claude removal only when present. Preserve other credentials,
+servers and app state; local logout does not prove provider-side revocation.
+Local setup requires explicit task authorization and preserves existing state.
+Payload-only updates must not run hook installers or regenerate whole homes.
+
+#### Test-First Success Criteria
+
+- TDD-001: Unselected Tavily remains absent from ordinary recovery and checks; selected native registration is inspectable without printing credential values.
+- TDD-002: Active routing is accepted and stale or example-only policy is rejected without rewriting user files.
+- TDD-003: All six selected skill payloads survive two-host installation and repeat-install checks without unrelated changes.
+- TDD-004: Context7 is absent from recovery/catalog output; ordinary setup preserves unselected custom integrations.
+- TDD-005: Cases distinguish callable vendor tools, configured-only tools, failure/coverage misses, known URLs and unavailable Tavily without installing integrations.
+
+- TDD-006: Narrow lookups avoid Research; substantial synthesis uses one scoped job with supported completion handling and primary-source verification.
+- TDD-007: Checkpoints stop early or expand only for named evidence gaps; explicit hard limits reject unenforceable Research routes without invented parameters.
+- TDD-008: Ambiguous completion prevents duplicate submission; failures, stale or conflicting citations and confidential context produce bounded safe handling.
+- TDD-009: Changed-file refresh preserves surrounding global instructions, installed extras, credentials, MCP configuration and hooks, including concurrent-edit detection.
+
+#### Validation Plan
+
+Run focused unit suites, portable and host-specific structure/evals, actual
+pinned disposable installation, scoped lint and code/security review.
+
+#### Test Plan
+
+Use synthetic homes for static checks. For authorized local setup, back up only
+changing files privately and verify exact parsed endpoint, native OAuth result,
+credential-store selection and fresh tool discovery separately.
+
+#### Evaluation Plan
+
+Exercise setup/fallback cases and task-directed tool selection. Native tests
+must use discovered tools and read-only public inputs. Keep paid research
+bounded; do not claim quality from registration or static phrase checks.
+
+#### Rollout And Rollback
+
+Apply source first, validate, then refresh only selected payloads and reconcile
+only authorized local settings. Restore only task-owned edits after checking
+for concurrent changes; never restore native application JSON wholesale.
+
+#### Done Definition
+
+Source and selected local surfaces agree with the contract. Report passing
+lanes and precise outstanding authorization or native-evaluation limitations.
+
+#### Implementation Evidence
+
+Version 3 is implemented in research, config-codex and config-claude. The core
+skill and methodology now define adaptive evidence checkpoints, conditional
+internal context and optional public Tavily synthesis with explicit model
+selection, one initial job, honest limits and completion handling, original
+source verification and safe fallback. Both instruction templates and setup
+references carry the same durable routing. Existing quick-fact routing,
+help/invocation controls and adjacent skill boundaries are preserved.
+
+Added seven research quality cases, two setup quality cases and seven trigger
+cases. Codex policy checking and both hosts' regression fixtures reject drift
+in adaptive checkpoints, ambiguous-completion handling, enforceable constraints
+and decisive-source verification. Updated README and Unreleased documentation.
+
+Refreshed 38 changed payload files across six existing installed copies using
+captured destination hashes, symlink rejection and permission preservation.
+Patched only the research section in each global instruction file; surrounding
+bytes remain unchanged. All 61 protected configuration/hook digests matched
+before native trials; afterward 60 match. Comparison with the exact native
+pre-trial backup proves only Claude's skillUsage bookkeeping changed in the
+remaining application JSON; MCP, OAuth and project settings are identical.
+The refresh made no installer ownership, credential, MCP or hook edits.
+
+Prior version 2 implementation evidence (historical) follows.
+
+Version 2 is implemented across config-codex, config-claude, design,
+brainstorm, research and nebius. Context7 is absent from the Codex baseline,
+Claude catalog and active recommended lookup routes. Focused tests cover stale
+policy rejection, availability versus registration, and preservation of
+unselected custom integrations. Small lookups and known URLs use the same
+vendor-MCP/Tavily/official-web order; public queries exclude confidential data.
+
+Authorized native reconciliation removed Codex's Context7 OAuth credentials
+through native logout and patched only its table. Claude already had no
+Context7 registration and needed no application-config rewrite. A positively
+identified dedicated Context7 cache and its launcher/worker processes were
+removed; unrelated packages, settings, credentials, roles, hooks and the shared
+app-server daemon were preserved. Both native instruction files and all twelve
+selected installed skill copies match the intended source contract. Private
+backups preserve the changed native text files. Local credential cleanup does
+not establish provider-side revocation or account deletion.
+
+Prior version implementation evidence (historical) follows.
+
+Added optional native Tavily registration, OAuth/keyring guidance, compact
+routing in both instruction templates, detailed references, selected checks,
+fixture regressions and canonical evals. Refreshed only the two selected skill
+payloads on both native hosts through the documented pinned copy installer.
+Authorized local reconciliation patched Codex and created scoped Claude
+instructions while preserving unrelated settings, roles and hooks.
+
+#### Verification Evidence
+
+Version 3 STATIC_PASS: 80 Codex and 30 Claude fixture tests pass. The four new
+Codex policy regressions failed before the checker change and pass afterward.
+All nine source structure profiles (portable, Codex, Claude across three skills),
+six installed host profiles and three actual pinned skills@1.5.26 package checks
+pass, including discovery, copy parity, repeat installation and isolation.
+Setup skills retain their existing native disable-model-invocation extension;
+strict portable consumers can reject that host extension. Scoped Markdown,
+Python syntax, Ruff, added-line privacy and diff whitespace checks pass.
+Code-review and advisory security review found no blocking introduced issue.
+All six installed payloads match source, both global research sections match
+the templates, and forty unrelated initially dirty files remain unchanged.
+
+Version 3 NATIVE_WORKFLOW_PASS on Codex 0.163.0: a fresh read-only narrow trial
+loaded the installed skill, extracted the supplied official Tavily page and
+answered with a source citation, with zero Research calls. A separate fresh
+SQLite trial loaded the skill, sent a public scoped brief in exactly one mini
+Research call, observed successful completion and retrieved original SQLite
+pages for the decisive claims. The response reported conflicts in generated
+synthesis and preferred original documentation. This is observed workflow
+evidence for these samples, not an independently graded improvement benchmark
+or proof of all failure cases, service-internal bounds, latency or cost.
+
+Version 3 CLAUDE_NATIVE_UNAVAILABLE on Claude 2.1.308: a fresh native trial
+failed before tool use because its OAuth session expired and could not refresh.
+No Research job or authentication repair was attempted on that host. Isolated
+trigger and comparative quality attempts on both hosts are also UNAVAILABLE
+because the clean runners lack agent authentication; the real-home Codex trial
+does not substitute for a clean baseline comparison or broad trigger scoring.
+REQ-049 remains active and FEAT-048 delivery implemented rather than verified.
+
+Prior version 2 verification evidence (historical) follows.
+
+Version 2 STATIC_PASS: 80 Codex and 30 Claude fixture tests; portable,
+Codex and Claude structure/eval validation for all six skills; actual pinned
+skills@1.5.26 discovery, copied-resource parity, repeat-install convergence and
+isolation. All twelve real installed copies match source. Markdown, Python
+syntax, added-line privacy and diff checks pass. Scoped Ruff has no new
+findings relative to captured working bytes (36 pre-existing findings remain).
+Native setup invocation extensions and the intentional Nebius tests directory
+are retained. Review fixed a missing required reference load for small
+standalone brainstorm documentation lookups; no other blocking source or
+security finding remained. The earlier shared-hook smoke failed its total-hint
+length assertion; a fresh standard-temporary-path run passes. A bounded
+reproduction confirms that longer temporary parents can fail the same limit
+because three absolute state paths are counted. The delegation suffix is
+unchanged, and the hook does not read documentation-routing instructions.
+This path-sensitive test limitation is independent of these routing changes.
+
+NATIVE_TOOLS_PASS: a fresh Codex process connects to hosted Tavily through
+native OAuth, discovers five tools, returns official-domain Search results
+and successfully extracts a discovered official page. One attempted known URL
+returned a page-fetch failure; per-page coverage is not assumed from connection
+status. Claude native inspection reports Tavily Connected. Native Context7
+registration, selected local package/cache and worker absence were checked;
+parsed Codex values differ only by that server's removal and unrelated native
+file fingerprints are unchanged. Existing running sessions can retain older
+in-memory tools and instructions; fresh sessions load the new configuration.
+
+Fresh isolated trigger and comparative quality attempts on both native hosts
+are UNAVAILABLE because model authentication is absent in the clean runners;
+no account credentials were copied or repaired. This does not negate the
+separately observed Tavily OAuth and native tool results, and those results do
+not establish model routing or output quality. Delivery is implemented, not
+fully runtime-qualified.
+
+Prior version verification evidence (historical) follows.
+
+STATIC_PASS: 79 Codex and 29 Claude fixture tests; shared template validation;
+portable, Codex and Claude structure/eval profiles; scoped Ruff, Markdown,
+Python compilation, added-line secret/path scan and diff checks. Native
+explicit-only metadata extensions were preserved. Disposable pinned npx
+checks passed discovery, copy parity, repeat install and isolation for both
+skills on both hosts; all four real installed payloads match source.
+
+Code-review and security lanes found no blocking issue. One mixed-host eval
+assertion was narrowed to its requested host before final validation. Local
+parsed registration and routing checks passed; unrelated configuration and
+hook/role byte fingerprints remained unchanged.
+
+NATIVE_TOOLS_PASS: Codex native OAuth completed with keyring-only MCP storage;
+a fresh app-server discovered all five tools and successfully called bounded
+Search, Extract, Map, Crawl and one mini Research operation on public official
+documentation. Research completed within the existing default timeout.
+Claude native user-scope registration reports Connected and a fresh session
+exposes all five tools. Neither check reads or copies token values; an actual
+expiry/refresh cycle was not exercised.
+
+A fresh Codex explicit-skill report-only case loaded the installed reference
+and satisfied the scoped setup/routing assertions. A matched no-skill case
+used global instructions without tools and retained the routing choices,
+while leaving unverified configuration details tentative. This limited
+comparison does not establish general quality improvement or full trigger
+coverage. Claude model evaluation was UNAVAILABLE because its independent
+account authorization had expired, despite the connected Tavily MCP. No
+unrelated account credential repair was attempted. Keep the requirement active
+and delivery implemented until broader native qualification is justified.
+
+<!-- /FEATURE: FEAT-048 -->
+
+<!-- FEATURE: FEAT-049 reqs=REQ-050 status=superseded delivery=unassessed priority=P1 version=1 -->
+### FEAT-049: Hosted Context7 OAuth transport
+
+#### Requirements Covered
+
+- REQ-050: Hosted Context7 OAuth in native setup skills.
+
+#### Context Evidence
+
+Superseded by FEAT-048 version 2; prior delivery was implemented. The evidence
+below records the retired hosted-Context7 design, not current setup policy.
+
+[Context7 OAuth](https://github.com/upstash/context7/blob/master/docs/howto/oauth.mdx)
+documents the hosted `/mcp/oauth` endpoint. Native Codex and Claude support HTTP
+MCP and own their OAuth authentication flows. Existing setup checkers accept
+HTTP; the source catalogs previously selected a local Context7 package.
+
+#### Design Details
+
+Replace the Codex recovery definition with a URL-only table and the optional
+Claude catalog definition with `type: http` and the same OAuth URL. Keep each
+skill's explicit selection, native target and patch-only reconciliation rules.
+Remove Context7 package/API-key prerequisites from current setup guidance.
+Use native login and credential storage; add no proxy, local fallback or
+credential migration. Documentation retrieval remains the same MCP capability;
+this transport change adds no model orchestration or agent behavior.
+
+#### Selected Option
+
+Connect directly to the provider-hosted OAuth endpoint using each native host.
+
+#### Alternatives Considered
+
+Local stdio retains laptop runtime maintenance. A local HTTP proxy adds an
+unnecessary process. API-key HTTP requires manual secret management instead of
+the selected native OAuth flow.
+
+#### Implementation Boundaries
+
+Own the two setup skills, their existing fixtures/evals and directly related
+catalog/spec documentation. Synchronize only selected installed payloads through
+the skills-only route. Laptop package removal is a separately authorized
+operation, never an automatic reusable setup step.
+
+#### Test-First Success Criteria
+
+- TDD-001: Both public definitions contain the hosted OAuth URL and no local Context7 command or secret reference.
+- TDD-002: Default checks preserve differing user settings; explicit Codex template auditing detects endpoint drift; Claude registration checks remain shape-only.
+- TDD-003: Both skill payloads preserve explicit-only metadata and install without changing unrelated skills or hooks.
+
+#### Validation Plan
+
+Run fixture, portable/host structure, eval definition, install-parity, lint,
+canonical-spec, code-review and security checks scoped to the changed surfaces.
+
+#### Test Plan
+
+Use disposable fixture homes for setup checks and installation. For an
+authorized real Codex migration, preserve unrelated config, perform native
+OAuth, then discover and invoke Context7 tools through a fresh connection.
+
+#### Evaluation Plan
+
+Add report-only OAuth migration cases and negative ordinary-doc-lookup cases.
+Separate static, installed, native tool and model-quality evidence. Do not
+launch a local server to validate the new remote connection.
+
+#### Rollout And Rollback
+
+Apply source first, validate, sync selected payloads, then patch authorized
+native configuration. Back up changing private files; reverse only task-owned
+edits after checking for concurrent changes. Remove dedicated local package
+installations only after remote validation and quiescence of their old workers.
+
+#### Done Definition
+
+Source and installed definitions agree, focused checks pass, and authorized
+native migration reports separate OAuth, fresh tool and local-removal outcomes.
+Unavailable model evaluation never becomes an inferred runtime or quality pass.
+
+#### Implementation Evidence
+
+Both setup skills now select the hosted OAuth endpoint in their public
+definitions, setup instructions, fixture expectations and canonical eval cases.
+Existing installed copies for both native hosts match the source payloads after
+a skills-only synchronization. An explicitly authorized Codex migration changed
+only the Context7 registration, completed native OAuth and removed the dedicated
+local package installations after their old workers were stopped. Unrelated
+configuration and hooks were preserved; no unselected Claude registration was
+added.
+
+#### Verification Evidence
+
+The Codex fixture suite passed 79 tests and the Claude suite passed 30 tests.
+Portable and native-host structure/eval validation, disposable installation
+parity and repeat-install isolation, Markdown/Python checks, changed-scope code
+review and security review passed. All four selected installed skill copies
+matched source.
+
+A fresh native Codex process connected directly to the hosted origin using
+OAuth, discovered `resolve-library-id` and `query-docs`, resolved the public
+Python library and retrieved documentation with source links. Dedicated local
+Context7 package entries and old workers were absent after removal. These
+results prove the authorized remote connection, not model-driven skill quality.
+Isolated model evals were attempted but were UNAVAILABLE because agent
+authentication was unavailable in their isolated environments. Keep delivery
+implemented and the requirement active without a comparative quality claim.
+
+<!-- /FEATURE: FEAT-049 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

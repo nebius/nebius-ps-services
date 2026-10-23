@@ -73,7 +73,7 @@ that baseline.
   `hooks.json`, and undocumented feature keys from public recovery assets.
 - Store secret values only in the user's shell, password manager, or external
   secret manager. In `config.toml`, reference secret variable names such as
-  `CONTEXT7_API_KEY` or `GITHUB_TOKEN`.
+  `GITHUB_TOKEN`. Selected OAuth integrations use native credential storage.
 - Inspect and build a patch plan before writing. Back up an existing local file
   only when that file will actually be changed.
 - `AGENTS.md` and `config.toml` are patch-only when they already exist. Create
@@ -113,6 +113,10 @@ For existing `$CODEX_HOME/AGENTS.md`:
   unchanged and do not create a backup.
 - Add a compact `config-codex` managed section only if the equivalent guidance
   is missing.
+- Include the template's Nebius documentation routing rule, accepting equivalent
+  active guidance anywhere in the file. If absent, add it inside the managed
+  block without duplicating a user-owned rule. Routing does not require or
+  authorize installing the optional `nebiusDocs` integration.
 - Keep the task-owned temporary cleanup rule, live-product-validation
   invariant, nested-project instruction precedence/conflict policy, and
   task-state marker preservation in that managed section so existing
@@ -184,10 +188,25 @@ For existing `$CODEX_HOME/config.toml`:
   exists with different values, report the conflict and patch only after the
   user confirms the desired value.
 
+For selected `nebiusDocs` setup, read the Nebius documentation MCP section in
+`references/local-setup.md`. The public endpoint is in the create-only recovery
+baseline; existing machines receive it only when that integration is requested.
+
 Read `references/config-recovery.md` before creating a missing `config.toml` or
 refreshing the recovery baseline from a live setup. It owns the allowlist,
 omissions, redacted inspection procedure, file-mode rule, and private-state
 recovery boundary.
+
+## Selected Research Setup
+
+For requested Tavily OAuth or global research routing, read
+[references/research-routing.md](references/research-routing.md). Tavily remains
+opt-in. Reconcile only the selected configuration and the template's
+Documentation and Web Research section; preserve equivalent active user rules
+without duplication. A routing-only request does not bootstrap hooks, roles,
+permissions or the rest of the home. An absent instruction file may contain
+only that section inside the native managed-context markers. Full-home checks
+remain separate and may report unrelated missing defaults on such a home.
 
 ## Workflow
 

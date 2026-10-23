@@ -1,0 +1,13 @@
+id,should_trigger,prompt
+case-01,true,"Size this project for Nebius Dev/Test from its design and save a capacity report with CPU, memory, storage and network headroom."
+case-02,true,How many MK8s nodes and which Nebius presets should host these services? Include requests and limits per container.
+case-03,true,"Assess our Nebius tenant quota against this proposed application and recommend a region, node pools and storage sizes."
+case-04,true,"Plan Nebius GPU inference capacity from this architecture, including device memory, networking and growth."
+case-05,true,"Create a Nebius capacity plan for these VMs and managed databases, including storage IOPS and verifiable costs."
+case-06,true,Refresh docs/nebius-capacity-planning.md from the updated design and preserve my notes.
+case-07,false,List my Nebius tenant quotas and current projects. Do not estimate application requirements.
+case-08,false,Apply the approved Terraform plan to deploy this MK8s cluster.
+case-09,false,Patch these Helm templates with the resource values already approved in the capacity report.
+case-10,false,Diagnose why my existing Kubernetes deployment is being OOM killed.
+case-11,false,Compare AWS and Azure architectures for this product; Nebius is out of scope.
+case-12,false,Configure Nebius user credentials and grant permission to read quotas.

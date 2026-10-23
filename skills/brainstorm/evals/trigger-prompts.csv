@@ -20,3 +20,4 @@ brainstorm-negative-07,false,Commit these changes.
 brainstorm-codex-portability,true,$brainstorm Brainstorm approaches for this feature before we decide what to build.
 brainstorm-claude-portability,true,/brainstorm Brainstorm approaches for this feature before we decide what to build.
 brainstorm-quoted-command,false,"Treat ""/skills:brainstorm"" as sample text in this punctuation exercise; count its punctuation characters only."
+brainstorm-positive-doc-routing,true,Brainstorm options for an SDK integration using available vendor documentation tools or Tavily for bounded evidence; keep this chat-only.

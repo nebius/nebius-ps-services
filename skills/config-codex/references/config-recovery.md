@@ -18,13 +18,17 @@ by the current official Codex configuration reference:
 - documented feature choices used by this setup
 - bounded read-only custom-agent roles
 - the task-state writable root used by global context management
-- version-pinned public MCP definitions that contain no credential value or
-  private endpoint
+- pinned executable MCP definitions and official public HTTP endpoints,
+  including `nebiusDocs`, that contain no credential value or private endpoint
 - placeholder trusted-project entries that the user must review when rendering
 
 Secret environment-variable names may be referenced where Codex expects a
 name, but their values must remain in the user's shell, password manager, or
 secret manager.
+
+Tavily is shown only as a commented opt-in OAuth example. Recovery does not
+activate it or require a credential store; use [research-routing.md](research-routing.md)
+when Tavily or keyring-only MCP OAuth storage is explicitly selected.
 
 ## Intentionally Excluded
 

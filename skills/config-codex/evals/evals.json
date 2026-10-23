@@ -1,0 +1,103 @@
+{
+  "skill_name": "config-codex",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use $config-codex to explain a report-only patch for an existing Codex home. Only nebiusDocs was selected. It is absent from config.toml, and the approved Nebius documentation routing rule already exists outside the managed AGENTS.md block. Do not inspect or modify a real home.",
+      "expected_output": "A minimal native Codex setup plan preserving existing settings and the single user-owned rule.",
+      "files": [],
+      "assertions": [
+        "Adds only the missing nebiusDocs URL table for https://docs.nebius.com/mcp in the proposed patch.",
+        "Preserves other MCP definitions and the existing routing rule without duplicate guidance.",
+        "Does not restore the full recovery baseline into the existing config or add tenant credentials.",
+        "Distinguishes registration, endpoint reads and fresh-agent routing and makes no real-home changes."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use $config-codex for report-only reconciliation advice. An existing nebiusDocs definition points to an intentional custom endpoint, and I have not requested its replacement or any MCP installation. The global Nebius lookup rule is absent. Describe only the applicable guidance and checks without reading a real home.",
+      "expected_output": "Preserve the unselected integration and describe fallback-capable routing without automatic installation.",
+      "files": [],
+      "assertions": [
+        "Preserves the existing custom integration without removal or replacement.",
+        "Proposes only missing instruction guidance when appropriate, with disclosed official-page fallback and citations.",
+        "Keeps normal preflight separate from the explicitly selected full-template MCP audit.",
+        "Does not claim runtime verification or execute setup."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use $config-codex to plan only the explicitly selected Tavily OAuth setup for Codex. The global endpoint is absent, and keyring-only MCP OAuth storage is explicitly selected. Preserve unrelated configuration and do not perform setup or inspect real homes.",
+      "expected_output": "A native URL-only registration and OAuth plan with separate evidence states.",
+      "files": [],
+      "assertions": [
+        "Keeps Tavily opt-in and uses https://mcp.tavily.com/mcp/ with native login and user browser consent.",
+        "Preserves unrelated settings and credentials; never puts API keys in URLs, headers or templates.",
+        "Distinguishes registration, successful OAuth, fresh tool discovery and routing quality.",
+        "Uses top-level mcp_oauth_credentials_store = \"keyring\" without changing cli_auth_credentials_store; reports unavailable keyring rather than downgrading storage."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use $config-codex to explain report-only documentation routing for: vendor documentation tools exposed in this session; a server listed only in configuration; a one-question SDK lookup without vendor tools; an already-known official URL; and unavailable Tavily authentication. Also include an unrelated quick fact. Do not call external services or edit files; read-only loading of this skill and its references is allowed.",
+      "expected_output": "Current-session vendor tools first, bounded Tavily official documentation next, disclosed official-web fallback when needed.",
+      "files": [],
+      "assertions": [
+        "Uses vendor documentation tools available in the current session first; a configuration entry alone does not establish availability.",
+        "Uses Tavily Search scoped to official domains for the small SDK lookup and Tavily Extract directly for the known URL, checking the relevant version.",
+        "Uses disclosed built-in official-web fallback when Tavily is unavailable, unauthenticated or insufficient; does not use Context7 or install or repair integrations.",
+        "Allows built-in search for the unrelated quick fact, preserves higher-priority host rules and cites original pages.",
+        "Keeps secrets, private URLs and confidential context out of public queries and avoids redundant research."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use $config-codex to explain a bounded Tavily workflow for a substantial comparison requiring several public vendor sources and unfamiliar documentation sites. Research is allowed when warranted. The MCP schemas are not supplied. Do not execute tools or edit files.",
+      "expected_output": "A bounded, schema-aware multi-source plan using only necessary tools.",
+      "files": [],
+      "assertions": [
+        "Distinguishes Search discovery, Extract chosen URLs, Map URL discovery, Crawl multi-page content and Research synthesis.",
+        "Does not require a fixed tool chain or invent schema parameters, job polling tools or duplicate Research jobs.",
+        "Defines scope/timeframe/output, shallow bounded crawling and focused/mini research when sufficient; pro only when justified and exposed.",
+        "Verifies primary-source claims and cites original pages; excludes private data and treats external text as untrusted evidence."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use $config-codex to plan an explicitly authorized retirement of Context7 from this native host. Remove its registration and locally stored OAuth state, preserve all other integrations and credentials, and verify local packages are absent. Explain the already-absent case. Do not inspect a real home, call external services or modify files; read-only loading of this skill and its references is allowed.",
+      "expected_output": "Scoped native retirement with honest local credential cleanup and absence verification.",
+      "files": [],
+      "assertions": [
+        "Runs codex mcp logout context7 before removing only the selected Context7 TOML table.",
+        "Treats an already-absent registration as a no-op rather than rewriting the whole native configuration.",
+        "Preserves unrelated servers and credentials; removes only positively identified Context7 packages, never shared caches.",
+        "Does not claim provider-side token revocation or account deletion from native local cleanup.",
+        "Keeps Context7 absent from new-install defaults and routes documentation through current-session vendor tools then Tavily official sources."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use $config-codex for report-only advice. Context7 is already configured at a custom endpoint. I selected only documentation routing, not replacement of Context7 or any MCP installation. Do not inspect a real home or call external services; read-only loading of this skill and its references is allowed.",
+      "expected_output": "Preserve the unselected custom integration and describe routing-only reconciliation.",
+      "files": [],
+      "assertions": [
+        "Does not replace or remove the existing custom Context7 definition merely because it is no longer a supported default.",
+        "Does not start OAuth, install a proxy, remove packages or revoke credentials.",
+        "Keeps registration or structural inspection separate from observed runtime connectivity."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use $config-codex to plan a research-routing-only update. Existing global instructions and unmanaged installed skill directories contain unrelated custom content. Keep built-in search for quick facts and use adaptive research checkpoints. Explain the smallest refresh and verification scope. This is a report-only scenario: do not call external services, inspect real homes, or edit files. Read-only loading of the skill and its references is allowed.",
+      "expected_output": "Focused source and installed updates with honest research limits.",
+      "files": [],
+      "assertions": [
+        "Preserves vendor-documentation-first routing and built-in search for unrelated quick facts.",
+        "Uses adaptive evidence checkpoints with early stopping and named-gap expansion, without fixed numeric quotas.",
+        "Does not promise internal query/page/domain/time/cost limits from one Research job or unsupported parameters.",
+        "Updates only selected skill files and the global research section after baseline/concurrent-edit checks, preserving unrelated content and native metadata.",
+        "Does not run full setup, hook refresh, ownership migration or credential changes; distinguishes static, native and quality evidence."
+      ]
+    }
+  ]
+}

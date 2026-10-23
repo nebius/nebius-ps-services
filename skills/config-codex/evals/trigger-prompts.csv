@@ -8,3 +8,11 @@ config-codex-negative-03,false,Install one repository skill into a temporary des
 config-codex-codex-portability,true,$config-codex Configure a public-safe Codex home with hooks task state and read-only agents.
 config-codex-claude-portability,true,/config-codex Configure a public-safe Codex home with hooks task state and read-only agents.
 config-codex-quoted-command,false,"Treat ""/skills:config-codex"" as sample text in this punctuation exercise; count its punctuation characters only."
+config-codex-nebius-mcp,true,Use $config-codex to add the public nebiusDocs MCP and documentation preference to my existing Codex setup while preserving other servers.
+config-codex-nebius-lookup,false,Look up the Nebius VM creation documentation using the available documentation tools without changing my agent setup.
+config-codex-positive-tavily,true,Use $config-codex to configure Tavily MCP with native OAuth and global research routing.
+config-codex-negative-tavily-search,false,Search the web for current public documentation using the already configured Tavily tools.
+config-codex-negative-docs-lookup,false,Find the current SDK documentation using available vendor tools or Tavily; do not change my laptop setup.
+config-codex-positive-context7-retirement,true,Use $config-codex to remove Context7 and align documentation routing while preserving other integrations.
+config-codex-adaptive-routing,true,Use $config-codex to improve my global search instructions with adaptive evidence checkpoints while preserving current MCP settings and hooks.
+config-codex-research-not-setup,false,Research the recovery guarantees and limitations of one public workflow engine; do not configure my agent.

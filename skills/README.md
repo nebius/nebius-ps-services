@@ -50,7 +50,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 71 flat skill folders with shared execution instructions,
+The catalog contains 72 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -94,8 +94,8 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with headless Playwright Test GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
-| `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations and recovery. |
-| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
+| `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations, including Nebius Docs, and recovery. |
+| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, selected MCP integrations such as Nebius Docs, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
 | `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
 
@@ -135,7 +135,8 @@ measuring performance.
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, and migrate or validate specs without gating tools, Stop, or workflow completion. |
-| `nebius` | Implicit allowed | Advise on Nebius provider constraints without requiring credentials or cloud actions; build and inspect compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
+| `nebius` | Implicit allowed | Advise on Nebius provider constraints using documentation MCP reads with official-page fallback; build and inspect compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
+| `nebius-capacity-planning` | Implicit allowed | Derive Nebius compute, storage and network sizing from project designs, with per-container Kubernetes allocations, explicit headroom, optional read-only quota assessment and a saved capacity report. |
 | `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
@@ -1159,6 +1160,18 @@ Shared hooks retain their existing installer/plugin owner. Trusted-local full
 access, delegation policy, Implement storage and MCP integrations remain
 explicit options. See [Config Claude](config-claude/README.md) for native scope,
 recovery, checker options and evidence boundaries.
+
+Both setup skills support optional Tavily OAuth and compact global research
+routing: vendor documentation MCP tools available in the current session first,
+then Tavily against official sources, then disclosed official-web fallback.
+Small documentation lookups follow the same order; builtin search remains
+available for unrelated quick facts. Substantial work uses adaptive evidence
+checkpoints. The research skill optionally uses Tavily Research with public
+briefs, supported completion handling and independent source verification;
+job counts do not guarantee internal work or cost limits. Selected removals preserve other servers
+and credentials; ordinary setup never deletes unselected integrations.
+Registration, native OAuth, fresh tool discovery and output quality are separate
+verification lanes. Payload-only skill updates do not register runtime hooks.
 
 ### `config-codex`
 

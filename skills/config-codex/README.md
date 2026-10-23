@@ -1,10 +1,24 @@
 # Config Codex
 
+Optional Tavily setup uses native OAuth and preserves unrelated configuration.
+Global documentation routing prefers vendor tools available in the current
+session, then Tavily against official sources, then disclosed official-web
+fallback. Small documentation lookups follow the same route. Search,
+Extract, Map, Crawl and Research are purpose-specific choices, not a required
+pipeline. See [research routing and OAuth setup](references/research-routing.md)
+for native commands, credential storage and separate verification lanes.
+
 `config-codex` is a public Codex skill for bootstrapping or recovering a local
 Codex runtime setup similar to the global context-management setup used in this
 skills repo. It packages the design, templates, and validation workflow needed
 to configure Codex without publishing personal paths, private state, or
 secrets.
+
+The public recovery baseline includes `nebiusDocs` at
+<https://docs.nebius.com/mcp>. Existing homes receive this integration only when
+selected. Global guidance prefers its documentation reads with cited official
+page fallback, without requiring installation; an equivalent user-owned rule
+is preserved. See [selected setup and verification](references/local-setup.md#nebius-documentation-mcp).
 
 The global instruction template reuses task authorization for necessary new
 credentials and secrets, permits only secure operational storage of values,
@@ -209,7 +223,7 @@ python3 config-codex/scripts/check-local-idempotency.py \
 ```
 
 The public-safe MCP baseline in `assets/config.toml.template` covers reusable
-servers such as Context7, Playwright, Terraform, MarkItDown, Microsoft Learn,
+servers such as Playwright, Terraform, MarkItDown, Microsoft Learn,
 GitHub, and OpenAI developer docs. Executable package and image references use
 reviewed version pins rather than `@latest` or an untagged image. Existing
 local configs may also contain plugin-managed or machine-specific MCP servers
@@ -233,13 +247,9 @@ workflow.
 
 ### Secrets Stay Out Of Config
 
-The config template references secret environment variable names, not values:
-
-- `CONTEXT7_API_KEY`
-- `GITHUB_TOKEN`
-
-The actual values belong in the user's shell profile, password manager, or
-secret manager. Do not print or commit them.
+The config template references `GITHUB_TOKEN` by environment-variable name,
+never its value. The value belongs in the user's shell profile, password manager,
+or secret manager. Do not print or commit it.
 
 ### Hooks Provide Context
 
@@ -727,3 +737,14 @@ on close; this does not connect to a personal Chrome profile. Existing config
 is patch-only and requires an explicit request to change its values. Restart
 the client/MCP session after applying a config change. Agent exploration through
 MCP is separate from required Playwright Test acceptance and its evidence.
+
+### Adaptive research routing
+
+Global guidance preserves vendor documentation tools first and built-in search
+for unrelated quick facts. Substantial work uses adaptive evidence checkpoints,
+not fixed query/page quotas. Tavily Research receives public briefs, uses only
+exposed controls, avoids duplicate jobs after uncertain completion, and requires
+verification of decisive claims in original sources. A job count is not an
+enforced cost or service-internal work limit. See
+[research routing](references/research-routing.md) for selected-scope refresh
+and separate static, native and quality evidence.

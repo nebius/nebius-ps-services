@@ -4,6 +4,44 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add adaptive research checkpoints and an explicit optional Tavily Research
+  workflow to research and both native search policies. Preserve quick-fact
+  routing, verify decisive original sources, prevent duplicate jobs after
+  ambiguous completion, and distinguish direct allowances from unenforceable
+  service-internal limits. Refresh only selected skill files and instruction
+  sections; retain native controls and separate runtime/quality evidence.
+  Align the UI prompt to inspect local files before conditional internal searches.
+
+- Retire Context7 from setup defaults and the supported optional catalog. Align
+  Codex, Claude, design, brainstorm, research and Nebius documentation routing:
+  available vendor documentation tools, then Tavily against official sources,
+  then disclosed official-web fallback. Preserve selected-scope removal and
+  native credential ownership without automatic installation or hook refresh.
+
+- Use hosted Context7 HTTP OAuth in the Codex recovery baseline and optional
+  Claude catalog. Align native setup guidance, endpoint-drift fixtures and
+  canonical evals; preserve explicit selection, unrelated configuration and
+  separate registration, authentication and fresh-tool evidence.
+
+- Add optional native Tavily OAuth setup to config-codex and config-claude,
+  with selected Codex keyring storage and compact documentation/search routing.
+  Document purpose-specific Search, Extract, Map, Crawl and Research workflows,
+  preserve vendor-specific routes and keep registration/auth/runtime evidence
+  separate. Extend focused fixtures and canonical evaluation cases.
+
+- Align `config-codex`, `config-claude` and `nebius` around the public
+  `nebiusDocs` MCP: native configuration options, documentation-first routing,
+  cited official-page fallback, optional-registration checks and eval coverage.
+  Preserve existing integrations and separate endpoint reads from fresh-agent
+  activation; documentation lookup does not install servers or submit feedback.
+
+- Fix the capacity calculator so known runtime or finite-limit demand that
+  already exceeds capacity remains a violation when other terms are unknown.
+  Expose auditable known subtotals while keeping incomplete totals and margins
+  null; cover mixed known/unknown and inactive terms with regression tests.
+
+- Add `nebius-capacity-planning` for design-first Nebius resource sizing, per-container Kubernetes requests/limits, failure and rollout headroom, optional read-only quota/region assessment and verifiable costs in `docs/nebius-capacity-planning.md`. Include an offline arithmetic helper, reusable report template and synthetic evaluation cases.
+
 - Update the Nebius validation environment to aiohttp 3.14.4 and its required
   yarl 1.25.1 dependency, addressing the aiohttp security advisories while
   preserving an installable pinned environment.

@@ -144,6 +144,40 @@ REQUIRED_SCRIPT_AUTHORIZATION_SNIPPETS = (
     "Preserve explicit read-only limits, skill invocation restrictions",
     "actual tool or sandbox controls",
 )
+REQUIRED_NEBIUS_DOCS_SNIPPETS = (
+    "When a task requires looking up Nebius product documentation",
+    "`nebiusDocs` search and retrieval tools already available in the current session first",
+    "use Tavily Search or Extract against official",
+    "https://docs.nebius.com",
+    "mention the fallback",
+    "If Tavily cannot help, disclose the limitation",
+    "Cite the relevant documentation pages",
+)
+REQUIRED_RESEARCH_ROUTING_SNIPPETS = (
+    "vendor-specific documentation MCP tools already exposed or discoverable in the current session",
+    "A configuration entry alone does not establish availability",
+    "Preserve higher-priority host rules",
+    "use Tavily Search or Extract against official sources",
+    "disclose the limitation and use built-in search or retrieval against official sources",
+    "Small documentation lookups follow the same routing",
+    "Use built-in live web search for unrelated quick facts",
+    "Tavily Search discovers sources",
+    "restrict to official vendor/project domains when known",
+    "Extract reads selected known URLs",
+    "Check the relevant product or package version",
+    "Tavily Map discovers relevant URLs",
+    "Crawl retrieves content from multiple related pages",
+    "bound domain, paths, depth and page count",
+    "Tavily Research is appropriate",
+    "Use adaptive research checkpoints",
+    "Never resubmit equivalent work after ambiguous completion",
+    "If a hard constraint cannot be enforced",
+    "Retrieve original sources for decisive generated claims",
+    "Discover available tools and their current schemas",
+    "Do not silently replace OAuth with API keys",
+    "cite the original pages",
+    "Keep secrets, private URLs and confidential data out of public queries",
+)
 OBSOLETE_SCRIPT_APPROVAL_RULE = (
     "Run mutating skill scripts only when the user explicitly asks to run or "
     "execute that script."
@@ -466,6 +500,27 @@ def markdown_headings(value: str) -> list[tuple[str, str]]:
     return headings
 
 
+def active_markdown_text(value: str) -> str:
+    """Exclude comments and fenced examples from routing-rule recognition."""
+    lines = re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL).splitlines()
+    active = []
+    fence: tuple[str, int, int] | None = None
+    for line in lines:
+        if fence is not None:
+            character, length, close_indent = fence
+            candidate = line.lstrip(" ")
+            if (
+                len(line) - len(candidate) <= close_indent
+                and re.fullmatch(re.escape(character) + "{" + str(length) + r",}\s*", candidate)
+            ):
+                fence = None
+            continue
+        fence = markdown_fence_opening(line)
+        if fence is None:
+            active.append(line)
+    return compact_markdown_text("\n".join(active))
+
+
 def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None:
     agents_path = codex_home / "AGENTS.md"
     template_path = skill_root() / "assets" / "AGENTS.md.template"
@@ -481,6 +536,13 @@ def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None
         return
     if not all(needle in actual_text for needle in REQUIRED_SCRIPT_AUTHORIZATION_SNIPPETS):
         fail("AGENTS.md managed block is stale or incomplete", failures)
+        return
+    routing_text = active_markdown_text(actual)
+    if not all(needle in routing_text for needle in REQUIRED_NEBIUS_DOCS_SNIPPETS):
+        fail("AGENTS.md lacks current Nebius documentation routing guidance", failures)
+        return
+    if not all(needle in routing_text for needle in REQUIRED_RESEARCH_ROUTING_SNIPPETS):
+        fail("AGENTS.md lacks current documentation and research routing guidance", failures)
         return
     if actual == template:
         ok("AGENTS.md matches AGENTS.md.template")

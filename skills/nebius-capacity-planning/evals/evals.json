@@ -1,0 +1,38 @@
+{
+  "skill_name": "nebius-capacity-planning",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Assess the synthetic design fixture for Dev/Test on Nebius. Read-only: return a concise report in chat. No cloud access or new measurements. Use official docs for capability checks if available; label any unavailable catalog/pricing evidence.",
+      "expected_output": "Complete component coverage, correct stage budgets and failure/rollout accounting, a defensible recommendation with explicit qualification gaps.",
+      "files": [
+        "evals/fixtures/cpu-design.md"
+      ],
+      "assertions": [
+        "Accounts for api app, native sidecar, migration init, database, backup job, infrastructure Pods and external model API.",
+        "Derives API effective request as 2600m CPU and 1600Mi memory, counting sidecar overlap and Pod overhead once.",
+        "Shows that three available 3500m workload-capacity nodes cannot accommodate four 2600m API Pods even when aggregate totals appear close; does not claim placement from totals.",
+        "Keeps unset CPU limits unbounded and includes terminating Pods in rollout demand.",
+        "Totals 450GiB of live and backup storage without multiplying backup copies by database replicas.",
+        "Does not infer CPU physical availability, quota sufficiency or complete costs without evidence.",
+        "Provides environment, assumptions, source coverage, explicit per-container allocations, network addressing and actionable qualification targets."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review the synthetic quota fixture against the design demand. Return a read-only Nebius capacity assessment in chat; do not log in, use ambient agent credentials or call cloud APIs.",
+      "expected_output": "Preserve a known quota deficit and missing project scope, reject an unsupported preset, and distinguish a priced subtotal from total cost.",
+      "files": [
+        "evals/fixtures/quota-design.md"
+      ],
+      "assertions": [
+        "Region-a CPU steady demand fits but surge demand is short by 8 vCPU; required tenant quota is at least 72 vCPU.",
+        "Region-b is not a verified recommendation because the required platform is unsupported in supplied project catalog.",
+        "Project quota and identity remain unresolved; tenant-only headroom does not become full sufficiency.",
+        "Uses incremental demand with existing usage, and does not count existing resources twice.",
+        "Reports cost as a partial estimate with unpriced storage/network and no guaranteed physical CPU capacity.",
+        "Does not change credentials, choose an arbitrary project, probe capacity by provisioning, or write files in this read-only invocation."
+      ]
+    }
+  ]
+}

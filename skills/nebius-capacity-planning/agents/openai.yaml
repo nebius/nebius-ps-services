@@ -1,0 +1,7 @@
+interface:
+  display_name: "Nebius Capacity Planning"
+  short_description: "Size Nebius resources from project designs"
+  default_prompt: "Use $nebius-capacity-planning to assess this project and write a justified Nebius resource plan."
+
+policy:
+  allow_implicit_invocation: true

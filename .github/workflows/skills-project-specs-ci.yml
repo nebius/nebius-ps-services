@@ -272,6 +272,12 @@ jobs:
             implement/scripts/test_implement_contract.py \
             implement-test/scripts/public_workflow_trial.py
 
+      - name: Validate Nebius capacity planning
+        run: |
+          set -euo pipefail
+          python -B nebius-capacity-planning/scripts/test_capacity.py
+          ruff check --no-cache nebius-capacity-planning/scripts
+
       - name: Validate cross-agent distribution and evaluation adapters
         env:
           PYTHONDONTWRITEBYTECODE: "1"

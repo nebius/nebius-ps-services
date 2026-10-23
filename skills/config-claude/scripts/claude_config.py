@@ -20,8 +20,8 @@ OWNERS = (
     "sdlc-start", "troubleshoot",
 )
 MCP_NAMES = (
-    "context7", "playwright", "terraform", "markitdown", "microsoftdocs",
-    "github", "openaiDeveloperDocs",
+    "playwright", "terraform", "markitdown", "microsoftdocs",
+    "github", "openaiDeveloperDocs", "nebiusDocs", "tavily",
 )
 PLUGIN = "skills@nebius-ps-services"
 MAX_BYTES = 2 * 1024 * 1024

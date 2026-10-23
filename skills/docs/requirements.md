@@ -3683,5 +3683,169 @@ Run fresh native and disposable application trials through both public workflows
 
 <!-- /REQUIREMENT: REQ-046 -->
 
+<!-- REQUIREMENT: REQ-047 status=active priority=P1 type=feature -->
+### REQ-047: Design-first Nebius capacity planning
+
+#### User Story
+
+Project owners need an auditable Nebius resource plan derived from their design,
+with per-component allocations, headroom, optional tenant/project quota checks
+and verifiable costs, before provisioning infrastructure.
+
+#### Acceptance Criteria
+
+- AC-001: Provide the implicitly discoverable `nebius-capacity-planning` skill for Kubernetes, VMs and relevant managed services. Ask for an unspecified environment; preserve project constraints and account for every design component.
+- AC-002: Explain per-container CPU/memory requests and limits, justified unset CPU limits, scale/concurrency, ephemeral storage, GPUs, placement and evidence. Separate effective Pod scheduling demand from simultaneous runtime demand.
+- AC-003: Size exact supported Nebius platforms/presets, pools, storage and network resources using explicit overhead, growth, failure and rollout scenarios without double counting.
+- AC-004: Optional read-only inspection delegates to `nebius`, preserves selected identity, and distinguishes quota sufficiency, incomplete evidence, platform support and physical capacity. No credentials are required for design-only work.
+- AC-005: Save a complete executive-summary-first report with linked TOC to the selected project's `docs/nebius-capacity-planning.md`; honor no-write requests and preserve identifiable human notes.
+- AC-006: Include traceable costs only with verified rates and assumptions; identify unpriced items. Keep reusable sources public-safe and reports free of secrets and raw cloud dumps.
+- AC-007: Provide offline deterministic arithmetic, meaningful synthetic cases, portable packaging, trigger evaluations and separately qualified static, runtime and quality evidence.
+
+#### Negative Criteria
+
+- NC-001: Do not provision, change quotas/authentication, apply manifests, run load tests or silently install dependencies.
+- NC-002: Do not inherit one project's region, CPU-only or SFS choices as universal defaults, or claim schedulability/availability from aggregate arithmetic or quotas.
+
+#### Validation Method
+
+Run changed-scope unit, structure, portability, catalog and canonical-spec checks;
+perform code/security reviews through align-skill and align.
+
+#### Test Method
+
+Cover unit discipline, effective Pod inputs, node loss, rollout overlap,
+unbounded limits, resource accounting and explicit incomplete-evidence cases.
+
+#### Evaluation Method
+
+Use realistic trigger and report-quality cases with a no-skill baseline for this
+new skill when a clean runnable surface exists; disclose unavailable lanes.
+
+<!-- /REQUIREMENT: REQ-047 -->
+
+<!-- REQUIREMENT: REQ-048 status=active priority=P1 type=feature -->
+### REQ-048: Configure and prefer the public Nebius documentation MCP
+
+#### User Story
+
+Users need the Codex and Claude setup skills to support the public nebiusDocs
+server and the Nebius skill to use it for documentation lookup consistently.
+
+#### Acceptance Criteria
+
+- AC-001: The Codex missing-config baseline includes the public HTTP endpoint; existing Codex setup and Claude user-scope setup configure it only when selected, preserving unrelated or conflicting definitions.
+- AC-002: Native AGENTS.md and CLAUDE.md guidance prefers nebiusDocs tools already available in the current session. Missing, failing or insufficient tools fall back to Tavily retrieval of official Nebius pages, then disclosed official-web retrieval if Tavily cannot help. Cite source pages and preserve higher-priority host requirements.
+- AC-003: Nebius documentation lookup needs no tenant credentials, installs no integration implicitly, submits no feedback without an explicit request, and does not establish live project state.
+- AC-004: Focused setup regressions, canonical trigger/quality cases and two-host package checks preserve explicit setup invocation, idempotency, native formats and independent evidence states.
+
+#### Negative Criteria
+
+- NC-001: Source alignment does not configure real homes, install hooks, change authentication, or mutate cloud resources.
+- NC-002: Registration, source validation and package parity do not prove native activation, model routing or comparative output quality.
+
+#### Validation Method
+
+Run changed-scope fixture, syntax, structure/eval, portability and review lanes.
+
+#### Test Method
+
+Test optional absence, requested registration shape and template drift; check
+native instruction routing and preservation of unrelated configuration.
+
+#### Evaluation Method
+
+Define setup and documentation/fallback cases. Use clean native runners only
+when authentication is available without importing private account state.
+
+<!-- /REQUIREMENT: REQ-048 -->
+
+<!-- REQUIREMENT: REQ-049 status=active priority=P1 type=feature -->
+### REQ-049: Optional Tavily OAuth and task-directed research routing
+
+#### User Story
+
+Users need the native Codex and Claude setup skills to configure optional Tavily
+OAuth and consistent global documentation and web-research guidance.
+
+#### Acceptance Criteria
+
+- AC-001: Tavily is opt-in in both setup skills, using the public HTTP endpoint and native OAuth without inline API keys; existing unrelated configuration is preserved.
+- AC-002: Codex supports explicitly selected keyring-only MCP OAuth storage; Claude retains native credential ownership. Registration, authorization and fresh tool availability are reported separately.
+- AC-003: Global guidance uses local evidence and relevant vendor documentation MCP tools already available in the current session, then Tavily against official version-appropriate sources, then disclosed official-web fallback if tools, authentication or coverage are insufficient. Mere registration is not availability; operational MCPs are not automatically documentation sources.
+- AC-004: Documentation questions, including small lookups, follow AC-003. Builtin search may handle unrelated quick facts; Tavily Search, Extract, Map, Crawl and Research are selected by purpose with bounded work, primary-source citations and actual discovered schemas. No mandatory tool chain or duplicate research job is required.
+- AC-005: Source templates, references, checks, evals and both native payloads agree across config-codex, config-claude, design, brainstorm, research and nebius, preserving explicit invocation, optional integration absence and selected-scope reconciliation.
+
+- AC-006: Context7 is absent from recovery defaults, the supported optional catalog and active lookup guidance. Explicit retirement removes only selected native registration and its locally stored OAuth credentials; ordinary setup preserves unselected custom integrations.
+
+- AC-007: Research starts with relevant repository evidence and checks internal connectors only for unresolved organizational context. Substantial work uses adaptive checkpoints with named evidence gaps, reuse of prior results and early stopping; illustrative counts are not fixed defaults, and explicit user limits remain binding.
+- AC-008: The research skill optionally delegates substantial public synthesis to Tavily Research using a sanitized brief and an explicit supported model. It launches one initial job per scope, reuses supported completion mechanisms, prevents equivalent duplicate jobs after uncertain completion and verifies decisive claims in original sources.
+- AC-009: Direct retrieval allowances and opaque service-internal work are distinguished. Unsupported query, page, domain, time or cost controls are never promised; a hard constraint that cannot be enforced routes to a suitable direct method or an explicit limitation. Unavailable capability, failed or incomplete output and unresolved citations retain honest evidence states without authentication repair.
+- AC-010: Authorized source and installed refreshes are limited to changed skill files and global research instruction sections. Existing working changes, native metadata, credentials, MCP settings, hooks, installed extras and unrelated instructions are preserved; fresh native and comparative quality evidence remain separate from static and package validation.
+
+#### Negative Criteria
+
+- NC-001: OAuth is not silently replaced with API keys, and secrets or private data are not sent in public research queries or copied into templates, logs or Git.
+- NC-002: Lookup preferences do not authorize installation, full setup bootstrap, hook changes or unrelated credential migration. Static or package checks do not prove native authentication or model behavior.
+
+#### Validation Method
+
+Run focused fixture, structure, portability, install-parity, lint and review
+checks. Verify native registration and OAuth only in an authorized local setup.
+
+#### Test Method
+
+Cover optional absence, active routing versus example-only guidance, native
+selected-registration shape and non-mutating checks with unrelated state.
+
+#### Evaluation Method
+
+Use canonical cases for OAuth setup, vendor routing, coverage misses, simple
+lookups and bounded multi-source work. Distinguish source, install, fresh native
+tool and comparative quality evidence; disclose unavailable lanes.
+
+<!-- /REQUIREMENT: REQ-049 -->
+
+<!-- REQUIREMENT: REQ-050 status=superseded priority=P1 type=feature -->
+### REQ-050: Hosted Context7 OAuth in native setup skills
+
+Superseded by REQ-049: retire Context7 and use the available vendor documentation
+MCP, Tavily and official-web routing policy. Historical acceptance and evidence
+remain for traceability.
+
+#### User Story
+
+Users selecting Context7 need the Codex and Claude setup skills to configure
+its hosted MCP endpoint without installing a local Context7 runtime.
+
+#### Acceptance Criteria
+
+- AC-001: The Codex recovery baseline and optional Claude catalog use `https://mcp.context7.com/mcp/oauth`, with native HTTP transport and OAuth credential ownership.
+- AC-002: Existing homes receive only explicitly selected Context7 changes; unrelated settings and integrations are preserved. Configuration, authentication and fresh tool behavior are distinct evidence lanes.
+- AC-003: Templates, setup guidance, fixture checks, canonical evals and installed skill payloads agree on the hosted endpoint without Context7 executable or API-key prerequisites.
+
+#### Negative Criteria
+
+- NC-001: Setup does not silently fall back to local stdio or API keys, install proxies, revoke credentials or clear shared package caches.
+- NC-002: Skill synchronization does not install hooks or add an unselected live integration; native registration alone does not prove a working connection.
+
+#### Validation Method
+
+Validate both host profiles, public template contents, native registration,
+selected payload parity and changed-scope review without exposing credentials.
+
+#### Test Method
+
+Run existing setup fixture suites with HTTP Context7 definitions, endpoint drift
+and default merge-safe versus explicitly requested template-audit coverage.
+
+#### Evaluation Method
+
+Use explicit Context7 setup and near-miss lookup cases. Verify fresh remote tool
+discovery and bounded public documentation reads for authorized native setup;
+report unavailable model or comparative quality lanes separately.
+
+<!-- /REQUIREMENT: REQ-050 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

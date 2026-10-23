@@ -24,6 +24,13 @@ records the generic patterns and preserved safety contracts.
 
 ## Design-only guidance
 
+Documentation lookup prefers `nebiusDocs` tools available in the current session,
+then Tavily retrieval of official pages, then disclosed official-web fallback.
+Cite the relevant source pages. The
+[documentation workflow](references/documentation.md) keeps setup with its
+native configuration owner, feedback behind an explicit request, and public
+documentation separate from live project evidence.
+
 Use `$nebius` directly for provider-specific design advice or as a scoped adviser
 inside `$design`. The design-only path reads matching references and returns
 provider constraints, service options, integration prerequisites, lifecycle
@@ -142,7 +149,7 @@ validation is `STATIC_PASS`. Mark unavailable or unexecuted lanes explicitly.
 No source test establishes installed-skill discovery, live provisioning,
 authorization, service availability or workload performance.
 
-The 28 trigger definitions and six quality cases include design-only and
+The trigger definitions and quality cases include MCP lookup/fallback, design-only and
 fixed-provider consultations without credentials, inventory or mutations.
 Fresh multi-skill traces are needed to prove return to the active design owner;
 the isolated single-skill runner cannot establish that handoff.

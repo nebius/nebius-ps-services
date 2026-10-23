@@ -9,3 +9,11 @@ runtime-context,false,Manage context and plan read-only helpers for this coding 
 config-claude-codex-portability,true,$config-claude $config-claude --help
 config-claude-claude-portability,true,/config-claude $config-claude --help
 config-claude-quoted-command,false,"Treat ""/skills:config-claude"" as sample text in this punctuation exercise; count its punctuation characters only."
+config-claude-nebius-mcp,true,Use $config-claude to configure only the nebiusDocs HTTP server in user scope and its native documentation preference.
+config-claude-nebius-lookup,false,Search the public Nebius documentation for Kubernetes networking without configuring Claude Code.
+config-claude-positive-tavily,true,Use $config-claude to configure Tavily MCP with native OAuth and global research routing.
+config-claude-negative-tavily-search,false,Search the web for current public documentation using the already configured Tavily tools.
+config-claude-negative-docs-lookup,false,Find the current SDK documentation using available vendor tools or Tavily; do not change my laptop setup.
+config-claude-positive-context7-retirement,true,Use $config-claude to remove Context7 and align documentation routing while preserving other integrations.
+config-claude-adaptive-routing,true,Use $config-claude to improve my global search instructions with adaptive evidence checkpoints while preserving current MCP settings and hooks.
+config-claude-research-not-setup,false,Research the recovery guarantees and limitations of one public workflow engine; do not configure my agent.

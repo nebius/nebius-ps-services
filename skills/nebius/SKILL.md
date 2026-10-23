@@ -38,6 +38,14 @@ beyond `-h, --help`; bundled inspection commands have their own help.
 
 ## Required Reads
 
+For Nebius documentation lookup, use `nebiusDocs` search and retrieval tools
+already available in the current session first. If absent, failing or
+insufficient, use Tavily Search/Extract against official <https://docs.nebius.com>
+pages. If Tavily cannot help, disclose the limitation and use official-web
+search/retrieval. Preserve higher-priority host rules and cite relevant pages. Read `references/documentation.md` for tool selection, setup
+ownership and evidence boundaries. Public documentation requires no tenant
+credentials and does not establish live project state.
+
 Read only the matching category and conditional references before decisions:
 
 | Task | Read |

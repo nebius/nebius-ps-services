@@ -277,6 +277,11 @@ operation safeguards, stop on irreconcilable conflicts, explicitly read a
 newly generated `AGENTS.md` in the current session, and treat
 `AGENTS.override.md` as active without creating one automatically.
 
+Include the template's Nebius documentation routing/fallback/citation rule.
+An equivalent active user-owned rule outside the managed block already
+satisfies this guidance; do not duplicate it. This is a lookup preference,
+not a requirement to install the MCP server on every machine.
+
 Recommended managed block markers:
 
 ```markdown
@@ -323,6 +328,49 @@ because they appear in `assets/config.toml.template`.
 
 The private implement root is the exception only after explicit opt-in;
 follow the dedicated contract above and preserve the existing policy.
+
+### Selected MCP removal
+
+Remove a configured integration only when explicitly requested. For a selected
+HTTP OAuth server, use `codex mcp logout NAME` before removing its registration
+so the native client can identify its stored credentials. Patch only the selected
+MCP table or use native removal after checking its effect; preserve unrelated
+configuration and recheck the resulting bytes. An already-absent registration
+needs no rewrite. Local logout does not prove provider-side token revocation.
+Do not delete provider accounts, unrelated secrets or shared package caches.
+
+### Tavily OAuth and research routing
+
+For selected Tavily setup or research-routing changes, use
+[research-routing.md](research-routing.md). It covers native OAuth, optional
+keyring-only MCP storage and compact guidance without full-home bootstrap.
+
+### Nebius documentation MCP
+
+When explicitly selected for an existing Codex home, add only this missing
+table after inspecting the parsed configuration:
+
+```toml
+[mcp_servers.nebiusDocs]
+url = "https://docs.nebius.com/mcp"
+```
+
+Preserve an equivalent entry, and resolve a conflicting or disabled entry
+before replacing it. Use the native `AGENTS.md` routing rule to prefer its
+search/retrieval tools already available in the session, then Tavily retrieval
+of official pages, then disclosed official-web fallback. Cite the pages and
+do not attach tenant credentials to this public endpoint.
+
+Check registration with `codex mcp get nebiusDocs` and the connection in a
+fresh/reloaded session. A bounded public documentation search verifies read
+behavior; do not call `submit_feedback` as a health check. Report registration,
+endpoint reads and actual agent tool selection separately. The ordinary
+idempotency check does not require this optional registration; an explicitly
+requested `--require-template-mcp-servers` audit compares the full baseline.
+
+Sources: [Codex HTTP MCP configuration](https://learn.chatgpt.com/docs/extend/mcp),
+[documentation routing guidance](https://developers.openai.com/learn/docs-mcp#quickstart),
+and the [Nebius documentation endpoint](https://docs.nebius.com/mcp).
 
 For a missing config, the public-safe MCP baseline in the template restores the
 reusable MCP servers that can be expressed without private values. Executable
@@ -377,11 +425,8 @@ arrives and continue waiting on the remaining handles.
 
 Do not put actual token values in `config.toml`.
 
-For Context7:
-
-```bash
-export CONTEXT7_API_KEY="<context7-api-key>"
-```
+Selected Tavily setup uses native OAuth; see
+[research routing](research-routing.md) for registration and authentication.
 
 For GitHub MCP:
 
@@ -389,7 +434,7 @@ For GitHub MCP:
 export GITHUB_TOKEN="<github-token>"
 ```
 
-Store those exports in the user's preferred local shell or secret-management
+Store that export in the user's preferred local shell or secret-management
 setup. Do not commit them.
 
 ## Validation

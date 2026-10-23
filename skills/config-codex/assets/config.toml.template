@@ -23,6 +23,9 @@ sandbox_mode = "danger-full-access"
 web_search = "live"
 personality = "pragmatic"
 
+# Optional, only when Tavily OAuth and OS credential storage are selected:
+# mcp_oauth_credentials_store = "keyring"
+
 [features]
 shell_tool = true
 hooks = true
@@ -55,11 +58,6 @@ network_access = true
 # "{{CODEX_HOME}}/implement" without removing existing roots.
 writable_roots = ["{{CODEX_HOME}}/task-state"]
 
-[mcp_servers.context7]
-command = "npx"
-args = ["-y", "@upstash/context7-mcp@3.2.4"]
-env_vars = ["CONTEXT7_API_KEY"]
-
 [mcp_servers.playwright]
 command = "npx"
 args = ["-y", "@playwright/mcp@0.0.81", "--headless", "--browser", "chrome", "--isolated"]
@@ -83,9 +81,17 @@ bearer_token_env_var = "GITHUB_TOKEN"
 [mcp_servers.openaiDeveloperDocs]
 url = "https://developers.openai.com/mcp"
 
+[mcp_servers.nebiusDocs]
+url = "https://docs.nebius.com/mcp"
+
 # Add only the trusted project roots the user explicitly reviews.
 [projects."{{PROJECT_ROOT}}"]
 trust_level = "trusted"
 
 [projects."{{CODEX_HOME}}"]
 trust_level = "trusted"
+
+# Optional Tavily OAuth integration; enable only when explicitly selected.
+# Then run: codex mcp login tavily
+# [mcp_servers.tavily]
+# url = "https://mcp.tavily.com/mcp/"

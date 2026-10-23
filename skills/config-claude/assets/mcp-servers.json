@@ -1,24 +1,32 @@
 {
-  "context7": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "@upstash/context7-mcp@3.2.4"],
-    "env": {"CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"}
-  },
   "playwright": {
     "type": "stdio",
     "command": "npx",
-    "args": ["-y", "@playwright/mcp@0.0.81", "--headless", "--browser", "chrome", "--isolated"]
+    "args": [
+      "-y",
+      "@playwright/mcp@0.0.81",
+      "--headless",
+      "--browser",
+      "chrome",
+      "--isolated"
+    ]
   },
   "terraform": {
     "type": "stdio",
     "command": "docker",
-    "args": ["run", "-i", "--rm", "hashicorp/terraform-mcp-server:0.5.2"]
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "hashicorp/terraform-mcp-server:0.5.2"
+    ]
   },
   "markitdown": {
     "type": "stdio",
     "command": "uvx",
-    "args": ["markitdown-mcp==0.0.1a4"]
+    "args": [
+      "markitdown-mcp==0.0.1a4"
+    ]
   },
   "microsoftdocs": {
     "type": "http",
@@ -27,10 +35,20 @@
   "github": {
     "type": "http",
     "url": "https://api.githubcopilot.com/mcp/",
-    "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}
+    "headers": {
+      "Authorization": "Bearer ${GITHUB_TOKEN}"
+    }
   },
   "openaiDeveloperDocs": {
     "type": "http",
     "url": "https://developers.openai.com/mcp"
+  },
+  "tavily": {
+    "type": "http",
+    "url": "https://mcp.tavily.com/mcp/"
+  },
+  "nebiusDocs": {
+    "type": "http",
+    "url": "https://docs.nebius.com/mcp"
   }
 }

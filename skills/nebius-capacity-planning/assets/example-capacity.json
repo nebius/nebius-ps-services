@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "pools": [
+    {
+      "id": "core",
+      "allocatable": {
+        "cpu_m": 4000,
+        "memory_mib": 8192,
+        "ephemeral_mib": 20480,
+        "gpus": 0
+      },
+      "pod_slots": 20,
+      "overhead_pods": 2,
+      "overhead": {
+        "requests": {
+          "cpu_m": 500,
+          "memory_mib": 512,
+          "ephemeral_mib": 0,
+          "gpus": 0
+        },
+        "limits": {
+          "cpu_m": 1000,
+          "memory_mib": 1024,
+          "ephemeral_mib": 0,
+          "gpus": 0
+        },
+        "runtime": {
+          "cpu_m": 750,
+          "memory_mib": 512,
+          "ephemeral_mib": 0,
+          "gpus": 0
+        }
+      }
+    }
+  ],
+  "components": [
+    {
+      "id": "api",
+      "pool": "core",
+      "allocation": {
+        "requests": {
+          "cpu_m": 1000,
+          "memory_mib": 1024,
+          "ephemeral_mib": 0,
+          "gpus": 0
+        },
+        "limits": {
+          "cpu_m": null,
+          "memory_mib": 2048,
+          "ephemeral_mib": 0,
+          "gpus": 0
+        },
+        "runtime": {
+          "cpu_m": 1500,
+          "memory_mib": 1024,
+          "ephemeral_mib": 0,
+          "gpus": 0
+        }
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "steady",
+      "nodes": {
+        "core": {
+          "base": 2,
+          "surge": 0,
+          "unavailable": 0
+        }
+      },
+      "replicas": {
+        "api": 4
+      },
+      "budgets": [
+        {
+          "id": "persistent-data",
+          "unit": "GiB",
+          "capacity": 500,
+          "items": [
+            {
+              "id": "live",
+              "quantity": 100,
+              "copies": 3
+            },
+            {
+              "id": "backup",
+              "quantity": 150,
+              "copies": 1
+            }
+          ]
+        },
+        {
+          "id": "node-addresses",
+          "unit": "count",
+          "capacity": 4,
+          "items": [
+            {
+              "id": "workers",
+              "quantity": 1,
+              "copies": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
