@@ -207,6 +207,7 @@ def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
 
 
 BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
+    "nat-gateway": {},  # Dedicated transactional wizard owns these fields.
     "vpc": {
         "inputs.parent_id": {
             "prompt": False,

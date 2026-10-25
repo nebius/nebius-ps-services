@@ -6,6 +6,24 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Update the supported uv toolchain to `>=0.13.5,<0.14` and align cxcli CI,
+  release, Nsight, and setup guidance so `make all` accepts uv 0.13.5 while
+  retaining locked dependencies and hash-constrained wheel builds.
+- Refresh Terraform status-test fixtures for NAT state preflight while keeping
+  lifecycle guards active, and isolate token-test fixtures from ambient
+  credentials and CLI profiles.
+
+- Add the opt-in `nat-gateway` Terraform component and guided CPU-only SDK
+  discovery, preferred `cpu-d3` / `4vcpu-16gb`, live quota admission, dedicated
+  subnet and preserved routing policies. Deployment stages guest verification
+  before cutover and records shared conditional recovery/restoration state.
+  Add NAT inspection, route refresh and explicit recovery commands, plus strict
+  SSH trust options on deploy. Direct Terraform mutations reject managed NAT.
+  Validate provisioning even when routing is disabled, recover interrupted
+  attachments from Terraform state, retain exact rendered module identities,
+  and finalize retirement after a no-op retry. Preserve indexed configuration
+  errors for malformed component rows.
+
 - Align the documentation contract inventory test with the verified profiling
   report destination requirement and feature.
 

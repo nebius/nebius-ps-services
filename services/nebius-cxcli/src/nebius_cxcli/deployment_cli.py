@@ -65,6 +65,8 @@ class DeployOptions:
     requeue_job_ids: tuple[str, ...] = ()
     job_wait_timeout: str = "0s"
     job_refresh_interval: str = "30s"
+    ssh_private_key: Path | None = None
+    ssh_known_hosts_file: Path | None = None
 
     def controls(self) -> dict[str, Any]:
         return {
@@ -185,6 +187,7 @@ def _deploy_validated_bundle(
         frozen_soperator_topology(),
         deployment_preview(options.dry_run),
         private_project_root(Path(directory)),
+        ExitStack() as nat_resources,
     ):
         from .deployment_workflow import _semantic_controls
 
@@ -217,6 +220,9 @@ def _deploy_validated_bundle(
         )
         executor.generation = generation
         executor.report_paths = paths
+        from .nat_gateway_deploy import NatDeployment
+
+        executor.nat = nat_resources.enter_context(NatDeployment(executor, settings=settings))
         executor.desired_generation = desired_generation
         executor.source_generation = source_generation
         executor.accepted_evidence = accepted_record.get("evidence", {}) if accepted_record else {}
@@ -558,6 +564,8 @@ class _CliDeploymentExecutor:
             raise RuntimeError("Compatibility admission is incomplete")
         self.compatibility_report = compatibility_report
         self._prepare_runtime_inputs()
+        if getattr(self, "nat", None) is not None:
+            self.nat.prepare()
 
     def _prepare_runtime_inputs(self) -> None:
         self.runtime_env = self.cli._terraform_runtime_env(self.config)
@@ -840,6 +848,8 @@ class _CliDeploymentExecutor:
             )
         plan_file.chmod(0o600)
         self.observation_plan = payload
+        if getattr(self, "nat", None) is not None:
+            self.nat.check_plan(payload)
         self._observation = TerraformObservation(
             self.paths.infra_dir.resolve(), terraform_inputs(self.paths.infra_dir), payload
         )
@@ -912,6 +922,7 @@ class _CliDeploymentExecutor:
                 assert_authority=assert_authority,
             )
         assert_authority()
+        self.complete_nat()
         _, after = self._terraform_plan(purpose="Verify project infrastructure convergence")
         if terraform_changes(after):
             raise RuntimeError("Project Terraform has not reached its admitted postconditions")
@@ -1327,6 +1338,10 @@ class _CliDeploymentExecutor:
             if dry_run:
                 self._prepared_release = prepared_release
 
+    def complete_nat(self) -> None:
+        if getattr(self, "nat", None) is not None:
+            self.nat.complete()
+
     def execute(self, admission: StageAdmission, *, recovering: bool) -> None:
         assert self.plan is not None
         self.cli.progress_console.print("Deploy: Deploy")
@@ -1381,6 +1396,7 @@ class _CliDeploymentExecutor:
             expected_identities=self._bound_identities(),
             on_target_identity=self._bind_application_identity,
             prepare_application_inputs=self._prepare_install_application_inputs,
+            on_terraform_complete=self.complete_nat,
             on_target_inputs=self._admit_install_application_inputs,
             soperator_plan=self.plan,
             soperator_release_complete=release_complete,
@@ -1416,6 +1432,8 @@ class _CliDeploymentExecutor:
 
     def verify_final(self, plan: DeploymentPlan) -> Mapping[str, Any]:
         self.cli.progress_console.print("Deploy: Verify")
+        if getattr(self, "nat", None) is not None:
+            self.nat.verify()
         self._desired_application_generation(fresh=True, purpose="Verify final application inputs")
         progress = SoperatorUpgradeProgress(self.cli.progress_console, prefix="Deploy")
         self._verifying_final = True

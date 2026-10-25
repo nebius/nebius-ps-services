@@ -23,7 +23,9 @@ Verify the selected provider's current instructions before changing a pin.
    alone is insufficient. Preserve existing custom definitions and ask about a
    concrete conflict unless the requested replacement is already authorized.
    Account for project and plugin definitions to avoid duplicate connections.
-4. For an authorized missing user server, pass that catalog entry as literal
+4. Tavily requires the preparation and placeholder rendering in
+   [tavily-bridge.md](tavily-bridge.md); never register its catalog placeholders
+   literally. For another authorized missing user server, pass that catalog entry as literal
    JSON to `claude mcp add-json --scope user NAME JSON`. Use an argument array
    when invoking from code; do not interpolate JSON through a shell. Keep
    `${GITHUB_TOKEN}` literal in saved configuration when selected.
@@ -47,7 +49,8 @@ claude mcp add-json --scope user microsoftdocs \
 The default MCP CLI scope is local, so always specify `--scope user` for this
 skill. Claude owns the corresponding application JSON and authentication;
 do not put `mcpServers` into `settings.json` or copy Codex TOML fields. OAuth
-and secrets stay in their native external flows. [Claude MCP](https://code.claude.com/docs/en/mcp)
+and secrets stay in their owning flows; selected Tavily uses the bridge's
+private file store. [Claude MCP](https://code.claude.com/docs/en/mcp)
 
 ## Selected removal
 
@@ -89,9 +92,9 @@ and the [public Nebius endpoint](https://docs.nebius.com/mcp).
 
 ### Tavily OAuth
 
-For selected Tavily registration, native login and global routing, read
+For selected Tavily bridge registration, browser login and global routing, read
 [research-routing.md](research-routing.md). Use user scope, preserve native
-credential ownership and verify OAuth separately from the shape-only checker.
+scope ownership and verify bridge OAuth separately from the shape-only checker.
 
 ### Other providers
 

@@ -1,0 +1,40 @@
+#cloud-config
+users:
+  - name: ${ssh_user_name}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${jsonencode(ssh_public_key)}
+ssh_pwauth: false
+disable_root: true
+packages:
+  - iptables
+write_files:
+  - path: /etc/sysctl.d/90-nebius-nat.conf
+    permissions: '0644'
+    content: |
+      net.ipv4.ip_forward=1
+  - path: /etc/nebius-nat.json
+    permissions: '0644'
+    content: ${jsonencode(guest_config)}
+  - path: /usr/local/sbin/nebius-nat
+    permissions: '0755'
+    content: |
+      ${indent(6, guest_program)}
+  - path: /etc/systemd/system/nebius-nat.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Nebius custom NAT gateway
+      Wants=network-online.target
+      After=network-online.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/nebius-nat configure
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [sysctl, --system]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, nebius-nat.service]

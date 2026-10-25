@@ -33,6 +33,26 @@ components:
         group: Network
         enabled: false
       wizard_profile: vpc
+    nat-gateway:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/nat-gateway?ref=main
+        local: ../../platform-infra/modules/nat-gateway
+      ui:
+        title: Custom NAT gateway (single CPU VM)
+        group: Network
+        enabled: false
+      status:
+        kind: nebius.compute.instance
+        parent_input: parent_id
+        name_input: name
+      wizard_profile: nat-gateway
+      defaults:
+        inputs.platform: cpu-d3
+        inputs.preset: 4vcpu-16gb
+        inputs.gateway_subnet_cidr: /28
+        inputs.boot_disk_size_gib: 20
+        inputs.boot_disk_type: NETWORK_SSD
+        inputs.ssh_user_name: shared.admin_ssh.user_name
     managed-postgresql:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main

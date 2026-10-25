@@ -73,7 +73,10 @@ that baseline.
   `hooks.json`, and undocumented feature keys from public recovery assets.
 - Store secret values only in the user's shell, password manager, or external
   secret manager. In `config.toml`, reference secret variable names such as
-  `GITHUB_TOKEN`. Selected OAuth integrations use native credential storage.
+  `GITHUB_TOKEN`. OAuth integrations use native credential storage except the
+  explicitly selected Tavily bridge, which owns separate protected files as
+  documented in `references/tavily-bridge.md`. Never silently downgrade a
+  Keychain-only requirement.
 - Inspect and build a patch plan before writing. Back up an existing local file
   only when that file will actually be changed.
 - `AGENTS.md` and `config.toml` are patch-only when they already exist. Create
@@ -201,7 +204,9 @@ recovery boundary.
 
 For requested Tavily OAuth or global research routing, read
 [references/research-routing.md](references/research-routing.md). Tavily remains
-opt-in. Reconcile only the selected configuration and the template's
+opt-in. Selected bridge setup follows [references/tavily-bridge.md](references/tavily-bridge.md),
+including locked preparation, private file storage and native migration.
+Reconcile only the selected configuration and the template's
 Documentation and Web Research section; preserve equivalent active user rules
 without duplication. A routing-only request does not bootstrap hooks, roles,
 permissions or the rest of the home. An absent instruction file may contain

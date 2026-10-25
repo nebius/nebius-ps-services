@@ -29,6 +29,9 @@ reviewable supporting assets.
 - AC-005: Identical shared hook payloads produce one installed file and one
   registration per event without a duplicate-destination notice. Conflicting
   payloads fail preflight before skill or hook writes.
+- AC-006: Shared hook runtime dependencies are included in expected-file
+  reporting and changed/unchanged totals. A runtime-only update triggers the
+  same restart notice as any other changed hook payload.
 
 #### Negative Criteria
 
@@ -3770,8 +3773,8 @@ OAuth and consistent global documentation and web-research guidance.
 
 #### Acceptance Criteria
 
-- AC-001: Tavily is opt-in in both setup skills, using the public HTTP endpoint and native OAuth without inline API keys; existing unrelated configuration is preserved.
-- AC-002: Codex supports explicitly selected keyring-only MCP OAuth storage; Claude retains native credential ownership. Registration, authorization and fresh tool availability are reported separately.
+- AC-001: Tavily is opt-in in both setup skills. Ordinary Codex and Claude launches start a pinned mcp-remote stdio bridge to the hosted public HTTPS endpoint. The bridge reuses credentials and opens the browser when OAuth is needed; no application launcher, login hook or API-key fallback is introduced. Existing unrelated configuration is preserved.
+- AC-002: Selected Tavily bridge credentials use separate private per-agent-home file stores with 0700 directories and 0600 files, plus distinct callback ports. Other providers retain native credential ownership and existing keyring policy. No tokens are copied. Registration, authorization, fresh tools and observed renewal are reported separately.
 - AC-003: Global guidance uses local evidence and relevant vendor documentation MCP tools already available in the current session, then Tavily against official version-appropriate sources, then disclosed official-web fallback if tools, authentication or coverage are insufficient. Mere registration is not availability; operational MCPs are not automatically documentation sources.
 - AC-004: Documentation questions, including small lookups, follow AC-003. Builtin search may handle unrelated quick facts; Tavily Search, Extract, Map, Crawl and Research are selected by purpose with bounded work, primary-source citations and actual discovered schemas. No mandatory tool chain or duplicate research job is required.
 - AC-005: Source templates, references, checks, evals and both native payloads agree across config-codex, config-claude, design, brainstorm, research and nebius, preserving explicit invocation, optional integration absence and selected-scope reconciliation.
@@ -3782,6 +3785,10 @@ OAuth and consistent global documentation and web-research guidance.
 - AC-008: The research skill optionally delegates substantial public synthesis to Tavily Research using a sanitized brief and an explicit supported model. It launches one initial job per scope, reuses supported completion mechanisms, prevents equivalent duplicate jobs after uncertain completion and verifies decisive claims in original sources.
 - AC-009: Direct retrieval allowances and opaque service-internal work are distinguished. Unsupported query, page, domain, time or cost controls are never promised; a hard constraint that cannot be enforced routes to a suitable direct method or an explicit limitation. Unavailable capability, failed or incomplete output and unresolved citations retain honest evidence states without authentication repair.
 - AC-010: Authorized source and installed refreshes are limited to changed skill files and global research instruction sections. Existing working changes, native metadata, credentials, MCP settings, hooks, installed extras and unrelated instructions are preserved; fresh native and comparative quality evidence remain separate from static and package validation.
+
+- AC-011: Setup installs a locked, reviewed bridge runtime plus exact-hash-guarded callback-readiness and connection-probe fixes with npm lifecycle scripts disabled; ordinary client startup does not download packages. Source assets and helper mirrors remain equal, and selected static checks are non-mutating. Aligned setup reruns perform no writes.
+- AC-012: The bridge uses 300-second callback/coordination timers; these are not an overall browser deadline. The native connection deadline bounds the wait. Codex allows at least 360 seconds for Tavily startup and tool execution; Claude has a selected 360000-millisecond global startup maximum, preserving longer limits. This is a timeout, never a forced launch delay.
+- AC-013: Migration is scoped and reversible at the configuration boundary. Claude native replacement may remove its previous Tavily OAuth state and rollback may require login; Codex native credentials are retained. Same-host and cross-host concurrency, cancellation and failure handling are qualified separately from natural expiry.
 
 #### Negative Criteria
 
@@ -3846,6 +3853,46 @@ discovery and bounded public documentation reads for authorized native setup;
 report unavailable model or comparative quality lanes separately.
 
 <!-- /REQUIREMENT: REQ-050 -->
+
+<!-- REQUIREMENT: REQ-051 status=active priority=P1 type=feature -->
+### REQ-051: Explain local Grafana MCP authentication and restart failures
+
+#### User Story
+
+Users need local Grafana MCP startup failures to identify the failing boundary
+without exposing credentials or claiming unsupported token renewal behavior.
+
+#### Acceptance Criteria
+
+- AC-001: Keep local stdio, one pinned human CLI identity, a protected token file, a one-hour startup cache-age heuristic, a best-effort ten-hour noninteractive retrieval schedule and the bounded 300-second startup setting.
+- AC-002: Local registration, private-state safety and binary checks precede online identity validation. Rejected local state causes no identity lookup or private-state writes.
+- AC-003: Stable sanitized stderr phase/code diagnostics cover configuration, identity, locks, token retrieval, child startup/exit and restart. Natural child exit status is preserved.
+- AC-004: Scheduled retrieval closes the retained stdio client with restart-required status 75 even when token bytes are unchanged. Foreground identity validation alone may open browser authentication.
+- AC-005: Readiness reports distinguish initialization failure, HTTP 401, HTTP 403 and timeout; successful initialization and a bounded datasource read are separate checks.
+
+#### Negative Criteria
+
+- NC-001: File mtime and successful retrieval must not be represented as issuance, expiry or an extended lifetime. The schedule must not promise stopping before expiry or surviving laptop suspension without interruption.
+- NC-002: Do not add a remote gateway, Keychain dependency, inline-token fallback, silent identity change or same-session reconnect guarantee. Never forward raw credential-bearing diagnostics.
+
+#### Validation Method
+
+Use source fixtures, static contract checks, lint/security review, selected
+installed-copy parity and a fresh native readiness check. Keep evidence lanes
+separate from natural token expiry and browser reauthentication.
+
+#### Test Method
+
+Cover local-first failure ordering, same-token retrieval, sanitized errors,
+child status preservation, locks and scheduled restart. Qualify the installed
+binary against a loopback Grafana fixture with dummy tokens.
+
+#### Evaluation Method
+
+Review explicit setup cases and adjacent query exclusions. Report unexecuted
+native skill-trigger, comparative quality and natural-lifetime checks honestly.
+
+<!-- /REQUIREMENT: REQ-051 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -27,14 +27,15 @@
     },
     {
       "id": 3,
-      "prompt": "Use $config-codex to plan only the explicitly selected Tavily OAuth setup for Codex. The global endpoint is absent, and keyring-only MCP OAuth storage is explicitly selected. Preserve unrelated configuration and do not perform setup or inspect real homes.",
-      "expected_output": "A native URL-only registration and OAuth plan with separate evidence states.",
+      "prompt": "Use $config-codex to plan only the explicitly selected Tavily OAuth bridge setup. Separate private file storage is accepted. Preserve unrelated configuration and do not perform setup or inspect real homes.",
+      "expected_output": "A pinned bridge setup plan using ordinary client launch, private per-home credentials and separate verification states.",
       "files": [],
       "assertions": [
-        "Keeps Tavily opt-in and uses https://mcp.tavily.com/mcp/ with native login and user browser consent.",
-        "Preserves unrelated settings and credentials; never puts API keys in URLs, headers or templates.",
-        "Distinguishes registration, successful OAuth, fresh tool discovery and routing quality.",
-        "Uses top-level mcp_oauth_credentials_store = \"keyring\" without changing cli_auth_credentials_store; reports unavailable keyring rather than downgrading storage."
+        "Keeps Tavily opt-in and uses a locked mcp-remote bridge to https://mcp.tavily.com/mcp/; no launcher, alias, login hook or runtime package download.",
+        "States that the bridge owns private file credentials rather than native Keychain, with separate per-host stores and callback ports.",
+        "Preserves unrelated settings and credentials; never prints or copies tokens or silently substitutes API keys.",
+        "Distinguishes static setup, browser OAuth, fresh tool discovery/search and observed expiry; does not claim natural refresh from a simulated timestamp.",
+        "Uses Tavily-specific Codex startup and tool timeout floors of 360 seconds; leaves global credential-store settings unchanged."
       ]
     },
     {
@@ -97,6 +98,28 @@
         "Does not promise internal query/page/domain/time/cost limits from one Research job or unsupported parameters.",
         "Updates only selected skill files and the global research section after baseline/concurrent-edit checks, preserving unrelated content and native metadata.",
         "Does not run full setup, hook refresh, ownership migration or credential changes; distinguishes static, native and quality evidence."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use $config-codex for report-only advice: I want automatic Tavily OAuth recovery but require all credentials to remain in Keychain. Do not inspect or change my setup.",
+      "expected_output": "Explain that the standard bridge file store conflicts with the requirement without silently changing storage.",
+      "files": [],
+      "assertions": [
+        "States the standard mcp-remote bridge uses files and does not meet Keychain-only storage.",
+        "Does not install, copy native tokens, invent a Keychain provider or switch to API keys.",
+        "Preserves the existing configuration and reports the specific unresolved storage constraint."
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use $config-codex for report-only review: an otherwise aligned Tavily bridge entry has enabled = false and its Node command is a symlink under a world-writable directory. Do not inspect or change my real setup.",
+      "expected_output": "Explains selected bridge safety and verification limits without changing the laptop.",
+      "files": [],
+      "assertions": [
+        "Reports the selected disabled entry as not aligned without silently enabling it.",
+        "Rejects the unsafe executable path even when the symlink target itself is trusted.",
+        "Distinguishes static checks and manual macOS OAuth fixture results from live authentication."
       ]
     }
   ]

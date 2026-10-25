@@ -6,3 +6,5 @@ ordinary-edit,false,"Fix this one typo."
 sdlc,false,"$sdlc-start Build the accepted feature."
 review,false,"Review the current changes without implementing them."
 implement-steered-delivery,true,$implement continue example-project after the accepted steering revision.
+multiline-plan,true,"$implement Execute the accepted plan with the multiline API schema and acceptance checks included in each task assignment."
+review-workflow,false,"Use $align-skill and $code-review to review the $implement workflow and fix findings before I use it."

@@ -1117,6 +1117,8 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
     if not isinstance(apps_charts, list):
         raise ValueError("apps.charts must be a list in dynamic config mode")
 
+    from .nat_gateway import validate_nat_config
+
     app_lookup = component_lookup("apps")
     infra_lookup = component_lookup("infra")
     seen_infra_instance_ids: set[str] = set()
@@ -1137,7 +1139,10 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             str(key)
             for key in raw_component
             if str(key)
-            not in {"id", "instance_id", "enabled", "source", "version", "inputs", "bindings"}
+            not in (
+                {"id", "instance_id", "enabled", "source", "version", "inputs", "bindings"}
+                | ({"routing"} if raw_component.get("id") == "nat-gateway" else set())
+            )
         )
         if unknown_keys:
             raise ValueError(
@@ -1249,6 +1254,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         if component_id == "vm" and bool(raw_component.get("enabled", False)):
             enabled_vm_instance_ids.add(instance_id)
 
+    validate_nat_config(payload)
     for cidr_entries in existing_network_private_cidrs.values():
         _validate_vpc_private_cidr_entries_do_not_overlap(cidr_entries)
 

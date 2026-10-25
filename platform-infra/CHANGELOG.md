@@ -13,6 +13,11 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Add `modules/nat-gateway`, composing a regular CPU VM, dedicated explicit
+  subnet, stable private/public allocations and policy-preserving route tables.
+  Persistent guest forwarding and restrictive administration rules include a
+  read-only readiness verifier. Consumer attachment remains with the caller.
+
 - Added `modules/vpc`, a reusable Nebius VPC module that can create a new
   VPC network with optional subnets or create declared subnets under an
   existing VPC network for planned-resource wiring through `nebius-cxcli`.

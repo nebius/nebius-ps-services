@@ -1,12 +1,14 @@
 # Config Claude
 
-Optional Tavily setup uses native OAuth and preserves unrelated configuration.
+Optional Tavily setup uses a pinned OAuth bridge and preserves unrelated configuration.
+Its strict checks validate executable paths and native wiring; the macOS OAuth
+fixture is a manual qualification step documented in [the bridge guide](references/tavily-bridge.md).
 Global documentation routing prefers vendor tools available in the current
 session, then Tavily against official sources, then disclosed official-web
 fallback. Small documentation lookups follow the same route. Search,
 Extract, Map, Crawl and Research are purpose-specific choices, not a required
 pipeline. See [research routing and OAuth setup](references/research-routing.md)
-for native commands, credential storage and separate verification lanes.
+for setup commands, private per-host file storage and separate verification lanes.
 
 An explicit setup skill for Claude Code, usable from Codex or Claude. It
 preserves personal settings while reconciling native instructions, three

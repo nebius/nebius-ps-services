@@ -39,7 +39,12 @@ def validate_backend_bucket(settings: TerraformBackendSettings, bucket: Bucket) 
         StorageClass.INTELLIGENT,
     }:
         raise RuntimeError("Terraform backend bucket storage class is unsupported")
-    keys = (settings.key, settings.key + ".tflock")
+    keys = (
+        settings.key,
+        settings.key + ".tflock",
+        settings.key + ".nat.json",
+        settings.key + ".nat.lock",
+    )
     anonymous_seen = False
     for rule in bucket.spec.bucket_policy.rules:
         if not rule.check_presence("anonymous"):

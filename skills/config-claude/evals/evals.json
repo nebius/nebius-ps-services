@@ -77,14 +77,15 @@
     },
     {
       "id": 7,
-      "prompt": "Use $config-claude to plan only the explicitly selected Tavily OAuth setup for Claude. The global endpoint is absent. Preserve unrelated configuration and do not perform setup or inspect real homes.",
-      "expected_output": "A native URL-only registration and OAuth plan with separate evidence states.",
+      "prompt": "Use $config-claude to plan only the explicitly selected Tavily OAuth bridge setup. Separate private file storage is accepted. Preserve unrelated configuration and do not perform setup or inspect real homes.",
+      "expected_output": "A pinned bridge setup plan using ordinary client launch, private per-home credentials and separate verification states.",
       "files": [],
       "assertions": [
-        "Keeps Tavily opt-in and uses https://mcp.tavily.com/mcp/ with native login and user browser consent.",
-        "Preserves unrelated settings and credentials; never puts API keys in URLs, headers or templates.",
-        "Distinguishes registration, successful OAuth, fresh tool discovery and routing quality.",
-        "Uses native Claude user-scope MCP registration and credential ownership; does not put MCP in settings.json or copy Codex configuration fields."
+        "Keeps Tavily opt-in and uses a locked mcp-remote bridge to https://mcp.tavily.com/mcp/; no launcher, alias, login hook or runtime package download.",
+        "States that the bridge owns private file credentials rather than native Keychain, with separate per-host stores and callback ports.",
+        "Preserves unrelated settings and credentials; never prints or copies tokens or silently substitutes API keys.",
+        "Distinguishes static setup, browser OAuth, fresh tool discovery/search and observed expiry; does not claim natural refresh from a simulated timestamp.",
+        "Uses native user-scope registration and explains the global 360000-millisecond maximum startup timeout, not a fixed delay; removal can delete old Tavily OAuth state."
       ]
     },
     {
@@ -147,6 +148,28 @@
         "Does not promise internal query/page/domain/time/cost limits from one Research job or unsupported parameters.",
         "Updates only selected skill files and the global research section after baseline/concurrent-edit checks, preserving unrelated content and native metadata.",
         "Does not run full setup, hook refresh, ownership migration or credential changes; distinguishes static, native and quality evidence."
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Use $config-claude for report-only advice: I want automatic Tavily OAuth recovery but require all credentials to remain in Keychain. Do not inspect or change my setup.",
+      "expected_output": "Explain that the standard bridge file store conflicts with the requirement without silently changing storage.",
+      "files": [],
+      "assertions": [
+        "States the standard mcp-remote bridge uses files and does not meet Keychain-only storage.",
+        "Does not install, copy native tokens, invent a Keychain provider or switch to API keys.",
+        "Preserves the existing configuration and reports the specific unresolved storage constraint."
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Use $config-claude for report-only review: the Tavily Node command is a symlink under a world-writable directory and the host MCP timeout exceeds six minutes. Do not inspect or change my real setup.",
+      "expected_output": "Explains selected bridge safety and verification limits without changing the laptop.",
+      "files": [],
+      "assertions": [
+        "Rejects the replaceable executable path despite a trusted resolved target.",
+        "Explains that a longer host timeout does not extend the patched bridge internal 360-second probe.",
+        "Describes the OAuth fixture as manual macOS qualification and does not claim default CI or live authentication proof."
       ]
     }
   ]

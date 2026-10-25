@@ -8,7 +8,7 @@ import yaml
 
 _SETUP_UV_REPOSITORY = "astral-sh/setup-uv"
 _SETUP_UV_INPUTS = {
-    "version": "0.12.9",
+    "version": "0.13.5",
     "enable-cache": "true",
     "cache-dependency-glob": "services/nebius-cxcli/uv.lock",
 }

@@ -14,6 +14,8 @@ Reusable modules under `modules/`:
 
 - [`mk8s`](modules/mk8s/README.md): Nebius Managed Kubernetes cluster and node groups.
 - [`vpc`](modules/vpc/README.md): Nebius VPC network and subnet ownership.
+- [`nat-gateway`](modules/nat-gateway/README.md): Custom CPU NAT gateway with an
+  explicit dedicated subnet, stable allocations and separate routing policies.
 - [`managed-postgresql`](modules/managed-postgresql/README.md): Nebius Managed PostgreSQL cluster.
 - [`sfs`](modules/sfs/README.md): Nebius Shared File System.
 - [`nfs`](modules/nfs/README.md): VM-backed NFS bridge for explicit NFS compatibility cases.

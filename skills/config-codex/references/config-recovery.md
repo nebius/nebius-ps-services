@@ -28,7 +28,8 @@ secret manager.
 
 Tavily is shown only as a commented opt-in OAuth example. Recovery does not
 activate it or require a credential store; use [research-routing.md](research-routing.md)
-when Tavily or keyring-only MCP OAuth storage is explicitly selected.
+when Tavily is explicitly selected. Its bridge uses private file storage;
+keyring-only requirements must not be silently downgraded.
 
 ## Intentionally Excluded
 

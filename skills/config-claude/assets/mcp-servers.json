@@ -44,8 +44,10 @@
     "url": "https://developers.openai.com/mcp"
   },
   "tavily": {
-    "type": "http",
-    "url": "https://mcp.tavily.com/mcp/"
+    "type": "stdio",
+    "command": "<ABSOLUTE_NODE>",
+    "args": ["<TAVILY_RUNTIME>/node_modules/mcp-remote/dist/proxy.js", "https://mcp.tavily.com/mcp/", "37412", "--transport", "http-only", "--auth-timeout", "300", "--silent"],
+    "env": {"MCP_REMOTE_CONFIG_DIR": "<TAVILY_AUTH_DIR>"}
   },
   "nebiusDocs": {
     "type": "http",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 report_test_failure() {
   local status="$?"
@@ -9,6 +9,13 @@ report_test_failure() {
   return "$status"
 }
 trap 'report_test_failure "$LINENO" "$BASH_COMMAND"' ERR
+
+assert_absent() {
+  if grep -Eq "$1" "$2"; then
+    printf 'unexpected forbidden diagnostic content in fixture output\n' >&2
+    exit 1
+  fi
+}
 
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 wrapper="${script_dir}/run-nebius-grafana-mcp.sh"
@@ -31,6 +38,13 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+printf 'fixture-secret\n' >"${tmp_dir}/assertion-oracle"
+if (assert_absent '^fixture-secret$' "${tmp_dir}/assertion-oracle") >/dev/null 2>&1; then
+  printf 'negative-output assertion did not reject an injected secret\n' >&2
+  exit 1
+fi
+assert_absent '^absent$' "${tmp_dir}/assertion-oracle"
 
 test_home="${tmp_dir}/home"
 fake_bin="${tmp_dir}/bin"
@@ -67,6 +81,10 @@ case " $* " in
     exit 0
     ;;
   *" iam whoami "*)
+    if [ "${FAKE_IDENTITY_FAIL:-false}" = "true" ]; then
+      printf "%s\n" "${FAKE_FAILURE_STDERR:-fixture failure}" >&2
+      exit 7
+    fi
     if [ "${FAKE_AUTH_REQUIRES_BROWSER:-false}" = "true" ]; then
       case " $* " in
         *" --no-browser "*)
@@ -126,9 +144,10 @@ case " $* " in
     fi
     if [ -n "${FAKE_TOKEN_FAIL_AFTER:-}" ] \
       && [ "$count" -gt "$FAKE_TOKEN_FAIL_AFTER" ]; then
+      printf '%s\n' "${FAKE_FAILURE_STDERR:-fixture failure}" >&2
       exit 1
     fi
-    printf 'fake-nebius-token-%s\n' "$count"
+    printf '%s\n' "${FAKE_TOKEN_VALUE:-fake-nebius-token-$count}"
     exit 0
     ;;
 esac
@@ -170,6 +189,9 @@ record_state() {
 }
 
 record_state "$@"
+if [ -n "${MCP_STDERR:-}" ]; then
+  printf '%s\n' "$MCP_STDERR" >&2
+fi
 if [ -n "${MCP_PID_CAPTURE_FILE:-}" ]; then
   printf '%s\n' "$$" >"$MCP_PID_CAPTURE_FILE"
 fi
@@ -572,8 +594,8 @@ STRINGS_MODE="token-file" \
   run_wrapper >"${tmp_dir}/missing-token-output" 2>&1
 test -s "$token_file"
 test "$(cat "$token_counter")" = "1"
-grep -Fq 'renewing it before MCP startup' "${tmp_dir}/missing-token-output"
-grep -Fq '<browser-auth-url-redacted>' "${tmp_dir}/missing-token-output"
+grep -Fq 'code=TOKEN_CACHE_RETRIEVAL' "${tmp_dir}/missing-token-output"
+grep -Fq 'code=AUTH_FOREGROUND' "${tmp_dir}/missing-token-output"
 if grep -Fq 'state=fixture-only' "${tmp_dir}/missing-token-output"; then
   printf 'foreground startup output exposed the browser authentication URL\n' >&2
   exit 1
@@ -666,7 +688,7 @@ STRINGS_MODE="token-file" \
   FAKE_AUTH_REQUIRES_BROWSER="true" \
   MCP_CAPTURE_FILE="${tmp_dir}/stale-startup-capture" \
   run_wrapper >"${tmp_dir}/stale-startup-output" 2>&1
-grep -Fq 'renewing it before MCP startup' "${tmp_dir}/stale-startup-output"
+grep -Fq 'code=TOKEN_CACHE_RETRIEVAL' "${tmp_dir}/stale-startup-output"
 grep -Fxq "token_file=$token_file" "${tmp_dir}/stale-startup-capture"
 if sed -n '1p' "$nebius_log" | grep -Fq -- '--no-browser'; then
   printf 'stale-token startup identity validation unexpectedly disabled browser authentication\n' >&2
@@ -675,7 +697,62 @@ fi
 grep -F 'args:iam get-access-token' "$nebius_log" \
   | grep -Fq -- '--no-browser'
 test "$(grep -Fc -- '--no-browser' "$nebius_log")" = "2"
+assert_absent 'https://auth|state=fixture-only|tenantuseraccount-|fake-nebius-token-' "${tmp_dir}/stale-startup-output"
 run_wrapper --refresh-token-only >/dev/null 2>&1
+
+# A successful retrieval may return exactly the same token. Cache age is not
+# evidence that the CLI issued a new credential or extended its lifetime.
+same_token="$(cat "$token_file")"
+: >"$nebius_log"
+FAKE_TOKEN_VALUE="$same_token" run_wrapper --refresh-token-only >"${tmp_dir}/same-token-output" 2>&1
+test "$(cat "$token_file")" = "$same_token"
+test "$(grep -Fc 'iam whoami' "$nebius_log")" = "2"
+test "$(grep -Fc 'iam get-access-token' "$nebius_log")" = "1"
+assert_absent 'minted|new token|extended|before credential expiry' "${tmp_dir}/same-token-output"
+
+fixture_secret='fixture-secret tenantuseraccount-private https://example.invalid/auth?state=private'
+for failure in identity token; do
+  failure_status=0
+  if [ "$failure" = identity ]; then
+    FAKE_IDENTITY_FAIL=true FAKE_FAILURE_STDERR="$fixture_secret" \
+      run_wrapper --refresh-token-only >"${tmp_dir}/redacted-output" 2>&1 || failure_status="$?"
+    grep -Fq 'code=AUTH_REQUIRED' "${tmp_dir}/redacted-output"
+  else
+    FAKE_TOKEN_FAIL_AFTER=0 FAKE_FAILURE_STDERR="$fixture_secret" \
+      run_wrapper --refresh-token-only >"${tmp_dir}/redacted-output" 2>&1 || failure_status="$?"
+    grep -Fq 'code=TOKEN_RETRIEVAL_FAILED' "${tmp_dir}/redacted-output"
+  fi
+  test "$failure_status" != 0
+  assert_absent 'fixture-secret|tenantuseraccount-private|state=private' "${tmp_dir}/redacted-output"
+done
+
+for code in UPSTREAM_401 UPSTREAM_403 UPSTREAM_TIMEOUT CHILD_DIAGNOSTIC; do
+  case "$code" in
+    UPSTREAM_401) child_message="HTTP 401 $fixture_secret" ;;
+    UPSTREAM_403) child_message="HTTP 403 $fixture_secret" ;;
+    UPSTREAM_TIMEOUT) child_message="context deadline exceeded $fixture_secret" ;;
+    *) child_message="$fixture_secret" ;;
+  esac
+  STRINGS_MODE=token-file MCP_STDERR="$child_message" MCP_CAPTURE_FILE="${tmp_dir}/redacted-child-capture" \
+    run_wrapper >"${tmp_dir}/redacted-child-output" 2>&1
+  grep -Fq "code=$code" "${tmp_dir}/redacted-child-output"
+  grep -Fq 'code=CHILD_EXIT] mcp-grafana exited with status 0' "${tmp_dir}/redacted-child-output"
+  assert_absent 'fixture-secret|tenantuseraccount-private|state=private' "${tmp_dir}/redacted-child-output"
+done
+
+# Local failures win over broken online identity validation, with no writes.
+for check_mode in --check --apply; do
+  : >"$nebius_log"
+  protected_state_before="$(snapshot_paths "$state_dir" "$identity_file" "$token_file")"
+  if STRINGS_MODE=inline FAKE_IDENTITY_MODE=malformed \
+    run_ensure "$check_mode" --skip-codex --user-profile human-primary >"${tmp_dir}/offline-output" 2>&1; then
+    printf 'expected offline binary failure before identity lookup\n' >&2
+    exit 1
+  fi
+  grep -Fq 'code=CHILD_STARTUP_FAILED' "${tmp_dir}/offline-output"
+  test ! -s "$nebius_log"
+  test "$protected_state_before" = "$(snapshot_paths "$state_dir" "$identity_file" "$token_file")"
+done
 
 capture_file="${tmp_dir}/canonical-registration-capture"
   STRINGS_MODE="token-file" \
@@ -946,14 +1023,17 @@ fi
 # Discovery failures must never be interpreted as an absent registration.
 for discovery_mode in get-read-error list-read-error list-malformed list-duplicate; do
   : >"$codex_capture"
+  : >"$nebius_log"
   protected_state_before="$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
-  if CODEX_MODE="$discovery_mode" \
+  if CODEX_MODE="$discovery_mode" FAKE_IDENTITY_MODE="malformed" \
     run_ensure --apply --user-profile human-primary >"${tmp_dir}/discovery-output" 2>&1; then
     printf 'expected failed or malformed discovery to fail closed: %s\n' "$discovery_mode" >&2
     exit 1
   fi
   test "$protected_state_before" = "$(snapshot_paths "${test_home}/.codex/config.toml" "$state_dir" "$identity_file" "$token_file")"
   test ! -s "$codex_capture"
+  test ! -s "$nebius_log"
+  grep -Fq "code=CONFIG_INVALID" "${tmp_dir}/discovery-output"
   test "$(cat "$token_counter")" = "$token_counter_before"
 done
 
@@ -1369,7 +1449,7 @@ fi
 wait "$slow_refresh_owner_pid"
 test "$(cat "$token_counter")" = "1"
 grep -Fq \
-  'reused the fresh profile-scoped token produced by the prior refresh owner' \
+  'code=TOKEN_CACHE_REUSED' \
   "${tmp_dir}/slow-refresh-waiter-output"
 test ! -e "${token_file}.lock"
 
@@ -1378,6 +1458,7 @@ capture_file="${tmp_dir}/refresh-capture"
 if STRINGS_MODE="token-file" \
   MCP_CAPTURE_FILE="$capture_file" \
   MCP_HOLD_SECONDS=3 \
+  FAKE_TOKEN_VALUE="fake-nebius-token-1" \
   NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS=1 \
   NEBIUS_GRAFANA_TOKEN_REFRESH_RETRY_SECONDS="0 0 0" \
   run_wrapper >"${tmp_dir}/refresh-output" 2>&1; then
@@ -1388,18 +1469,18 @@ else
 fi
 test "$refresh_status" = "75"
 grep -Fq 'token_file_initial=fake-nebius-token-1' "$capture_file"
-grep -Fxq 'fake-nebius-token-2' "$token_file"
+grep -Fxq 'fake-nebius-token-1' "$token_file"
 if grep -Fxq 'natural_exit=true' "$capture_file"; then
   printf 'scheduled rotation must stop MCP before natural exit\n' >&2
   exit 1
 fi
-grep -Fq 'start a new chat or restart Codex' "${tmp_dir}/refresh-output"
+grep -Fq 'code=RESTART_REQUIRED' "${tmp_dir}/refresh-output"
 
 capture_file="${tmp_dir}/post-refresh-process-capture"
 STRINGS_MODE="token-file" \
   MCP_CAPTURE_FILE="$capture_file" \
   run_wrapper >/dev/null 2>&1
-grep -Fq 'token_file_initial=fake-nebius-token-2' "$capture_file"
+grep -Fq 'token_file_initial=fake-nebius-token-1' "$capture_file"
 
 : >"$token_counter"
 capture_file="${tmp_dir}/refresh-failure-capture"
@@ -1452,7 +1533,7 @@ if grep -Fxq 'natural_exit=true' "$capture_file"; then
   exit 1
 fi
 grep -Fq \
-  'token refresh worker failed unexpectedly; stopping MCP' \
+  'code=REFRESH_WORKER_FAILED' \
   "${tmp_dir}/refresh-worker-failure-output"
 test ! -e "${token_file}.lock"
 rm -f -- "${fake_bin}/chmod"
@@ -1481,13 +1562,15 @@ capture_file="${tmp_dir}/natural-exit-capture"
 if STRINGS_MODE="token-file" \
   MCP_CAPTURE_FILE="$capture_file" \
   MCP_EXIT_STATUS=42 \
-  run_wrapper >/dev/null 2>&1; then
+  run_wrapper >"${tmp_dir}/natural-exit-output" 2>&1; then
   printf 'expected the wrapper to preserve the natural MCP exit status\n' >&2
   exit 1
 else
   natural_exit_status="$?"
 fi
 test "$natural_exit_status" = "42"
+grep -Fq "code=CHILD_EXIT] mcp-grafana exited with status 42" "${tmp_dir}/natural-exit-output"
+assert_absent "code=AUTH_REQUIRED" "${tmp_dir}/natural-exit-output"
 
 for race_iteration in 1 2 3; do
   : >"$token_counter"
@@ -1611,10 +1694,12 @@ fi
 capture_file="${tmp_dir}/unsupported-token-mode-capture"
 if STRINGS_MODE="inline" \
   MCP_CAPTURE_FILE="$capture_file" \
-  run_wrapper >/dev/null 2>&1; then
+  run_wrapper >"${tmp_dir}/unsupported-output" 2>&1; then
   printf 'expected a build without token-file authentication to be rejected\n' >&2
   exit 1
 fi
+grep -Fq 'code=CHILD_STARTUP_FAILED' "${tmp_dir}/unsupported-output"
+test ! -e "$capture_file"
 
 if HOME="$test_home" \
   PATH="${fake_bin}:${PATH}" \
@@ -1634,7 +1719,7 @@ if HOME="$test_home" \
   GRAFANA_TOKEN_FILE="$token_file" \
   NEBIUS_GRAFANA_TOKEN_REFRESH_RETRY_SECONDS="1800 1800 1" \
   /bin/bash "$wrapper" --print-config >/dev/null 2>&1; then
-  printf 'expected retry delays beyond the pre-expiry budget to be rejected\n' >&2
+  printf 'expected retry delays beyond the bounded retry budget to be rejected\n' >&2
   exit 1
 fi
 

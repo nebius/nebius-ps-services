@@ -7,8 +7,8 @@ and uv to keep the checkout environment consistent with `uv.lock`.
 
 ## Environment
 
-Required tools are Python 3.12–3.14, Git, Make, and uv `0.12.9` or a compatible
-`0.12.x` release. A native toolchain may be needed when Python wheels are
+Required tools are Python 3.12–3.14, Git, Make, and uv `0.13.5` or a compatible
+`0.13.x` release. A native toolchain may be needed when Python wheels are
 unavailable. Install uv through its
 [official guide](https://docs.astral.sh/uv/getting-started/installation/).
 Command-specific tools remain listed in the [README](../README.md#credentials-and-tools).

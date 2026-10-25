@@ -241,7 +241,8 @@ class ConfigurationTests(unittest.TestCase):
     def test_tavily_selection_is_optional_shape_only_and_nonmutating(self):
         catalog = json.loads((config.SKILL / "assets/mcp-servers.json").read_text())
         self.assertIn("tavily", config.MCP_NAMES)
-        self.assertEqual(catalog["tavily"], {"type": "http", "url": "https://mcp.tavily.com/mcp/"})
+        self.assertEqual(catalog["tavily"]["type"], "stdio")
+        self.assertIn("https://mcp.tavily.com/mcp/", catalog["tavily"]["args"])
         self.assertEqual(self.inspect()["status"], "STATIC_PASS")
         target = self.base / "native-app.json"
         for value, expected in (
@@ -257,6 +258,14 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertEqual(result["status"], expected)
                 self.assertNotIn("opaque-fixture", json.dumps(result))
                 self.assertEqual(target.read_bytes(), before)
+
+    def test_strict_tavily_check_is_optional_and_does_not_accept_shape_alone(self):
+        target = self.base / "native-app.json"
+        put(target, {"mcpServers": {"tavily": {"type": "http", "url": "https://mcp.tavily.com/mcp/"}}})
+        before = snapshot(self.base)
+        self.assertEqual(self.inspect(mcp_config=target)["status"], "STATIC_PASS")
+        self.assertEqual(self.inspect(tavily_bridge=True, mcp_config=target)["status"], "NOT_ALIGNED")
+        self.assertEqual(snapshot(self.base), before)
 
     def test_research_policy_drift_is_reported_without_installing_tavily(self):
         target = self.home / "CLAUDE.md"

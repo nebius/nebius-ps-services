@@ -757,6 +757,10 @@ def _build_module_plans(
         inputs = resolved_item.get("inputs", {})
         if not isinstance(inputs, dict):
             inputs = {}
+        if component_id == "nat-gateway":
+            from .nat_gateway import nat_module_inputs
+
+            inputs = nat_module_inputs(resolved_item)
         source = _effective_component_source(row=resolved_item, entry=entry)
         version = _effective_component_version(row=resolved_item, entry=entry) or None
 
@@ -967,6 +971,23 @@ def _build_module_plans(
                     binding=binding,
                 ),
             )
+
+        if component_id == "vpc":
+            from .nat_gateway import ROUTE_OVERRIDES, nat_rows, target_key
+
+            for nat in nat_rows(payload):
+                nat_module = module_name_by_component_instance[("nat-gateway", nat["instance_id"])]
+                for target in nat["routing"]["targets"]:
+                    if target["owner"] != "terraform" or target["vpc_instance"] != instance_id:
+                        continue
+                    key = target["subnet_key"]
+                    fallback = (
+                        f"module.{nat_module}.route_table_ids[{json.dumps(target['policy'])}]"
+                        if nat["routing"]["enabled"]
+                        else _hcl_value(module_inputs["subnets"][key].get("route_table_id") or None)
+                    )
+                    expression = f"lookup(var.{ROUTE_OVERRIDES}, {json.dumps(target_key(target))}, {fallback})"
+                    module_inputs["subnets"][key]["route_table_id"] = _HclExpression(expression)
 
         if component_id == "vm" and cxcli_sfs_attachments is not None:
             if "filesystems" in module_inputs:
@@ -1394,7 +1415,27 @@ def render_terraform_artifacts(
     written.append(providers_tf_path)
 
     variables_tf_path = paths.infra_dir / "variables.tf"
-    _write_text(variables_tf_path, _render_variables_tf(module_plans))
+    from .nat_gateway import ROUTE_OVERRIDES, nat_rows
+
+    routing_variables = ""
+    if nat_rows(to_plain_data(config)):
+        routing_variables = f'\nvariable "{ROUTE_OVERRIDES}" {{\n  type = map(string)\n  default = {{}}\n  description = "Internal staged NAT attachment preimages; managed by deploy."\n}}\n'
+        routing_variables += """
+variable "cxcli_nat_execution_authorized" {
+  type = bool
+  default = false
+  description = "Set only by the cxcli NAT lifecycle after acquiring shared authority."
+}
+resource "terraform_data" "cxcli_nat_authority" {
+  lifecycle {
+    precondition {
+      condition = var.cxcli_nat_execution_authorized
+      error_message = "Use nebius-cxcli deploy (or deploy --dry-run) for NAT readiness, quota and routing admission."
+    }
+  }
+}
+"""
+    _write_text(variables_tf_path, _render_variables_tf(module_plans) + routing_variables)
     written.append(variables_tf_path)
 
     main_tf_path = paths.infra_dir / "main.tf"

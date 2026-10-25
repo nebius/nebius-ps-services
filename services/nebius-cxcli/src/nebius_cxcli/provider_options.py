@@ -732,6 +732,12 @@ class ProviderOptionLookup:
                         self._last_error = None
                         return resolved
 
+            if args.get("cpu_only") is True and provider in {
+                "compute_platforms",
+                "compute_platform_presets",
+            }:
+                # Opaque plugin choices cannot prove the live zero-GPU resource contract.
+                return []
             plugin_specs = os.environ.get(_OPTION_PLUGIN_ENV, "")
             for plugin in _load_option_plugins(plugin_specs):
                 try:
@@ -2068,13 +2074,27 @@ class ProviderOptionLookup:
         if not project_id:
             return ()
         prefix = _as_str(args.get("platform_prefix"))
-        cache_key = ("compute_platforms", project_id, prefix)
+        cpu_only = args.get("cpu_only") is True
+        cache_key = ("compute_platforms", project_id, prefix, cpu_only)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         inventory = self._resolve_project_compute_platform_inventory(project_id)
         resolved = tuple(
-            choice for choice in inventory if not prefix or choice.value.startswith(prefix)
+            choice
+            for choice in inventory
+            if (not prefix or choice.value.startswith(prefix))
+            and (
+                not cpu_only
+                or any(
+                    preset.gpu_count == 0
+                    and preset.vcpu_count is not None
+                    and preset.vcpu_count > 0
+                    for preset in self._compute_platform_preset_cache.get(
+                        (project_id, choice.value), ()
+                    )
+                )
+            )
         )
         self._cache[cache_key] = resolved
         return resolved
@@ -2103,6 +2123,7 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
+        cpu_only = args.get("cpu_only") is True
         require_gpu_clustering = False
         gpu_cluster_required_path = _as_str(args.get("gpu_cluster_required_path"))
         if gpu_cluster_required_path:
@@ -2122,6 +2143,7 @@ class ProviderOptionLookup:
             project_id,
             platform_name,
             require_gpu_clustering,
+            cpu_only,
             reservation_policy,
             tenant_id,
             region_id,
@@ -2138,6 +2160,8 @@ class ProviderOptionLookup:
         if (project_id, platform_name) not in self._compute_platform_preset_cache:
             return ()
         for preset in presets:
+            if cpu_only and (preset.gpu_count != 0 or not preset.vcpu_count):
+                continue
             preset_name = preset.name
             allow_gpu_clustering = preset.allow_gpu_clustering
             if require_gpu_clustering and not allow_gpu_clustering:

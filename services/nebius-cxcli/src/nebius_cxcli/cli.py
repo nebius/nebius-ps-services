@@ -40,6 +40,7 @@ from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
 from . import kubernetes_process
+from .nat_gateway_cli import app as nat_app
 
 try:
     import fcntl as _fcntl
@@ -2173,7 +2174,16 @@ def _raise_on_generated_bundle_live_quota_issues(
     phase: str,
 ) -> QuotaReport:
     terraform_init(paths.infra_dir, extra_env=dict(runtime_env or {}))
-    report = _assess_live_quota_report(config, phase=phase)
+    from .nat_gateway import nat_rows
+    from .nat_gateway_deploy import CURRENT_NAT
+
+    quota_config = to_plain_data(config)
+    if phase == "deploy" and CURRENT_NAT.get() is not None and nat_rows(quota_config):
+        # NAT/VPC demand is admitted from the fresh plan, including replacement peaks.
+        for row in quota_config.get("infra", {}).get("components", []):
+            if row.get("id") in {"nat-gateway", "vpc"}:
+                row["enabled"] = False
+    report = _assess_live_quota_report(quota_config, phase=phase)
     if manifest is not None:
         report = _adjust_quota_report_for_managed_mk8s_state(
             report,
@@ -2663,6 +2673,7 @@ app.add_typer(acceptance_test_app, name="acceptance-test")
 app.add_typer(upgrade_app, name="upgrade")
 app.add_typer(migrate_app, name="migrate")
 app.add_typer(grafana_app, name="grafana")
+app.add_typer(nat_app, name="nat")
 
 
 def _version_callback(value: bool) -> bool:
@@ -31482,6 +31493,29 @@ def _run_component_field_wizard(
                 include_shared=False,
             )
             _set_payload_value(payload, component_path, resolved_component_node)
+        if entry.scope == "infra" and entry.id == "nat-gateway":
+            from .nat_gateway_wizard import WizardNavigation, configure_nat
+
+            if component_path is None or provider_lookup is None:
+                raise RuntimeError("NAT wizard requires live provider discovery")
+            try:
+                updated = configure_nat(
+                    payload,
+                    _get_payload_value(payload, component_path),
+                    prefix=_format_payload_path(component_path),
+                    lookup=provider_lookup,
+                    prompt=_prompt_scalar_override,
+                    is_back=lambda value: value is _WIZARD_BACKTRACK,
+                    emit=lambda message: console.print(message, markup=False),
+                )
+            except WizardNavigation as navigation:
+                return (
+                    _WizardComponentOutcome.QUIT
+                    if navigation.stopped
+                    else _WizardComponentOutcome.BACK
+                )
+            _set_payload_value(payload, component_path, updated)
+            return _WizardComponentOutcome.CONTINUE
         if soperator_install and entry.scope == "infra" and entry.id == "sfs":
             if component_path is None:
                 raise RuntimeError("Soperator filesystem component is missing")
@@ -37124,6 +37158,10 @@ def _wait_for_mysterybox_eso_token_ready(
 
 def _terraform_runtime_env(config: Any) -> dict[str, str]:
     runtime_env: dict[str, str] = {}
+    from .nat_gateway_deploy import CURRENT_NAT
+
+    if CURRENT_NAT.get() is not None:
+        runtime_env["TF_VAR_cxcli_nat_execution_authorized"] = "true"
 
     project_id = str(config.client_info.nebius.project_id).strip()
     client_name = str(config.client_info.client_name).strip()
@@ -38953,6 +38991,11 @@ def _requires_flux_terraform_state(config: Any) -> bool:
 
 
 def _config_has_enabled_infra_components(config: Any) -> bool:
+    from .nat_gateway_deploy import CURRENT_NAT
+
+    nat = CURRENT_NAT.get()
+    if nat is not None and nat.retirement_required:
+        return True
     payload = to_plain_data(config)
     infra = payload.get("infra") if isinstance(payload, Mapping) else None
     components = infra.get("components") if isinstance(infra, Mapping) else None
@@ -49637,12 +49680,12 @@ def _deploy_generated_artifacts(
     if terraform_required:
         # A retry can observe a no-op plan after losing the apply acknowledgement.
         # Materialize app inputs from authoritative outputs before any target effect.
+        if on_terraform_complete is not None:
+            on_terraform_complete()
         if prepare_application_inputs is not None:
             prepare_application_inputs()
         else:
             _refresh_mysterybox_eso_flux_after_terraform(config, paths)
-        if on_terraform_complete is not None:
-            on_terraform_complete()
     write_inventory(config, paths, validations=report_validations)
     if skip_validations and deploy_declared_validations:
         if deploy_validations:
@@ -50297,6 +50340,10 @@ def _run_terraform_apply_with_status(
     runtime_env = _terraform_runtime_env(config)
     if extra_env:
         runtime_env.update(dict(extra_env))
+    from . import cli as cli_module
+    from .nat_gateway_deploy import guard_direct_mutation
+
+    guard_direct_mutation(cli_module, config, paths, runtime_env, initialize=initialize)
     validation_env = os.environ.copy()
     validation_env.update(runtime_env)
     _validate_mysterybox_runtime_payload_values(config, environ=validation_env)
@@ -50361,6 +50408,10 @@ def _run_terraform_destroy_with_status(
     status_watchers: list[dict[str, str]] | None = None,
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
+    from . import cli as cli_module
+    from .nat_gateway_deploy import guard_direct_mutation
+
+    guard_direct_mutation(cli_module, config, paths, runtime_env, initialize=initialize)
     reporting_kwargs: dict[str, Any] = {
         "emit": _print_deployment_status_message,
         "operation": "destroy",
@@ -53734,6 +53785,16 @@ def component_remove_command(
         removed_app_labels: list[str] = []
         removed_cluster_targets: set[str] = set()
         for target in remove_targets:
+            if target.scope == "infra" and target.component_id == "nat-gateway":
+                row = next(
+                    r
+                    for r in payload["infra"]["components"]
+                    if r["instance_id"] == target.instance_id
+                )
+                if row.get("routing", {}).get("enabled"):
+                    raise RuntimeError(
+                        "Restore NAT routes first: set routing.enabled=false, render and deploy before removing the component"
+                    )
             removed = _remove_component_instance_row(
                 payload=next_payload,
                 scope=target.scope,
@@ -55972,6 +56033,19 @@ def deploy_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    ssh_private_key: Annotated[
+        Path | None,
+        typer.Option(
+            "--ssh-private-key", help="NAT readiness SSH private key; otherwise use the SSH agent."
+        ),
+    ] = None,
+    ssh_known_hosts_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--ssh-known-hosts-file",
+            help="Independently verified NAT SSH host keys; strict checking is required.",
+        ),
+    ] = None,
 ) -> None:
     """Plan and execute the workflow selected by the rendered configuration.
 
@@ -55997,6 +56071,8 @@ def deploy_command(
             )
         _require_soperator_lifecycle_scope(config, command="deploy")
         options = DeployOptions(
+            ssh_private_key=ssh_private_key,
+            ssh_known_hosts_file=ssh_known_hosts_file,
             dry_run=dry_run,
             skip_validations=skip_validations,
             skip_validation_kinds=frozenset(

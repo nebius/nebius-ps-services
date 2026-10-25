@@ -274,7 +274,7 @@ def test_pyproject_uses_a_uv_development_group() -> None:
     assert any(requirement.startswith("setuptools>=83.0.0,<84.0.0") for requirement in dev)
     assert any(requirement.startswith("setuptools-scm") for requirement in dev)
     assert pyproject["tool"]["uv"] == {
-        "required-version": ">=0.12.9,<0.13",
+        "required-version": ">=0.13.5,<0.14",
         "default-groups": ["dev"],
     }
 

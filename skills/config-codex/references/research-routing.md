@@ -1,50 +1,20 @@
 # Tavily OAuth and Research Routing
 
-## Optional Native Codex Setup
+## Optional Tavily Bridge Setup
 
-Inspect the installed Codex version and existing parsed configuration without
-printing credentials. Preserve existing definitions and user settings. For a
-selected missing Tavily server, add only:
+Tavily remains an explicitly selected integration. Follow
+[tavily-bridge.md](tavily-bridge.md) to prepare the pinned stdio bridge, render
+native registration and qualify fresh-client behavior. The bridge connects to
+hosted Tavily, reuses credentials and opens the browser when needed, using
+separate protected file storage for each client. Other providers retain their
+native credential policy. A Keychain-only requirement blocks this bridge;
+never silently substitute storage or API keys.
 
-```toml
-[mcp_servers.tavily]
-url = "https://mcp.tavily.com/mcp/"
-```
-
-When the user selects OS-protected MCP OAuth storage, set this **top-level** key
-before all TOML table headers, preserving other authentication settings:
-
-```toml
-mcp_oauth_credentials_store = "keyring"
-```
-
-On macOS this selects the native Keychain backend. `keyring` requires an
-available OS credential store instead of allowing the `auto` file fallback.
-Do not change `cli_auth_credentials_store` or relocate other credentials as
-part of this MCP-only setup. The recovery template leaves both Tavily and the
-keyring setting commented: neither is a default requirement on every machine.
-
-Start the native flow after registration:
-
-```bash
-codex mcp login tavily
-```
-
-The user completes browser consent. OAuth normally reuses stored tokens and
-refreshes them when supported; it does not require a browser on every launch.
-Provider policy, expiry or revocation can require reauthorization. No Tavily API
-key is needed in config, environment, URL or a manually created Keychain item.
-Never print or copy tokens. If keyring is unavailable, report the blocker and
-keep the selected policy; do not silently downgrade to file storage or API keys.
-
-Compare the selected parsed URL and credential-store setting separately from
-full-template checks; `--require-template-mcp-servers` does not require the
-commented Tavily example. For routing-only changes, patch only the template's
-Documentation and Web Research section in AGENTS.md, accepting active existing
-guidance without duplication. Do not regenerate the whole file.
-
-[Codex MCP](https://developers.openai.com/codex/mcp) and
-[configuration reference](https://developers.openai.com/codex/config-reference).
+For routing-only changes, patch only the template's Documentation and Web
+Research section, preserving equivalent active user guidance. Do not install
+the bridge, bootstrap the rest of the home or repair OAuth merely for a lookup.
+An absent instruction file may contain only the selected section inside the
+native managed-context markers. Full-home checks remain separate.
 
 ## Tool Selection
 
@@ -132,13 +102,13 @@ only the global research section and verify surrounding bytes are unchanged.
 
 ## Verification Boundaries
 
-Separate parsed registration, completed native OAuth, fresh-session tool
+Separate parsed registration, completed bridge OAuth, fresh-session tool
 availability, actual read-tool calls and routing/quality evaluation. Inspect
 actual schemas before selecting options. Restart or create a fresh client
 session after configuration changes; the current chat may retain its old tools.
 A static checker does not verify OAuth, token refresh or tool execution. Do not
-read or copy credential values to prove storage. Native success and protected
-store settings are different evidence from observing a particular refresh.
+read or copy credential values to prove storage. A successful connection and private
+file permissions are different evidence from observing a particular refresh.
 
 ## Official References
 

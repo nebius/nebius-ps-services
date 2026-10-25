@@ -342,8 +342,8 @@ Do not delete provider accounts, unrelated secrets or shared package caches.
 ### Tavily OAuth and research routing
 
 For selected Tavily setup or research-routing changes, use
-[research-routing.md](research-routing.md). It covers native OAuth, optional
-keyring-only MCP storage and compact guidance without full-home bootstrap.
+[research-routing.md](research-routing.md). It covers bridge-owned OAuth, optional
+private per-host credential storage and compact guidance without full-home bootstrap.
 
 ### Nebius documentation MCP
 
@@ -425,7 +425,7 @@ arrives and continue waiting on the remaining handles.
 
 Do not put actual token values in `config.toml`.
 
-Selected Tavily setup uses native OAuth; see
+Selected Tavily setup uses a pinned stdio OAuth bridge with private files; see
 [research routing](research-routing.md) for registration and authentication.
 
 For GitHub MCP:
@@ -650,3 +650,12 @@ Use the shared runtime when configuring hooks; do not invent independent
 Claude and Codex home resolvers. Source templates remain Codex configuration
 assets; the installer and native manifests bind the selected runtime host.
 Existing Codex configuration reconciliation continues to preserve user settings.
+
+## Selected Tavily Bridge Check
+
+After explicitly selected bridge setup, add `--require-tavily-bridge` to the
+existing checker. It validates exact bridge wiring, pinned runtime integrity,
+private credential modes and authentication timeouts without starting processes
+or reading credentials. For Claude, also supply `--mcp-config PATH`; generic
+`--require-mcp` remains presence/shape-only. Ordinary setup still permits Tavily
+to be absent. See [bridge setup and recovery](tavily-bridge.md).

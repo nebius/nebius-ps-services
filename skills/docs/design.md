@@ -2,7 +2,7 @@
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Project Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001,REQ-005 status=ready delivery=implemented priority=P0 version=2 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001,REQ-005 status=ready delivery=implemented priority=P0 version=3 -->
 ### FEAT-001: Source-owned skill and installation boundary
 
 #### Requirements Covered
@@ -36,6 +36,14 @@ selection owns the refreshed marker and manifest; single-skill installation
 must not prune sibling skills owned by a catalog. Shared hook bundles retain
 their standalone copies; collision preflight silently accepts identical bytes
 and rejects different bytes before mutation.
+
+The shared runtime file list is authoritative for both synchronization and
+expected-file reporting. Runtime synchronization contributes one status row,
+including changed and unchanged counts, before the combined restart decision.
+A source without hook bundles still reports shared-runtime changes. Missing
+skill ownership markers remain an operator recovery matter: verify the entire
+skill tree and provenance before restoring metadata; do not infer ownership
+from a matching name or silently adopt an unmanaged directory.
 
 #### Selected Option
 
@@ -93,6 +101,14 @@ activation boundary agree without a duplicate installed skill tree.
 
 #### Implementation Evidence
 
+Shared runtime discovery, synchronization and expected-file reporting use one
+file list. Runtime changes contribute to the combined status and restart
+notice for combined, all-hook, single-hook and no-hook-bundle installations.
+Help and README explain lost ownership markers and preserve the boundary
+between verified metadata recovery and adopting unowned content.
+
+Prior ownership-convergence implementation follows.
+
 `install-skills.sh` now compares exact physical local skill directories when
 individual and catalog source identities differ, then records the selected
 source after synchronization. Exact source ownership still governs pruning.
@@ -100,6 +116,25 @@ Identical shared-hook payloads remain collision-checked without a duplicate
 notice. Installer help, README and changelog document these boundaries.
 
 #### Verification Evidence
+
+The reporting regression reproduced eight failures before the repair across
+two hosts and four install modes. All eight focused installer tests pass after
+the repair, including ownership preservation, source-selection convergence,
+conflicting payload rejection, instruction-only installation, support-only
+drift, backups, restart notices and unchanged reruns. Bash syntax, ShellCheck,
+Ruff, Markdown lint, canonical spec validation and diff whitespace checks pass.
+A read-only code/security review found no blocking issue in the changed scope.
+
+After recovery of six independently verified missing ownership markers, the
+normal default installation completed without unmanaged-skill skips. Independent
+comparison verified 72 source skills, 1,690 substantive files and every source
+marker. The repeat install reported zero updates, 72 unchanged skills and only
+the non-skill docs directory skipped; catalog and hook/provenance/backup bytes
+were unchanged. Existing hook payloads and settings, unrelated skills and six
+unowned fixture files were preserved. Ten event/handler registrations were
+unique. Fresh native-session discovery and activation were not exercised.
+
+Prior ownership-convergence verification (historical) follows.
 
 The focused installer suite covers both hosts, both source-selection directions,
 physical-path aliases, foreign/unmanaged preservation, stale pruning, shared
@@ -8156,6 +8191,13 @@ action, allowing worker heartbeat and observation to continue. Lease release and
 reassignment cannot race consumption, and completion rejects an active lease
 before committing or changing evidence.
 
+Task fields are parsed as complete top-level Markdown blocks before assignment
+serialization. Multiline schemas, validation, completion criteria and ownership
+lists remain bound to the frozen plan. Empty or duplicate fields and malformed
+task headings fail before preparation; following plan sections cannot contribute
+task fields. CRLF input is normalized for parsing without changing the locked
+plan's raw-byte identity.
+
 #### Selected Option
 
 One breaking direct-input path, shared Worktree execution primitives, workflow-specific adapters and one integration tree per Implement run.
@@ -8196,6 +8238,12 @@ Renamed skills are discoverable, capture hooks and obsolete commands are absent,
 
 #### Implementation Evidence
 
+The shared plan parser now preserves complete task fields instead of truncating
+them to one line, and rejects ambiguous field/task boundaries. Implement and
+Worktree guidance document the format, and Implement trigger cases distinguish
+workflow review from execution. Existing public actions, ownership, permissions,
+state schemas and Git transitions are unchanged.
+
 Implemented direct intake and explicit bindings, shared immutable execution bases and Worktree transactions, ready-slot scheduling, assignment runtime leases, fenced steering/cancellation, automatic local delivery, guarded paired spec publication, both verifier contracts and exact owned capture retirement. Historical runtime results do not certify this replacement.
 
 PR validation repaired the shared engine's Python 3.11 syntax, the CI worker-schema path, obsolete commit contract assertions and retained-hook upgrade handling. Eight retirement regressions pass, including both full native-host installers blocking before runtime replacement, missing provenance, unchanged retirement, unregistered customization and first-install settings. Source-only Python 3.11 compilation verifies the shared execution modules; this does not establish live agent execution.
@@ -8208,6 +8256,17 @@ regression suite. Implement's usage and input sections retain its existing
 explicit-only public interface while satisfying the stateful skill profile.
 
 #### Verification Evidence
+
+The task-field repair has fail-before/pass-after parser and real-Git assignment
+regressions. All 13 scheduler/parser checks pass, including CRLF preservation;
+raw CRLF plans retain multiline contracts in persisted assignments. The shared
+suite ran 152 cases with one stale-basis rejection while a required reference
+was being edited; that cancellation case and the assignment case pass on the
+final stable source. All 100 Implement verifier tests and three public-contract
+checks pass. Scoped lint, syntax, canonical validation, standard/Codex/Claude
+structure and disposable pinned npx installation checks pass. These are
+source and installation observations, not a new native workflow or application
+qualification; prior live evidence remains bounded to its recorded version.
 
 Deterministic shared execution: 128 tests passed; final publication/completion boundary matrix: 17 passed; objective contracts: 15 passed; Worktree lifecycle: 55 passed; Implement verifier: 78 passed; SDLC verifier: 102 passed; SDLC phase lifecycle: 78 passed; hooks: 111 passed; hook installer: 29 passed. Both complete deterministic preflights passed with zero failures; SDLC retains seven missing-live-evidence warnings. Changed-scope standard/Codex/Claude structures passed for 36 skills and 466 static trigger cases; six primary skills passed pinned npx installation checks. These are distinct and overlapping evidence sets, not a combined test count.
 
@@ -8676,8 +8735,8 @@ implemented, with native qualification explicitly outstanding.
 
 <!-- /FEATURE: FEAT-047 -->
 
-<!-- FEATURE: FEAT-048 reqs=REQ-049 status=ready delivery=implemented priority=P1 version=3 -->
-### FEAT-048: Native Tavily OAuth and structured research guidance
+<!-- FEATURE: FEAT-048 reqs=REQ-049 status=ready delivery=implemented priority=P1 version=4 -->
+### FEAT-048: Tavily OAuth bridge and structured research guidance
 
 #### Requirements Covered
 
@@ -8691,10 +8750,49 @@ registration and authorization; their application formats differ.
 
 #### Design Details
 
-Keep the Codex Tavily URL example commented in the recovery baseline and add
-an optional Claude catalog entry. Configure only selected integrations with
-native OAuth; explicitly selected Codex keyring storage fails rather than
-falling back to a plaintext token file. Do not change unrelated login storage.
+Version 4 keeps Tavily optional and uses mcp-remote 0.15.2 as a local stdio
+bridge to the hosted HTTPS service. Both ordinary native clients start the
+bridge directly with an absolute Node executable and reviewed locked assets.
+There is no application launcher, alias, login hook or runtime package download.
+Use http-only transport, 300-second callback/coordination timers and silent
+logging; those bridge timers do not enforce a total browser wait. Native
+startup limits bound the connection. Never enable secret-bearing debug logs.
+
+The pinned release has a reproduced callback ordering defect on rejected
+refresh: a browser can redirect before the callback listener exists. A reviewed
+two-file patch gates redirection on existing coordinator readiness, clears only
+an unused follower verifier, and gives the internal SDK connection probe a
+360000-millisecond maximum. Upstream PKCE, state, tokens and registration remain
+owned by the bridge. Exact preimage/anchor/postimage guards reject drift;
+both operations must succeed before immutable runtime publication. Runtime
+identity includes manifests and patch, with no modification of an active runtime.
+
+Each selected agent home owns a versioned runtime and a separate protected
+credential directory. Files are 0600 and credential directories 0700. The
+bridge owns Tavily OAuth, including browser login when needed; other providers
+retain their native credential stores. Default callback ports are distinct:
+37411 for Codex and 37412 for Claude. Custom profiles select a distinct port;
+occupied unrelated ports fail clearly. Separate stores without separate ports
+are insufficient because bridge auth coordination identifies the endpoint.
+
+Codex changes only Tavily's command/args/env, startup timeout to at least 360
+seconds and tool timeout to at least 360 seconds. Claude uses native user-scope
+registration and a selected user settings MCP_TIMEOUT of 360000 milliseconds,
+preserving longer existing limits. Its global startup scope is explicit; this
+maximum is not a fixed delay. Preserve longer tool limits, raising only Tavily
+when an effective limit would interrupt authentication.
+
+A standalone preparation/check helper and locked assets are owned by
+config-codex and mirrored byte-for-byte in config-claude. The helper installs
+only the private bridge runtime; each setup owner patches its native config.
+Native CLI calls preserve the inherited profile environment: explicitly setting
+Claude's default directory can select different application/authentication state,
+so an absolute helper home is not permission to override the native environment.
+Optional --require-tavily-bridge checks validate exact bridge wiring and private
+state without starting OAuth or reading token values. Preparation rejects
+unsafe paths, unknown drift and partial installations; unchanged runs do no
+writes. Source, installed payloads and active native configuration remain
+separate evidence lanes.
 
 Carry compact documentation and research routing in both instruction templates.
 For a routing-only request, reconcile only that section in the existing managed
@@ -8739,12 +8837,13 @@ builtin quick-fact route. Use current working-byte baselines and focused copy
 of changed files for existing unmanaged installed directories, with destination
 hash checks, symlink rejection and permission preservation. Do not invoke the
 broader installer, claim ownership or refresh hooks. Patch only the two global
-research sections. No new public flags, wrapper service or job store is added.
+research sections. No new public skill flags, background service or research job store is added.
 
 #### Selected Option
 
 Extend existing native setup owners and conditionally loaded references. Keep
-Tavily optional and use native credential stores without a custom auth wrapper.
+Tavily optional with a pinned standard bridge and separate private stores. The
+source helper runs only during setup; it does not wrap either client launch.
 
 #### Alternatives Considered
 
@@ -8786,7 +8885,10 @@ pinned disposable installation, scoped lint and code/security review.
 
 Use synthetic homes for static checks. For authorized local setup, back up only
 changing files privately and verify exact parsed endpoint, native OAuth result,
-credential-store selection and fresh tool discovery separately.
+credential-store permissions and fresh tool discovery separately. Version 4
+adds isolated cold/warm login, invalid token/client recovery, cancellation,
+occupied ports and concurrent clients. Natural expiry and mid-session recovery
+must be observed before claiming durable refresh; simulation is insufficient.
 
 #### Evaluation Plan
 
@@ -8799,6 +8901,9 @@ bounded; do not claim quality from registration or static phrase checks.
 Apply source first, validate, then refresh only selected payloads and reconcile
 only authorized local settings. Restore only task-owned edits after checking
 for concurrent changes; never restore native application JSON wholesale.
+Claude native remote removal deletes the old local OAuth tokens and client
+registration; HTTP rollback may require native login. Keep Codex Keychain
+credentials untouched and do not revoke provider grants or clear shared caches.
 
 #### Done Definition
 
@@ -8806,6 +8911,16 @@ Source and selected local surfaces agree with the contract. Report passing
 lanes and precise outstanding authorization or native-evaluation limitations.
 
 #### Implementation Evidence
+
+Version 4 is implemented in the canonical config-codex/config-claude sources,
+including locked manifests, mirrored preparation/check helper and patch asset,
+optional strict wiring checks, templates, references, evals and regression tests.
+Selected installed payloads were refreshed with preimage checks and private
+rollback metadata. Both selected laptop registrations now directly launch the
+prepared patched bridge; only Tavily configuration and the selected Claude
+startup maximum changed. Unrelated settings and native credentials for other
+providers remain preserved. No application launcher, login hook or startup
+package download was introduced. Prior evidence below is historical.
 
 Version 3 is implemented in research, config-codex and config-claude. The core
 skill and methodology now define adaptive evidence checkpoints, conditional
@@ -8858,6 +8973,60 @@ Authorized local reconciliation patched Codex and created scoped Claude
 instructions while preserving unrelated settings, roles and hooks.
 
 #### Verification Evidence
+
+Version 4 source validation: 100 Codex checks (including 20 bridge regressions)
+and 31 Claude checks pass. Both native skill profiles, scoped Python checks,
+mirror checks and code/security review pass. Missing or corrupt second patch
+operations cannot publish a runtime. Selected runtime integrity and permissions
+checks are non-mutating and never read credential contents. Selected Codex
+validation rejects explicit disablement without changing it. Executable checks
+validate both lexical and resolved ancestry, preserving the selected Homebrew
+permission policy while rejecting replaceable symlinks in public directories.
+Both new regressions fail against the captured pre-alignment working baseline
+and pass against the aligned helper.
+
+Seven positive loopback-only OAuth/MCP cases plus an expected-failure
+short-probe control pass against the prepared runtime and an isolated code copy: cold and expired login, expired/rejected concurrent sessions
+including immediate follower reauthentication, healthy cached startup despite
+an occupied callback port, and same-process mid-session tool recovery. The
+unpatched immediate-callback case fails; readiness and verifier fixes pass.
+A shortened internal probe timer fails during delayed fixture consent; the
+scoped authentication-sized probe passes. This is manual macOS qualification,
+required for pin/patch changes rather than a default Ubuntu CI job. The fixture
+identifies the original browser owner, forces the startup follower to recover
+first, and asserts successful callbacks, tool content and exact exchange counts.
+Local occupied-port, cancellation,
+failed-opener and native short-deadline fixtures also passed. These simulations
+are separate from provider behavior.
+
+Fresh native Codex processes discovered five Tavily tools and completed bounded
+public searches after cold login, warm reuse and isolated expired/rejected-token
+recovery. The final laptop configuration also passed a fresh search. Native
+Claude connected from an empty isolated store; the ordinary signed-in laptop
+profile connected and performed one model-driven Tavily search through native
+ToolSearch. A first model probe disabled that discovery tool and made no search;
+it is a harness failure, not successful tool evidence. A mistaken explicit
+Claude default-directory override failed before removing any registration;
+normal inherited-profile commands completed the selected migration.
+
+The first isolated Claude rejected-token trial reached the native timeout before
+its callback completed. After user-reported browser authorization, a clean replay
+connected; a new controlled expired/rejected checkpoint then connected within the
+same native invocation in 2.71 seconds, with a replacement token and future expiry
+independently confirmed. Codex's corresponding 5.43-second trial also confirmed
+those postconditions and completed a search in the same process. Earlier failed
+trials remain failed evidence, not reclassified successes.
+
+Pinned disposable packaging passed discovery, copy parity, repeated installation
+and isolation for both skills on both hosts. All 66 selected installed files
+match source. Both prepared laptop runtimes pass integrity/permission checks,
+and aligned preparation reruns produce no writes. Catalog, Markdown, Python,
+privacy and diff checks pass; final code/security review has no residual findings.
+Natural token expiry, live stale-client-registration recovery, long-lived
+real-provider mid-session recovery and comparative routing quality remain
+unverified. Source/package, installation, native authentication, tool execution
+and lifetime proof remain separate; delivery is implemented rather than fully
+verified.
 
 Version 3 STATIC_PASS: 80 Codex and 30 Claude fixture tests pass. The four new
 Codex policy regressions failed before the checker change and pass afterward.
@@ -9067,6 +9236,121 @@ authentication was unavailable in their isolated environments. Keep delivery
 implemented and the requirement active without a comparative quality claim.
 
 <!-- /FEATURE: FEAT-049 -->
+
+<!-- FEATURE: FEAT-050 reqs=REQ-051 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-050: Local Grafana MCP diagnostics and bounded credential lifecycle
+
+#### Requirements Covered
+
+- REQ-051: Observable startup boundaries and accurate local credential lifecycle.
+
+#### Context Evidence
+
+The installer owns two shell helpers, protected profile-scoped state and Codex
+registration. Grafana MCP v2.1.1 stdio retains its startup client. The existing
+closed-initialize warning alone does not identify a causal failure.
+
+#### Design Details
+
+Keep the existing local stdio path, pinned human identity, private token file
+and timer settings. Treat one-hour file age only as a cache heuristic. Perform
+local registration, state-safety and binary checks before online identity work.
+Replace raw CLI/child stderr with stable phase/code diagnostics. Browser URLs
+and credential payloads never enter MCP logs. Child categories are hints;
+actual tool responses establish HTTP outcomes. Preserve natural child status.
+Scheduled retrieval remains noninteractive and requests status-75 shutdown,
+including when the CLI returns identical bytes. New-process initialization
+loads the file; no automatic same-session reconnect is promised.
+
+#### Selected Option
+
+Maintain the protected local token file and existing Nebius CLI browser auth.
+No additional authentication store or deployed service is needed.
+
+#### Alternatives Considered
+
+mcp-remote requires a real HTTP MCP endpoint and cannot authenticate the
+Grafana web/API root as an MCP server. A gateway changes deployment ownership.
+Keychain storage and seamless reconnection add unrequested lifecycle machinery.
+
+#### Implementation Boundaries
+
+Own the Grafana installer source scripts, tests, instructions and supporting
+catalog/spec documentation. Preserve query-skill behavior, unrelated skills,
+IAM, native registration and existing credential bindings.
+
+#### Test-First Success Criteria
+
+- TDD-001: Combined local and online defects report the local boundary without network identity calls or protected-state writes.
+- TDD-002: Same-token retrieval preserves identity validation and still produces scheduled restart.
+- TDD-003: Credential-bearing fixture stderr is suppressed and child status 42 remains 42.
+- TDD-004: The installed binary retains dummy token A after file replacement and loads token B only in a new process.
+
+#### Validation Plan
+
+Run wrapper fixtures, eleven cross-skill contracts, the installed-binary
+loopback qualification, shell/Python/Markdown lint and scoped review. Validate
+portable/native metadata and disposable installation separately.
+
+#### Test Plan
+
+Keep existing lock ownership, stale recovery, concurrency, signal cleanup and
+child-exit race cases. Use fake CLI failures and dummy loopback tokens before
+an authorized fresh native initialization and bounded datasource read.
+
+#### Evaluation Plan
+
+Retain explicit-only invocation and query handoff cases. Static definitions,
+script behavior, installed parity, native MCP readiness, skill triggering and
+comparative model quality are separate claims.
+
+#### Rollout And Rollback
+
+Validate repository source first, synchronize only changed selected skill
+payloads after byte/digest comparison, and preserve unrelated runtime hooks.
+Restart the client to load the wrapper. Revert only owned bytes after checking
+for concurrent changes; never replace credential bindings during rollback.
+
+#### Done Definition
+
+Source, instructions and installed payload agree; focused checks pass and
+native readiness is reported with exact limits. Natural lifetime and browser
+reauthentication remain separate qualification work unless directly observed.
+
+#### Implementation Evidence
+
+The source helpers emit sanitized phase codes, check offline prerequisites
+first and describe retrieval without issuance guarantees. Tests cover same
+bytes, redaction and child exits; the loopback binary qualification passed.
+
+#### Verification Evidence
+
+The full fake-command wrapper suite and eleven cross-skill contracts passed,
+including local-first checks, same-token retrieval, redaction, lock/concurrency
+recovery, scheduled shutdown, signal cleanup and natural child exit status.
+The redaction assertion itself rejects an injected fixture secret. ShellCheck,
+Bash syntax, Ruff, Markdown and whitespace checks passed. Review found no
+remaining blocker after correcting the negative-output assertions.
+
+The installed-binary loopback test confirmed stdio token retention and loading
+a replacement only in a new process. The real local helper check passed without
+setup writes. A fresh registered wrapper initialized and completed a bounded
+datasource read. A fresh native Codex app-server thread reported the server
+connected with the datasource tool and completed the same bounded read. An
+isolated codex exec model run reported the tool unavailable without a startup
+error; native MCP API readiness does not prove model-driven tool exposure.
+
+Portable, Codex and Claude structure checks passed with the existing native
+frontmatter extension retained. Disposable npx discovery, copied payloads,
+repeat installation and unrelated-state isolation passed. Eleven selected
+installed payloads match source bytes and modes; no global hooks or native
+registration were changed. Sixteen canonical trigger definitions and two
+report-only quality cases are present. Fresh skill triggering and comparative
+model quality are unverified; isolated eval credentials were unavailable.
+Natural twelve-hour operation and browser reauthentication were not exercised.
+The original closed-initialize warning was not reproduced or causally explained.
+
+<!-- /FEATURE: FEAT-050 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -486,6 +486,7 @@ class TerraformCampaignHooks(CampaignGenerationHooks):
                 assert_authority=assert_authority,
             )
         assert_authority()
+        self.executor.complete_nat()
         _, after = self.executor._terraform_plan(purpose=f"Verify {stage_name} stage convergence")
         if terraform_changes(after):
             raise RuntimeError("Topology stage did not reach its admitted Terraform postconditions")

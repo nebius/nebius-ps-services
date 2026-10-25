@@ -42,15 +42,15 @@ def test_specs_expose_only_the_current_canonical_contracts() -> None:
     design = _read("docs/design.md")
 
     assert re.findall(r"^### (REQ-\d+):", requirements, re.MULTILINE) == [
-        f"REQ-{number:03d}" for number in range(13, 42)
+        f"REQ-{number:03d}" for number in range(13, 43)
     ]
     assert re.findall(r"^### (FEAT-\d+):", design, re.MULTILINE) == [
-        f"FEAT-{number:03d}" for number in range(13, 50)
+        f"FEAT-{number:03d}" for number in range(13, 51)
     ]
-    assert requirements.count("<!-- REQUIREMENT:") == 29
-    assert requirements.count("<!-- /REQUIREMENT:") == 29
-    assert design.count("<!-- FEATURE:") == 37
-    assert design.count("<!-- /FEATURE:") == 37
+    assert requirements.count("<!-- REQUIREMENT:") == 30
+    assert requirements.count("<!-- /REQUIREMENT:") == 30
+    assert design.count("<!-- FEATURE:") == 38
+    assert design.count("<!-- /FEATURE:") == 38
 
 
 def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:
@@ -72,7 +72,7 @@ def test_developer_workflow_uses_one_locked_uv_authority() -> None:
     requirements = _read("docs/requirements.md")
     design = _read("docs/design.md")
 
-    assert "uv `0.12.9`" in readme
+    assert "uv `0.13.5`" in readme
     assert "`make lock-check`" in readme
     assert "`UV_PROJECT_ENVIRONMENT`" in readme
     assert "rejects whitespace" in readme

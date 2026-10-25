@@ -55,7 +55,12 @@
     "grafana import",
     "grafana export",
     "grafana validate",
-    "grafana install"
+    "grafana install",
+    "nat",
+    "nat status",
+    "nat refresh-routes",
+    "nat unlock",
+    "nat reconcile"
   ],
   "schema": "nebius-cxcli.cli-contract.v1",
   "soperator": {
@@ -608,7 +613,7 @@
     "schema": "nebius-cxcli.soperator-cli-contract.v6"
   },
   "surface_sha256": {
-    "": "731708b4ab772e5272f29916e576814e5e165ca3413cfc9261224a8994f19414",
+    "": "124e989bc3425f5f9ed07b7d697abcd0258a08c2449fa4ea15f61fea4b154c66",
     "acceptance-test": "567992d239fb66e2f6ee49db5a8abdda138f2afb2fe535b3756dbd7f1b298672",
     "acceptance-test benchmark": "ce15bd9332df332729c8cbf8db2fbf08ab55c62900838ae850c507b9756bdfe7",
     "acceptance-test smoke": "4bc7a21731ada9ae4f2046af3058fafc16d03f39edb9af62d8b1c3ba467a903f",
@@ -619,7 +624,7 @@
     "component list": "6ca81b09c890efd444a2203da38c48e302408cdb6078bcc69570ae02763001f5",
     "component remove": "0e83c01a5bec5bb1736bd3f184af12dd9f2bb660480e9e008cbb375c9fd3ac8a",
     "create": "443963a816181c0b13137102fc59eb0a64f7f73b1a50456750dd282437ad8d87",
-    "deploy": "eea9530c9bc6b7348de376e8017dafa7ae2df8012b652b06348011b89b12853e",
+    "deploy": "674434b125c992b0ddf2d54f9bac5ac8c8b9f8a0948fde28d488dbb16c6b91c0",
     "destroy": "ea6b598ab75609904c2ba945725b270c7389b99f700d08fe1147135da550f7bb",
     "discover": "84a74594da34349ebfce61afcfda9a1e71dcfd7caf72d6554734dab63d15e85b",
     "email": "8c4831a38070e14869c46b327cd6af99f3ddacfc0c05064f70374ac4a913120e",
@@ -636,6 +641,11 @@
     "migrate": "26e2fc73349056a43ce4ee4627f3b33bbbaf21195923cc317925a4f86e867161",
     "migrate node-group": "dc99abd942d04f2fa9b6dfdfb1daa9cdf514530c0b98d738d4067d6274733c94",
     "mk8s-token": "c81de4d40869095daf28c31b008ab4342cccb6177c3154d6ae23fd1723762729",
+    "nat": "08b135c0b24a68221b9bea446000a27b7feb9126b4226768378dfcbf004546d3",
+    "nat reconcile": "72cef51d33433a90f7497c56a731c925de2da1f337611dc1054982305d6d1842",
+    "nat refresh-routes": "48d2ffe3a1b6bba711711d4e9f347042856a254fb9ab6a9cbb61badfbef9c0c0",
+    "nat status": "e70964b81e6e7129c821b7af16d3334d8c029a45ba4fb4165db3abec1f7a0977",
+    "nat unlock": "c63087b324c29a57323f176a07aa45298d5d890949cde383183905a2783643e6",
     "quota-check": "c116f7c460519e23eb491ba390be280f35623a0e4f8895d8f46d2f06063b8630",
     "quota-request": "f167fbde2cc31d02b355f63f5c5bdc243ab929e8cdcc22783aae7cbc283c51df",
     "render": "ef6627d008794215dc9d5a182f6d16aac0b67a5af677e82e2ebfdb641df11a62",

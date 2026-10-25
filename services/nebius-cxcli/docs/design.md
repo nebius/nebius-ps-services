@@ -3906,7 +3906,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-027 -->
 
-<!-- FEATURE: FEAT-028 reqs=REQ-026 status=ready delivery=verified priority=P1 version=4 -->
+<!-- FEATURE: FEAT-028 reqs=REQ-026 status=ready delivery=verified priority=P1 version=5 -->
 ### FEAT-028: Locked uv contributor and CI workflow
 
 #### Requirements Covered
@@ -3923,6 +3923,15 @@ release workflows call that Make path and also invoke the venv interpreter
 directly.
 
 #### Design Details
+
+Version 5 adopts uv `>=0.13.5,<0.14` for contributor and operator setup and
+pins uv `0.13.5` in the cxcli CI, release, and Nsight workload jobs. Preserve
+explicit supported-Python selection, disabled automatic downloads, locked
+synchronization, and hash-constrained builds. The toolchain update must pass
+`make lock-check`, focused workflow/environment/documentation checks, and
+`make all` with the existing dependency lock; it does not authorize dependency
+upgrades or a global uv downgrade. Keep prerequisite guidance and version
+contract tests aligned with this single supported minor line.
 
 Release verification fetches main without introducing a shallow boundary,
 retaining complete history for tag ancestry and the tagged commit parent used
@@ -3970,9 +3979,10 @@ project-environment interface.
 #### Implementation Boundaries
 
 `pyproject.toml` and `uv.lock` own dependency intent and resolution. Make owns
-safe environment selection, serialization, and local task composition. Only
-the two cxcli workflows install uv; sibling workflows are out of scope. The
-existing build hook remains the packaging authority for generated wheel data.
+safe environment selection, serialization, and local task composition. The
+cxcli CI, release, and Nsight workflows install the same pinned uv version;
+sibling workflows are out of scope. The existing build hook remains the
+packaging authority for generated wheel data.
 
 #### Test-First Success Criteria
 
@@ -4011,11 +4021,20 @@ than adding a fallback or leaving mixed pip/uv authority.
 
 #### Done Definition
 
-The contributor environment and both cxcli workflows use the reviewed lock
+The contributor environment and cxcli workload jobs use the reviewed lock
 through uv, all supported Python jobs retain their validation contract, wheel
 verification remains artifact-exact, and focused plus aggregate gates pass.
 
 #### Implementation Evidence
+
+Version 5: `pyproject.toml`, Make prerequisite guidance, README, the development
+guide, and existing environment/documentation/workflow tests use uv 0.13.5
+with an upper bound below 0.14. All six uv setup steps in the cxcli CI,
+release, and Nsight workflows pin 0.13.5. `uv.lock` and application code are
+unchanged by this repair. Eight existing Terraform status fixtures now supply
+mapping configurations and mock the external empty-state read while retaining
+the real NAT guard. Two token-test fixtures explicitly control renewable
+credential availability and the ambient CLI profile.
 
 Version 4: `.github/workflows/nebius-cxcli-release.yml` retains full main
 history by removing the depth-one fetch from the ancestry gate. The existing
@@ -4032,6 +4051,21 @@ runtime remediation text, and developer design text describe that single path;
 the former pip environment helpers and legacy Make aliases are removed.
 
 #### Verification Evidence
+
+Version 5: the original uv version rejection reproduced at `make lock-check`.
+After the toolchain repair, lock inspection and exact environment synchronization
+passed without changing `uv.lock`. All 79 focused environment/workflow/docs
+cases passed. The full run exposed eight stale Terraform fixtures; all eight
+repaired cases and two independent NAT rejection cases passed. Two ambient-auth
+failures were then reproduced with disposable dummy credential/profile inputs;
+the same three parameter cases passed after fixture isolation, together with
+all 48 SDK-auth tests. Final `make all` exited zero with 8,385 passed, three
+skipped and 18 opt-in integration tests deselected. Its isolated wheel build
+and CLI verification passed for 58 public and one hidden surface. Ruff,
+Markdown lint, diff hygiene and read-only correctness/security review passed.
+Local actionlint reports the same existing release-workflow `concurrency.queue`
+diagnostic on HEAD and the working tree; CI and Nsight workflows lint cleanly.
+Remote GitHub execution and the full Python-version matrix remain unverified.
 
 Version 4: `tests/test_github_workflows.py` executes the actual ancestry shell
 step against disposable local Git remotes with both historical and tip release
@@ -9982,6 +10016,76 @@ Source, fixtures, copy parity and docs agree; live qualification is reported sep
 The focused report-contract, installation, progress, profiling and architecture suites passed 133 tests. Three changed source modules pass scoped mypy; changed Python files pass Ruff. Cross-project fixture coverage exercises the actual course reader during admission closure. A separate Linux tmpfs fixture exercised actual mount discovery, reconciliation and downstream atomic delivery. Independent review found no remaining blocker after interrupted invalidation and active-job protection were repaired. Deployed filesystem lock/rename semantics, cross-node mounts, real GPU reports and browser opening remain unverified pending authorized nonproduction qualification.
 
 <!-- /FEATURE: FEAT-049 -->
+
+<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-050: Custom NAT component and staged routing
+
+#### Requirements Covered
+
+- REQ-042: Terraform-owned custom NAT gateways.
+
+#### Context Evidence
+
+The generic infra catalog resolves Terraform modules; SDK helpers supply project discovery and quota allowances. The existing vm module supports stable allocations and cloud-init. VPC route attachment is a subnet field. Before this feature, deployment journals resided locally, non-reconciliation staged admission was Soperator-specific, and quota normalization did not distinguish unknown measurement states.
+
+#### Design Details
+
+Add a nat-gateway module composing vm and owning its explicit subnet, stable allocations, gateway egress table and workload route-policy tables. Register a Network component with a dedicated wizard. Discover CPU-only preset resources live and prefer cpu-d3/4vcpu-16gb. Use an autoallocated /28 subnet by default with configurable CIDR, Ubuntu 24.04 driverless image resolved to an ID, and a configurable 20 GiB network SSD enlarged for image requirements. Bootstrap persistent IPv4 forwarding and NAT using the actual default-route interface, scoped source ranges and restricted administration access.
+
+Store consumer routing metadata separately from module inputs. Existing source policies are copied into new owned tables, retaining non-default static routes and replacing only the default with the stable private allocation. Keep distinct policies, reject unsupported routes and report specific-route exceptions. Same-run network references feed NAT without consumer-subnet dependencies; attachment overrides belong to the VPC owner and are activated only after readiness.
+
+Preflight live scope, quota and routing; freeze prepare/activate generations; Terraform prepares resources with old/default workload attachments; trusted SSH verifies guest state; Terraform activates owned subnet fields and SDK read-modify-update activates delegated external fields with exact resource versions. Independently observe every transition. Missing SSH trust leaves preparation resumable. Preserve the existing admission constraint against additional actions. Route restoration precedes removal, and direct Terraform mutations detect NAT in config and state and use the lifecycle owner.
+
+Persist original attachments, operation progress and generation identity in the existing protected regular Object Storage backend with conditional writes and cross-host locking. Never infer safe lock takeover from time alone. Local journals are caches. The shared record retains the actual rendered module name. Recover network and subnet identities from module-scoped Terraform resource state when root outputs are unavailable, and reject disagreements between outputs and state. Partial changes are observed before retry; third-party attachment changes and unknown consumers block restoration/deletion. Stable allocations survive VM replacement; single-VM downtime is explicit and never triggers automatic egress fallback.
+
+Strict NAT quota assessment includes CPU, VM/disk counts and size, public IPs, allocations, subnet/pool and route/table demand including new VPC dependencies. Unknown/inactive usage remains unresolved; aggregate shared demand and calculate net-new/replacement demand from state/plan. Fresh checks precede provisioning and cutover. Resource creation or updates require provisioning checks even with routing disabled; only pure restoration of existing attachments is exempt from image/preset availability. Other component policy remains unchanged.
+
+#### Selected Option
+
+Python SDK discovery and controlled external attachment updates with Terraform provisioning, following the existing architecture. Deterministic implementation; no application or AI stack change.
+
+#### Alternatives Considered
+
+SDK-owned infrastructure would duplicate Terraform planning/state. Manual routing does not meet the guided lifecycle. Shared-table mutation affects unselected consumers. Automatic HA adds failover/fencing outside the initial scope.
+
+#### Implementation Boundaries
+
+cxcli catalog/wizard, reusable discovery/quota normalization, isolated NAT planning/SDK/lifecycle modules, generated deployment stages and guards, status/refresh CLI, and platform-infra nat-gateway module. Canonical spec publication belongs to maintain-project-specs.
+
+#### Test-First Success Criteria
+
+- TDD-001: CPU-only defaults, strict unknown quota and topology rejection behave independently of live credentials.
+- TDD-002: No workload route activates before guest readiness; interrupted routing restores only its own proven attachments.
+
+#### Validation Plan
+
+Run targeted pytest, isolated Terraform fmt/init/schema/validate/mock-provider tests, catalog/packaging checks, scoped lint/type checks and align.
+
+#### Test Plan
+
+Cover missing defaults, pagination and quota states; inherited/explicit pools; route cloning/drift; same-run graph cycles; trusted SSH bootstrap/replacement; partial writes and ambiguous outcomes; cross-host locking/recovery; removal and direct-command guards; existing infrastructure/Soperator regressions.
+
+#### Evaluation Plan
+
+An authorized nonproduction trial verifies selected-subnet egress, unchanged unselected routes, preserved custom paths, reboot persistence, recovery and restoration before deletion.
+
+#### Rollout And Rollback
+
+Ship an opt-in catalog component with no existing-config migration. Restore owned attachments before removing resources. Missing or conflicting restoration evidence fails closed. Do not delete external infrastructure or auto-change egress on failure.
+
+#### Done Definition
+
+Module, wizard, quota, deployment, recovery, CLI, packaging and documentation align and pass focused verification; live qualification remains a separate explicit evidence lane.
+
+#### Implementation Evidence
+
+Implemented the opt-in catalog entry and Terraform module, live SDK CPU/preset/image/network discovery, transactional wizard and plan-derived shared quota admission. The module owns dedicated networking, stable allocations, route-policy tables, VM and persistent guest forwarding. Separate NAT modules own scoped SDK updates, conditional shared state, staged trusted-SSH readiness and activation, exact original-route restoration, interrupted-operation reconciliation, last-component retirement and direct-mutation guards. NAT status, refresh, reconcile and unlock commands, deploy SSH controls, CLI contract, examples and operator documentation are aligned. Route-only restoration remains possible after provisioning drift and uses historical Terraform attachment preimages even when the authored VPC route changes. Partial-apply recovery reconciles resource identities before attachment admission, rejects stale output identities and Terraform-owned external delegation, and completes a no-op retirement even when other components remain. Canonical structural validation precedes NAT semantics.
+
+#### Verification Evidence
+
+The focused alignment pass reproduced and repaired disabled-provisioning admission, malformed-row errors, interrupted identity/ownership recovery, rendered module-name retirement and no-op retirement finalization. Seventeen regression cases were added; failure-path cases were observed failing before their fixes. All 62 NAT tests pass, with 129 lifecycle/adapter/structural cases and 916 broader deployment/render/storage regressions also passing in overlapping focused batches. The catalog/quota/provider/CLI/docs batch passed 279 tests. Terraform validation and five mock-provider tests passed at provider 0.6.8. Ruff, Markdown, formatting, type and architecture ratchets passed; installed-wheel CLI verification covers 58 public and one hidden surface. Final independent read-only review found no remaining blocker in the repaired paths. The wheel uses the existing setuptools backend and an isolated package tree with the locked dependency interpreter because installed uv 0.13.5 is outside the project constraint. No full CI matrix, live provisioning, guest reboot or workload egress trial was run; production qualification remains unverified and the requirement remains active.
+
+<!-- /FEATURE: FEAT-050 -->
 <!-- maintain-project-specs:design:end -->
 
 ## General Architecture and Runtime Design (Recovered Pre-Lifecycle Baseline)
@@ -12994,7 +13098,7 @@ Infra render:
 
 Managed vs external local tooling:
 
-- Local developer bootstrap for this repo assumes Python `3.12+`, uv `0.12.9` or a compatible `0.12.x` release, `make`, `git`, and a native build toolchain for Python-package fallback builds before `make env` / `make all` are expected to work. One phony `env` boundary precedes every Python-backed Make target: it rejects whitespace-containing, unsafe, symlinked, and unrecognized custom/default VENV paths before uv runs, maps the path through `UV_PROJECT_ENVIRONMENT`, checks `uv.lock` with the selected Python and automatic downloads disabled, and process-serializes exact `uv sync --locked`. Consumer commands use locked, non-syncing `uv run`; no timestamp, custom dependency checker, standalone pip launcher, or public development extra is repository authority.
+- Local developer bootstrap for this repo assumes Python `3.12+`, uv `0.13.5` or a compatible `0.13.x` release, `make`, `git`, and a native build toolchain for Python-package fallback builds before `make env` / `make all` are expected to work. One phony `env` boundary precedes every Python-backed Make target: it rejects whitespace-containing, unsafe, symlinked, and unrecognized custom/default VENV paths before uv runs, maps the path through `UV_PROJECT_ENVIRONMENT`, checks `uv.lock` with the selected Python and automatic downloads disabled, and process-serializes exact `uv sync --locked`. Consumer commands use locked, non-syncing `uv run`; no timestamp, custom dependency checker, standalone pip launcher, or public development extra is repository authority.
 - The repo Makefile exposes an explicit fast/default unit lane plus separate integration/coverage entrypoints: `make test-unit`, `make test-integration`, and `make coverage`. Unit and integration selection use pytest markers across `tests/`; the integration lane includes public-release source verification and the cloud-free native Terraform fixture regardless of directory.
 - Provider lookup helpers should stay friendly to strict IDE type checkers as well as runtime checks; when `callable()` or optional-value narrowing is not enough for Pyright/Pylance, prefer explicit casts or stepwise typed locals over compact inference-heavy comprehensions.
 - Auto-managed by the CLI when missing:
@@ -13202,7 +13306,7 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 - The local `make all` path overlaps the lint/test gate with an isolated PEP 517 `uv build --wheel` after the shared locked environment boundary. The build backend is represented in the development lock and constrained by a temporary hashed export of that lock. Wheel verification is serialized after the build, requires exactly one artifact, creates a temporary uv environment, installs runtime dependencies exported from the reviewed lock, installs the wheel without resolving a second graph, checks consistency, and runs the complete CLI contract from that isolated installation. The downloaded-wheel CI consumers never rebuild the artifact.
 - After the Make quality and wheel gates, the repo CI workflow runs `validate-sources component_sources.yaml` with source profile `local` so branch changes are checked against the current checkout's Terraform modules and Helm charts. The release workflow separately runs the same command with source profile `portable` so published wheels and release catalogs are still verified against portable pinned sources.
 - The repo CI workflow checks that built wheels bundle `component_sources.yaml`, `component_cli_settings.yaml`, and `soperator_wizard.yaml` with valid contracts. The release workflow is the place that runs the stricter portable `verify-wheel` / `verify-catalog` checks.
-- Post-gate workflow verification uses locked, non-syncing `uv run` commands after `make env` so wheel/catalog checks import the checked-out editable package reliably under GitHub Actions. The two cxcli workflows pin setup-uv and uv itself; sibling workflows and generated customer pip installation remain outside this contributor-tooling contract.
+- Post-gate workflow verification uses locked, non-syncing `uv run` commands after `make env` so wheel/catalog checks import the checked-out editable package reliably under GitHub Actions. The cxcli CI, release, and Nsight workflows pin setup-uv and uv itself; sibling workflows and generated customer pip installation remain outside this contributor-tooling contract.
 
 Primary automated test ownership:
 

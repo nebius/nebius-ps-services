@@ -4,6 +4,36 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Include every shared hook runtime helper in expected-file reporting and
+  update counts, and request restart for runtime-only changes in all install
+  modes. Explain missing skill ownership markers and how copy installers can
+  discard them; preserve unmanaged skills and unowned hook files.
+
+- Add phase-coded redacted Grafana MCP diagnostics and run offline setup checks
+  before online identity validation. Keep local stdio and protected token files;
+  document cache-age and scheduled retrieval as heuristics, preserve child exit
+  status and require restart even when retrieval returns the same token. Add
+  failure-ordering, redaction and lifecycle regression coverage.
+
+- Preserve multiline Implement and SDLC task contracts through assignment
+  serialization, including schema examples, acceptance checks and ownership
+  lists. Reject empty or duplicate fields and malformed task headings before
+  preparation; cover the parser and real-Git assignment boundary.
+
+- Harden Tavily executable symlink checks and reject disabled selected Codex
+  entries. Assert OAuth follower ownership, callback counts and delayed-probe
+  behavior; document the manual macOS qualification boundary.
+
+- Pin the opt-in Tavily bridge with a hash-guarded callback-readiness repair,
+  scoped probe timeout, and loopback OAuth recovery regression fixture.
+
+- Configure selected Tavily through a locked mcp-remote OAuth bridge in both
+  setup skills, using ordinary client launch, separate private file stores and
+  callback ports. Add standalone preparation, integrity and selected wiring
+  checks; document maximum authentication timeouts, native migration/rollback
+  and the distinction between simulated recovery and observed token expiry.
+  Preserve unrelated native settings, OAuth stores and research routing.
+
 - Add adaptive research checkpoints and an explicit optional Tavily Research
   workflow to research and both native search policies. Preserve quick-fact
   routing, verify decisive original sources, prevent duplicate jobs after

@@ -16,6 +16,9 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import urlparse
 
+# Imported TestCase is collected by unittest.main and the existing CI command.
+from test_tavily_bridge import TavilyBridgeTests  # noqa: F401
+
 
 SCRIPT = Path(__file__).resolve().with_name("check-local-idempotency.py")
 CREATE_RECOVERY_SCRIPT = Path(__file__).resolve().with_name("create-recovery-config.py")
@@ -1266,11 +1269,11 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         result = self.run_check("--require-template-mcp-servers")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(path.read_bytes(), before)
-        selected = tomllib.loads(path.read_text().replace(
-            '# [mcp_servers.tavily]\n# url = "https://mcp.tavily.com/mcp/"',
-            '[mcp_servers.tavily]\nurl = "https://mcp.tavily.com/mcp/"',
-        ))
-        self.assertEqual(selected["mcp_servers"]["tavily"], {"url": "https://mcp.tavily.com/mcp/"})
+        self.assertIn('# command = "<ABSOLUTE_NODE>"', path.read_text())
+        self.assertIn('"--auth-timeout", "300", "--silent"', path.read_text())
+        selected = self.run_check("--require-tavily-bridge")
+        self.assertEqual(selected.returncode, 1)
+        self.assertEqual(path.read_bytes(), before)
 
     def test_unselected_context7_custom_integration_is_preserved(self) -> None:
         path = self.codex_home / "config.toml"

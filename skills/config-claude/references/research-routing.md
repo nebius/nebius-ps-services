@@ -1,39 +1,20 @@
 # Tavily OAuth and Research Routing
 
-## Optional Native Claude Setup
+## Optional Tavily Bridge Setup
 
-Tavily in `assets/mcp-servers.json` is an opt-in selection, not a default.
-Inspect native user/local/project/plugin registrations structurally without
-printing credentials; preserve equivalent definitions and unrelated state.
-For a selected missing user-level server:
+Tavily remains an explicitly selected integration. Follow
+[tavily-bridge.md](tavily-bridge.md) to prepare the pinned stdio bridge, render
+native registration and qualify fresh-client behavior. The bridge connects to
+hosted Tavily, reuses credentials and opens the browser when needed, using
+separate protected file storage for each client. Other providers retain their
+native credential policy. A Keychain-only requirement blocks this bridge;
+never silently substitute storage or API keys.
 
-```bash
-claude mcp add --transport http --scope user tavily https://mcp.tavily.com/mcp/
-claude mcp login tavily
-```
-
-Verify installed CLI help before using login. The user completes browser
-consent; on clients without a native login subcommand use their documented
-`/mcp` authentication interface. Report unsupported OAuth rather than inventing
-a command or silently switching to API keys. Native Claude owns OAuth storage
-and refresh; on macOS use its native protected credential handling rather than
-copying tokens or creating an extra manual Keychain item. OAuth does not mean
-browser login on every launch; expiry, revocation or provider policy can require
-reauthorization. Never print tokens or reconstruct application/authentication
-JSON. Do not put `mcpServers` in settings.json or copy Codex credential-store keys.
-
-Patch only the template's Documentation and Web Research section for a
-routing-only request. If CLAUDE.md is absent, create a compact file containing
-that section inside the config-claude managed-context markers. A later full
-setup may reconcile that same block with the full template; do not create a
-second block. Full-home checks can report unrelated missing defaults and are
-not acceptance criteria for the scoped routing-only operation.
-
-`--require-mcp tavily --mcp-config PATH` checks presence and shape only. Compare
-the exact selected endpoint separately and verify native connection/auth status;
-a static pass is not an OAuth or endpoint-identity assertion.
-
-[Claude native MCP configuration and OAuth](https://code.claude.com/docs/en/mcp).
+For routing-only changes, patch only the template's Documentation and Web
+Research section, preserving equivalent active user guidance. Do not install
+the bridge, bootstrap the rest of the home or repair OAuth merely for a lookup.
+An absent instruction file may contain only the selected section inside the
+native managed-context markers. Full-home checks remain separate.
 
 ## Tool Selection
 
@@ -121,13 +102,13 @@ only the global research section and verify surrounding bytes are unchanged.
 
 ## Verification Boundaries
 
-Separate parsed registration, completed native OAuth, fresh-session tool
+Separate parsed registration, completed bridge OAuth, fresh-session tool
 availability, actual read-tool calls and routing/quality evaluation. Inspect
 actual schemas before selecting options. Restart or create a fresh client
 session after configuration changes; the current chat may retain its old tools.
 A static checker does not verify OAuth, token refresh or tool execution. Do not
-read or copy credential values to prove storage. Native success and protected
-store settings are different evidence from observing a particular refresh.
+read or copy credential values to prove storage. A successful connection and private
+file permissions are different evidence from observing a particular refresh.
 
 ## Official References
 

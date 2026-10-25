@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tomllib
 
+from tavily_bridge import validate_registration as validate_tavily_bridge
+
 
 # BEGIN shared runtime bootstrap
 def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
@@ -281,6 +283,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "template-baseline audits; normal laptop setup preserves existing "
             "MCP config and patches requested integrations separately."
         ),
+    )
+    parser.add_argument(
+        "--require-tavily-bridge",
+        action="store_true",
+        help="Check selected Tavily bridge wiring, private state and timeouts without authentication.",
     )
     parser.add_argument(
         "--require-implement-state",
@@ -1126,6 +1133,8 @@ def main(argv: list[str]) -> int:
     check_runtime_files(codex_home, failures)
     if args.require_implement_state:
         check_implement_state(codex_home, config, failures)
+    if args.require_tavily_bridge:
+        check_tavily_bridge(codex_home, config, failures)
     if failures:
         print(f"Idempotency preflight failed: {len(failures)} issue(s)")
         return 1
@@ -1133,6 +1142,14 @@ def main(argv: list[str]) -> int:
         "Idempotency preflight passed: no local changes required for checked surfaces"
     )
     return 0
+
+
+def check_tavily_bridge(codex_home: Path, config: dict, failures: list[str]) -> None:
+    try:
+        validate_tavily_bridge(codex_home, "codex", config.get("mcp_servers", {}).get("tavily"))
+        ok("selected Tavily bridge is statically aligned; authentication not tested")
+    except (OSError, ValueError, TypeError, KeyError):
+        fail("selected Tavily bridge is missing, unsafe or differs; authentication not tested", failures)
 
 
 if __name__ == "__main__":

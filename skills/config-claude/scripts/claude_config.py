@@ -10,6 +10,8 @@ import re
 import shlex
 import stat
 
+from tavily_bridge import validate_registration as validate_tavily_bridge
+
 
 SKILL = Path(__file__).resolve().parents[1]
 BEGIN = "<!-- BEGIN config-claude managed context -->"
@@ -281,7 +283,8 @@ def check_hooks(home: Path, source: Path, settings: dict, route: str) -> None:
 
 def inspect(home: Path, source: Path, *, route: str = "local", native_only: bool = False,
             trusted: bool = False, delegation: bool = False, workspace: bool = False,
-            mcp_names: tuple[str, ...] = (), mcp_config: Path | None = None) -> dict:
+            mcp_names: tuple[str, ...] = (), mcp_config: Path | None = None,
+            tavily_bridge: bool = False) -> dict:
     checks: list[dict] = []
     fingerprints: dict[str, str] = {}
 
@@ -354,6 +357,15 @@ def inspect(home: Path, source: Path, *, route: str = "local", native_only: bool
                 else:
                     raise ValueError("unsupported MCP transport")
         check("requested MCP registrations (presence and shape only)", selected_mcp)
+    if tavily_bridge:
+        def selected_tavily_bridge():
+            if mcp_config is None:
+                raise ValueError("explicit native MCP configuration path is required")
+            servers = json_object(safe_read(mcp_config)).get("mcpServers", {})
+            if not isinstance(servers, dict):
+                raise ValueError("invalid MCP server collection")
+            validate_tavily_bridge(home, "claude", servers.get("tavily"), settings)
+        check("selected Tavily bridge (static only; authentication not tested)", selected_tavily_bridge)
     success = all(item["state"] == "Aligned" for item in checks)
     return {"status": "STATIC_PASS" if success else "NOT_ALIGNED", "checks": checks,
             "fingerprints": fingerprints,

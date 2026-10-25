@@ -26,14 +26,14 @@ and provides MK8s, Soperator, Grafana, and access-management commands.
 
 ## Installation
 
-Use Git, an installed Python **3.12, 3.13, or 3.14**, and uv **0.12.9 or a
-compatible 0.12.x release**. Install the CLI with `uv tool` to run
+Use Git, an installed Python **3.12, 3.13, or 3.14**, and uv **0.13.5 or a
+compatible 0.13.x release**. Install the CLI with `uv tool` to run
 `nebius-cxcli` from any directory without activating a virtual environment.
 
 If uv is not installed, install it with an existing, working `pipx`:
 
 ```bash
-pipx install 'uv>=0.12.9,<0.13'
+pipx install 'uv>=0.13.5,<0.14'
 ```
 
 If `pipx` is unavailable, use an installation method from the
@@ -251,6 +251,10 @@ They should not be treated as universally side-effect-free.
 | `terraform apply` | `GENERATED_PATH` | Apply generated Terraform infrastructure |
 | `terraform destroy` | `GENERATED_PATH` | Tear down eligible projects without MK8s |
 | `terraform unlock` | `GENERATED_PATH` | Inspect and, after guarded confirmation, remove an eligible stale lock |
+| `nat status` | `CONFIG_YAML` | Observe gateway, routing and optional trusted-SSH readiness |
+| `nat refresh-routes` | `CONFIG_YAML` | Refresh detached source policy snapshots in configuration |
+| `nat unlock` | `CONFIG_YAML` and exact owner | Release an abandoned shared NAT lock after writers stop |
+| `nat reconcile` | `CONFIG_YAML` | Reconcile settled ambiguous attachments without changing routes |
 | `flux apply` | `GENERATED_PATH` | Apply apps directly and wait for readiness |
 | `flux bootstrap` | `GENERATED_PATH` | Establish or reconcile continuous GitOps delivery |
 | `flux destroy` | `GENERATED_PATH` | Remove eligible rendered app resources |
@@ -262,6 +266,11 @@ nebius-cxcli deploy "$CONFIG"
 
 Use `deploy` for initial Soperator installation and protected changes. Dedicated
 Terraform mutations and Flux bootstrap/destroy reject Soperator targets.
+
+The opt-in [custom NAT gateway](docs/nat-gateway.md) also uses `deploy` for staged
+provisioning, trusted guest readiness, route activation and restoration. Its
+wizard discovers CPU-only presets and live quotas; defaults prefer
+`cpu-d3` / `4vcpu-16gb`. Terraform owns all resource creation and deletion.
 After a successful accepted Soperator deployment, ordinary app changes can use:
 
 ```bash

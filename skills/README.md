@@ -96,7 +96,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
 | `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations, including Nebius Docs, and recovery. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, selected MCP integrations such as Nebius Docs, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
-| `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
+| `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, protected token cache, and enforced read-only tools. |
 | `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
 
 ### Git, Pull Requests, and Publishing
@@ -1161,7 +1161,8 @@ access, delegation policy, Implement storage and MCP integrations remain
 explicit options. See [Config Claude](config-claude/README.md) for native scope,
 recovery, checker options and evidence boundaries.
 
-Both setup skills support optional Tavily OAuth and compact global research
+Both setup skills support optional pinned Tavily OAuth bridges with separate
+private per-host credential stores, ordinary client launch and compact global research
 routing: vendor documentation MCP tools available in the current session first,
 then Tavily against official sources, then disclosed official-web fallback.
 Small documentation lookups follow the same order; builtin search remains
@@ -1250,10 +1251,11 @@ templates, schema, and validation.
 
 `install-grafana-mcp-for-nebius` installs and configures the official Grafana
 MCP server for Codex. It pins and validates one human Nebius CLI profile,
-stores a private profile/user binding, isolates rotating token state per
-server/profile, renews stale startup credentials before MCP launch under a
-bounded Codex timeout, clears agent and competing Grafana credentials, and
-always enforces read-only MCP arguments. External Grafana
+stores a private profile/user binding and protected token cache per server/profile,
+retrieves older cache state before MCP launch under a bounded Codex timeout,
+reports sanitized startup phases and always enforces read-only MCP arguments.
+Scheduled retrieval requires restart; file age does not prove token expiry.
+External Grafana
 service-account/static-key setup remains separate. Routine observability
 questions are handed to `nebius-grafana-query`; the installer retains no second
 query path.
@@ -1642,7 +1644,7 @@ diagnostic; it is never imported from the current directory.
 ## Skills Installer
 
 With no arguments, `./install-skills.sh` installs all sibling skills, copies all
-seven reviewed hook bundles and their shared runtime, and merges their hook
+reviewed hook bundles and their shared runtime, and merges their hook
 registrations for Codex. `--agent claude` performs the same operation for Claude.
 Existing explicit hook-only and skill-removal modes remain available.
 
@@ -1727,6 +1729,13 @@ installer preflight.
 Reruns converge with rsync. Unmanaged or other-source-owned skill folders are
 skipped. A local individual skill and its parent catalog count as the same
 source only when both resolve to the exact same physical skill directory.
+`Skip (existing unmanaged directory)` means the destination has no nonempty
+`.install-source-id` ownership marker. A separate copy installer can replace
+the directory and discard that marker even when the skill content still
+matches. Use this installer consistently for managed skills; do not refresh
+the same destination through a different copy installer. If a marker was lost,
+verify the prior source and the entire installed tree before restoring that
+exact source identity. Matching names alone are not ownership evidence.
 Reinstallation updates the ownership marker to the selected source; installing
 one skill preserves catalog-owned siblings. Obsolete same-source skills are
 removed. Other extra skills and hook
@@ -1734,7 +1743,8 @@ files/registrations are reported for review, not automatically removed.
 `--remove-skill` removes the selected skill and its installer manifest entries;
 it does not uninstall hooks. Reinstalling a source that still contains that
 skill adds it back. Unmanaged copies require deliberate removal through their
-owning route before changing installation ownership.
+owning route before changing installation ownership, unless verified prior
+ownership is being restored without replacing their content.
 
 Differing hook payloads are backed up under the selected home's
 `.install-hooks-state/backups/` before refresh. Registration preflight rejects
@@ -1742,6 +1752,10 @@ malformed settings and conflicting handlers before installing skills or hooks.
 Identical shared payloads in standalone bundles converge on one installed file
 and registration without a duplicate-destination notice. Differing payloads
 targeting the same filename still fail preflight before installation.
+Shared runtime helpers are included in the expected-file inventory and hook
+update totals. A change confined to those helpers still triggers the restart
+notice, including installation of a skill without its own hook bundle. Extra
+files without proven ownership remain visible for review and are preserved.
 Ordinary merges preserve unrelated registrations and Claude settings keys.
 `--refresh-hook-registrations` permits only the same event/script with unchanged
 handlers apart from status metadata and an exact managed command's host binding.

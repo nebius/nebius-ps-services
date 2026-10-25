@@ -12882,10 +12882,14 @@ def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    config = {"infra": {"components": []}}
     calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
 
     @contextmanager
     def _fake_reporting(
@@ -12910,13 +12914,13 @@ def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
         lambda message, **kwargs: calls.append(("print", message, kwargs)),
     )
 
-    cli._run_terraform_apply_with_status("cfg", fake_paths)
+    cli._run_terraform_apply_with_status(config, fake_paths)
 
     assert calls == [
-        ("status_enter", "cfg", 15.0, 60.0),
+        ("status_enter", config, 15.0, 60.0),
         ("print", "hello", {"highlight": False}),
         ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
-        ("status_exit", "cfg"),
+        ("status_exit", config),
     ]
 
 
@@ -13081,10 +13085,14 @@ def test_run_terraform_apply_with_status_can_skip_mk8s_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    config = {"infra": {"components": []}}
     calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
     monkeypatch.setattr(
         cli,
         "validate_vpc_networking_preflight",
@@ -13106,7 +13114,7 @@ def test_run_terraform_apply_with_status_can_skip_mk8s_preflight(
         ),
     )
 
-    cli._run_terraform_apply_with_status("cfg", fake_paths, run_mk8s_preflight=False)
+    cli._run_terraform_apply_with_status(config, fake_paths, run_mk8s_preflight=False)
 
     assert calls == [
         ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
@@ -13122,6 +13130,9 @@ def test_run_terraform_apply_with_status_runs_mk8s_gpu_stack_preflight(
     reporter = SimpleNamespace(handle_terraform_event="callback")
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
     monkeypatch.setattr(
         cli,
         "validate_vpc_networking_preflight",
@@ -13168,6 +13179,7 @@ def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    config = {"infra": {"components": []}}
     calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
     watchers = [
@@ -13180,6 +13192,9 @@ def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
     ]
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
 
     @contextmanager
     def _fake_reporting(
@@ -13217,13 +13232,13 @@ def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
         lambda message, **kwargs: calls.append(("print", message, kwargs)),
     )
 
-    cli._run_terraform_apply_with_status("cfg", fake_paths, status_watchers=watchers)
+    cli._run_terraform_apply_with_status(config, fake_paths, status_watchers=watchers)
 
     assert calls == [
-        ("status_enter", "cfg", 15.0, 60.0, watchers),
+        ("status_enter", config, 15.0, 60.0, watchers),
         ("print", "hello", {"highlight": False}),
         ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
-        ("status_exit", "cfg"),
+        ("status_exit", config),
     ]
 
 
@@ -13247,6 +13262,9 @@ def test_run_terraform_apply_with_status_passes_prompted_mysterybox_env(
     )
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
 
     @contextmanager
     def _fake_reporting(
@@ -13288,11 +13306,15 @@ def test_run_terraform_apply_with_status_appends_last_known_status_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    config = {"infra": {"components": []}}
     reporter = SimpleNamespace(
         handle_terraform_event="callback", snapshot=lambda: "Status [10s] TF: failed | API: pending"
     )
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
 
     @contextmanager
     def _fake_reporting(
@@ -13310,13 +13332,14 @@ def test_run_terraform_apply_with_status_appends_last_known_status_on_failure(
     monkeypatch.setattr(cli, "terraform_apply", _fake_apply)
 
     with pytest.raises(RuntimeError, match="Last known deploy status"):
-        cli._run_terraform_apply_with_status("cfg", fake_paths)
+        cli._run_terraform_apply_with_status(config, fake_paths)
 
 
 def test_run_terraform_apply_with_status_passes_abort_check_when_reporter_supports_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    config = {"infra": {"components": []}}
     calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(
         handle_terraform_event="callback",
@@ -13325,6 +13348,9 @@ def test_run_terraform_apply_with_status_passes_abort_check_when_reporter_suppor
     )
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
 
     @contextmanager
     def _fake_reporting(
@@ -13355,7 +13381,7 @@ def test_run_terraform_apply_with_status_passes_abort_check_when_reporter_suppor
 
     monkeypatch.setattr(cli, "terraform_apply", _fake_apply)
 
-    cli._run_terraform_apply_with_status("cfg", fake_paths)
+    cli._run_terraform_apply_with_status(config, fake_paths)
 
     assert calls == [
         (
@@ -13373,6 +13399,7 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
+    config = {"infra": {"components": []}}
     calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(
         handle_terraform_event="callback",
@@ -13381,6 +13408,9 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
     )
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
+    monkeypatch.setattr(
+        cli, "terraform_show_json", lambda *_args, **_kwargs: {"values": {"root_module": {}}}
+    )
 
     @contextmanager
     def _fake_reporting(
@@ -13417,10 +13447,10 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
 
     monkeypatch.setattr(cli, "terraform_destroy", _fake_destroy)
 
-    cli._run_terraform_destroy_with_status("cfg", fake_paths)
+    cli._run_terraform_destroy_with_status(config, fake_paths)
 
     assert calls == [
-        ("status_enter", "cfg", "destroy"),
+        ("status_enter", config, "destroy"),
         (
             "destroy",
             fake_paths.infra_dir,
@@ -15485,6 +15515,7 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
             captured["closed"] = True
 
     monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: False)
+    monkeypatch.setattr(cli, "_renewable_runtime_auth_env_available", lambda: False)
     monkeypatch.setattr(
         cli,
         "_runtime_auth_cache_load",

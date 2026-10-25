@@ -16,14 +16,14 @@ been selected and preserves only setup-state and handoff expectations.
 | `$install-grafana-mcp-for-nebius` use my active human CLI profile for managed Grafana | Validate `.user_profile.id`, pin the active profile, and create profile-scoped private state only after explicit apply approval. |
 | `$install-grafana-mcp-for-nebius` switch from the old shared token registration to profile `<human_profile>` | Show the exact migration; replace the named MCP entry only with explicit `--apply --replace-existing`. |
 | `$install-grafana-mcp-for-nebius` repair an authentication or wrapper failure | Diagnose the setup path and apply only explicitly authorized repair. |
-| Ambient profile is `codex-agent-<project>` while a human profile is pinned | Clear agent selectors and credentials; validate and mint only through the pinned human profile. |
-| The pinned profile now resolves to another user or a service account | Fail closed before minting or starting MCP; do not rewrite the binding automatically. |
+| Ambient profile is `codex-agent-<project>` while a human profile is pinned | Clear agent selectors and credentials; validate and retrieve only through the pinned human profile. |
+| The pinned profile now resolves to another user or a service account | Fail closed before retrieval or starting MCP; do not rewrite the binding automatically. |
 | The installed MCP build lacks token-file support | Fail closed and require an updated `mcp-grafana`; do not add an inline-token compatibility path. |
-| The cached startup token is missing or older than one hour | Renew through the pinned human profile before MCP launch, permit browser authentication only for the foreground identity check, mint and revalidate noninteractively, wait long enough to reuse one concurrent foreground renewal, and fail closed without launching MCP if renewal fails. |
+| The cached startup token is missing or older than one hour | Renew through the pinned human profile before MCP launch, permit browser authentication only for the foreground identity check, retrieve and revalidate noninteractively, wait long enough to reuse one concurrent foreground renewal, and fail closed without launching MCP if renewal fails. |
 | The Codex MCP entry lacks the canonical startup timeout | Set only `startup_timeout_sec = 300.0` in place when every other structured value is canonical and the digest-bound config bytes remain unchanged; do not use inline `sh -c` or put a token in TOML. |
 | The CLI cannot read MCP inventory or returns malformed or duplicate entries | Fail closed before config, binding, or token writes; never infer absence from a failed get. |
 | Registration drift is rejected while the token is stale or private state is missing | Preserve the existing token and leave missing private state absent; require replacement approval before local convergence. |
-| Repeated check/apply on canonical state | Preserve config, binding, fresh token, and private-directory metadata; do not add, remove, or mint again. |
+| Repeated check/apply on canonical state | Preserve config, binding, acceptable token cache, and private-directory metadata; do not add, remove, or retrieve again. |
 | A stale token is renewed during an approved canonical apply | Renew once; subsequent apply/check calls reuse the token without rewriting protected state. |
 | An existing command points to a byte-identical trusted wrapper without execute permission | Report registration drift; do not accept the command as launchable. |
 | Refresh initialization left only a stale empty private `owner-pid.tmp` | Recover the unchanged provisional lock and refresh once; preserve populated, linked, unsafe, or unknown state. |
@@ -34,3 +34,13 @@ been selected and preserves only setup-state and handoff expectations.
 | Summarize recent Loki errors for one resource | Route to `$nebius-grafana-query`; do not rerun setup. |
 | Inspect dashboard panel queries | Route to `$nebius-grafana-query`; do not mutate config. |
 | User asks naturally for metrics without naming the installer | Do not invoke setup implicitly. |
+
+| Additional state | Expected behavior |
+| --- | --- |
+| Local config or binary is defective and online identity validation also fails | Report the offline phase first with no identity call or private-state writes. |
+| CLI retrieval returns the same token bytes | Accept a valid payload, preserve identity checks, and never claim new issuance or extended expiry. Scheduled retrieval still requires restart. |
+| A child exits naturally with status 42 | Preserve 42 and emit `CHILD_EXIT`; do not label it an authentication failure. |
+| CLI or child stderr contains tokens, user IDs or authorization URLs | Emit fixed phase/code diagnostics without raw payloads. |
+| Readiness yields 401, 403, timeout or closed initialize | Distinguish rejected authentication, denied access, network uncertainty and local startup failure; do not invent a common expiry cause. |
+| User asks for mcp-remote against a Grafana web URL | Explain the missing HTTP MCP endpoint; retain local stdio and the accepted protected file. |
+| Laptop wakes after a long suspension | Do not promise the ten-hour schedule ran before expiry; perform a bounded read and report actual readiness. |

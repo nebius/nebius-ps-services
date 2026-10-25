@@ -670,7 +670,7 @@ state, and external adapters separated and guarded by repository quality gates.
 - AC-004: The measured global branch-coverage floor is nondecreasing, and safety-critical supervisor, ownership, protected-storage, transaction, and compensation modules meet a separately enforced focused branch-coverage floor. Proposed coverage floors may only rise, the package mypy error ceiling may only fall, and the Ruff-format offender allowlist may only shrink relative to the merge base.
 - AC-005: One canonical machine-readable contract covers the root, every public command group and leaf command, global options, arguments, option spellings, requiredness, defaults, choices, repeatability, visibility, ordering, and selected help clauses. Help descriptions and example comments match the current execution path, including conditional requirements, target selection, prompts, recovery, and local versus remote effects. Displayed example commands parse with the registered interface after operators substitute placeholders; explanatory punctuation and comments stay outside command text. Hidden internal commands are recorded separately and never appear as public commands.
 - AC-006: Installed-wheel verification imports only the isolated artifact, renders every public help surface, exercises the version path, and reaches every public callback through a deterministic fail-before-external-effect case. Status smoke verification independently proves the injected configuration-read boundary was reached exactly once, requires the sanitized failure diagnostic and overall Error with nonzero exit, and rejects disclosure of the injected exception text.
-- AC-007: Every Python-backed Make target enters one shared uv environment boundary. The committed lock must be current, a validated whitespace-free custom `VENV` maps to `UV_PROJECT_ENVIRONMENT`, lock inspection and exact locked synchronization use the selected supported Python without automatic downloads, synchronization is serialized per resolved environment, and isolated wheel-build dependencies are hash-constrained by the same lock without a second installer authority.
+- AC-007: Every Python-backed Make target enters one shared uv environment boundary using uv `>=0.13.5,<0.14`; cxcli CI, release, and Nsight workload jobs pin uv `0.13.5`. The committed lock must be current, a validated whitespace-free custom `VENV` maps to `UV_PROJECT_ENVIRONMENT`, lock inspection and exact locked synchronization use the selected supported Python without automatic downloads, synchronization is serialized per resolved environment, and isolated wheel-build dependencies are hash-constrained by the same lock without a second installer authority.
 
 - AC-008: Commands explicitly presented for copying and running use one shared terminal style: bold dark text on a light-gray background covering only command text. Apply the style to workflow handoffs, access and recovery commands, and public help examples. Keep labels, commentary and help separators outside command highlighting; preserve complete command text, quoting, runtime soft wrapping, normal redirected plain output and existing color-disable behavior. Saved command/report artifacts remain free of terminal styling.
 
@@ -1432,4 +1432,41 @@ Exercise unsafe/stale metadata, mount replacement, exact retries, concurrency, p
 Separate source and Linux fixture verification from fresh authorized nonproduction single-GPU, distributed, container and browser report acceptance.
 
 <!-- /REQUIREMENT: REQ-041 -->
+
+<!-- REQUIREMENT: REQ-042 status=active priority=P1 type=feature -->
+### REQ-042: Terraform-owned custom NAT gateways
+
+#### User Story
+
+Operators configure a reusable CPU-only NAT gateway through the normal component wizard, with live discovery, strict quota checks, dedicated networking and recoverable route activation.
+
+#### Acceptance Criteria
+
+- AC-001: Register infra:nat-gateway with portable/local Terraform sources. Terraform creates and deletes every gateway infrastructure resource; the Python SDK owns discovery, validation and explicitly delegated external subnet attachment updates only.
+- AC-002: Offer live project CPU-only platforms/presets, validated by gpu_count=0. Prefer cpu-d3 and 4vcpu-16gb only when available. Support configurable storage and live-resolved driverless images without static resource inventories.
+- AC-003: Own an explicit dedicated gateway subnet, stable private/public allocations, persistent forwarding/NAT and isolated direct gateway egress. Support existing and same-deployment VPC networks/subnets. Reject wrong-parent/network targets, overlaps, self-routing and competing owners.
+- AC-004: Preserve supported non-default routes in owned policy tables and preview default-route replacement plus retained exceptions. Reject unsupported routes and source drift; later policy refresh is explicit. Terraform remains the attachment owner for its subnets; external SDK attachment requires explicit delegation and resource-version checks preserving unrelated fields.
+- AC-005: Check current tenant/project quotas and exact live presets, aggregate demand, distinguish unknown/inactive usage from zero, and include additional/replacement and implicit network resource demand. Unresolved required quotas and confirmed shortages block NAT deployment; draft configuration remains savable. Quota is not physical capacity.
+- AC-006: Prepare infrastructure before guest readiness and routing activation. Freeze stages and resume by observation. Strict trusted SSH verifies the exact instance; missing trust leaves provisioned resources unactivated. Report provider, guest, routing and end-to-end evidence separately.
+- AC-007: Store attachment preimages and operation progress in the protected regular Object Storage backend with conditional writes and cross-host locking. Restore and verify attachments before Terraform retirement, reject unknown consumers/drift, and guard direct Terraform/CI bypasses including resources removed from configuration.
+- AC-008: Provide NAT status and explicit configuration-only route refresh. Preserve existing generic infra and Soperator behavior, unrelated edits and secrets. Document single-VM outages and preserve allocations across VM replacement without automatic egress fallback.
+
+#### Negative Criteria
+
+- NC-001: No SDK infrastructure creation/deletion, Terraform provisioners, dual subnet ownership, implicit route adoption, GPU presets, automatic HA, or silent quota fallback.
+- NC-002: Never claim live forwarding from infrastructure readiness alone or publish credentials/private environment values.
+
+#### Validation Method
+
+Compare authored intent, Terraform plans/state, live SDK observations, guest readiness and exact subnet attachment preimages/postimages.
+
+#### Test Method
+
+Exercise discovery, quotas, module contracts, routing snapshots, same-run graph ordering, partial failures, concurrent writers, cross-host recovery, removal and command guards.
+
+#### Evaluation Method
+
+Run an independently authorized nonproduction deployment, reboot, workload egress probe and restoration trial; report local evidence separately.
+
+<!-- /REQUIREMENT: REQ-042 -->
 <!-- maintain-project-specs:requirements:end -->

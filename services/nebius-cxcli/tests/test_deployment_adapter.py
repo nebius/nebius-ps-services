@@ -72,6 +72,12 @@ def _exercise_adapter(
     execution_profile=None,
     rerender=False,
 ):
+    from nebius_cxcli.nat_gateway_deploy import NatDeployment
+
+    # This adapter fixture has no remote NAT ownership. NAT transport/recovery has its own tests.
+    monkeypatch.setattr(
+        NatDeployment, "_open", lambda self: SimpleNamespace(value={"gateways": {}})
+    )
     payload = config() if soperator else {"infra": {"components": []}, "apps": {"charts": []}}
     execution_payload = copy.deepcopy(payload)
     if hydrated:
@@ -643,6 +649,7 @@ def test_lost_fence_after_refresh_prevents_deployment_dispatch(monkeypatch, tmp_
 
 @pytest.mark.parametrize("loss_phase", ["preflight", "stream", "timeout", "os-error", "status"])
 def test_apply_fence_and_status_abort_share_one_guard(monkeypatch, tmp_path, loss_phase):
+    monkeypatch.setattr(cli, "terraform_show_json", lambda *a, **kw: {})
     held = True
 
     def assert_held():
