@@ -898,7 +898,7 @@ class ProviderOptionLookup:
             )
 
         try:
-            from nebius.api.nebius.iam.v1 import (
+            from nebius.api.nebius.iam.v2 import (
                 GetProjectRequest,
                 ProjectServiceClient,
             )
@@ -918,17 +918,17 @@ class ProviderOptionLookup:
                 )
                 .wait()
             )
-        except Exception as exc:
+        except Exception:
             return TenantProjectValidationResult(
                 valid=False,
                 message=(
                     f"Project '{normalized_project_id}' does not exist or is not accessible "
-                    f"with current credentials: {exc}"
+                    "with current credentials."
                 ),
             )
 
         resolved_project_id = _as_str(getattr(getattr(project, "metadata", None), "id", None))
-        if resolved_project_id and resolved_project_id != normalized_project_id:
+        if not resolved_project_id or resolved_project_id != normalized_project_id:
             return TenantProjectValidationResult(
                 valid=False,
                 message=(
@@ -973,7 +973,7 @@ class ProviderOptionLookup:
             return "", ""
 
         try:
-            from nebius.api.nebius.iam.v1 import (
+            from nebius.api.nebius.iam.v2 import (
                 GetProjectRequest,
                 GetTenantRequest,
                 ProjectServiceClient,
@@ -2932,7 +2932,7 @@ class ProviderOptionLookup:
         sdk = self._sdk_or_none()
         if sdk is None:
             return ()
-        from nebius.api.nebius.iam.v1 import ListProjectsRequest, ProjectServiceClient
+        from nebius.api.nebius.iam.v2 import ListProjectsRequest, ProjectServiceClient
 
         client = ProjectServiceClient(sdk)
         items = self._paged_list(

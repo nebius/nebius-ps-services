@@ -1469,4 +1469,41 @@ Exercise discovery, quotas, module contracts, routing snapshots, same-run graph 
 Run an independently authorized nonproduction deployment, reboot, workload egress probe and restoration trial; report local evidence separately.
 
 <!-- /REQUIREMENT: REQ-042 -->
+<!-- REQUIREMENT: REQ-043 status=satisfied priority=P1 type=architecture -->
+### REQ-043: Use supported service-specific Nebius APIs
+
+#### User Story
+
+Operators need project creation and discovery to keep working after retired
+Nebius API versions are removed, without expanding their credential scope.
+
+#### Acceptance Criteria
+
+- AC-001: Every Project and Tenant lookup uses IAM v2 directly, including scope validation, optional name resolution, tenant project listing and Soperator discovery. Existing AccessKey operations remain v2; other services use their supported service-specific versions.
+- AC-002: Scope admission requires an exact nonempty project ID and matching nonempty parent tenant ID. Project-scoped credentials require no Tenant read. Optional names may remain unavailable and folder naming then uses the existing resource IDs.
+- AC-003: Preserve bounded requests, complete pagination, repeated-token rejection, per-tenant cache separation, SDK cleanup and independent cluster/project binding. Provider failures never expose raw exception text through scope-validation diagnostics.
+- AC-004: Use the existing SDK dependency and configuration/CLI contracts. Validate real v2 request/response types and service identities without suppressing deprecation warnings.
+
+#### Negative Criteria
+
+- NC-001: No v1 Project/Tenant fallback, compatibility wrapper, version switch, blanket replacement of supported v1 services, credential rotation, IAM expansion or cloud-resource migration.
+
+#### Validation Method
+
+Inventory SDK imports and trace create/discovery admission through the provider
+boundary. Verify canonical specifications and installed-wheel behavior.
+
+#### Test Method
+
+Exercise exact and malformed identities, project-only credentials, inaccessible
+resources, sanitized failures, optional names, multipage lists, cache isolation,
+failed pages and discovery cleanup using real SDK messages and constructors.
+
+#### Evaluation Method
+
+Separate offline and installed-runtime proof from bounded read-only cloud
+qualification. Never use create or IAM reconciliation as a read-only smoke test.
+
+<!-- /REQUIREMENT: REQ-043 -->
+
 <!-- maintain-project-specs:requirements:end -->

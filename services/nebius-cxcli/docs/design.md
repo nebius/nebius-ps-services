@@ -10086,6 +10086,125 @@ Implemented the opt-in catalog entry and Terraform module, live SDK CPU/preset/i
 The focused alignment pass reproduced and repaired disabled-provisioning admission, malformed-row errors, interrupted identity/ownership recovery, rendered module-name retirement and no-op retirement finalization. Seventeen regression cases were added; failure-path cases were observed failing before their fixes. All 62 NAT tests pass, with 129 lifecycle/adapter/structural cases and 916 broader deployment/render/storage regressions also passing in overlapping focused batches. The catalog/quota/provider/CLI/docs batch passed 279 tests. Terraform validation and five mock-provider tests passed at provider 0.6.8. Ruff, Markdown, formatting, type and architecture ratchets passed; installed-wheel CLI verification covers 58 public and one hidden surface. Final independent read-only review found no remaining blocker in the repaired paths. The wheel uses the existing setuptools backend and an isolated package tree with the locked dependency interpreter because installed uv 0.13.5 is outside the project constraint. No full CI matrix, live provisioning, guest reboot or workload egress trial was run; production qualification remains unverified and the requirement remains active.
 
 <!-- /FEATURE: FEAT-050 -->
+<!-- FEATURE: FEAT-051 reqs=REQ-043 status=ready delivery=verified priority=P1 version=3 -->
+### FEAT-051: Direct IAM v2 project and tenant discovery
+
+#### Requirements Covered
+
+- REQ-043: Use supported service-specific Nebius APIs.
+
+#### Context Evidence
+
+ProviderOptionLookup owns scope admission, optional names and project listing;
+SoperatorPublicDiscoveryRuntime owns independent project/cluster binding.
+Before this migration, both imported Project/Tenant v1. AccessKey already used v2.
+Nebius documents Project/Tenant v1 removal on December 16, 2026; SDK clients
+are versioned per service. The locked SDK already provides the required v2 types.
+
+Sources: [Project deprecation](https://docs.nebius.com/cli/reference/iam/project/index),
+[Tenant deprecation](https://docs.nebius.com/cli/reference/iam/tenant/index),
+[SDK requests](https://docs.nebius.com/sdk/python/send-request).
+
+#### Design Details
+
+The four provider/discovery functions use iam.v2 request and client imports
+and consume v2 Project/Tenant metadata directly. Admission requires
+exact nonempty project identity and matching tenant parent without a Tenant
+read. Optional names retain ID-based folder naming. Preserve request budgets,
+pagination, sorting, cache separation and SDK lifecycle. Remove raw exception
+text from scope-validation failures; discovery retains its sanitized errors.
+
+#### Selected Option
+
+One direct cutover with the fixed Python/Nebius stack and unchanged dependency
+range/lock. All behavior is deterministic. No wrapper or additional abstraction.
+
+#### Alternatives Considered
+
+Keeping deprecated calls misses the provider deadline. Blanket v2 replacement
+is invalid because other service versions are independent. A broad SDK upgrade
+adds unrelated regression scope and is separately deferred. No legacy path is
+needed because the product has no existing users requiring compatibility.
+
+#### Implementation Boundaries
+
+provider_options.py, soperator_public_discovery.py, their existing callers/tests,
+README, changelog and this canonical pair. Existing AccessKey v2, supported IAM
+v1 principals/keys/permissions, other services and Terraform declarations remain.
+No public flags, configuration schemas, resource IDs or cloud resources migrate.
+
+#### Test-First Success Criteria
+
+- TDD-001: Real v2 requests/responses and constructors exercise all four functions; service names select iam.v2, deprecated constructors are forbidden and deprecation logs remain empty.
+- TDD-002: Missing/mismatched project identity fails closed; provider failure details are absent from validation results and CLI diagnostics.
+
+#### Validation Plan
+
+Run focused scope/provider/progress/discovery tests, repository make all,
+changed-scope lint/type/format checks, installed-SDK contract checks and align.
+Publish implementation and independent verification evidence through the owner.
+
+#### Test Plan
+
+Cover valid project-only credentials; missing/wrong IDs and parents; denied
+access; optional name failures and folder stability; sorted multipage project
+choices, repeated tokens, cache isolation and failed-page retry; discovery
+binding, sanitized errors and SDK cleanup. Retain actual SDK constructors so
+warning assertions cannot be bypassed by mocks.
+
+#### Evaluation Plan
+
+Use existing credentials for bounded read-only scope, name and list lookups.
+Record complete versus denied reads without credentials, provider payloads or
+resource identifiers. Do not bootstrap IAM or rerun create on an existing folder.
+
+#### Rollout And Rollback
+
+Ship one direct cutover before the provider retirement date; no dual-path rollout
+or persisted data migration. Local code rollback needs no resource rollback and
+must not become a supported deprecated runtime path.
+
+#### Done Definition
+
+No deprecated Project/Tenant runtime call remains; focused and packaged checks
+pass, docs match code, and live verification or its exact limitation is recorded.
+
+#### Implementation Evidence
+
+All four provider/discovery functions use IAM v2 directly. Scope admission
+rejects missing/mismatched project identity and strips provider exception text
+from diagnostics. Existing name fallback, project-only permissions, pagination,
+caching, request budgets and SDK cleanup remain. Twenty real-SDK regression
+cases cover those boundaries; existing scope/progress/discovery fixtures and
+documentation inventories now match. README and Unreleased guidance are aligned.
+The SDK manifest and lockfile are unchanged.
+
+#### Verification Evidence
+
+On 2026-10-26, the new regression tests first rejected v1 client use, then
+reproduced missing-ID acceptance and raw provider-error disclosure before the
+fixes. All 77 focused scope/provider/progress/discovery/documentation tests pass.
+Repository make all passed: 8,405 tests passed, three skipped and 18 opt-in
+integration tests deselected; isolated-wheel verification passed 58 public and
+one hidden CLI surfaces. Ruff, Markdown, formatting/type/architecture ratchets,
+and diff checks passed. Runtime/script inspection found no deprecated
+Project/Tenant imports. Independent read-only code/security review found no
+blocking issue in the changed scope.
+
+An offline check under the existing installed SDK 0.6.17 exercised all four
+migrated functions with real constructors, v2 service identities/messages,
+retired-client rejection and no deprecation warnings. The locked source/wheel
+checks use SDK 0.6.4. Bounded live reads using an existing noninteractive
+operator token validated the selected project/tenant relationship, resolved both
+names, and completed project listing containing the selected project with zero
+deprecation warnings. Authentication was fixture setup; no IAM reconciliation,
+credential creation, resource mutation or create command was performed.
+Project-only credentials, discovery cluster binding and SDK cleanup are covered
+offline; live Soperator/Kubernetes discovery and the full Python CI matrix were
+not run.
+
+<!-- /FEATURE: FEAT-051 -->
+
 <!-- maintain-project-specs:design:end -->
 
 ## General Architecture and Runtime Design (Recovered Pre-Lifecycle Baseline)

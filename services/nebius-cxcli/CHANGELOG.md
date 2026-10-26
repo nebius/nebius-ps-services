@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Migrate all Project and Tenant discovery calls directly to IAM v2 before
+  their v1 retirement on December 16, 2026. Preserve project-scoped access,
+  optional name lookup and paginated choices; reject missing project identities
+  and sanitize scope-validation failures. Keep the SDK dependency unchanged
+  and retain the supported versions of other services, including AccessKey v2.
+
 - Update the supported uv toolchain to `>=0.13.5,<0.14` and align cxcli CI,
   release, Nsight, and setup guidance so `make all` accepts uv 0.13.5 while
   retaining locked dependencies and hash-constrained wheel builds.

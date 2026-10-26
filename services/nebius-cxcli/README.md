@@ -102,8 +102,12 @@ commands that connect to it. **MK8s `destroy --target CLUSTER_ID` uses cloud API
 and does not need Kubernetes API access.**
 
 A standalone `nebius` CLI is not required for ordinary operation; cxcli uses the
-Nebius Python SDK. Automatic quota-request submission is a separate internal
-operator capability described below.
+Nebius Python SDK. Project, Tenant, and AccessKey calls use IAM v2 directly;
+other services use their supported API versions independently. Project scope
+validation requires the exact project ID and parent tenant ID, without requiring
+tenant-read permission. Optional tenant/project names fall back to resource IDs
+for folder naming when unavailable. Automatic quota-request submission is a
+separate internal operator capability described below.
 
 ## Quick start
 

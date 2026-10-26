@@ -48,7 +48,7 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 def test_public_discovery_provider_observation_preserves_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import nebius.api.nebius.iam.v1 as iam_v1
+    import nebius.api.nebius.iam.v2 as iam_v2
 
     class _CompletedRequest:
         def __init__(self, value: object) -> None:
@@ -102,7 +102,7 @@ def test_public_discovery_provider_observation_preserves_capacity(
             return [raw_group]
 
     sdk = SimpleNamespace(sync_close=lambda: None)
-    monkeypatch.setattr(iam_v1, "ProjectServiceClient", _ProjectServiceClient)
+    monkeypatch.setattr(iam_v2, "ProjectServiceClient", _ProjectServiceClient)
     monkeypatch.setattr(soperator_public_discovery, "init_nebius_sdk", lambda **_kwargs: sdk)
     monkeypatch.setattr(
         soperator_public_discovery,
