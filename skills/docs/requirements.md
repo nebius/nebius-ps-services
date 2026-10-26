@@ -3701,13 +3701,14 @@ and verifiable costs, before provisioning infrastructure.
 - AC-002: Explain per-container CPU/memory requests and limits, justified unset CPU limits, scale/concurrency, ephemeral storage, GPUs, placement and evidence. Separate effective Pod scheduling demand from simultaneous runtime demand.
 - AC-003: Size exact supported Nebius platforms/presets, pools, storage and network resources using explicit overhead, growth, failure and rollout scenarios without double counting.
 - AC-004: Optional read-only inspection delegates to `nebius`, preserves selected identity, and distinguishes quota sufficiency, incomplete evidence, platform support and physical capacity. No credentials are required for design-only work.
-- AC-005: Save a complete executive-summary-first report with linked TOC to the selected project's `docs/nebius-capacity-planning.md`; honor no-write requests and preserve identifiable human notes.
+- AC-005: Save a complete report whose opening executive summary includes the selected profile, exact per-pool provisioning quantities, storage/network, surge/growth, external dependencies and unresolved gates, with linked TOC to the selected project's `docs/nebius-capacity-planning.md`; honor no-write requests and preserve identifiable human notes.
 - AC-006: Include traceable costs only with verified rates and assumptions; identify unpriced items. Keep reusable sources public-safe and reports free of secrets and raw cloud dumps.
 - AC-007: Provide offline deterministic arithmetic, meaningful synthetic cases, portable packaging, trigger evaluations and separately qualified static, runtime and quality evidence.
+- AC-008: Expose tenant/project/profile selectors, read-only quota-check and explicitly authorized quota-request modes, and a positive multiplier of at least one over the selected incremental scenario envelope. Compare usage plus multiplied demand, preserve unknowns, deduplicate requests, submit once as the selected human account and verify receipts. Never promise permanent spare quota or physical reservation.
 
 #### Negative Criteria
 
-- NC-001: Do not provision, change quotas/authentication, apply manifests, run load tests or silently install dependencies.
+- NC-001: Do not provision, directly edit/approve quotas, change authentication, apply manifests, run load tests or silently install dependencies. Explicit quota-request mode may submit only verified shortfalls through an existing human identity.
 - NC-002: Do not inherit one project's region, CPU-only or SFS choices as universal defaults, or claim schedulability/availability from aggregate arithmetic or quotas.
 
 #### Validation Method

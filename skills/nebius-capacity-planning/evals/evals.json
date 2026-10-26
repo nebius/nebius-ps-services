@@ -33,6 +33,49 @@
         "Reports cost as a partial estimate with unpriced storage/network and no guaranteed physical CPU capacity.",
         "Does not change credentials, choose an arbitrary project, probe capacity by provisioning, or write files in this read-only invocation."
       ]
+    },
+    {
+      "id": 3,
+      "prompt": "Assess the supplied synthetic Dev/Test fixture in chat using the report structure. Make the opening summary independently useful for provisioning review and preserve distinct container allocations in every split table. Use only supplied evidence; no cloud access, authentication or file writes.",
+      "expected_output": "A self-contained but explicitly provisional provisioning summary, correct pool/surge totals and unambiguous per-container joins.",
+      "files": [
+        "evals/fixtures/provisioning-summary.md"
+      ],
+      "assertions": [
+        "Executive Summary names both exact supplied pool shapes/counts/boot disks, control-plane version gap, selected workload/profile, SFS/object allocations and ingress/egress/address needs.",
+        "Steady total is 5 nodes, 56 CPU, 224 GiB RAM and 448 GiB boot disks; one-pool-at-a-time maximum is 6 nodes, 72 CPU, 288 GiB and 576 GiB boot disks, not both surges together.",
+        "Retains api/main versus api/audit identity across CPU/memory and heap/ephemeral/placement tables; does not merge them under C-01.",
+        "States required remote dependencies, reduced node-loss throughput, unknown quota/capacity/addresses and unpriced cost; no claim of complete schedulability or readiness."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use --tenant example-tenant --quota-check --quota-multiplier 2 for the supplied synthetic fixture. Read-only, use supplied evidence only and no cloud calls.",
+      "expected_output": "Correct total-limit targets, partial evidence and no submission.",
+      "files": [
+        "evals/fixtures/quota-modes.md"
+      ],
+      "assertions": [
+        "CPU requires 352 free and a 432 total limit; 400 current limit gives a 32 deficit.",
+        "SFS requires 3072 GiB free and 3584 GiB total; 4096 is sufficient and is not reduced.",
+        "Unknown object usage remains unresolved; pending CPU requests do not add usable quota.",
+        "No submission in check mode and no arbitrary project or identity selection."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Apply --quota-request --quota-multiplier 2 to the synthetic fixture. This is an offline rehearsal: explain the authorized action sequence only, with no cloud calls or writes.",
+      "expected_output": "Human-only, deduplicated request plan with reconciliation rather than retries.",
+      "files": [
+        "evals/fixtures/quota-modes.md"
+      ],
+      "assertions": [
+        "Reuses the existing adequate pending 432 CPU request rather than creating a duplicate.",
+        "An existing smaller pending target requires reconciliation; no automatic edit or duplicate.",
+        "Missing human authentication blocks submission; agent credentials are never substituted.",
+        "A timeout requires request list/get reconciliation, not blind retries; pending is not approved.",
+        "Uses the quota report section to separate multiplier/envelope, request receipts, attribution limits and usable allowance readback; does not claim all report modes prohibit authorized requests."
+      ]
     }
   ]
 }

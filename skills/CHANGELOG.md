@@ -4,6 +4,23 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Added
+
+- `nebius-capacity-planning` tenant/project/profile selectors, quota-check and
+  explicit human-account quota-request modes, plus an offline reserve-multiplier
+  planner. Requests require verified shortfalls, duplicate checks and readback;
+  design-only use remains independent of cloud credentials.
+  Enforce the planner input bound in UTF-8 bytes and return structured errors
+  for invalid encodings and numeric exponents. Align the report template with
+  explicit quota-request receipts and pending-versus-usable allowance states.
+
+- Make capacity reports directly useful for provisioning review: include the
+  selected profile, exact per-pool presets/counts/boot disks, control plane,
+  storage/network, surge/growth, external prerequisites and unresolved gates in
+  the opening summary. Preserve container identity across split allocation
+  tables and route Nebius documentation fallbacks through available Tavily.
+  Add a synthetic multi-container, multi-pool output evaluation.
+
 - Include every shared hook runtime helper in expected-file reporting and
   update counts, and request restart for runtime-only changes in all install
   modes. Explain missing skill ownership markers and how copy installers can

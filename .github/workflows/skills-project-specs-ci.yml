@@ -276,6 +276,7 @@ jobs:
         run: |
           set -euo pipefail
           python -B nebius-capacity-planning/scripts/test_capacity.py
+          python -B nebius-capacity-planning/scripts/test_quota.py
           ruff check --no-cache nebius-capacity-planning/scripts
 
       - name: Validate cross-agent distribution and evaluation adapters

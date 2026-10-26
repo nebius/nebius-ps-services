@@ -65,7 +65,8 @@ incremental steady demand, scenario maximum, deficit, status and timestamp:
 
 Keep known deficits visible even when other dimensions are unresolved. Suggest
 the needed target quota (`current usage + maximum incremental demand`, plus
-any separately justified future allowance) without submitting requests.
+any separately justified future allowance). Submission is opt-in and governed
+by [quota workflow](quota-workflow.md); checking alone never submits.
 
 ## Region ranking and physical capacity
 
@@ -88,9 +89,11 @@ commitments are recommendations only, with interruption and cost implications.
 ## Official sources
 
 Use the `nebiusDocs` MCP search and retrieval tools first when available.
-If unavailable or insufficient, consult official `docs.nebius.com` pages
-directly and disclose the fallback. Documentation lookup needs no tenant
-credentials; do not install a server or change authentication for it.
+If unavailable or insufficient, use available Tavily Search/Extract against
+official `docs.nebius.com` pages. If that route is unavailable or insufficient,
+disclose the limitation and use built-in official-page search/retrieval.
+Documentation lookup needs no tenant credentials; do not install a server or
+change authentication for it. Preserve stricter host documentation-routing rules.
 
 Recheck only the services used by the selected design. Cite exact pages and
 retrieval dates in the project report, not search result pages.

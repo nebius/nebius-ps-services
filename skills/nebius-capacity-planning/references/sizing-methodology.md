@@ -69,6 +69,12 @@ Create a ledger for each data class and storage resource:
 | Compatibility | Access mode, sharing, consistency, locks, durability, fencing, attachment and project/region constraints |
 | Capacity | Per-volume/PVC/filesystem/bucket budget, number of resources, growth trigger and billable unit |
 
+Define backup cadence and the promised recovery window. Retain the base backup
+and uninterrupted WAL/log chain needed for every point in that window; budget
+new backup generation overlap before retiring old generations. Include
+attachment/mount preparation and node replacement when a restore needs a new
+filesystem; alternatively budget a preattached restore area explicitly.
+
 Use separate live-data, backup and scratch rows. Three application replicas of
 a 100 GiB data set consume 300 GiB of allocated live-data budget; one independent
 150 GiB backup budget adds 150 GiB, not another three copies. Do not multiply

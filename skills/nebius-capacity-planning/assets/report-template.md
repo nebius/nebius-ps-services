@@ -4,16 +4,23 @@ Assessment date: {{date}} · Environment: {{environment}} · Design revision: {{
 
 ## Executive Summary
 
-{{Recommended region, platforms/presets, node counts, storage and networking.
-State evidence confidence, feasibility gates, priced subtotal/coverage and
-the most important next actions. Distinguish estimates from measured results.}}
+{{State the selected environment/profile and workload/concurrency envelope.
+Give one recommendation with nominal totals and required external dependencies.
+State reduced failure behavior, evidence confidence, feasibility gates, priced
+subtotal/coverage and next actions. Distinguish estimates from measurements.}}
 
-| Resource | Steady recommendation | Required scenario maximum | Basis |
+| Provisioning item | Steady recommendation | Replacement surge / growth | Evidence or gate |
 | --- | --- | --- | --- |
-| Compute | {{nodes / vCPU / GiB / GPUs}} | {{provisioned and usable}} | {{evidence}} |
-| Persistent storage | {{types / count / size}} | {{growth / recovery}} | {{evidence}} |
-| Networking | {{IPs / LBs / throughput}} | {{peak / surge}} | {{evidence}} |
-| Cost | {{currency / period / coverage}} | {{surge / growth}} | {{rates}} |
+| Control plane / managed service | {{count / HA / target version}} | {{upgrade behavior}} | {{compatibility}} |
+| Compute pool (repeat per pool) | {{region / exact platform / preset / node count / CPU / GiB / GPUs}} | {{separate counts and quantities}} | {{catalog / quota / capacity}} |
+| Boot disks (per pool) | {{type / count x size / total GiB}} | {{temporary and growth disk totals}} | {{basis}} |
+| Persistent storage | {{service / type / count x size / logical vs provisioned}} | {{growth / recovery}} | {{performance / semantics}} |
+| Networking | {{address-block budgets / IPs / LBs / egress / throughput}} | {{peak / surge}} | {{support / free addresses}} |
+| Quota reserve / request status (when used) | {{scenario envelope / multiplier / required free quota; not resources to provision}} | {{requested totals / pending vs effective limits}} | {{identity / coverage / approval gates}} |
+| Cost | {{currency / period / priced subtotal and exclusions}} | {{surge / growth}} | {{dated rates}} |
+
+{{Mark inapplicable rows explicitly. This summary must stand alone for a
+provisioning decision without hiding unresolved gates or authorizing changes.}}
 
 ## Table of Contents
 
@@ -56,11 +63,13 @@ Kubernetes-only fields not applicable. All numeric proposals need a basis.}}
 | --- | --- | --- | --- | --- | --- | --- |
 | {{C-id / names}} | {{app/init/sidecar}} | {{m/core}} | {{value or unset + reason}} | {{Mi/Gi}} | {{Mi/Gi}} | {{measurement/vendor/estimate}} |
 
-| Component | Replicas min/desired/max or concurrency | Heap/cache allowance | Ephemeral request/limit | GPU | Pool/placement |
+| Component / workload / container | Replicas min/desired/max or concurrency | Heap/cache allowance | Ephemeral request/limit | GPU | Pool/placement |
 | --- | --- | --- | --- | --- | --- |
-| {{C-id}} | {{counts}} | {{budget}} | {{Mi/Gi}} | {{type/count or none}} | {{constraints}} |
+| {{same C-id / workload / container key as above}} | {{counts}} | {{budget}} | {{Mi/Gi}} | {{type/count or none}} | {{constraints}} |
 
-{{Show effective Pod request/limit and expected runtime budgets, stage ledger,
+{{Preserve the same unique component/workload/container key across split tables;
+a component ID alone cannot identify multiple containers or deployments.
+Show effective Pod request/limit and expected runtime budgets, stage ledger,
 autoscaling signals and admission/defaulting considerations.}}
 
 ## Compute and Kubernetes Node-Pool Plan
@@ -104,9 +113,21 @@ and operational restrictions. Distinguish request fit from peak SLO capacity.}}
 
 Inspection scope/identity alias/time/completeness: {{evidence or not inspected}}.
 
-| Quota / unit / region / scope | Limit / usage | Effective headroom | Incremental steady / maximum | Deficit / target quota | Status |
+Quota mode / scenario basis / multiplier: {{assessment-only, check or request;
+explicit incremental envelope and multiplier, or not applicable}}.
+
+| Quota / unit / region / scope | Limit / usage | Effective headroom | Incremental envelope / required free after multiplier | Shortfall / rounded total target / increase | Status |
 | --- | --- | --- | --- | --- | --- |
-| {{provider dimension}} | {{values or unknown}} | {{value or unresolved}} | {{scenario demand}} | {{values}} | {{sufficient/insufficient/unresolved/not inspected}} |
+| {{provider dimension}} | {{values or unknown}} | {{value or unresolved}} | {{separate values and basis}} | {{values}} | {{sufficient/insufficient/unresolved/not inspected}} |
+
+| Request scope / quota / region | Requested total | Request / operation IDs | State and verification time | Identity / attribution evidence |
+| --- | --- | --- | --- | --- |
+| {{exact scope alias and dimension, or no submission with reason}} | {{total + unit}} | {{returned IDs or unavailable}} | {{prepared/pending/approved/rejected/ambiguous + readback}} | {{verified human identity type; creator evidence or explicit gap}} |
+
+{{Checking alone never submits. State the disposition of adequate/smaller pending
+requests and ambiguous outcomes. Pending or approved requests do not establish
+usable quota until allowance readback confirms it. Separate free headroom from
+physical reservation; never promise permanent reserve.}}
 
 | Region / project scope | Service/preset eligibility | Quota fit | Physical capacity evidence | Cost/latency tradeoff | Rank and action |
 | --- | --- | --- | --- | --- | --- |
@@ -132,8 +153,9 @@ separately. State taxes/discounts/commitment assumptions; unknown is not free.}}
 | {{priority}} | {{issue}} | {{concrete measure}} | {{recommendation}} |
 
 {{Cover load/startup, throttling/OOM, queues/latency, failure/recovery, storage
-performance/restore, network capacity and growth triggers. No tests or cloud
-mutations are executed as part of this report.}}
+performance/restore, network capacity and growth triggers. Do not execute load,
+failover, restore or deployment tests. Disclose any explicitly authorized quota
+request submissions above; assessment/check mode performs no cloud writes.}}
 
 ## Sources and Calculation Notes
 

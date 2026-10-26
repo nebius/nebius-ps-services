@@ -8470,7 +8470,7 @@ qualification.
 
 <!-- /FEATURE: FEAT-045 -->
 
-<!-- FEATURE: FEAT-046 reqs=REQ-047 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-046 reqs=REQ-047 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-046: Nebius capacity assessment and report skill
 
 #### Requirements Covered
@@ -8494,8 +8494,23 @@ counts, node capacity and explicit scenarios; it never simulates the scheduler
 or accesses the cloud. Known demand subtotals still expose proven overloads
 when complete runtime/limit totals are unknown; complete totals and margins
 remain null. Official Nebius documentation uses the documentation MCP when
-available, with a disclosed direct-documentation fallback. The report template starts with Executive Summary and a
-linked TOC and ends with risks, validation actions and source/calculation notes.
+available, then available Tavily official-source retrieval, then a disclosed
+built-in official-page fallback. The report starts with a self-contained
+provisioning summary: selected profile, exact per-pool presets/counts/boot disks,
+control plane/version, storage/network, external prerequisites, surge/growth,
+cost coverage and unresolved gates. Split allocation tables retain the same
+component/workload/container key. A linked TOC precedes the detailed assessment;
+risks, validation actions and source/calculation notes complete it.
+
+Quota modes add explicit tenant/project/profile selectors and a demand multiplier
+(default one). Check mode remains read-only; request mode is authorized only by
+a direct user request and creates approval requests for verified shortfalls,
+never edits allowances or approves requests. An offline planner computes total
+limits from current usage plus the multiplied incremental scenario envelope.
+Human identity, project ancestry, current evidence, duplicate checks, one-shot
+submission and independent receipt verification are mandatory. Public sources
+contain no internal request client or authentication machinery; unavailable
+request interfaces yield a prepared plan with explicit submission limits.
 
 #### Selected Option
 
@@ -8514,7 +8529,8 @@ A mandatory cloud connection prevents useful design-stage estimates.
 Own the new skill folder, catalog/plugin registration, this specification pair
 and release notes. Leave infrastructure, authentication, existing Nebius helpers
 and generic evaluation runners unchanged. Normal operation writes only the
-selected project's capacity report; no-write contexts receive a chat report.
+selected project's capacity report; explicitly requested quota submission is
+the sole additional cloud write. No-write contexts receive a chat report.
 
 #### Test-First Success Criteria
 
@@ -8554,8 +8570,8 @@ runtime/cloud evidence is stated separately.
 
 Implemented `nebius-capacity-planning` with a concise core, host metadata,
 methodology references, executive-summary-first report template, normalized
-standard-library arithmetic helper, 27 unit tests, twelve trigger prompts and
-two synthetic output-quality cases. Registered both plugin catalogs and the
+standard-library arithmetic helper, 27 unit tests, thirteen trigger prompts and
+three synthetic output-quality cases. Registered both plugin catalogs and the
 human catalog, added release notes and an offline CI test/lint step. Live
 inspection remains delegated to the optional Nebius owner; no cloud/auth or
 real installed-home changes were made.
@@ -8580,9 +8596,56 @@ the skill arm added explicit allocation and qualification ledgers. This scoped
 QUALITY_PASS does not establish native implicit triggering or arbitrary report
 quality. The isolated native runner lacked usable authentication; its attempted
 batch was interrupted without completed trigger evidence. Native activation
-is UNAVAILABLE. Actual report refresh/persistence, live quotas and workload
-performance remain NOT_RUN. Requirement remains active and delivery implemented
+was UNAVAILABLE in that initial run. Report persistence, live quotas and workload
+performance were NOT_RUN at that point. Requirement remains active and delivery implemented
 rather than claiming full runtime qualification.
+
+The provisioning-summary refinement adds a two-pool, multi-container fixture
+to exercise exact steady/surge quantities, independent container identity and
+unknown readiness. The previous template keyed the second allocation table
+only by component, losing the distinction for multiple containers. Current
+source and forward-evaluation evidence is recorded in the skill README;
+installed-copy and live-runtime qualification remain separate.
+
+On 2026-10-25, the refined report contract passed old-versus-new field/key
+checks, all 27 unchanged calculator regressions, portable/Codex/Claude structure,
+catalog/spec/lint checks and disposable npx parity. A bounded offline synthetic
+forward assessment passed all four new assertions; it is not a fresh native
+trigger run or a matched new no-skill comparison. A design-only report was
+persisted and checked for coverage, per-container joins, links and scenario
+arithmetic. Existing-note refresh, live quota/capacity and workload/storage
+qualification remain unverified. Storage methodology now includes backup
+cadence/replacement overlap and attachment-aware restore planning.
+
+#### Quota-mode implementation and evidence
+
+Added tenant/project/profile selectors, separate check/request modes and a
+reserve multiplier. A standard-library quota planner preserves exact decimal
+ceilings, active/known usage requirements and partial-result boundaries.
+Twenty-two quota tests join 27 capacity regressions in the existing CI lane.
+The stdin boundary is 1 MiB of UTF-8 bytes, with structured errors for malformed
+encoding, unsupported decimal exponents and excessive nesting. The report
+template carries reserve arithmetic and request receipts visibly, distinguishing
+pending or approved records from verified effective allowances.
+The request workflow requires verified human identity, current scope/evidence,
+duplicate reconciliation and independent receipt readback; no internal request
+client or authentication implementation is copied into the public skill.
+
+Static structure, 17 trigger definitions, arithmetic, catalogs/specs and scoped
+lint passed. Disposable npx installation passed for both hosts. Two offline
+mode rehearsals passed eight output assertions against captured working bytes;
+the baseline lacked the new modes. Native routing remained unavailable because
+the isolated runner lacked authentication. Live submission is independently
+reported per assessment and is not certified by static or fixture evidence.
+
+Follow-up source alignment reproduced and repaired three malformed-input
+defects against captured working bytes. Five new stdin regressions passed,
+including valid non-ASCII input. A matched offline request-mode report rehearsal
+passed all five current assertions; both versions retained the arithmetic and
+submission guards, while the old template exposed a contradictory no-mutation
+statement. Final review found no remaining code/security issues; deterministic,
+structure, catalog, lint and disposable installation checks passed. Native
+triggering remains unavailable and this source-only pass made no cloud changes.
 
 <!-- /FEATURE: FEAT-046 -->
 
