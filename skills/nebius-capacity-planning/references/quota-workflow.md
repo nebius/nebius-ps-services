@@ -6,9 +6,9 @@ public sources independent of internal clients and proprietary automation.
 
 ## Freeze the sizing basis
 
-1. Resolve the exact tenant, optional project, region and existing profile.
-   Verify project ancestry from the provider; a profile default is not scope
-   authority. Never select an arbitrary project for tenant-only assessments.
+1. Resolve the user-selected tenant, region selector and existing profile through
+   the offline scope helper. A profile default is not scope authority. Omitted
+   region means all; do not enumerate projects or infer a project selection.
 2. Define incremental quota demand per exact provider key, region and unit.
    Aggregate all shared consumers once. Include the selected concurrent peak,
    replacement/upgrade and growth scenarios; do not add mutually exclusive
@@ -25,14 +25,15 @@ public sources independent of internal clients and proprietary automation.
    The helper performs arithmetic only, not scope, freshness or IAM validation.
 5. Inspect all pages under a bounded budget; retain collection timestamp and
    completeness. Missing limits, unknown usage/state, inaccessible scopes or
-   ambiguous inheritance stay unresolved. A complete project usage-only list
-   may inherit a tenant limit only under verified provider semantics. Do not
-   invent zero usage, unlimited capacity, quota names or RAM quota. When a
+   absent tenant limits stay unresolved. Do not infer project limits or
+   inheritance. Do not invent zero usage, unlimited capacity, quota names or RAM quota. When a
    verified protobuf JSON serializer omits scalar zero, normalize it to zero
    only with known active/NOT_USED semantics; unknown states remain unresolved.
-6. Compare tenant reserve policy separately from effective project constraints.
-   Both can constrain deployment. Report verified dimensions even if others
-   remain unresolved; do not submit rows with uncertain usage/limits or units.
+6. Report tenant quota fit only; project limits and deployment eligibility remain
+   unchecked. Keep verified dimensions alongside unresolved rows. Regions are
+   alternative placements unless the design explicitly distributes demand; do
+   not multiply the deployment by the number of candidate regions. Global
+   quotas are shared across simultaneous consumers, not copied per region.
 
 A quota is a permission ceiling, not a physical reservation. Other tenant
 workloads and automatic quota reductions can consume/remove spare headroom.
@@ -40,6 +41,10 @@ An “always available” reserve needs recurring checks or separate governance;
 this invocation neither schedules monitoring nor guarantees permanent reserve.
 
 ## Submit only with explicit authority
+
+For omitted region or `--region all`, prepare per-region request values only.
+State that nothing was submitted and that submission needs one concrete region.
+An excluded region or unresolved design envelope cannot become a request target.
 
 - Require the user's direct quota-request authorization and exact tenant/region,
   plan, multiplier and requested total limits. Present the concrete request
@@ -57,12 +62,15 @@ this invocation neither schedules monitoring nor guarantees permanent reserve.
   Requests or support center labels may differ). Use available authorized
   browser tooling if no supported request API is exposed. Never copy internal
   request clients into the public skill or silently install a client.
-- An existing explicitly authorized local adapter may be used only after its
-  effects and identity selection are inspected, its current request interface
-  is verified, and it meets these boundaries. Do not assume an operator-auth
-  preference excludes agent/environment credentials or delegation.
+- Every cloud-access script must use the official Nebius Python SDK and the
+  existing owner runtime. Non-SDK local request adapters, raw HTTP clients and
+  CLI subprocess fallbacks are not permitted. If no supported SDK approval-request
+  interface exists, use the authorized console workflow through host-permitted
+  browser tools or return manual request values marked unsubmitted. Never use
+  SDK quota-allowance create/update as a substitute. Preserve human identity
+  and disable client-default impersonation; profile names alone prove neither.
 - Refresh relevant allowance and request records immediately before submission.
-  List existing requests with complete pagination. Match exact tenant/project,
+  List existing requests with complete pagination. Match exact tenant,
   quota key, region, total limit and status. Reuse an adequate pending request;
   report a smaller pending request for reconciliation rather than duplicate or
   edit it silently. A failed/denied request is evidence, not permission to retry
@@ -105,7 +113,7 @@ or credential access. Example:
   "multiplier": "2",
   "collection_complete": true,
   "dimensions": [{
-    "scope": "tenant", "region": "example-region",
+    "scope": "tenant-example", "region": "example-region",
     "quota_name": "compute.instance.non-gpu.vcpu", "unit": "count",
     "envelope": 176, "limit": 400, "usage": 80,
     "state": "STATE_ACTIVE", "usage_state": "USAGE_STATE_USED",

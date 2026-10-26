@@ -1306,7 +1306,12 @@ class OrdinaryAppWorkflow:
         manifest = load_generated_manifest(paths.generated_dir)
         config = runtime_config_from_manifest(manifest)
         bindings = {key: dict(value) for key, value in (identities or {}).items()}
-        for target in self.resolve_targets(manifest, requested_target_ref=None, all_targets=True):
+        # Empty infrastructure-only bundles still publish their checked baseline.
+        for target in self.resolve_targets(
+            manifest,
+            requested_target_ref=None,
+            all_targets=bool(enabled_cluster_target_refs(config)),
+        ):
             target_ref = str(target["target_ref"])
             if target_ref in bindings or (
                 selected_target_refs is not None and target_ref not in selected_target_refs

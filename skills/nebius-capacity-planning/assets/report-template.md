@@ -4,7 +4,8 @@ Assessment date: {{date}} · Environment: {{environment}} · Design revision: {{
 
 ## Executive Summary
 
-{{State the selected environment/profile and workload/concurrency envelope.
+{{State the selected local project, design sources, tenant alias or offline mode,
+region selector (default all), environment/profile and workload/concurrency envelope.
 Give one recommendation with nominal totals and required external dependencies.
 State reduced failure behavior, evidence confidence, feasibility gates, priced
 subtotal/coverage and next actions. Distinguish estimates from measurements.}}
@@ -22,6 +23,13 @@ subtotal/coverage and next actions. Distinguish estimates from measurements.}}
 {{Mark inapplicable rows explicitly. This summary must stand alone for a
 provisioning decision without hiding unresolved gates or authorizing changes.}}
 
+| Region | Design constraints / service support | Tenant quota fit | Capacity evidence | Cost coverage / recommendation |
+| --- | --- | --- | --- | --- |
+| {{repeat every candidate; retain exclusions}} | {{documented / excluded / restricted eligibility unknown}} | {{sufficient / insufficient / unresolved / not inspected}} | {{GPU snapshot or unverified; project eligibility unchecked}} | {{priced coverage and recommendation}} |
+
+{{Regional placements are alternatives unless the design explicitly distributes
+components. Do not sum alternative deployments, prices or overlapping GPU advice.}}
+
 ## Table of Contents
 
 - [Executive Summary](#executive-summary)
@@ -32,7 +40,7 @@ provisioning decision without hiding unresolved gates or authorizing changes.}}
 - [Storage Capacity and Performance Plan](#storage-capacity-and-performance-plan)
 - [Network Capacity Plan](#network-capacity-plan)
 - [Headroom, Failure, Rollout and Growth Scenarios](#headroom-failure-rollout-and-growth-scenarios)
-- [Tenant/Project Quotas and Region Comparison](#tenantproject-quotas-and-region-comparison)
+- [Tenant Quotas and Regional Assessments](#tenant-quotas-and-regional-assessments)
 - [Consolidated Resource Bill and Cost Estimate](#consolidated-resource-bill-and-cost-estimate)
 - [Risks, Validation Plan and Recommended Actions](#risks-validation-plan-and-recommended-actions)
 - [Sources and Calculation Notes](#sources-and-calculation-notes)
@@ -41,7 +49,11 @@ provisioning decision without hiding unresolved gates or authorizing changes.}}
 
 {{Project boundaries, intended versus deployed architecture, Kubernetes and
 component versions, environment/load/concurrency/SLO, retention/growth horizon,
-availability objectives, operating hours, constraints, evidence date and gaps.}}
+availability objectives, operating hours, constraints, evidence date and gaps.
+Identify the primary design and amendments, supplemental sources and conflicts.
+State local report destination separately from tenant authority. Show public
+regional coverage, tenant inspection coverage, restricted-region uncertainty
+and collection completeness; project eligibility is not inspected.}}
 
 | Assumption ID | Value or range | Evidence/confidence | Sensitivity or validation |
 | --- | --- | --- | --- |
@@ -56,8 +68,9 @@ availability objectives, operating hours, constraints, evidence date and gaps.}}
 ## Detailed Component Resource Allocations
 
 {{Repeat compact tables by subsystem; include each app/init/sidecar container.
-For external/managed/VM components supply their equivalent allocation and mark
-Kubernetes-only fields not applicable. All numeric proposals need a basis.}}
+For Nebius-managed/VM components supply equivalent allocations and mark
+Kubernetes-only fields not applicable. External services get dependency and
+Nebius-side traffic budgets, not other-cloud allocations. All numeric proposals need a basis.}}
 
 | Component / workload / container | Role/stage | CPU request | CPU limit | Memory request | Memory limit | Rationale/evidence |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -109,14 +122,28 @@ image/backup/storage traffic, supported egress and isolation constraints.}}
 {{State required combinations, bottlenecks, headroom purposes, provision delay
 and operational restrictions. Distinguish request fit from peak SLO capacity.}}
 
-## Tenant/Project Quotas and Region Comparison
+## Tenant Quotas and Regional Assessments
+
+{{Repeat the following regional subsection for each candidate. Keep excluded
+regions visible with reasons. Put truly global quota dimensions in a separate
+shared ledger and apply them once across simultaneous consumers.}}
+
+### {{Region identifier}}
+
+{{Document service availability, component-to-service/preset mapping, locality
+exclusions, documented/restricted access, quota coverage and remaining gates.
+An absent quota/advice row is unresolved, not zero or unsupported.}}
+
+| Component / resource | Regional service / exact candidate | Quantity and scenario | Support evidence / limitation |
+| --- | --- | --- | --- |
+| {{C-id}} | {{service/platform/preset/storage/network}} | {{demand}} | {{source/date; project eligibility unchecked}} |
 
 Inspection scope/identity alias/time/completeness: {{evidence or not inspected}}.
 
 Quota mode / scenario basis / multiplier: {{assessment-only, check or request;
 explicit incremental envelope and multiplier, or not applicable}}.
 
-| Quota / unit / region / scope | Limit / usage | Effective headroom | Incremental envelope / required free after multiplier | Shortfall / rounded total target / increase | Status |
+| Quota / unit / region / scope | Limit / usage | Tenant headroom | Incremental envelope / required free after multiplier | Shortfall / rounded total target / increase | Status |
 | --- | --- | --- | --- | --- | --- |
 | {{provider dimension}} | {{values or unknown}} | {{value or unresolved}} | {{separate values and basis}} | {{values}} | {{sufficient/insufficient/unresolved/not inspected}} |
 
@@ -129,12 +156,14 @@ requests and ambiguous outcomes. Pending or approved requests do not establish
 usable quota until allowance readback confirms it. Separate free headroom from
 physical reservation; never promise permanent reserve.}}
 
-| Region / project scope | Service/preset eligibility | Quota fit | Physical capacity evidence | Cost/latency tradeoff | Rank and action |
-| --- | --- | --- | --- | --- | --- |
-| {{candidate}} | {{verified/documented/unresolved}} | {{status}} | {{timestamp or unverified}} | {{basis}} | {{recommendation}} |
+| Platform / preset / fabric | Allocation type | Available VMs / data state | Measurement time / availability level | Interpretation |
+| --- | --- | --- | --- | --- |
+| {{exact shape or not applicable}} | {{on-demand/preemptible/reserved}} | {{fresh count or unknown}} | {{effective timestamp / confidence}} | {{alternative shape; no additive total or guarantee}} |
 
-{{Preserve confirmed deficits alongside unresolved dimensions. Explain reused
-versus incremental resources, alternatives and exact quota changes needed.}}
+{{Preserve confirmed deficits alongside unresolved dimensions. Explain reuse
+attribution, the full-addition bound when reuse is unknown, exact quota changes,
+unpriced resources and later project checks. CPU physical capacity is unverified.
+Default/all-region request mode only prepares values and never submits.}}
 
 ## Consolidated Resource Bill and Cost Estimate
 

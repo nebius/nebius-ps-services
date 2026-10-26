@@ -1,90 +1,114 @@
 # Nebius assessment
 
-## Read-only discovery boundary
+## Read-only tenant boundary
 
-Use the existing `nebius` skill when available for tenant/project selection,
-bounded API/CLI reads and sanitized inspection envelopes. Read its selection,
-authentication and quota guidance before querying. A tenant-only request
-permits scoped project discovery, not choosing an arbitrary project for
-project-specific sufficiency. Ask which project or label the result tenant-only.
+Use the optional `nebius` skill and the argument arrays from
+[input and scope](input-and-scope.md). A user-selected tenant automatically
+triggers tenant-only SDK quota inspection; GPU designs also collect capacity
+advice. Never enumerate projects, choose an arbitrary project, or inherit a
+project from authentication. Keep the official Nebius Python SDK as the only
+cloud interface for scripts; do not add a second auth/runtime implementation.
 
-Honor explicit user identity/profile selection. An ambient agent token is not
-an acceptable fallback when the user selected human authentication. Keep
-credentials in the existing protected store/runtime; do not print tokens, pass
-them on command lines, copy them into fixtures or replace profiles. If selected
-authentication is unavailable, report that limitation and finish offline work.
+Honor explicit human/agent identity and profile selection. If selected access
+is unavailable, report that limitation and finish the offline assessment.
+Keep credentials in the existing protected store; never print, copy or replace
+them. Preserve sanitized errors, scope, collection times and completeness.
+Complete collection does not establish quota sufficiency or deployment readiness.
 
-The Nebius inspection envelope uses `scope`, `data`, `complete`, `errors`.
-Collection completeness is not sizing sufficiency. Preserve sanitized errors
-and partial results without raw resource dumps. The current compute inventory
-helper describes inventory metadata; it is not a sizing/preset catalog.
-Resolve platform/preset specifications using the documented platform API
-through that owner, verifying the installed CLI/SDK surface before use.
+## Region coverage and catalog mapping
 
-## Catalog and compatibility
+Omitted `--region` means `all`, even when the design imposes locality constraints.
+Build coverage from current official documented regions plus region keys in
+returned tenant quotas/advice. Show public-document coverage separately from
+tenant-inspected coverage. Mark restricted-region eligibility unknown unless
+verified by appropriate evidence. Missing rows or denied/incomplete inspection
+never mean zero capacity, unsupported service or nonexistent region. Keep global
+quota scope separate from regional keys; do not treat a global marker as a region.
 
-For every candidate record region, project scope when verified, service,
-platform, preset, CPU/RAM/GPU, relevant network/storage constraints and source
-timestamp. Public docs establish documented support; project platform listing
-establishes project availability; neither proves spare physical capacity.
-Use actual returned quantities: unit-looking preset labels do not substitute
-for the documented/API memory units.
+For each region record service support, exact candidate platform/preset and its
+CPU/RAM/GPU, storage/network constraints, source and timestamp. Use documented
+quantities, not unit-looking preset names. Exact project platform eligibility
+requires a later project-specific check and is outside this skill's public scope.
+Do not turn published support or GPU advice into a project-verified catalog.
 
-Verify storage types, performance scaling, access/consistency, resizing,
-attachment limits and region/project boundaries. For SFS-backed databases,
-explicitly assess durability, locking/fencing and independent data directories;
-shared storage does not make a database HA. Record qualification gaps.
+Map the same design demand into each region independently. Treat candidates as
+alternative placements unless the design explicitly requires simultaneous
+multi-region deployment. Show locality, service or fixed-platform conflicts as
+excluded with reasons; never silently move workloads or redesign the stack.
+A region that lacks a required component cannot pass because its CPUs fit.
 
-For managed Kubernetes distinguish managed cluster/control-plane charges and
-quotas from Compute worker quantities. Include cluster/node-group limits and
-dependent Compute, filesystem, disk, IP and networking quotas.
+Verify storage performance scaling, consistency, resizing, attachment and region
+constraints. SFS-backed databases still need durability, locking/fencing and
+independent data directories; shared storage does not establish HA. Separate
+managed control-plane/service quantities from Compute workers and dependent
+disk, filesystem, IP and networking demands.
 
 ## Demand and quota comparison
 
-Build a demand map keyed by the provider's quota identifier, scope, region and
-unit. Aggregate all consumers of a shared dimension before comparing. Do not
-invent a RAM quota merely because RAM is a sizing dimension.
+Key demand by tenant identity, exact provider quota name, region/scope and unit.
+Aggregate shared consumers before comparison; never invent a RAM quota. Compare
+known active tenant limits and measured usage, preserving unknown states and
+unmapped resources. Missing tenant limits remain unresolved, not inherited from
+an uninspected project. Label conclusions as tenant quota fit; project eligibility
+and limits remain uninspected even when all tenant dimensions fit.
 
-Use the current `nebius` owner's effective quota semantics. Applicable measured
-tenant and project headroom constrain the same allocation. Missing limits may
-inherit only when verified semantics establish that; unknown state/usage,
-denied scope or unmapped resources are unresolved, never implicitly unlimited.
+For a new deployment use the full incremental scenario envelope. For an existing
+deployment, subtract reused resources only with explicit current evidence tying
+them to this design and existing usage. Otherwise show the full-addition bound
+and unresolved reuse; tenant aggregate usage is not attribution evidence. Do not
+subtract future deletions before the resources can actually be released.
 
-For an existing deployment, distinguish reused resources, net additions and
-temporary overlap. Do not compare the full target fleet with remaining quota
-if that fleet already includes charged existing nodes. Conversely, do not
-subtract resources slated for deletion before they can actually be released.
+Show quota key/unit, limit, usage, headroom, incremental steady demand, scenario
+maximum, multiplier, required free amount, deficit and timestamp. Apply global
+quotas once across simultaneous consumers, not once per alternative region.
 
-Show quota ID/unit, scope/region, limit, current usage, effective headroom,
-incremental steady demand, scenario maximum, deficit, status and timestamp:
-
-- **Sufficient:** all relevant applicable constraints are known and fit.
-- **Insufficient:** at least one confirmed constraint has a deficit.
-- **Unresolved:** missing, stale, incomplete or ambiguous applicable evidence.
+- **Sufficient:** all required tenant dimensions are known and fit; no claim
+  about project eligibility or physical capacity.
+- **Insufficient:** a confirmed tenant constraint has a deficit, even if other
+  dimensions remain unresolved.
+- **Unresolved:** applicable evidence is missing, stale, inaccessible or ambiguous.
 - **Not inspected:** no live quota assessment was performed.
 
-Keep known deficits visible even when other dimensions are unresolved. Suggest
-the needed target quota (`current usage + maximum incremental demand`, plus
-any separately justified future allowance). Submission is opt-in and governed
-by [quota workflow](quota-workflow.md); checking alone never submits.
+Keep known deficits visible alongside gaps. Use the offline quota planner for
+`current usage + ceil(multiplier * incremental envelope)` with provider rounding.
+Request submission is separately governed by [quota workflow](quota-workflow.md).
 
-## Region ranking and physical capacity
+## GPU advice and physical capacity
 
-First reject candidates violating required locality, latency, service,
-preset, storage or fabric constraints. Then compare quota fit for the complete
-required scenario, evidence confidence, spare bottleneck capacity and cost.
-Do not rank regions by free CPUs alone or turn unknowns into zero/unlimited.
-Separate tenant-level candidates from project-verified candidates.
+The `nebius` owner's `scripts/inspect_capacity.py` uses the SDK's
+`ResourceAdviceServiceClient` and `ListResourceAdviceRequest`. It collects all
+pages with a region/fabric/platform/preset key and filters exact regions locally.
+No region filter means all; do not pass literal `all` to an inspector. Responses
+may omit resource metadata; any supplied parent must match the selected tenant.
+An empty fabric is valid for shapes without a fabric-specific placement.
 
-As documented on 2026-10-20, the capacity advisor covers GPU VMs and excludes
-CPU-only VMs. Its timestamped GPU advice is not a provisioning guarantee.
-Recheck this scope at assessment time. If no suitable API establishes CPU
-capacity, state "physical capacity unverified" and recommend provider
-confirmation; never create test VMs or reservations to probe it.
+Retain each shape and allocation type (`on_demand`, `preemptible`, `reserved`)
+with its data state, effective timestamp, availability level and VM count.
+Fresh zero is measured zero; stale/unknown data or a missing timestamp produces
+unknown counts. Collection can be complete while individual measurements remain
+unresolved. Timestamped fresh advice remains a snapshot, not a creation guarantee.
 
-Present one justified recommendation and meaningful alternatives with exact
-quota increases, tradeoffs and unresolved gates. Reserved/spot capacity and
-commitments are recommendations only, with interruption and cost implications.
+Advice is already constrained by quota/reservation state. Do not subtract quota
+usage again. Different presets or allocation types can describe shared physical
+resources: never sum their available counts into a regional total. Compare exact
+shapes separately; simultaneous mixed-shape feasibility remains unresolved
+without independent joint-placement evidence. Reservation advice does not prove
+that a future project can use a capacity block group.
+
+Verified on 2026-10-26, Capacity Advisor covers GPU VMs and excludes CPU-only
+VMs. Recheck official scope at assessment time. For CPU-only designs, skip this
+collector and state physical capacity unverified. Other resource types without
+an applicable authoritative capacity source also remain unverified. Never create
+VMs, reservations, proof Pods or load tests to probe capacity.
+
+## Recommendation and report
+
+Group tenant totals and component mappings by region. Keep excluded regions
+visible. Rank constraint-compatible candidates by complete scenario quota fit,
+evidence coverage and verified cost; use latency only with evidence. Explain
+unknowns rather than silently ranking them as zero or sufficient. Report no
+verified fit when appropriate. Candidate totals and prices are alternatives,
+not a combined bill. Give exact shortfalls and later project/provisioning checks.
 
 ## Official sources
 
@@ -98,6 +122,7 @@ change authentication for it. Preserve stricter host documentation-routing rules
 Recheck only the services used by the selected design. Cite exact pages and
 retrieval dates in the project report, not search result pages.
 
+- [Regions and service availability](https://docs.nebius.com/overview/regions)
 - [Platforms and presets](https://docs.nebius.com/compute/virtual-machines/types)
 - [Project platform discovery](https://docs.nebius.com/compute/virtual-machines/list-platforms)
 - [Capacity advisor](https://docs.nebius.com/compute/virtual-machines/capacity-advisor)

@@ -7,6 +7,105 @@ identity. Set `CONFIG` to the project file and replace `TARGET_ID` with its
 logical cluster instance ID. Versions, hardware presets, fabrics, and capacity
 must be available for that target; example values are not compatibility claims.
 
+## Cluster creation and node placement
+
+Run `nebius-cxcli component add infra:mk8s --config "$CONFIG"` to configure a
+cluster and its node groups. After each new group's name and size, the wizard
+offers a placement rule:
+
+| Choice | Saved node-template fields | Workload requirement |
+| --- | --- | --- |
+| None (default) | No custom labels or taints | No custom placement rule |
+| Label | `node_labels` | Use matching `nodeSelector` entries to require these nodes |
+| Taint | `taints` | Matching tolerations permit scheduling but do not select these nodes |
+| Both | `node_labels` and `taints` | Use matching selectors and tolerations |
+
+Enter explicit keys and values; values default to the node-group name. In Both
+mode, the first taint defaults to the first label's key/value. You can add
+multiple labels and taints. Duplicate label keys or taint key/effect pairs are
+rejected. Going back or quitting during placement discards the incomplete new
+group and preserves completed groups. The renderer still supplies its automatic
+node-group and GPU labels.
+
+Choose `NoSchedule` (default), `PreferNoSchedule`, or `NoExecute` per taint.
+NoSchedule blocks new Pods without a matching toleration; PreferNoSchedule is
+a soft preference; NoExecute can also evict existing Pods lacking a matching
+toleration. The config uses Nebius enum names as shown below.
+
+For example, this fragment belongs under the MK8s component's `inputs` beside
+`cluster`. The hardware values must be valid for your project:
+
+```yaml
+node_groups:
+  core-services:
+    node_count: 6
+    platform: cpu-d3
+    preset: 4vcpu-16gb
+    node_labels:
+      scheduling.example.com/pool: core
+  task-runners:
+    node_count: 4
+    platform: cpu-d3
+    preset: 4vcpu-16gb
+    node_labels:
+      scheduling.example.com/pool: task
+    taints:
+      - key: scheduling.example.com/pool
+        value: task
+        effect: NO_SCHEDULE
+```
+
+These native fields flow through render/deploy into the node-group template.
+There is no separate persisted placement-rule field. Authored configuration is
+validated for Kubernetes key/value syntax and provider-supported effects.
+Nebius ignores node label keys containing `kubernetes.io` or `k8s.io`, so cxcli
+rejects them. Node-template label/taint changes apply to newly created nodes;
+they do not relabel existing nodes or automatically roll a node group.
+See the [Nebius node-group resource reference](https://docs.nebius.com/terraform-provider/reference/resources/mk8s_v1_node_group).
+
+The wizard prints guidance only. For core-service Pods, put this in the Pod
+spec (or the workload controller's `spec.template.spec`):
+
+```yaml
+spec:
+  nodeSelector:
+    scheduling.example.com/pool: core
+```
+
+For task-runner Pods:
+
+```yaml
+spec:
+  nodeSelector:
+    scheduling.example.com/pool: task
+  tolerations:
+    - key: scheduling.example.com/pool
+      operator: Equal
+      value: task
+      effect: NoSchedule
+```
+
+Cluster deployment does not edit application manifests. Labels alone do not
+force applications onto a group; tolerations alone do not direct them to it.
+See [Kubernetes taints and tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/).
+
+### Existing and planned VPC choices
+
+A configured VPC subnet confirmed by exact managed state and live cloud identity
+appears once with its cloud ID and an `existing; managed by ...` annotation.
+Selecting it retains its component binding in `config.yaml`. A genuinely new
+configured subnet appears as `planned:`. Names and CIDRs can detect possible
+collisions but cannot establish ownership.
+
+The wizard reads the frozen generated manifest's exact state object using
+available credentials, without initializing Terraform or creating credentials.
+Missing access, inconsistent state, missing live resources, or incomplete
+discovery produce a diagnostic and block automatic selection of affected
+bindings. Malformed module inventory is unresolved, and a choice filter that
+hides live resources cannot establish that a configured resource is new.
+Unrelated live resources remain manually selectable. Resolve the
+reported state/discovery problem before selecting the managed binding.
+
 ## Choose the operation
 
 | Change | Command |

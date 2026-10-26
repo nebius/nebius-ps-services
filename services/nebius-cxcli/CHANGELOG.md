@@ -6,6 +6,34 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Always show Infra then Apps multi-selection in `component add --config` when
+  selectors are omitted, with the full field wizard for additions. Preserve
+  confirmed choices on backtracking and resolve text IDs, numeric indexes,
+  `all` and `none` against selectable components. Retain existing settings,
+  target/dependency checks and configuration-only saves.
+
+- Reconcile configured VPC choices with exact Terraform state and live resource
+  identities. Show existing managed subnets once, preserve their bindings, and
+  block automatic selection when ownership or discovery is unresolved.
+  Reject malformed module inventories and prevent filtered discovery results
+  from implying resource absence; keep resolution in the VPC module.
+- Add per-node-group None, Label, Taint, and Both choices to the generic MK8s
+  creation wizard. Persist native labels and taints, validate authored values,
+  and show Pod placement examples without modifying workloads.
+
+- Complete infrastructure-only deployments without requiring a cluster target
+  during ordinary-app baseline publication. Preserve generation checks and
+  explicit target-selection errors. Distinguish absent API watcher coverage
+  from failed API access in Terraform progress.
+
+- Strengthen NAT gateway address-space validation with pool-scoped occupancy,
+  contiguous CIDR fits and combined fresh-plan demand. Block new reservations
+  on insufficient or unresolved capacity while allowing well-formed draft
+  saves. Preserve retained-subnet and route-restoration recovery, and verify
+  realized gateway range and allocation ownership before activating routes.
+  Require positive dedicated-pool evidence, preserve repeated prefix demand,
+  and check derived-pool expansion against every affected upstream pool.
+
 - Migrate all Project and Tenant discovery calls directly to IAM v2 before
   their v1 retirement on December 16, 2026. Preserve project-scoped access,
   optional name lookup and paginated choices; reject missing project identities

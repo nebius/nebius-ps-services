@@ -927,6 +927,11 @@ def test_render_passes_typed_mk8s_node_group_scale_and_preemptible_inputs(
     }
     cpu_group["preemptible"] = True
     gpu_group["preemptible"] = True
+    cpu_group["node_labels"] = {"scheduling.example.com/pool": "core"}
+    gpu_group["node_labels"] = {"scheduling.example.com/pool": "task"}
+    gpu_group["taints"] = [
+        {"key": "scheduling.example.com/pool", "value": "task", "effect": "NO_SCHEDULE"}
+    ]
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -956,6 +961,14 @@ def test_render_passes_typed_mk8s_node_group_scale_and_preemptible_inputs(
     assert tfvars["mk8s_node_groups"]["cpu"]["node_labels"]["nebius.com/node-group"] == "cpu"
     assert tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/node-group"] == "worker"
     assert tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/gpu"] == "true"
+
+    assert tfvars["mk8s_node_groups"]["cpu"]["node_labels"]["scheduling.example.com/pool"] == "core"
+    assert "taints" not in tfvars["mk8s_node_groups"]["cpu"]
+    assert (
+        tfvars["mk8s_node_groups"]["worker"]["node_labels"]["scheduling.example.com/pool"] == "task"
+    )
+    assert tfvars["mk8s_node_groups"]["worker"]["taints"] == gpu_group["taints"]
+    assert all("placement" not in group for group in tfvars["mk8s_node_groups"].values())
 
 
 def test_render_passes_vm_preemptible_contract_inputs(

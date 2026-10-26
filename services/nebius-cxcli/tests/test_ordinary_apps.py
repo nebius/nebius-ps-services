@@ -18,6 +18,71 @@ from nebius_cxcli.paths import resolve_project_paths
 
 
 @pytest.fixture
+def infrastructure_baseline(tmp_path):
+    config_path = tmp_path / "deployments" / "tenant" / "project" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    paths = resolve_project_paths(config_path)
+    payload = {
+        "client_info": {
+            "client_name": "example",
+            "nebius": {"project_id": "project-example", "region_id": "eu-north2"},
+        },
+        "infra": {"components": [{"id": "vpc", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": []},
+    }
+    config_path.write_text(yaml.safe_dump(payload))
+    paths.infra_dir.mkdir(parents=True)
+    (paths.infra_dir / "main.tf").write_text("# VPC-only fixture\n")
+    manifest = build_generated_manifest(
+        config=payload, paths=paths, targets=[], required_component_outputs=[]
+    )
+    manifest_path_for_generated_dir(paths.generated_dir).write_text(json.dumps(manifest))
+    return paths, manifest
+
+
+@pytest.mark.parametrize("selected_target_refs", [None, ()])
+def test_infrastructure_only_completion_publishes_baseline_without_cluster_access(
+    infrastructure_baseline, monkeypatch, selected_target_refs
+):
+    from nebius_cxcli.deployment_state import DeploymentGeneration
+
+    paths, manifest = infrastructure_baseline
+    generation = DeploymentGeneration.capture(paths, manifest)
+
+    def unexpected_cluster_access(*args, **kwargs):
+        pytest.fail("Infrastructure-only completion must not access Kubernetes")
+
+    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", unexpected_cluster_access)
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", unexpected_cluster_access)
+
+    assert (
+        cli.accept_ordinary_app_baseline(
+            paths,
+            selected_target_refs=selected_target_refs,
+            deployment_generation=generation.identity,
+            expected_generation=generation,
+        )
+        is True
+    )
+    baseline = json.loads((paths.reports_dir / ordinary_apps.BASELINE_FILENAME).read_text())
+    assert baseline["identities"] == {}
+    assert baseline["ordinary_files"] == {}
+    assert baseline["deployment_generation"] == generation.identity
+    assert baseline["protected_files"]["infra/main.tf"]
+
+
+@pytest.mark.parametrize("requested_target_ref,all_targets", [("cluster", False), (None, True)])
+def test_infrastructure_only_explicit_cluster_selection_still_fails(
+    infrastructure_baseline, requested_target_ref, all_targets
+):
+    _paths, manifest = infrastructure_baseline
+    with pytest.raises(RuntimeError, match="No built-in cluster targets"):
+        cli._resolve_selected_deploy_targets(
+            manifest, requested_target_ref=requested_target_ref, all_targets=all_targets
+        )
+
+
+@pytest.fixture
 def project(tmp_path, monkeypatch):
     def accepted(config, paths, manifest, baseline, refs, **kwargs):
         kwargs["assert_held"]()

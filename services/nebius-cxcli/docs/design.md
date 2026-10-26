@@ -9588,7 +9588,7 @@ signal ingestion/readback, capacity, HA and queue handoff qualification remain
 unverified.
 
 <!-- /FEATURE: FEAT-047 -->
-<!-- FEATURE: FEAT-048 reqs=REQ-017,REQ-031,REQ-040 status=ready delivery=implemented priority=P0 version=8 -->
+<!-- FEATURE: FEAT-048 reqs=REQ-017,REQ-031,REQ-040 status=ready delivery=implemented priority=P0 version=9 -->
 ### FEAT-048: Current-input deployment with command-local recovery
 
 #### Requirements Covered
@@ -9604,6 +9604,8 @@ attempts. Local upgrade, reconciliation and deployment journals already own
 useful recovery evidence and must remain separate from this backend coupling.
 
 #### Design Details
+
+Revision 9 makes successful infrastructure-only completion an empty-target baseline publication. Internal enumeration requests all targets only when runtime configuration declares cluster targets; explicit public selections keep their strict errors. Baseline generation and source-preimage checks remain mandatory. No-target progress reports unavailable watcher coverage separately from SDK failures. The shared VPC module flattens supported `status.ipv4_private_pools[*].cidrs` and public equivalents into its existing CIDR-list outputs, without deprecated reads or compatibility branches. The VPC module and minimal example require Nebius provider `>= 0.6.74, < 0.7.0`; roots with older locks must refresh their provider selection.
 
 Revision 8 publishes resolved selected-target Flux and dashboard bytes with
 compatibility evidence for the actual composite execution bundle in one project
@@ -9739,12 +9741,16 @@ Remote lease replacement introduces another shared lifecycle owner and is reject
 
 #### Validation Plan
 
+Reproduce empty-target baseline failure through the real CLI workflow, then verify persisted empty bindings, no Kubernetes calls, multi-target controls, explicit invalid selections and concurrent-input protection. Check no-watcher progress against an actual SDK-failure control. Verify the VPC output expression with provider-independent Terraform console fixtures for multiple private/public pools, empty pools and null values. Check the native module tests, schema and absence of deprecation diagnostics with provider 0.6.74, the incident version and new supported minimum.
+
 Test cancelled A then changed B, same-input local resume, unchanged dedicated
 upgrade recovery, checkpoint preservation through render, artifact snapshot races,
 no custom lifecycle S3 calls, native Terraform locks, Grafana idempotency and
 independent resource postconditions. Run focused regressions and project alignment.
 
 #### Implementation Evidence
+
+Revision 9 updates `OrdinaryAppWorkflow.accept_baseline` to request all cluster targets only when runtime configuration declares them, while retaining the same baseline publisher. `DeploymentStatusReporter` labels absent API watcher coverage separately from access failures. The shared VPC module reads supported status pools and its example locks provider 0.6.74 with macOS ARM64 and Linux AMD64 checksums.
 
 Revision 8 regressions exercise real freeze/admit receipt comparison across
 publication and cache restore, mixed-target preservation, authenticated metadata
@@ -9809,6 +9815,8 @@ modules and command-owned checkpoint formats remain unchanged. README, command
 help, observability guides, changelog and regression tests describe the new flow.
 
 #### Verification Evidence
+
+Revision 9 reproduces the empty-target exception in both default and explicitly empty internal selections before repair; those tests pass afterward and persist generation-bound empty baselines without Kubernetes access. The affected suite passes 186 tests, including real baseline wiring through deployment orchestration, concurrent-input protection, explicit invalid target controls, SDK failures and four provider-independent VPC expression cases. The original VPC expression fails the multi-pool negative control. Seven native Terraform tests and module/example validation pass with provider 0.6.74; deprecated CIDR warnings are absent. Schema inspection confirms the new fields in 0.6.74 and their absence in the former 0.6.8 minimum. These are local source/provider-schema checks; no cloud deployment was replayed.
 
 The repaired effective-input publication and recovery admission passed the
 nonproduction existing-target workflow end to end. Normal render changed only
@@ -10017,7 +10025,7 @@ The focused report-contract, installation, progress, profiling and architecture 
 
 <!-- /FEATURE: FEAT-049 -->
 
-<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-050: Custom NAT component and staged routing
 
 #### Requirements Covered
@@ -10040,13 +10048,23 @@ Persist original attachments, operation progress and generation identity in the 
 
 Strict NAT quota assessment includes CPU, VM/disk counts and size, public IPs, allocations, subnet/pool and route/table demand including new VPC dependencies. Unknown/inactive usage remains unresolved; aggregate shared demand and calculate net-new/replacement demand from state/plan. Fresh checks precede provisioning and cutover. Resource creation or updates require provisioning checks even with routing disabled; only pure restoration of existing attachments is exempt from image/preset availability. Other component policy remains unchanged.
 
+Use a pure NAT address-space assessor with feasible, insufficient and unresolved results. Scoped SDK reads collect private IPv4 network pools, child pools and direct allocations with bounded pagination, readiness, per-block availability and maximum-mask checks. Count child reservations and allocations even without subnet assignments; inherited subnet displays do not own parent ranges. Preserve pool-tree/resource identity and deduplicate live/plan observations. Subtract occupied intervals, place exact demands first, then use deterministic largest-first best-fit backtracking for prefix demands with a 10,000-state bound and a shared 1,000,000-unit arithmetic work budget covering preprocessing and candidate scans. Exhausted computation or incomplete inventory is unresolved, never sufficient or empty. Hypothetical placements are not persisted or passed to Terraform.
+
+Aggregate all affected NAT, VPC subnet, pool and explicit allocation demands using the fresh Terraform plan and refreshed prior state. Resolve new topology symbolically from component bindings and manifest resource identities; computed IDs and concrete provider-selected addresses are not unknown demand. Only new or expanded reservations require available space. Keep existing occupancy for replacements and pending deletions until independently released. The wizard and early preparation report capacity without preventing well-formed draft saves; the fresh-plan boundary blocks insufficient or unresolved new demand before apply. Do not fabricate missing required configuration or weaken structural checks. Verify realized exact CIDR/prefix, network/pool hierarchy and private allocation containment before routing activation. Keep route-only restoration and retained-subnet/VM-only changes independent of spare subnet space.
+
+Count implicit dynamic VM host demand through inherited pools. Unmodelled MK8s service, Pod and rolling-update allocations through a shared inherited parent pool are unresolved; a proven dedicated child subnet contains that demand within its already-accounted reservation. Resolve computed workload IDs through canonical VM/MK8s VPC output bindings and matching planned child resources, including node-group overrides and cluster fallback; custom or ambiguous bindings remain unresolved. Stable VM allocations and unchanged NIC addressing need no new parent reservation. Existing MK8s child-subnet sizing checks remain authoritative within that subnet.
+
+Require positive dedicated-pool evidence before excluding host or implicit workload allocations from parent demand. An omitted SDK subnet-pool specification inherits network pools; false-only or unknown isolation evidence does not establish an owned child range. Retained automatic prefixes are cancelled by multiplicity, and additional unresolved prefix expansion blocks admission. Before crediting an expanded derived pool, follow its affected source-pool ancestry with a bounded traversal and charge each additional range against upstream occupancy.
+
+The assessment is a fresh read-only feasibility snapshot, not an allocator reservation. Concurrent writers and provider placement of automatic requests relative to planned exact subnets can still cause apply failure. Keep Terraform allocation, default /28, config and journal schemas unchanged; pool expansion and allocation ordering remain separate operations.
+
 #### Selected Option
 
 Python SDK discovery and controlled external attachment updates with Terraform provisioning, following the existing architecture. Deterministic implementation; no application or AI stack change.
 
 #### Alternatives Considered
 
-SDK-owned infrastructure would duplicate Terraform planning/state. Manual routing does not meet the guided lifecycle. Shared-table mutation affects unselected consumers. Automatic HA adds failover/fencing outside the initial scope.
+Parent-prefix-only admission misses exhaustion and fragmentation. Manual subnet precreation or SDK reservation would change resource ownership and is rejected. SDK-owned infrastructure would duplicate Terraform planning/state. Manual routing does not meet the guided lifecycle. Shared-table mutation affects unselected consumers. Automatic HA adds failover/fencing outside the initial scope.
 
 #### Implementation Boundaries
 
@@ -10059,7 +10077,7 @@ cxcli catalog/wizard, reusable discovery/quota normalization, isolated NAT plann
 
 #### Validation Plan
 
-Run targeted pytest, isolated Terraform fmt/init/schema/validate/mock-provider tests, catalog/packaging checks, scoped lint/type checks and align.
+Add capacity tests for fragmentation, scoped inventory failures, disabled blocks, mask restrictions, aggregate demand, symbolic new networks, retained/replaced subnets, partial apply, route restoration and realized CIDR validation. Cross-check small synthetic fit cases against an exhaustive oracle. Run targeted pytest, isolated Terraform fmt/init/schema/validate/mock-provider tests, catalog/packaging checks, scoped lint/type checks and align.
 
 #### Test Plan
 
@@ -10079,11 +10097,15 @@ Module, wizard, quota, deployment, recovery, CLI, packaging and documentation al
 
 #### Implementation Evidence
 
+Implemented the address-space enhancement in nat_gateway_address_space.py, nat_gateway_address_inventory.py and nat_gateway_address_plan.py. Scoped SDK evidence feeds bounded pure CIDR feasibility; the wizard and prepare stage report advisory results, every fresh provisioning plan gates new address demand, and realized gateway CIDR, pool ancestry and private host containment are checked before route activation. Per-pool diagnostics keep unresolved evidence distinct from zero capacity. Terraform allocation, config/journal schemas and route-recovery ownership remain unchanged.
+
 Implemented the opt-in catalog entry and Terraform module, live SDK CPU/preset/image/network discovery, transactional wizard and plan-derived shared quota admission. The module owns dedicated networking, stable allocations, route-policy tables, VM and persistent guest forwarding. Separate NAT modules own scoped SDK updates, conditional shared state, staged trusted-SSH readiness and activation, exact original-route restoration, interrupted-operation reconciliation, last-component retirement and direct-mutation guards. NAT status, refresh, reconcile and unlock commands, deploy SSH controls, CLI contract, examples and operator documentation are aligned. Route-only restoration remains possible after provisioning drift and uses historical Terraform attachment preimages even when the authored VPC route changes. Partial-apply recovery reconciles resource identities before attachment admission, rejects stale output identities and Terraform-owned external delegation, and completes a no-op retirement even when other components remain. Canonical structural validation precedes NAT semantics.
 
 #### Verification Evidence
 
-The focused alignment pass reproduced and repaired disabled-provisioning admission, malformed-row errors, interrupted identity/ownership recovery, rendered module-name retirement and no-op retirement finalization. Seventeen regression cases were added; failure-path cases were observed failing before their fixes. All 62 NAT tests pass, with 129 lifecycle/adapter/structural cases and 916 broader deployment/render/storage regressions also passing in overlapping focused batches. The catalog/quota/provider/CLI/docs batch passed 279 tests. Terraform validation and five mock-provider tests passed at provider 0.6.8. Ruff, Markdown, formatting, type and architecture ratchets passed; installed-wheel CLI verification covers 58 public and one hidden surface. Final independent read-only review found no remaining blocker in the repaired paths. The wheel uses the existing setuptools backend and an isolated package tree with the locked dependency interpreter because installed uv 0.13.5 is outside the project constraint. No full CI matrix, live provisioning, guest reboot or workload egress trial was run; production qualification remains unverified and the requirement remains active.
+The complete NAT suite passes 124 tests, including an exhaustive tiny-space oracle, fragmented/exhausted pools, disabled blocks and masks, pending/unattached child reservations, dynamic allocations, inventory failures, fresh-plan aggregate demand, planned pool changes, unknown controls, no deletion credit, expansion/replacement, symbolic workload bindings, implicit compute demand, draft saves, retained/recovery exemptions and realized-address validation. The initial six independent read-only review findings were repaired. Before the follow-up alignment fixes, `make all` passed 8,457 tests with three skips and 18 integration tests deselected; lint, locked environment setup, wheel build and installed CLI verification also pass. The follow-up alignment reproduced and repaired AS-007 (SDK defaults and incomplete isolation proof), AS-008 (repeated automatic-prefix demand), and AS-009 (unchecked parent-pool expansion). All 319 focused NAT/deployment/render/MK8s/docs tests pass against the final source, including free and occupied parent/grandparent controls. Final read-only review found no remaining blocker in the repairs; the full suite was not repeated for these bounded fixes.
+
+Scoped Ruff and mypy pass for the new address modules. The preceding implementation pass passed the repository type, format and CLI architecture ratchets. Markdown and paired canonical-spec validation pass. Isolated Terraform fmt/init/validate and five mock-provider tests pass with provider 0.6.8; the Terraform module was not changed. Installed-wheel CLI verification passes for 58 public and one hidden surface using the supported uv 0.13.5 toolchain. No live provisioning, guest reboot or workload egress trial was run. Snapshot races and provider allocation ordering remain documented limitations, and REQ-042 remains active pending live qualification.
 
 <!-- /FEATURE: FEAT-050 -->
 <!-- FEATURE: FEAT-051 reqs=REQ-043 status=ready delivery=verified priority=P1 version=3 -->
@@ -10204,6 +10226,137 @@ offline; live Soperator/Kubernetes discovery and the full Python CI matrix were
 not run.
 
 <!-- /FEATURE: FEAT-051 -->
+
+
+<!-- FEATURE: FEAT-052 reqs=REQ-044 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-052: VPC choice reconciliation and declarative node-group placement
+
+#### Requirements Covered
+
+- REQ-044: Identity-aware VPC choices and declarative MK8s placement.
+
+#### Context Evidence
+
+Before this change, the CLI appended configured VPC choices to live IDs and deduplicated only equal values. A local controlled reproducer shows two entries for one apparent subnet. The generic MK8s group loop previously omitted placement prompts although the module already supported node_labels and taints. Deployments execute Terraform in temporary directories, so generated/infra is not a durable initialized state source.
+
+#### Design Details
+
+Inject a lazy, invocation-scoped identity reader into provider option lookup at command composition. Use a non-recovering generated-manifest read and the exact frozen Object Storage state key with existing project-bound credentials. Parse supported raw state in memory, retain only scoped network/subnet identities, and resolve exact manifest module names and subnet keys. Require exact managed resource identity; use outputs only to cross-check it, never as standalone subnet ownership evidence. Adopted-network outputs provide validation context without proving managed network ownership. Validate the manifest envelope and backend/project scope before transport. Reject malformed module inventories instead of treating them as empty identity evidence. Choice filters that remove live entries cannot establish collision-free resource absence. Reconcile resource and output IDs and verify project/network identity against complete live discovery. A confirmed managed live choice displays its cloud ID and managed origin but retains a binding token until canonical binding materialization. New keys absent from available state and collision-free complete discovery remain planned. Unknown or contradictory identity produces a bounded diagnostic and disables singleton selection; unrelated verified live choices remain manually selectable. Missing credentials do not trigger setup. Match names/CIDRs only to detect possible collisions, never ownership.
+
+Extend the plain MK8s new-group loop after name/size with None, Label, Taint and Both (default None). Collect placement in a temporary mapping. Label modes collect key/value pairs; taint modes collect key/value/effect triples. Values default to the group name and the first Both taint defaults to the first label pair. Permit more entries; duplicate labels and duplicate taint key/effect pairs fail. Display Kubernetes effect names but persist NO_SCHEDULE, PREFER_NO_SCHEDULE and NO_EXECUTE, defaulting to NO_SCHEDULE. Shared pure validation covers authored configuration and wizard input, including Nebius-ignored node label keys. Commit only completed placement to node_labels/taints. Existing automatic labels remain renderer-owned. Show Pod YAML guidance without writing workloads or adding a placement_rule schema.
+
+#### Selected Option
+
+Reuse native MK8s inputs and Terraform templates, with deterministic Python helpers for placement and resource identity. Keep the existing Python/Typer/Terraform stack.
+
+#### Alternatives Considered
+
+Name/CIDR deduplication risks false ownership. Cosmetic renaming leaves duplicate choices. Replacing bindings with literal IDs loses dependencies. A second placement schema duplicates existing native fields; live node patching and automatic app placement exceed the requested deployment scope.
+
+#### Implementation Boundaries
+
+The VPC module owns reference parsing and option construction/resolution, with the CLI supplying its existing catalog field reader. Other boundaries are guided placement prompts, provider option metadata, bounded VPC state reader, pure reconciliation/placement helpers, runtime validation, existing render contracts, focused tests and user documentation. No cloud mutation, auth bootstrap, Soperator profile changes, node rollout or module schema migration.
+
+#### Test-First Success Criteria
+
+- TDD-001: A deployed managed subnet yields one existing choice and retains the rendered binding; new or unresolved candidates are distinguished.
+- TDD-002: All placement modes/effects survive wizard save/load/render; cancellation never persists incomplete placement.
+
+#### Validation Plan
+
+Run focused provider, wizard, runtime validation, rendering, architecture and generated-manifest tests, scoped Ruff/type checks, canonical-pair validation and changed-scope alignment.
+
+#### Test Plan
+
+Cover scoped identities, exact module names, malformed/missing state, state/output conflicts, denied reads, cached project credentials, unavailable credentials, collision-only name matching, singleton behavior, all placement choices, syntax/enum/type errors, duplicate pairs and q/qq navigation.
+
+#### Evaluation Plan
+
+Use fixtures and controlled reproductions for source proof. Reserve cloud existence, actual node metadata and Pod scheduling claims for separately authorized live qualification.
+
+#### Rollout And Rollback
+
+Ship through the existing editable/package installation path. Native config fields and bindings require no migration. Reverting the source change does not mutate existing resources or remove native placement configuration.
+
+#### Done Definition
+
+Both behaviors pass focused regression and cross-boundary checks; docs/specs describe the same behavior and live evidence limits.
+
+#### Implementation Evidence
+
+Implemented in mk8s_placement.py, vpc_identity.py and vpc_choices.py, with CLI/provider/project-creation composition, a non-recovering generated-manifest snapshot and shared runtime validation. Existing Terraform templates receive the native fields unchanged. README, MK8s guide, changelog and contract inventory tests are aligned. The direct CLI architecture gate exposed resolver logic in the composition root; cohesive VPC choice/reference logic now resides in vpc_choices.py without widening the baseline. Filter completeness and malformed-inventory handling have focused negative-control regressions. No Terraform module schema, workload manifest or cloud resource was changed.
+
+#### Verification Evidence
+
+Baseline duplicate was reproduced locally and three existing wizard tests passed before implementation. The subsequent alignment pass reproduced and repaired three findings: the CLI architecture gate rejected a new implementation definition, filtered choices incorrectly implied complete live inventory, and malformed module inventory incorrectly implied resource absence. Six identity regression cases failed for the expected reasons before repair and passed afterward. Final affected provider/wizard/validation/render/manifest/architecture and full CLI suite: 718 passed; documentation suite: 46 passed. The actual CLI architecture ratchet passed with 1116 definitions against 1191 allowed, without changing its baseline. Scoped Ruff lint/formatting, Markdown lint, create/component-add help smokes and diff whitespace checks passed. The repository mypy ratchet passed with 492 existing errors against a maximum of 493. Independent report-only code/security review verified both VPC findings, 41 VPC tests and behavior-preserving parser extraction, with no remaining blocking finding. Source and editable-installed-source behavior are covered; no live cloud reconciliation, node deployment or Pod scheduling trial was run.
+
+<!-- /FEATURE: FEAT-052 -->
+
+<!-- FEATURE: FEAT-053 reqs=REQ-045 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-053: Full add-only Infra and Apps wizard
+
+#### Requirements Covered
+
+- REQ-045: Full add-only component selection wizard.
+
+#### Context Evidence
+
+The existing component_add_command already accepts a batch of component additions and calls the shared field wizard. Its omitted-selector flow conditionally hides Apps behind an extra yes/no phase. The scope-selection helper passes text tokens through without resolving the numeric indexes advertised by the prompt. This feature supersedes the recovered pre-lifecycle baseline's optional Apps selection phase.
+
+#### Design Details
+
+Always prompt Infra then Apps without the intermediate Apps question. Keep confirmed sets outside the selection retry loop and seed each revisited section with its prior choices. Start both sets empty. Resolve prompt tokens with the existing component-ID resolver over selectable entries only, retry invalid input within the current section, and show the resolved selection summary. Both empty is a no-op. Apps without a cluster target return to Infra with choices retained; selection back/quit keeps existing navigation semantics.
+
+Reuse the existing add-target construction, resource names, target binding, dependency expansion, source validation, field wizard and config writer. Configure only additions, retain the current field-level exit-and-save policy and required-field checks, and preserve lifecycle-owned publication restrictions. Explicit selectors bypass catalog selection as before. No public flags, schemas or dependencies change.
+
+#### Selected Option
+
+Extend the existing deterministic Python/Typer/Questionary flow with two unconditional catalog selection sections. Questionary 2.1.1 supports multi-selection and checked choices for revisiting sections; its [official checkbox implementation](https://github.com/tmbo/questionary/blob/2.1.1/questionary/prompts/checkbox.py) confirms the required behavior.
+
+#### Alternatives Considered
+
+Documentation alone preserves the hidden Apps gate. A whole-configuration editor adds removal and reconfiguration semantics outside the accepted scope. A separate wizard command duplicates the existing component-add workflow.
+
+#### Implementation Boundaries
+
+Existing CLI selection helpers and component_add_command, focused CLI/navigation tests, command help, README and changelog. Preserve unrelated workspace work. Canonical requirements and design are published as a pair through maintain-project-specs.
+
+#### Test-First Success Criteria
+
+- TDD-001: Omitted selectors expose both lists and pass multiple additions through the existing field wizard and writer.
+- TDD-002: Invalid tokens, missing targets, backtracking and cancellation never lose confirmed choices or publish invalid selections.
+
+#### Validation Plan
+
+Run focused component-add and prompt tests, CLI/help/documentation contract checks, scoped lint, architecture and type ratchets, canonical-pair validation and changed-scope alignment.
+
+#### Test Plan
+
+Cover IDs/indexes/all/none, selectable-only choices, empty scopes, multiple additions, returning from Apps, missing MK8s, selection quit, required-field failure, field-level save, preserved existing values and explicit/noninteractive calls.
+
+#### Evaluation Plan
+
+Source-level deterministic tests and terminal prompt checks establish the interaction contract. No live provisioning is required or claimed.
+
+#### Rollout And Rollback
+
+Ship with the existing package; no migration or feature flag is needed. A source revert restores the prior selection flow without altering saved configuration or live resources.
+
+#### Done Definition
+
+Both sections and input normalization pass regression checks; help/docs match the current behavior and existing lifecycle/configuration boundaries remain intact.
+
+#### Implementation Evidence
+
+Implemented in the existing CLI selection helper and component-add orchestration. Both sections are unconditional and retain confirmed choices. Selectable-only shared token parsing retries RuntimeError and ValueError failures in the same section. The field wizard, add-target construction and publication owners remain unchanged. README, changelog, command/argument help, its generated contract hash and canonical inventory tests are aligned.
+
+#### Verification Evidence
+
+The new regressions first reproduced 13 expected failures in the original flow. Final component-add and prompt selection: 57 passed; CLI/help/docs contracts: 59 passed. Coverage includes mixed and Apps-only additions, empty/cancelled selections, backtracking, missing-target retry, numeric/keyword parsing, hidden entries, TTY checked defaults, preservation and existing field-exit behavior. Independent read-only review reproduced a malformed digit-like index escaping the retry boundary; its focused test failed before the fix, passed afterward, and independent recheck confirmed same-section recovery. No blocking review/security finding remains in the changed scope.
+
+Scoped Ruff lint and formatting passed. The CLI architecture ratchet passed at 1116 definitions against 1191 allowed; the mypy ratchet passed at 492 existing errors against 493 allowed. The PATH-installed CLI renders the new component-add help. Diff whitespace checks passed. Markdown checking found only two preexisting multiple-blank-line warnings, independently reproduced in the pre-task document snapshots and preserved as unrelated edits. Canonical pair validation passes. Evidence is source tests and installed help, not a live interactive cloud provisioning trial.
+
+<!-- /FEATURE: FEAT-053 -->
 
 <!-- maintain-project-specs:design:end -->
 

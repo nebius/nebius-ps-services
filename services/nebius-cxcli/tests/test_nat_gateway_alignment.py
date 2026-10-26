@@ -29,7 +29,9 @@ def prepared_manager(monkeypatch, *, owner="external", current="table-original")
     }
     manager.executor.paths = NS(infra_dir="fixture")
     manager.executor.cli = NS(
-        terraform_show_json=lambda *a, **kw: {}, _terraform_state_resources=lambda raw: []
+        terraform_show_json=lambda *a, **kw: {},
+        _terraform_state_resources=lambda raw: [],
+        progress_console=NS(print=lambda *a, **kw: None),
     )
     monkeypatch.setattr(
         type(sdk), "cpu_preset", lambda *a: {"gpu_count": 0, "vcpu_count": 4}, raising=False
@@ -37,12 +39,11 @@ def prepared_manager(monkeypatch, *, owner="external", current="table-original")
     monkeypatch.setattr(
         type(sdk), "image", lambda *a, **kw: NS(status=NS(min_disk_size_bytes=1)), raising=False
     )
-    monkeypatch.setattr(type(sdk), "validate_subnet_cidr", lambda *a, **kw: None, raising=False)
     monkeypatch.setattr(nat_gateway_quota, "check_plan_quotas", lambda *a: None)
     return manager, sdk, record, target, live, effects
 
 
-@pytest.mark.parametrize("check", ["cpu_preset", "image", "validate_subnet_cidr"])
+@pytest.mark.parametrize("check", ["cpu_preset", "image", "network_cidrs"])
 def test_disabled_new_gateway_still_validates_provisioning(monkeypatch, check):
     manager, sdk, _record, _target, _live, _effects = prepared_manager(monkeypatch)
     manager.state.value["gateways"] = {}

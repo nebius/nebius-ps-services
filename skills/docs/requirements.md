@@ -3692,19 +3692,23 @@ Run fresh native and disposable application trials through both public workflows
 #### User Story
 
 Project owners need an auditable Nebius resource plan derived from their design,
-with per-component allocations, headroom, optional tenant/project quota checks
+with per-component allocations, headroom, optional tenant quota and regional capacity checks
 and verifiable costs, before provisioning infrastructure.
 
 #### Acceptance Criteria
 
-- AC-001: Provide the implicitly discoverable `nebius-capacity-planning` skill for Kubernetes, VMs and relevant managed services. Ask for an unspecified environment; preserve project constraints and account for every design component.
+- AC-001: Provide the implicitly discoverable `nebius-capacity-planning` skill for Kubernetes, VMs and relevant managed services. Inventory components before resolving missing sizing inputs; preserve design constraints and account for every component, sizing only Nebius-hosted resources.
 - AC-002: Explain per-container CPU/memory requests and limits, justified unset CPU limits, scale/concurrency, ephemeral storage, GPUs, placement and evidence. Separate effective Pod scheduling demand from simultaneous runtime demand.
 - AC-003: Size exact supported Nebius platforms/presets, pools, storage and network resources using explicit overhead, growth, failure and rollout scenarios without double counting.
-- AC-004: Optional read-only inspection delegates to `nebius`, preserves selected identity, and distinguishes quota sufficiency, incomplete evidence, platform support and physical capacity. No credentials are required for design-only work.
+- AC-004: A user-selected tenant automatically triggers read-only tenant-level inspection through `nebius` using the official Python SDK. Preserve selected identity and distinguish quota headroom, incomplete evidence, documented regional support and capacity advice. No credentials are required for design-only work; missing live access preserves useful offline results.
 - AC-005: Save a complete report whose opening executive summary includes the selected profile, exact per-pool provisioning quantities, storage/network, surge/growth, external dependencies and unresolved gates, with linked TOC to the selected project's `docs/nebius-capacity-planning.md`; honor no-write requests and preserve identifiable human notes.
 - AC-006: Include traceable costs only with verified rates and assumptions; identify unpriced items. Keep reusable sources public-safe and reports free of secrets and raw cloud dumps.
 - AC-007: Provide offline deterministic arithmetic, meaningful synthetic cases, portable packaging, trigger evaluations and separately qualified static, runtime and quality evidence.
-- AC-008: Expose tenant/project/profile selectors, read-only quota-check and explicitly authorized quota-request modes, and a positive multiplier of at least one over the selected incremental scenario envelope. Compare usage plus multiplied demand, preserve unknowns, deduplicate requests, submit once as the selected human account and verify receipts. Never promise permanent spare quota or physical reservation.
+- AC-008: Expose tenant/region/profile selectors, default region to all, reject the removed project selector, and retain explicit quota-check and quota-request modes plus a multiplier of at least one over the incremental scenario envelope. Quota requests require one concrete region; all-region request mode prepares values without submitting. Cloud-access scripts use the official Nebius Python SDK, never a non-SDK request adapter. Compare usage plus multiplied demand, preserve unknowns, deduplicate requests, submit once as the selected human account and verify receipts. Never promise permanent spare quota or physical reservation.
+
+- AC-009: Resolve current user amendments, explicit design references, relevant conversation design, then selected-local-project docs. Trace every component to evidence, clarify conflicting authorities, exclude generated capacity reports as primary designs, and keep an external input from silently relocating the report.
+- AC-010: Group tenant totals by region, with all-region coverage from current public documentation and tenant evidence. Preserve locality exclusions, restricted-region uncertainty, global quotas and unresolved rows. Treat regional placements as alternatives unless the design requires simultaneous multi-region deployment.
+- AC-011: Collect timestamped GPU capacity advice with bounded SDK pagination, validated composite identities and allocation/data states. Never sum overlapping preset advice or equate CPU quota with physical capacity; leave project deployment eligibility unchecked. Deduct reused resources only with current explicit evidence.
 
 #### Negative Criteria
 

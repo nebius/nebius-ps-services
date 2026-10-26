@@ -11,11 +11,11 @@ Storage requirement: 500GiB SFS and 200GiB object backups. Networking requires
 one ingress public IP plus egress; those rates and quotas were not inspected.
 
 Region-a tenant CPU limit: 64 vCPU; measured usage: 24; state active, inspection
-complete. Project quota is inaccessible: no effective project limit is known.
-The supplied project catalog supports the required platform/preset.
+complete. Project eligibility is outside this tenant assessment.
+The supplied regional documentation supports the required platform/preset.
 
 Region-b tenant CPU limit: 128 vCPU; measured usage: 0; state active, inspection
-complete. Its supplied project catalog does not support `required-cpu`.
+complete. Its supplied regional documentation does not support `required-cpu`.
 No provider evidence establishes physical CPU capacity in either region.
 
 The user supplied only a tenant alias and explicitly requires human-profile

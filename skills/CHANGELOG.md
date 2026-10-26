@@ -6,7 +6,16 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ### Added
 
-- `nebius-capacity-planning` tenant/project/profile selectors, quota-check and
+- Capacity planning now resolves explicit/conversation/local-doc designs, defaults
+  to all regions and automatically checks a selected tenant. Remove its public
+  `--project` selector; group tenant totals by region and leave project
+  eligibility explicit. Add an offline scope helper and Nebius Python SDK GPU
+  advice inspector with bounded pagination, timestamp/state handling and
+  non-additive preset evidence. All-region quota-request mode prepares values
+  only; cloud scripts use the SDK, never non-SDK request adapters. Expand source,
+  scope and regional report evals and wire inspector tests into CI.
+
+- `nebius-capacity-planning` tenant/region/profile selectors, quota-check and
   explicit human-account quota-request modes, plus an offline reserve-multiplier
   planner. Requests require verified shortfalls, duplicate checks and readback;
   design-only use remains independent of cloud credentials.

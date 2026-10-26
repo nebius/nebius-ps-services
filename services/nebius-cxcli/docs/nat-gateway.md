@@ -17,8 +17,9 @@ a capacity reservation. CPU choices do not use the GPU Capacity Advisor.
 Select an existing network or a VPC component from the same deployment, then
 select workload subnets. The gateway receives a **dedicated explicit subnet**,
 using a provider-allocated `/28` by default. A specific IPv4 CIDR is also accepted
-after pool, allocation and subnet overlap validation. Extend network pools
-separately when space is insufficient. Network private ranges define the guest's
+when the selected pool has an available, aligned range. cxcli creates this subnet;
+you do not need to prepare it manually. Extend network pools separately when
+space is insufficient. Network private ranges define the guest's
 forwarding sources; subnets with inherited pools do not provide distinct CIDR
 security boundaries. Provide restricted administration CIDRs and an SSH public
 key. Password/root SSH access is disabled.
@@ -55,6 +56,53 @@ after this completes. Shared quota demand is assessed from planned creates and
 growth; replacements conservatively require transient headroom.
 Disabling routing does not disable provisioning checks: new or changed gateway
 resources still require a valid CPU preset, image, subnet and quota admission.
+
+### Private address capacity
+
+The wizard and initial preparation show an advisory address-space assessment.
+A well-formed draft can be saved with insufficient or unresolved capacity, but
+missing network or forwarding-source CIDRs must still be resolved. Every fresh
+provisioning plan that needs new private space requires a successful assessment
+before apply. Disabled routing does not bypass this gate.
+
+The assessment uses each network's private pool identities, enabled blocks and
+mask restrictions. It subtracts child-pool reservations, including unattached
+and pending reservations, and direct allocations, including dynamic addresses
+without a subnet ID. Inherited subnets do not reserve the entire parent pool.
+It combines the plan's gateway, workload subnet, pool and private-allocation
+demand, checks explicit CIDRs and contiguous prefix fits, and reports requested
+addresses, free space and the largest eligible block. Unknown membership,
+incomplete inventory or exhausted assessment limits block new reservations;
+they are never treated as empty pools.
+An omitted subnet-pool specification inherits network pools; a false or unknown
+flag alone does not prove a dedicated reservation. Repeated automatic prefix
+requests retain their multiplicity, and unresolved prefix expansion blocks
+admission. Expanding a derived pool also checks the additional ranges against
+its upstream pools before crediting the new space.
+
+Dynamic VM interfaces add host-address demand when they use inherited pools.
+Kubernetes networking can allocate Service and Pod blocks implicitly; when a
+changed cluster or node group shares a NAT parent pool through an inherited
+subnet, admission reports unresolved demand rather than guessing its footprint.
+Use a dedicated explicit workload subnet for this composition. Canonical
+same-deployment VPC bindings prove that isolation even before subnet IDs exist;
+custom or ambiguous bindings must be resolved. Kubernetes subnet sizing remains
+subject to its separate preflight checks. See the provider's
+[Kubernetes address requirements](https://docs.nebius.com/kubernetes/networking/requirements#private-ip-address-allocations).
+
+Pending deletions do not free capacity for admission. A replacement must fit
+while the old reservation remains; an in-place explicit expansion checks only
+its additional range. A retained subnet, VM-only replacement or route-only
+restoration needs no spare-space check. Each new plan reads a new snapshot.
+
+After provisioning, cxcli verifies the realized gateway CIDR or prefix, parent
+pool ownership and private host-allocation containment before route activation.
+This check does not require spare capacity. A feasible snapshot is **not a
+reservation**: concurrent allocation or provider ordering between automatic
+and explicit requests can still cause apply to fail. cxcli keeps Terraform's
+automatic allocation and does not reserve addresses or change apply ordering.
+
+### SSH trust and availability
 
 Provision host keys in `trusted_hosts` from an independently trusted source. The
 CLI never accepts an unverified key automatically. On a first deployment, missing

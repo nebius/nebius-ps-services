@@ -37,6 +37,8 @@ These requirements apply to direct consumers of the modules in this repo:
   provider write-only payload fields
 - Nebius provider source/version for all modules:
   `nebius/nebius` with `>= 0.6.8, < 0.7.0`
+- `vpc` requires `nebius/nebius >= 0.6.74, < 0.7.0` for supported subnet
+  status pool outputs
 - `managed-postgresql` also requires `hashicorp/random >= 3.6.0, < 4.0.0`
 - The calling Terraform root owns backend configuration, provider configuration,
   credentials, and lock files

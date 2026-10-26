@@ -28,6 +28,7 @@ from .observability import (
     materialize_observability_infra_values,
     resolve_observability_app_selection,
 )
+from .paths import resolve_project_paths
 from .provider_options import ProviderOptionLookup
 from .quota_checks import QuotaReport
 from .soperator_config_materialization import _SOPERATOR_APP_ID, _default_soperator_profile_name
@@ -235,6 +236,7 @@ class ProjectCreationWorkflow:
             tenant_folder=resolved_tenant_folder,
             project_folder=resolved_project_folder,
         )
+        provider_lookup.configure_vpc_identity(resolve_project_paths(existing_config_path))
         had_existing_config = existing_config_path.exists()
         infra_source_validation_ran = False
         if had_existing_config:

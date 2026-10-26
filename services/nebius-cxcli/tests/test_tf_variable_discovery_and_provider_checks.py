@@ -462,8 +462,10 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
     assert prompt_type_hints["infra.components[0].inputs.optional_field"] == "string"
 
 
+@pytest.mark.parametrize("cancel_placement", [None, "back", "quit"])
 def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     monkeypatch,
+    cancel_placement,
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
@@ -538,6 +540,7 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
 
     prompted_paths: list[str] = []
     new_group_names = ["system", "burst"]
+    cancelled = False
     add_another_answers = [True, False]
 
     def _fake_prompt(
@@ -549,8 +552,22 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         required=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
+        nonlocal cancelled
         _ = choices, type_hint, required, unset_on_skip
+        if path_label.endswith(".burst.taints[0].effect") and cancel_placement and not cancelled:
+            cancelled = True
+            if cancel_placement == "back":
+                new_group_names.append("burst")
+                return cli._WIZARD_BACKTRACK, False
+            return current, True
         prompted_paths.append(path_label)
+        if path_label.endswith(".placement.rule"):
+            return ("label" if ".system." in path_label else "both"), False
+        if path_label.endswith(".node_labels.<new>.key"):
+            return "scheduling.example.com/pool", False
+        if path_label.endswith(".node_labels.<new>.value"):
+            return ("core" if ".system." in path_label else "task"), False
+
         if path_label.endswith(".inputs.cluster.cluster_name"):
             return "demo-cluster", False
         if path_label.endswith(".inputs.cluster.network_id"):
@@ -656,7 +673,16 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         provider_lookup=_StaticVpcLookup(),
     )
 
+    if cancel_placement == "quit":
+        assert completed is False
+        groups = yaml.safe_load(updated_yaml)["infra"]["components"][0]["inputs"]["node_groups"]
+        assert set(groups) == {"system"}
+        assert groups["system"]["node_labels"] == {"scheduling.example.com/pool": "core"}
+        return
     assert completed is True
+    if cancel_placement == "back":
+        assert cancelled
+        assert prompted_paths.count("infra.components[0].inputs.node_groups.<new>.name") == 3
     assert "infra.components[0].inputs.cluster" not in prompted_paths
     assert "infra.components[0].inputs.node_groups" not in prompted_paths
     assert "infra.components[0].inputs.cluster.cluster_name" in prompted_paths
@@ -690,6 +716,13 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     assert inputs["cluster"]["k8s_version"] == "1.33"
     assert inputs["cluster"]["public_endpoint"] is True
     assert "node_group_defaults" not in inputs
+    assert inputs["node_groups"]["system"]["node_labels"] == {"scheduling.example.com/pool": "core"}
+    assert "taints" not in inputs["node_groups"]["system"]
+    assert inputs["node_groups"]["burst"]["node_labels"] == {"scheduling.example.com/pool": "task"}
+    assert inputs["node_groups"]["burst"]["taints"] == [
+        {"key": "scheduling.example.com/pool", "value": "task", "effect": "NO_SCHEDULE"}
+    ]
+    assert all("placement" not in group for group in inputs["node_groups"].values())
     assert inputs["node_groups"]["system"]["node_count"] == 2
     assert inputs["node_groups"]["system"]["gpu"] is False
     assert inputs["node_groups"]["system"]["platform"] == "cpu-d3"

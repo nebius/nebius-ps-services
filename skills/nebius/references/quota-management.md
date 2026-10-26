@@ -173,9 +173,31 @@ only the other scope; effective rows preserve both scopes' state fields. A missi
 means unlimited capacity. `complete` means collection completed, not that every
 workload dimension is resolved or that deployment is approved.
 
-## Resource Advice Caveat
+## Tenant GPU capacity advice
 
-Nebius `capacity.v1.ResourceAdvice` may exist, but it can be disabled or unavailable on some tenants. Treat it as optional enrichment, not as the primary quota gate.
+Use `scripts/inspect_capacity.py --tenant-id <tenant-id> --json` for bounded
+SDK `capacity.v1.ResourceAdviceServiceClient` collection. Optional exact
+`--region` filters apply locally; omitted filters mean all returned regions.
+Do not pass literal `all`. The client is included in the pinned SDK 0.6.7.
+The typed request takes tenant parent, page size and continuation token; do not
+invent a region request field from CLI prose. Collection deduplicates validated
+region/fabric/platform/preset keys, allowing an empty fabric when appropriate.
+
+The common report envelope retains UTC collection time and allowlisted rows for
+on-demand, preemptible and reserved allocation types. Each row includes the
+provider data state, effective timestamp and availability level. Only FRESH,
+timestamped observations expose numeric available/limit VM counts; stale,
+unspecified or unknown data remains null. Collection completeness is separate
+from measurement validity. An unavailable/disabled advisor is an inspection gap,
+not proof of zero capacity or a reason to bypass quotas.
+
+Advice counts are already constrained by applicable quota/reservations and may
+share underlying GPU capacity across presets and allocation types. Do not
+subtract usage again, sum advice rows, or infer simultaneous mixed-shape placement.
+CPU-only capacity and project eligibility remain outside this inspector. Fresh
+GPU advice does not guarantee resources at creation time. Verify the current
+[Capacity Advisor scope](https://docs.nebius.com/compute/virtual-machines/capacity-advisor)
+before assessment; GPU-only scope and SDK request fields were checked on 2026-10-26.
 
 ## Official references
 

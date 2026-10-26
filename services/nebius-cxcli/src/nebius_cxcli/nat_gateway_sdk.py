@@ -44,9 +44,19 @@ class NatGatewaySDK:
                 f"NAT provider request failed ({type(exc).__name__}); no empty-inventory fallback"
             ) from None
 
-    def pages(self, method: Callable[..., Any], factory: Callable[[str], Any]) -> list[Any]:
+    def pages(
+        self,
+        method: Callable[..., Any],
+        factory: Callable[[str], Any],
+        *,
+        deadline: float | None = None,
+    ) -> list[Any]:
         result, token, seen, identities = [], "", set(), set()
-        deadline = time.monotonic() + 120
+        deadline = (
+            min(deadline, time.monotonic() + 120)
+            if deadline is not None
+            else time.monotonic() + 120
+        )
         for _ in range(1000):
             if time.monotonic() > deadline:
                 raise RuntimeError("NAT inventory deadline exceeded")
@@ -241,45 +251,10 @@ class NatGatewaySDK:
             time.sleep(2)
         raise RuntimeError("NAT attachment operation is still pending")
 
-    def validate_subnet_cidr(self, network_id: str, cidr: str, *, own_subnet_id: str = "") -> None:
-        parents = [ipaddress.IPv4Network(item) for item in self.network_cidrs(network_id)]
-        if cidr.startswith("/"):
-            if not any(parent.prefixlen <= int(cidr[1:]) for parent in parents):
-                raise ValueError("NAT subnet prefix cannot fit the network pools")
-            return  # Provider allocates an unused explicit child; no inherited address ownership.
-        candidate = ipaddress.IPv4Network(cidr, strict=True)
-        if not any(candidate.subnet_of(parent) for parent in parents):
-            raise ValueError(
-                "NAT subnet CIDR is outside its network; pool extension is a separate operation"
-            )
-        for subnet in self.subnets(network_id):
-            if (
-                subnet.metadata.id == own_subnet_id
-                or not subnet.spec.check_presence("ipv4_private_pools")
-                or subnet.spec.ipv4_private_pools.use_network_pools
-            ):
-                continue
-            for pool in subnet.status.ipv4_private_pools:
-                if any(candidate.overlaps(ipaddress.IPv4Network(item)) for item in pool.cidrs):
-                    raise ValueError("NAT subnet CIDR overlaps an explicit workload subnet")
-        from nebius.api.nebius.vpc.v1 import AllocationServiceClient, ListAllocationsRequest
+    def address_pool(self, pool_id: str, *, deadline: float | None = None) -> Any:
+        from .nat_gateway_address_inventory import read_address_pool
 
-        subnet_ids = {s.metadata.id for s in self.subnets(network_id)}
-        allocations = self.pages(
-            AllocationServiceClient(self.sdk).list,
-            lambda token: ListAllocationsRequest(
-                parent_id=self.project_id, page_size=500, page_token=token
-            ),
-        )
-        for allocation in allocations:
-            details = allocation.status.details
-            if (
-                details.subnet_id in subnet_ids - {own_subnet_id}
-                and allocation.spec.check_presence("ipv4_private")
-                and details.allocated_cidr
-                and candidate.overlaps(ipaddress.IPv4Network(details.allocated_cidr))
-            ):
-                raise ValueError("NAT subnet CIDR overlaps an existing private allocation")
+        return read_address_pool(self, pool_id, deadline=deadline)
 
     def preset_resources(self, platform: str, preset: str) -> dict[str, int]:
         from nebius.api.nebius.common.v1 import GetByNameRequest
@@ -377,13 +352,17 @@ class NatGatewaySDK:
             or nic.public_ip_address.allocation_id != outputs["public_allocation_id"]
         ):
             raise RuntimeError("NAT gateway allocation bindings differ from Terraform outputs")
+        private_allocation = None
         for key in ("private_allocation_id", "public_allocation_id"):
             allocation = self.call(
                 AllocationServiceClient(self.sdk).get, GetAllocationRequest(id=outputs[key])
             )
+            if key == "private_allocation_id":
+                private_allocation = allocation
             assignment = allocation.status.assignment.network_interface
             if (
-                allocation.metadata.parent_id != self.project_id
+                allocation.metadata.id != outputs[key]
+                or allocation.metadata.parent_id != self.project_id
                 or assignment is None
                 or assignment.instance_id != outputs["instance_id"]
             ):
@@ -395,6 +374,9 @@ class NatGatewaySDK:
             or subnet.status.route_table.id != outputs["gateway_route_table_id"]
         ):
             raise RuntimeError("Gateway subnet isolation or direct egress differs from intent")
+        from .nat_gateway_address_inventory import verify_gateway_address
+
+        verify_gateway_address(self, subnet, inputs, private_allocation)
         expected = canonical_routes(
             [{"destination_cidr": "0.0.0.0/0", "default_egress_gateway": True}]
         )

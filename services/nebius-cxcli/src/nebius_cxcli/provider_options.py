@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .capacity_dashboard import (
     CapacityAdviceAvailability,
@@ -29,6 +29,10 @@ from .deploy_targets import deploy_target_is_external_mk8s
 from .sdk_auth import init_nebius_sdk
 from .soperator_install_progress import install_phase, install_progress_step
 from .soperator_wizard import soperator_wizard_settings
+
+if TYPE_CHECKING:
+    from .paths import ProjectPaths
+    from .vpc_identity import VpcIdentityReader, VpcIdentitySnapshot
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
@@ -682,6 +686,31 @@ class ProviderOptionLookup:
         ] = {}
         self._capacity_resource_advice_cache: dict[str, tuple[CapacityResourceAdvice, ...]] = {}
         self._last_error: str | None = None
+        self._vpc_identity_reader: VpcIdentityReader | None = None
+        self._vpc_diagnostics: dict[str, tuple[str, ...]] = {}
+        self._last_vpc_complete = False
+
+    def configure_vpc_identity(self, paths: ProjectPaths) -> None:
+        from .vpc_identity import VpcIdentityReader
+
+        self._vpc_identity_reader = VpcIdentityReader(paths)
+        self._vpc_diagnostics.clear()
+
+    def vpc_identity(self, payload: Mapping[str, Any]) -> VpcIdentitySnapshot:
+        from .vpc_identity import VpcIdentitySnapshot
+
+        if self._vpc_identity_reader is None:
+            return VpcIdentitySnapshot()
+        return self._vpc_identity_reader.read(payload)
+
+    def vpc_diagnostics(self, field_path: str) -> tuple[str, ...]:
+        return self._vpc_diagnostics.get(field_path, ())
+
+    def record_vpc_diagnostics(self, field_path: str, diagnostics: tuple[str, ...]) -> None:
+        self._vpc_diagnostics[field_path] = diagnostics
+
+    def vpc_discovery_complete(self) -> bool:
+        return self._last_vpc_complete
 
     def resolve(
         self,
@@ -692,6 +721,8 @@ class ProviderOptionLookup:
         field_path: str,
     ) -> list[OptionChoice]:
         self._last_error = None
+        if provider in {"project_networks", "project_subnets"}:
+            self._last_vpc_complete = False
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
@@ -728,6 +759,11 @@ class ProviderOptionLookup:
                         builtin_choices,
                         filter_pattern=_as_str(args.get("_filter")),
                     )
+                    if provider in {"project_networks", "project_subnets"}:
+                        # Filtered presentation cannot prove that a resource is absent.
+                        self._last_vpc_complete = not self._last_error and len(resolved) == len(
+                            builtin_choices
+                        )
                     if resolved:
                         self._last_error = None
                         return resolved
@@ -755,6 +791,8 @@ class ProviderOptionLookup:
                     filter_pattern=_as_str(args.get("_filter")),
                 )
                 if resolved:
+                    if provider in {"project_networks", "project_subnets"}:
+                        self._last_vpc_complete = False
                     self._last_error = None
                     return resolved
             return []
@@ -2519,6 +2557,7 @@ class ProviderOptionLookup:
     ) -> tuple[OptionChoice, ...]:
         project_id = self._resolve_project_id(payload, args)
         if not project_id:
+            self._last_error = "VPC discovery requires a project ID"
             return ()
         network_id = _as_str(args.get("network_id"))
         network_id_path = _as_str(args.get("network_id_path"))
@@ -2530,6 +2569,7 @@ class ProviderOptionLookup:
 
         sdk = self._sdk_or_none()
         if sdk is None:
+            self._last_error = self._last_error or "VPC SDK discovery unavailable"
             return ()
         from nebius.api.nebius.vpc.v1 import ListSubnetsRequest, SubnetServiceClient
 
@@ -2594,6 +2634,9 @@ class ProviderOptionLookup:
                     metadata={
                         "private_cidrs": explicit_private_cidrs,
                         "use_network_private_pools": use_network_private_pools,
+                        "name": name,
+                        "parent_id": _as_str(getattr(metadata, "parent_id", None)),
+                        "network_id": item_network_id,
                     },
                 )
             )
@@ -2826,6 +2869,7 @@ class ProviderOptionLookup:
     ) -> tuple[OptionChoice, ...]:
         project_id = self._resolve_project_id(payload, args)
         if not project_id:
+            self._last_error = "VPC discovery requires a project ID"
             return ()
         cache_key = ("project_networks", project_id)
         if cache_key in self._cache:
@@ -2833,6 +2877,7 @@ class ProviderOptionLookup:
 
         sdk = self._sdk_or_none()
         if sdk is None:
+            self._last_error = self._last_error or "VPC SDK discovery unavailable"
             return ()
         from nebius.api.nebius.vpc.v1 import (
             GetPoolRequest,
@@ -2904,6 +2949,8 @@ class ProviderOptionLookup:
                     recommended=_is_default_project_network_name(name),
                     metadata={
                         "name": name or "",
+                        "parent_id": _as_str(getattr(metadata, "parent_id", None)),
+                        "network_id": network_id,
                         "private_pool_ids": private_pool_ids,
                         "private_cidrs": private_cidrs,
                     },

@@ -105,6 +105,18 @@
         "Cites original official pages and labels unresolved claims.",
         "Does not install MCP, repair authentication, use Context7 or send confidential information to public search."
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "Explain how to collect Nebius tenant GPU capacity advice using the bundled Python SDK inspector. Two on-demand presets report 4 and 2 VMs on one fabric, while reserved advice is stale zero. No live access is authorized.",
+      "expected_output": "Explicit tenant SDK collection with non-additive timestamped advice and unknown stale values.",
+      "files": [],
+      "assertions": [
+        "Uses inspect_capacity.py with an explicit tenant and omitted region filter for all regions, without CLI subprocess or raw HTTP cloud adapters.",
+        "Retains separate preset/allocation rows and does not report six available VMs.",
+        "Treats stale reserved zero as unresolved, not measured zero.",
+        "Keeps CPU physical capacity and project eligibility unverified and performs no cloud calls."
+      ]
     }
   ]
 }

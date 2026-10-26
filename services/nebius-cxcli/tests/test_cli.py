@@ -43,6 +43,7 @@ from nebius_cxcli.runtime_validation import (
     validate_dynamic_payload_structure,
     validate_runtime_payload,
 )
+from nebius_cxcli.vpc_choices import combined_vpc_choices
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 from soperator_fixtures import sample_snapshot
 
@@ -1481,7 +1482,8 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
         entry = kwargs["entry"]
         full_path_label = kwargs["full_path_label"]
         if full_path_label.endswith(".inputs.cluster.network_id"):
-            return cli_module._combined_vpc_choices(
+            return combined_vpc_choices(
+                read_field=cli_module._read_payload_field,
                 payload=current_payload,
                 entry=entry,
                 full_path_label=full_path_label,
@@ -1490,7 +1492,8 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
                 live_choices=[],
             )
         if full_path_label.endswith(".inputs.cluster.subnet_id"):
-            return cli_module._combined_vpc_choices(
+            return combined_vpc_choices(
+                read_field=cli_module._read_payload_field,
                 payload=current_payload,
                 entry=entry,
                 full_path_label=full_path_label,
@@ -6808,11 +6811,11 @@ def test_component_add_interactive_prompts_for_new_component_fields(
     config_path = _project_config_path(deployments_root)
     result = _component_add(
         config_path,
-        input_text="managed-postgresql\nn\ndemo-pg\ny\n\n",
+        input_text="managed-postgresql\nnone\ndemo-pg\ny\n\n",
     )
     assert result.exit_code == 0, result.output
-    assert "Select apps components to add too?" in result.output
-    assert "Select apps components (comma-separated ids or indexes)" not in result.output
+    assert "Select apps components to add too?" not in result.output
+    assert "Select apps components (comma-separated ids or indexes" in result.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -6823,6 +6826,106 @@ def test_component_add_interactive_prompts_for_new_component_fields(
         if isinstance(row, dict) and str(row.get("id", "")).strip() == "managed-postgresql"
     )
     assert managed_pg["inputs"]["name"] == "demo-pg"
+
+
+@pytest.mark.parametrize(
+    ("infra_selection", "resource_answers", "expected_infra"),
+    [
+        ("managed-postgresql,object-storage", "\n\n", {"managed-postgresql", "object-storage"}),
+        ("none", "", set()),
+    ],
+)
+def test_component_add_full_wizard_adds_multiple_infra_and_apps(
+    tmp_path, monkeypatch, infra_selection, resource_answers, expected_infra
+):
+    created = _create_non_interactive(tmp_path, "--infra", "mk8s", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    original = yaml.safe_load(config_path.read_text())
+    wizard_selections = []
+
+    def configure_additions(**kwargs):
+        wizard_selections.append((kwargs["selected_infra"], kwargs["selected_apps"]))
+        return kwargs["config_yaml"], True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", configure_additions)
+    result = _component_add(
+        config_path,
+        input_text=f"{infra_selection}\nn8n,external-dns\n{resource_answers}y\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Select apps components to add too?" not in result.output
+    assert wizard_selections == [(expected_infra, {"n8n@mk8s", "external-dns@mk8s"})]
+    updated = yaml.safe_load(config_path.read_text())
+    assert {row["id"] for row in updated["infra"]["components"]} == {"mk8s"} | expected_infra
+    assert {row["id"] for row in updated["apps"]["charts"]} == {"n8n", "external-dns"}
+    assert updated["infra"]["components"][0] == original["infra"]["components"][0]
+
+
+@pytest.mark.parametrize("answers", ["none\nnone\n", "qq\n", "vm\nqq\n", "vm\nq\nnone\nnone\n"])
+def test_component_add_full_wizard_empty_or_cancel_preserves_config(tmp_path, answers):
+    created = _create_non_interactive(tmp_path, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    original = config_path.read_bytes()
+
+    result = _component_add(config_path, input_text=answers)
+
+    assert result.exit_code == 0, result.output
+    assert config_path.read_bytes() == original
+    if answers != "qq\n":
+        assert "Select apps components (comma-separated ids or indexes" in result.output
+
+
+def test_component_add_full_wizard_retains_infra_on_back(tmp_path, monkeypatch):
+    created = _create_non_interactive(tmp_path, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    original = config_path.read_bytes()
+    answers = iter((["vm"], cli_module._WizardBackRequested(), [], []))
+    prompts = []
+
+    def select(**kwargs):
+        prompts.append((kwargs["scope"], set(kwargs["defaults"])))
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(cli_module, "_prompt_component_with_checkboxes", select)
+    result = _component_add(config_path)
+
+    assert result.exit_code == 0, result.output
+    assert prompts == [("infra", set()), ("apps", set()), ("infra", {"vm"}), ("apps", set())]
+    assert config_path.read_bytes() == original
+
+
+def test_component_add_full_wizard_retains_apps_after_missing_target(tmp_path, monkeypatch):
+    created = _create_non_interactive(tmp_path, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    answers = iter(([], ["n8n"], ["mk8s"], ["n8n"]))
+    prompts = []
+
+    def select(**kwargs):
+        prompts.append((kwargs["scope"], set(kwargs["defaults"])))
+        return next(answers)
+
+    monkeypatch.setattr(cli_module, "_prompt_component_with_checkboxes", select)
+    monkeypatch.setattr(
+        cli_module, "_run_component_field_wizard", lambda **kwargs: (kwargs["config_yaml"], True)
+    )
+    result = _component_add(config_path, input_text="\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid app selection:" in result.output
+    assert prompts == [("infra", set()), ("apps", set()), ("infra", set()), ("apps", {"n8n"})]
+    updated = yaml.safe_load(config_path.read_text())
+    assert {row["id"] for row in updated["infra"]["components"]} == {"mk8s"}
+    assert [(row["id"], row["instance_id"]) for row in updated["apps"]["charts"]] == [
+        ("n8n", "mk8s")
+    ]
 
 
 def test_component_add_does_not_write_when_quit_leaves_required_fields_missing(

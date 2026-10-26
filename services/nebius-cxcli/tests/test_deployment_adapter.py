@@ -34,6 +34,17 @@ def test_adapter_recovers_partial_creation_without_reclassifying_it_as_unowned(
     _exercise_adapter(tmp_path, monkeypatch, soperator=True, preview=False, interrupt=True)
 
 
+def test_infrastructure_only_deploy_finishes_through_real_baseline_workflow(tmp_path, monkeypatch):
+    _exercise_adapter(
+        tmp_path,
+        monkeypatch,
+        soperator=False,
+        preview=False,
+        interrupt=False,
+        real_baseline=True,
+    )
+
+
 def test_render_publication_before_capture_cannot_mix_old_manifest_and_new_files(
     tmp_path, monkeypatch
 ):
@@ -71,6 +82,7 @@ def _exercise_adapter(
     hydrated=False,
     execution_profile=None,
     rerender=False,
+    real_baseline=False,
 ):
     from nebius_cxcli.nat_gateway_deploy import NatDeployment
 
@@ -199,7 +211,8 @@ def _exercise_adapter(
     monkeypatch.setattr(cli, "preflight_soperator_backup_inputs", lambda *a, **kw: None)
     monkeypatch.setattr(cli, "preflight_soperator_sssd_inputs", lambda *a, **kw: {})
     monkeypatch.setattr(cli, "_preflight_soperator_install_checks", lambda *a: None)
-    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *a, **kw: None)
+    if not real_baseline:
+        monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *a, **kw: None)
 
     @contextmanager
     def lease(**kwargs):

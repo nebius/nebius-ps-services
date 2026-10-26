@@ -110,7 +110,9 @@ implicit requirement or authority for mutations, auth setup or diagnostics.
    that script/operation and applicable environment rules allow it.
 5. For authorized read-only discovery, run the matching `scripts/inspect_*.py`
    command. Treat exit 1 or `complete: false` as incomplete evidence. Do not
-   infer absence, sufficiency or permission from missing data.
+   infer absence, sufficiency or permission from missing data. Tenant GPU advice
+   uses `scripts/inspect_capacity.py`; read quota/capacity guidance for its
+   non-additive counts, data states and measurement timestamps.
 6. For authorized writes, submit once, retain operation/resource IDs, wait
    for terminal success and independently verify identity, desired settings
    and readiness. Reconcile ambiguous outcomes before another write; do not

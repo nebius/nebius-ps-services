@@ -58,6 +58,7 @@ python scripts/inspect_storage.py --project-id <project-id> --kind disk --kind b
 python scripts/inspect_vpc_topology.py --project-id <project-id> --network-id <network-id> --json
 python scripts/inspect_vpc_routes.py --project-id <project-id> --network-id <network-id> --json
 python scripts/inspect_quotas.py --tenant-id <tenant-id> --project-id <project-id> --region <region> --json
+python scripts/inspect_capacity.py --tenant-id <tenant-id> --profile <profile> --json
 ```
 
 Each command supports `--help`, `--profile`, `--config-file`, `--endpoint` and
@@ -68,7 +69,17 @@ repeatable `--kind` accepts `disk`, `filesystem`, `bucket`, `registry`,
 `--region`, `--name`, `--name-prefix`, and `--raw`; at least one tenant/project
 selector is required. VPC `--network-id` filters to an exact project network.
 
-All six commands emit `{scope, data, complete, errors}` with `--json`. Quota
+Capacity advice requires only a tenant and uses the official Nebius Python SDK.
+Omit `--region` for all regions or repeat it for exact filters; literal `all` is
+rejected. It emits one row per region/fabric/platform/preset/allocation type,
+retaining provider data state and measurement time. Fresh zero is measured zero;
+stale/unknown or untimestamped counts remain null. Different presets may share
+capacity, so rows are never summed. GPU advice does not cover CPU-only physical
+capacity or project eligibility and is not a provisioning guarantee. Any returned
+metadata parent must match the tenant. Partial collections fail explicitly.
+See [quota and capacity guidance](references/quota-management.md).
+
+All seven commands emit `{scope, data, complete, errors}` with `--json`. Quota
 also emits `mode: effective|raw`, controlled only by `--raw`. Exit status is
 **0** for complete collection, **1** for incomplete/failed collection and **2**
 for invalid arguments. Human output shows at most 20 top-level records;
@@ -153,3 +164,18 @@ The trigger definitions and quality cases include MCP lookup/fallback, design-on
 fixed-provider consultations without credentials, inventory or mutations.
 Fresh multi-skill traces are needed to prove return to the active design owner;
 the isolated single-skill runner cannot establish that handoff.
+
+## Capacity inspector validation (2026-10-26)
+
+All 50 offline tests pass with the pinned SDK, including 11 capacity and
+tenant-only quota regressions. The added cases cover typed requests, pagination,
+scope validation, partial failures, alternative presets and evidence-state
+handling. Strict portable/Codex/Claude structure, catalogs, scoped lint and
+independent code/security review pass. Disposable skills CLI 1.5.26 discovery,
+copy parity, repeat installation and isolation pass on both hosts; real homes
+were unchanged.
+
+This is source, SDK-schema and distribution evidence. Native activation is
+`UNAVAILABLE` without isolated runner authentication; live API/tenant checks,
+provisioning and performance are `NOT_RUN`. The capacity skill's two scoped
+report-quality comparisons do not establish live inspector correctness.

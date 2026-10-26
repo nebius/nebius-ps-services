@@ -107,8 +107,10 @@ class WizardSDK:
     def network_cidrs(self, *args):
         return ["10.0.0.0/8"]
 
-    def validate_subnet_cidr(self, *args):
-        pass
+    def address_pool(self, identity, **kwargs):
+        from nebius_cxcli.nat_gateway_address_space import AddressBlock, AddressPool, IPv4
+
+        return AddressPool(identity, (AddressBlock(IPv4("10.0.0.0/8")),))
 
     def route_policy(self, *args):
         return config()["infra"]["components"][0]["routing"]["policies"]["default"]
@@ -122,7 +124,10 @@ class WizardSDK:
         ]
 
     def network(self, *args):
-        return NS(status=NS(default_route_table_id="table-original"))
+        return NS(
+            status=NS(default_route_table_id="table-original"),
+            spec=NS(ipv4_private_pools=NS(pools=[NS(id="pool")])),
+        )
 
 
 class Lookup:

@@ -260,7 +260,6 @@ class NatDeployment:
         ]
         if len(candidates) > 1 or (own_subnet and candidates and own_subnet != candidates[0]):
             raise RuntimeError("NAT dedicated subnet identity is ambiguous")
-        own_subnet = own_subnet or (candidates[0] if candidates else "")
         with NatGatewaySDK(inputs["parent_id"]) as sdk:
             sdk.cpu_preset(inputs["platform"], inputs["preset"])
             image = sdk.image(
@@ -268,14 +267,10 @@ class NatDeployment:
             )
             if inputs["boot_disk_size_gib"] * 1024**3 < image.status.min_disk_size_bytes:
                 raise ValueError("NAT disk is smaller than the live image minimum")
-            if network:
-                sdk.validate_subnet_cidr(
-                    network, inputs["gateway_subnet_cidr"], own_subnet_id=own_subnet
+            if network and set(inputs["source_cidrs"]) != set(sdk.network_cidrs(network)):
+                raise RuntimeError(
+                    "NAT source ranges differ from the live network pools; review the network policy"
                 )
-                if set(inputs["source_cidrs"]) != set(sdk.network_cidrs(network)):
-                    raise RuntimeError(
-                        "NAT source ranges differ from the live network pools; review the network policy"
-                    )
 
     def prepare(self) -> None:
         if self.prepared:
@@ -296,6 +291,7 @@ class NatDeployment:
             return
         outputs = self.outputs()
         all_rows = {r["instance_id"]: r for r in payload["infra"]["components"]}
+        preview_needed = False
         managed_subnets = {
             identifier
             for r in all_rows.values()
@@ -337,6 +333,7 @@ class NatDeployment:
                     for policy in row["routing"]["policies"].values():
                         sdk.check_source_policy(policy, network)
                 if not record or record["intent"] != digest:
+                    preview_needed = True
                     previous = record
                     if previous:
                         self._assert_no_consumers(previous)
@@ -419,6 +416,15 @@ class NatDeployment:
                                     "Unfinished NAT Terraform attachment has drifted"
                                 )
                         self.overrides[key] = original
+        if preview_needed:
+            from .nat_gateway_address_plan import assess_config_address_space
+
+            report = assess_config_address_space(payload, sdk_factory=NatGatewaySDK)
+            self.executor.cli.progress_console.print(
+                report.message()
+                + " Preparation preview assumes new reservations; the fresh plan determines retained demand.",
+                markup=False,
+            )
         self.prepared = True
         self.assert_attachments()
         self._set_overrides()
@@ -464,6 +470,16 @@ class NatDeployment:
                     for resource in plan.get("resource_changes", [])
                 ):
                     self._validate_provisioning(row, outputs)
+            from .nat_gateway_address_plan import assess_plan_address_space
+
+            modules = {
+                (item["component_id"], item["instance_id"]): item["module_name"]
+                for item in self.executor.manifest.get("render", {}).get("module_sources", [])
+            }
+            report = assess_plan_address_space(to_plain_data(self.executor.config), plan, modules)
+            if report.capacities or report.status != "feasible":
+                self.executor.cli.progress_console.print(report.message(), markup=False)
+            report.require_feasible()
             check_plan_quotas(to_plain_data(self.executor.config), plan)
             assert self.state is not None
             for row in self.rows:

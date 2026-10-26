@@ -987,9 +987,63 @@ def test_prompt_component_with_checkboxes_tty_uses_key_navigation_without_contro
     titles = [choice["title"] for choice in captured["choices"]]
     assert selected == ["mk8s"]
     assert titles == ["mk8s  (mk8s)"]
+    assert captured["choices"][0]["checked"] is True
     assert "< Back" not in titles
     assert "< Quit wizard" not in titles
     assert "q=back; qq=quit" in str(captured["instruction"])
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("1,2", {"vm", "vpc"}),
+        ("vpc,vm", {"vm", "vpc"}),
+        ("all", {"vm", "vpc"}),
+        ("none", set()),
+        ("", set()),
+    ],
+)
+def test_prompt_component_scope_selection_resolves_text(monkeypatch, answer, expected):
+    entries = (
+        ComponentEntry(id="vm", scope="infra", config_path="infra.vm", description="VM"),
+        ComponentEntry(
+            id="internal",
+            scope="infra",
+            config_path="infra.internal",
+            description="internal",
+            selectable=False,
+        ),
+        ComponentEntry(id="vpc", scope="infra", config_path="infra.vpc", description="VPC"),
+    )
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: answer)
+
+    assert (
+        cli._prompt_component_scope_selection(action="add", scope="infra", entries=entries)
+        == expected
+    )
+
+
+@pytest.mark.parametrize("invalid", ["missing", "0", "3", "internal", "²"])
+def test_prompt_component_scope_selection_retries_invalid_text(monkeypatch, invalid):
+    entries = (
+        ComponentEntry(id="vm", scope="infra", config_path="infra.vm", description="VM"),
+        ComponentEntry(
+            id="internal",
+            scope="infra",
+            config_path="infra.internal",
+            description="internal",
+            selectable=False,
+        ),
+    )
+    answers = iter((invalid, "1"))
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(answers))
+
+    assert cli._prompt_component_scope_selection(action="add", scope="infra", entries=entries) == {
+        "vm"
+    }
+    assert list(answers) == []
 
 
 def test_resolve_component_ids_prints_interactive_selection_summary(monkeypatch) -> None:
@@ -3192,7 +3246,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_allocati
 
     class _ProviderLookup(ProviderOptionLookup):
         def __init__(self):
-            self._last_error = None
+            super().__init__()
 
         def resolve(self, *, provider, **kwargs):
             self._last_error = None
@@ -3310,7 +3364,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_subnet_l
 
     class _ProviderLookup(ProviderOptionLookup):
         def __init__(self):
-            self._last_error = None
+            super().__init__()
 
         def resolve(self, *, provider, **_kwargs):
             self._last_error = None

@@ -21,6 +21,7 @@ from .mk8s_node_groups import (
     iter_node_groups,
     legacy_mk8s_input_keys,
 )
+from .mk8s_placement import validate_node_placement
 
 _LINUX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _SOPERATOR_APP_ID = "soperator"
@@ -338,6 +339,7 @@ def _validate_mk8s_inputs(
             if not isinstance(raw_group, Mapping) or raw_group.get("enabled") is False:
                 continue
             _validate_mk8s_node_group_scale(base, str(raw_key), raw_group)
+            validate_node_placement(raw_group, path=f"{base}.node_groups.{raw_key}")
 
     if selected_gpu_enabled:
         for group in node_groups:
@@ -428,9 +430,7 @@ def _validate_mk8s_inputs(
             if "nccl" in unknown_keys:
                 hint = "; use acceptance-test benchmark for NCCL"
             raise ValueError(
-                f"{validation_label} has unsupported field(s): "
-                + ", ".join(unknown_keys)
-                + hint
+                f"{validation_label} has unsupported field(s): " + ", ".join(unknown_keys) + hint
             )
         operator_readiness = project_gpu_deployment_testing.get("operator_readiness", {})
         gpu_visibility = project_gpu_deployment_testing.get("gpu_visibility", {})

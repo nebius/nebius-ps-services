@@ -166,6 +166,11 @@ config.yaml
 Do not use Terraform as an in-cluster package manager. App charts belong to
 enabled built-in MK8s targets or onboarded Nebius MK8s targets in the project.
 An app-only bundle without a cluster target is unsupported.
+Infrastructure-only bundles, such as VPC networks and subnets with no cluster
+targets or apps, complete `deploy` after Terraform convergence and local baseline
+publication. They do not require Kubernetes access. Without an applicable API
+watcher, deployment status reports Terraform progress only; this is not an API
+connection failure.
 
 Use `component list/add/remove` for day-2 selection changes. `create` starts a
 project from scratch; overwriting an existing project can remove **all files in
@@ -199,7 +204,7 @@ Use `nebius-cxcli COMMAND --help` for all flags, defaults, and examples.
 | `create` | Deployments root | Create one project through the guided wizard |
 | `discover` | Deployments root | Discover local projects for deployment/CI; `--all` ignores the Git change filter |
 | `component list` | `--config CONFIG_YAML` | List selected components |
-| `component add` | Selectors and `--config CONFIG_YAML` | Add infrastructure or target-bound apps |
+| `component add` | Optional selectors and `--config CONFIG_YAML` | Add multiple infrastructure components and target-bound apps through the wizard |
 | `component remove` | Selectors and `--config CONFIG_YAML` | Remove component selections from configuration |
 | `validate` | `CONFIG_YAML` | Check configuration, readiness, networking, and live quota/capacity |
 | `validate-generated` | `GENERATED_PATH` | Validate the rendered bundle |
@@ -208,13 +213,29 @@ Use `nebius-cxcli COMMAND --help` for all flags, defaults, and examples.
 
 ```bash
 nebius-cxcli component list --config "$CONFIG"
+nebius-cxcli component add --config "$CONFIG"
 nebius-cxcli component add infra:vm --config "$CONFIG"
 nebius-cxcli validate "$CONFIG"
 nebius-cxcli render "$CONFIG" --force
 ```
 
+With no selectors, `component add` always shows Infra then Apps multi-select
+lists. Choose multiple components with Space and Enter, or use comma-separated
+IDs/indexes in the text prompt (`all` and `none` are also supported). Leave either
+section empty to skip it; leaving both empty makes no changes. Backtracking
+retains confirmed choices. The full field wizard configures the additions while
+preserving existing component settings. Apps require an existing or newly
+selected MK8s target; Soperator uses its dedicated command group. The command
+saves configuration only, so run `validate` and `render` before deployment.
+
 Review removals and the generated diff before applying them. `render --force`
 approves replacement of local generated artifacts, not a live-resource plan.
+
+The MK8s wizard offers None, Label, Taint, or Both for each new node group and
+saves native `node_labels` and `taints` in `config.yaml`. Managed VPC choices
+show confirmed existing resources once while preserving their bindings;
+unresolved ownership blocks automatic selection. See [cluster creation and
+placement](docs/mk8s.md#cluster-creation-and-node-placement).
 
 ```bash
 nebius-cxcli discover ./deployments --all
@@ -275,6 +296,11 @@ The opt-in [custom NAT gateway](docs/nat-gateway.md) also uses `deploy` for stag
 provisioning, trusted guest readiness, route activation and restoration. Its
 wizard discovers CPU-only presets and live quotas; defaults prefer
 `cpu-d3` / `4vcpu-16gb`. Terraform owns all resource creation and deletion.
+The gateway subnet defaults to an automatically allocated `/28`. Address-space
+previews allow well-formed drafts; deployment requires confirmed contiguous
+space for the fresh plan's combined reservations. Retained subnets and
+route-only restoration do not require spare capacity.
+Planned growth of a derived pool must also fit its upstream pool reservations.
 After a successful accepted Soperator deployment, ordinary app changes can use:
 
 ```bash

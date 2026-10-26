@@ -18,12 +18,31 @@ Use $nebius-capacity-planning to compare this design with my tenant's quotas.
 Use my selected human profile and keep all cloud inspection read-only.
 ```
 
-`-h` and `--help` return help without further reads or actions. Use `--tenant`,
-`--project` and `--profile` for explicit scope and existing identity; select
-`--quota-check` for read-only comparison or `--quota-request` for authorized
-human-account increase requests. `--quota-multiplier N` defaults to 1 and
-multiplies the incremental scenario envelope before adding current usage. The skill asks for an unspecified environment; CPU limits are
-workload-specific, and prices are included only when verifiable.
+The skill resolves explicit user amendments, an explicit design reference,
+conversation design, then `<selected-local-project>/docs` (current directory by
+default). It inventories components before asking for missing sizing inputs.
+An external document does not change the report destination. Generated capacity
+reports are historical evidence, never the primary design.
+
+```text
+$nebius-capacity-planning
+$nebius-capacity-planning ./project Dev/Test --tenant <tenant-id>
+$nebius-capacity-planning ./docs/design.md --tenant <tenant-id> --region all
+$nebius-capacity-planning --region <region-id>
+```
+
+Region defaults to `all`. A tenant automatically triggers read-only tenant quota
+and GPU-capacity checks, grouped by region. Without a tenant, assess public
+regional support without credentials. `--profile` selects existing identity;
+it never supplies tenant authority. `--project` is removed, without an alias;
+project-specific deployment checks belong to later provisioning.
+
+`-h` and `--help` show the complete interface without further reads or actions.
+`--quota-check` explicitly selects read-only comparison; `--quota-request`
+prepares increases and requires a concrete region plus explicit authority before
+submission. Default/all-region request mode prepares values only.
+`--quota-multiplier N` defaults to 1 and multiplies incremental quota demand,
+not current usage or the resources to provision.
 
 ## Output and boundaries
 
@@ -31,11 +50,18 @@ The normal output is `docs/nebius-capacity-planning.md` inside the selected
 project, beginning with an Executive Summary and linked TOC. The summary gives
 the selected profile, per-pool exact presets/counts/boot disks, storage and
 network allocations, external prerequisites, surge/growth and unresolved gates.
+Regions are alternative placements unless the design requires simultaneous
+multi-region deployment. Regional sections retain exclusions, documented support,
+tenant headroom, timestamped GPU advice and unresolved project/CPU capacity.
+External services remain dependencies, without other-cloud allocations.
 Split allocation tables retain a common component/workload/container key. Read-only and
 Plan Mode return the assessment in chat. Existing identifiable human notes are
 preserved. Infrastructure, credentials and manifests are unchanged; request
 mode submits approval requests, never edits allowances or approves them.
 
+All cloud-access scripts use the official Nebius Python SDK through the existing
+`nebius` owner. Reuse its tenant-only quota inspector and GPU capacity collector;
+do not use CLI subprocesses, raw HTTP adapters or a second authentication stack.
 Design-only assessment needs no cloud credentials, SDK, sibling skill or
 runtime hooks. Optional live inspection requires the separately available
 `nebius` skill, authorized existing authentication and its declared runtime.
@@ -49,6 +75,7 @@ simulate placement, determine effective quotas or contact cloud services.
 ## Files and validation
 
 - [SKILL.md](SKILL.md): public workflow, help and safety boundary.
+- [Input and scope](references/input-and-scope.md): design discovery, defaults and inspector handoff.
 - [Sizing methodology](references/sizing-methodology.md): evidence and accounting.
 - [Kubernetes sizing](references/kubernetes-sizing.md): resource semantics and scenarios.
 - [Nebius assessment](references/nebius-assessment.md): optional inspection and region decisions.
@@ -63,6 +90,7 @@ From this skill directory:
 ```bash
 python3 -B scripts/test_capacity.py
 python3 -B scripts/test_quota.py
+python3 -B scripts/test_scope.py
 python3 -B scripts/calculate_capacity.py < assets/example-capacity.json
 ```
 
@@ -83,6 +111,25 @@ for trigger checks and matched no-skill baseline runs for this new skill's
 quality cases; record those evidence states separately.
 
 ## Validation evidence
+
+Tenant and region workflow validation on 2026-10-26:
+
+| Lane | Evidence |
+| --- | --- |
+| Static and deterministic | `STATIC_PASS`: 27 capacity, 22 quota and 9 selector tests; 50 shared Nebius tests with pinned SDK serialization; portable/Codex/Claude structure, catalogs/specs and scoped lint. |
+| Distribution | Disposable skills CLI 1.5.26 discovery, copied-file parity, repeat installation and isolation passed for both changed skills on Codex and Claude. Real homes were unchanged. |
+| Output quality | Scoped `QUALITY_PASS`: two offline source-based helper assessments passed 10/10 independently graded assertions against 7/10 for the captured prior skill. |
+| Native triggering | `UNAVAILABLE`: the isolated runner lacks usable authentication. Definitions were checked; native invocation was not observed. |
+| Report persistence and cloud | `NOT_RUN`: these assessments returned chat reports. No report refresh, live tenant/API, quota request or workload-performance trial was performed. |
+
+The two quality cases exercise conversation-first inventory and default local
+design discovery with all-region tenant evidence. They cover locality,
+shortfalls, overlapping GPU advice, stale versus measured-zero evidence and
+the concrete-region submission guard. Both arms preserve the supplied quantities
+and user note in their response; this does not prove file-write preservation.
+The explicit-document and competing-design cases are defined but were not
+executed in this comparison. Independent code/security review found no blocking
+issues. CI now runs selector and shared SDK tests in addition to arithmetic.
 
 Source validation on 2026-10-20:
 
@@ -136,11 +183,11 @@ filesystem attachment preparation or preattached restore space.
 ## Quota mode examples
 
 ```text
-$nebius-capacity-planning ./project Dev/Test --tenant <tenant-id> --project <project-id> --profile <human-profile> --quota-check --quota-multiplier 2
-$nebius-capacity-planning ./project Dev/Test --tenant <tenant-id> --project <project-id> --profile <human-profile> --quota-request --quota-multiplier 2
+$nebius-capacity-planning ./project Dev/Test --tenant <tenant-id> --region <region-id> --profile <human-profile> --quota-check --quota-multiplier 2
+$nebius-capacity-planning ./project Dev/Test --tenant <tenant-id> --region <region-id> --profile <human-profile> --quota-request --quota-multiplier 2
 ```
 
-The second invocation explicitly authorizes approval-request submission for
+The second invocation selects a concrete region and explicitly authorizes approval-request submission for
 verified shortfalls. Pending requests do not increase usable quota. Two times
 means free headroom for two complete selected envelopes before deployment;
 permanent reserve and physical availability are not guaranteed. Missing optional

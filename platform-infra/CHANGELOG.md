@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Read VPC subnet CIDRs from supported private/public status pools instead of
+  deprecated status CIDR fields. Preserve the CIDR-list outputs, require Nebius
+  provider `>= 0.6.74, < 0.7.0` for this module, and refresh its minimal example lockfile.
+
 - Keep MK8s `service_account_ids` keys known during the initial plan by
   selecting configured accounts instead of filtering their apply-time IDs.
   Caller-owned IAM grants can use this output in `for_each` without a targeted

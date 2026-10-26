@@ -5262,7 +5262,7 @@ verified. Temporary working-byte comparison copies are task-owned and removed
 after verification; no generated trial artifacts enter reusable skill sources.
 
 <!-- /FEATURE: FEAT-026 -->
-<!-- FEATURE: FEAT-027 reqs=REQ-028 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-027 reqs=REQ-028 status=ready delivery=implemented priority=P1 version=5 -->
 ### FEAT-027: Six-domain Nebius skill and reusable SDK foundation
 
 #### Requirements Covered
@@ -5298,6 +5298,15 @@ planning does not establish credentials, run inspectors or execute provisioning
 preflight. Preserve known selectors as constraints; mark unresolved capacity,
 identity and availability as later checks. Preserve operational authorization
 and Terraform/Helm/cxcli/vpngw ownership; do not choose the AI/application stack.
+
+Version 5 adds a tenant-scoped GPU capacity inspector using the official
+Python SDK and existing runtime/report owner. Composite region/fabric/platform/
+preset identity supports complete bounded pagination; exact region filters
+are applied locally. Retain allocation type, state and effective time. Unknown,
+stale or untimestamped capacity remains null; fresh zero stays zero. Alternative
+preset counts are non-additive. Capacity advice does not establish CPU physical
+capacity, project eligibility or a creation guarantee. Existing quota inspection
+remains project-capable; capacity planning invokes its tenant-only raw mode.
 
 #### Selected Option
 
@@ -5348,6 +5357,14 @@ All six routes, guides, assets and local validation agree; code/security review
 findings are resolved and evidence boundaries are explicit.
 
 #### Implementation Evidence
+
+Version 5 adds the seventh read-only inspector, capacity guidance, trigger and
+quality definitions, and 11 capacity/tenant-only quota tests. The full 50-test
+suite passes with pinned SDK serialization; source metadata, local links,
+scoped lint, code/security review and disposable both-host distribution pass.
+The report-owning capacity skill has separate bounded output-quality evidence.
+No native routing or live API behavior is established by these offline tests.
+Earlier evidence below describes prior revisions.
 
 Version 4 adds a credential-free design-only consultation before the unchanged
 operational workflow. It returns provider constraints, service options,
@@ -8470,7 +8487,7 @@ qualification.
 
 <!-- /FEATURE: FEAT-045 -->
 
-<!-- FEATURE: FEAT-046 reqs=REQ-047 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-046 reqs=REQ-047 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-046: Nebius capacity assessment and report skill
 
 #### Requirements Covered
@@ -8502,15 +8519,65 @@ cost coverage and unresolved gates. Split allocation tables retain the same
 component/workload/container key. A linked TOC precedes the detailed assessment;
 risks, validation actions and source/calculation notes complete it.
 
-Quota modes add explicit tenant/project/profile selectors and a demand multiplier
+Quota modes expose explicit tenant/region/profile selectors and a demand multiplier
 (default one). Check mode remains read-only; request mode is authorized only by
 a direct user request and creates approval requests for verified shortfalls,
 never edits allowances or approves requests. An offline planner computes total
 limits from current usage plus the multiplied incremental scenario envelope.
-Human identity, project ancestry, current evidence, duplicate checks, one-shot
+Human identity, tenant scope, current evidence, duplicate checks, one-shot
 submission and independent receipt verification are mandatory. Public sources
 contain no internal request client or authentication machinery; unavailable
 request interfaces yield a prepared plan with explicit submission limits.
+
+#### Tenant and region workflow revision
+
+Current user amendments override an explicit design, then relevant conversation
+design, then discovery in the selected local directory's docs. External inputs
+do not relocate the report. Inventory precedes sizing questions and includes
+external dependencies without allocating other-cloud resources. A pure offline
+scope helper validates tenant/region/profile and quota modes; region defaults
+to all, project is rejected, and profile does not grant tenant authority.
+
+Tenant selection triggers read-only checks without requiring quota-check.
+Reuse the quota inspector with tenant-only raw JSON and omit its exact region
+filter for all. Add a Nebius-owned capacity inspector using the official Python
+SDK ResourceAdviceServiceClient and existing runtime/report primitives. Page
+with a validated region/fabric/platform/preset key; retain per-allocation data
+state and effective timestamp, preserve unknowns, and never sum overlapping
+preset advice. Keep cloud-access scripts SDK-only and arithmetic offline.
+
+Build coverage from current public regions and returned tenant region keys.
+Show restricted-region uncertainty, locality exclusions, missing evidence,
+global quotas and per-region totals. Candidate regions are alternatives unless
+the design explicitly distributes work. Tenant usage alone cannot prove reuse.
+Project eligibility and CPU physical capacity remain unverified. Reports retain
+known deficits and cost gaps independently of incomplete collection.
+
+All-region quota-request invocations only prepare values; submission requires
+one concrete region plus existing human-identity and request guards. Remove
+non-SDK scripted request fallbacks; absent SDK approval-request support permits
+an authorized console workflow or prepared manual values, never allowance
+mutation. No live requests are part of skill implementation validation.
+
+Implemented the offline selector helper, Nebius SDK capacity collector,
+source-discovery guidance, regional report contract, fixtures and CI wiring.
+Version 4 validation passes 27 capacity, 22 quota, nine selector and 50 shared
+Nebius tests, including real pinned SDK request serialization without RPCs.
+Portable/Codex/Claude structure, catalogs, paired specs, scoped lint and
+independent code/security review pass. Disposable skills CLI 1.5.26 discovery,
+copy parity, repeat installation and isolation pass for both changed skills
+on both hosts. Real installed homes are unchanged.
+
+Scoped QUALITY_PASS: two offline source-based helper assessments passed all
+10 independently graded assertions against seven for the captured prior skill.
+The cases cover inventory before sizing questions, all-region defaults,
+regional shortfalls, locality exclusions, non-additive/stale advice and the
+concrete-region request guard. Both preserve fixture quantities and user notes
+in chat. Other defined eval cases were not executed; file-write preservation
+is not proven. Native triggering is UNAVAILABLE without isolated runner
+authentication. Live tenant/API checks, request submission, report refresh and
+performance are NOT_RUN. REQ-047 remains active; delivery is implemented, not
+verified. Historical evidence below describes previous revisions.
 
 #### Selected Option
 
@@ -8526,9 +8593,7 @@ A mandatory cloud connection prevents useful design-stage estimates.
 
 #### Implementation Boundaries
 
-Own the new skill folder, catalog/plugin registration, this specification pair
-and release notes. Leave infrastructure, authentication, existing Nebius helpers
-and generic evaluation runners unchanged. Normal operation writes only the
+Own the capacity skill, the added Nebius SDK capacity inspector and its tests, affected CI/docs/evals, this specification pair and release notes. Reuse the existing tenant quota inspector and SDK runtime without changing their project-capable interfaces. Leave infrastructure, authentication and generic evaluation runners unchanged. Normal operation writes only the
 selected project's capacity report; explicitly requested quota submission is
 the sole additional cloud write. No-write contexts receive a chat report.
 

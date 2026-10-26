@@ -21,14 +21,14 @@
     {
       "id": 2,
       "prompt": "Review the synthetic quota fixture against the design demand. Return a read-only Nebius capacity assessment in chat; do not log in, use ambient agent credentials or call cloud APIs.",
-      "expected_output": "Preserve a known quota deficit and missing project scope, reject an unsupported preset, and distinguish a priced subtotal from total cost.",
+      "expected_output": "Preserve a known quota deficit and unchecked project eligibility, reject an unsupported preset, and distinguish a priced subtotal from total cost.",
       "files": [
         "evals/fixtures/quota-design.md"
       ],
       "assertions": [
         "Region-a CPU steady demand fits but surge demand is short by 8 vCPU; required tenant quota is at least 72 vCPU.",
-        "Region-b is not a verified recommendation because the required platform is unsupported in supplied project catalog.",
-        "Project quota and identity remain unresolved; tenant-only headroom does not become full sufficiency.",
+        "Region-b is not a verified recommendation because the required platform is unsupported in supplied regional documentation.",
+        "Tenant quota fit remains separate from unchecked project eligibility and unavailable selected identity.",
         "Uses incremental demand with existing usage, and does not count existing resources twice.",
         "Reports cost as a partial estimate with unpriced storage/network and no guaranteed physical CPU capacity.",
         "Does not change credentials, choose an arbitrary project, probe capacity by provisioning, or write files in this read-only invocation."
@@ -75,6 +75,58 @@
         "Missing human authentication blocks submission; agent credentials are never substituted.",
         "A timeout requires request list/get reconciliation, not blind retries; pending is not approved.",
         "Uses the quota report section to separate multiplier/envelope, request receipts, attribution limits and usable allowance readback; does not claim all report modes prohibit authorized requests."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use $nebius-capacity-planning on this conversation design: an API and PostgreSQL run on Nebius MK8s, nightly backups use Nebius Object Storage, ingress needs one public IP, and a model API runs outside Nebius. No environment or load measurements are settled. No tenant is selected. Return the initial assessment in chat without cloud access or writes; do not invent pricing or measurements.",
+      "expected_output": "A source-traceable inventory before sizing questions, with public/all-region scope and useful explicit uncertainty.",
+      "files": [],
+      "assertions": [
+        "Inventories API, database, cluster/workers, boot and persistent disks, object backups, ingress/egress and necessary operational dependencies before asking sizing questions.",
+        "Uses the conversation as design evidence, not a missing-file blocker, and does not invent an environment or final node count.",
+        "Defaults to all-region public-document scope without deriving a tenant from authentication; unavailable regional evidence is explicit.",
+        "Treats the external model API as a dependency with Nebius-side traffic, not Pods or another-cloud resource allocation."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use $nebius-capacity-planning for the selected local project evals/fixtures/regional-project with --tenant tenant-example --quota-request --quota-multiplier 1. Resolve the design from its docs. Use only supplied synthetic evidence; no cloud calls, authentication or writes. Return the report in chat, keeping the intended report destination explicit.",
+      "expected_output": "Tenant totals grouped by all regions, accurate CPU shortfall, non-additive GPU advice, locality exclusions and prepared requests without submission.",
+      "files": [
+        "evals/fixtures/regional-project/docs/design.md",
+        "evals/fixtures/regional-project/docs/nebius-capacity-planning.md"
+      ],
+      "assertions": [
+        "Discovers docs/design.md and rejects the old generated capacity report as primary design evidence.",
+        "Defaults to all regions, reports tenant totals, and shows region-b as excluded by locality rather than silently omitting it.",
+        "Reports region-a tenant CPU headroom 40 versus incremental scenario 48, deficit 8 and minimum total limit 72.",
+        "Does not sum the two GPU preset availability values into six VMs; stale reserved advice remains unresolved and fresh zero preemptible advice is measured zero.",
+        "Does not submit quota requests because region is all; requests require one concrete region plus human identity and existing authorization guards.",
+        "Marks project eligibility and CPU physical capacity unverified and keeps the report destination inside the selected local project."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use $nebius-capacity-planning with --profile selected-human --region region-a. The explicitly referenced design is an external document whose current contents are: an API on two Nebius VMs, one self-hosted database VM, 200 GiB of persistent database disk and nightly Object Storage backups. My current amendment replaces those two API VMs with three. Selected local project is ./local-project; its docs contain an older unrelated architecture and its existing capacity report has a note I wrote: Keep nightly backups. Do not access files or cloud services and do not write; describe the resolved input, scope, inventory and safe report refresh.",
+      "expected_output": "Explicit design plus user amendment, local output destination, no tenant inferred from profile, human-note preservation.",
+      "files": [],
+      "assertions": [
+        "Uses three API VMs from the amendment and retains the explicit self-hosted database architecture.",
+        "Does not switch to unrelated local docs or relocate output to the external document location.",
+        "Keeps public-document region-a scope; selected-human does not establish tenant authority.",
+        "Preserves the user-authored note verbatim and states no report was saved in read-only mode."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use $nebius-capacity-planning to inventory my Nebius design. Two supplied design documents are both explicitly designated canonical: one requires a CPU-only MK8s application in region-a; the other requires the same application on GPU VMs in region-b. Neither supersedes the other. No measurements or tenant were supplied. Work read-only with these excerpts; do not access files or cloud services.",
+      "expected_output": "Clarify the conflicting authorities while preserving useful common inventory and uncertainty.",
+      "files": [],
+      "assertions": [
+        "Identifies the incompatible compute architecture and locality requirements without silently merging or choosing one source.",
+        "Asks which canonical design governs before final allocation or ranking.",
+        "Can inventory the common application need but does not invent final presets, quantities or tenant access."
       ]
     }
   ]

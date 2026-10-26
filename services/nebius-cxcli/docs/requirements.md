@@ -952,6 +952,8 @@ validation, rendering, deployment and CI commands as every other project.
 
 - AC-022: Prepare, assess changes, deploy, verify and report a result through one shared path. Reuse successful invocation-local initialization and immutable preparation only for identical inputs and concrete runtime roots; restore the exact recovery generation before preflight. One raw Terraform observation supplies initial drift classification and semantic admission. A simple stage takes a second fresh execution plan immediately before apply, retaining scope/fence checks and independent post-stage/final verification. Distinct intermediate generations retain their own plans. No-op skips mutation but retains required readiness and acceptance. Dry-run wording is reserved for actual user previews; same-version settings changes are reconciliation. Effective application publication commits selected target bytes and compatibility evidence for the resulting complete execution bundle together. Recovery may correct stale private metadata only when unchanged authored intent and an authenticated target checkpoint prove every changed resource; unexplained changes remain blocked. Authored compatibility replay cannot reuse effective proof unless artifact bytes also match.
 
+- AC-023: Infrastructure-only bundles, including VPC-only configurations with no cluster targets or applications, complete deployment and publish the ordinary-app baseline after verified Terraform convergence without Kubernetes handoff. Explicit cluster target selection still fails when no target exists. Progress distinguishes absent API watcher coverage from failed API access. VPC subnet outputs use supported provider status pool CIDRs without deprecated-field reads.
+
 #### Negative Criteria
 
 - NC-001: Do not apply raw Terraform before identifying and establishing necessary Soperator maintenance.
@@ -1450,6 +1452,7 @@ Operators configure a reusable CPU-only NAT gateway through the normal component
 - AC-006: Prepare infrastructure before guest readiness and routing activation. Freeze stages and resume by observation. Strict trusted SSH verifies the exact instance; missing trust leaves provisioned resources unactivated. Report provider, guest, routing and end-to-end evidence separately.
 - AC-007: Store attachment preimages and operation progress in the protected regular Object Storage backend with conditional writes and cross-host locking. Restore and verify attachments before Terraform retirement, reject unknown consumers/drift, and guard direct Terraform/CI bypasses including resources removed from configuration.
 - AC-008: Provide NAT status and explicit configuration-only route refresh. Preserve existing generic infra and Soperator behavior, unrelated edits and secrets. Document single-VM outages and preserve allocations across VM replacement without automatic egress fallback.
+- AC-009: Assess usable contiguous private address space and aggregate all competing planned reservations before NAT provisioning. Complete scoped pool/allocation inventory and fresh Terraform actions distinguish feasible, insufficient and unresolved capacity; insufficient or unresolved capacity blocks new address demand while well-formed drafts remain savable. Retained subnets, VM-only replacement and route restoration require no extra subnet capacity. Account for occupied child pools and allocations, preserve pool-tree identity, and grant no capacity credit for pending deletion. Verify realized subnet CIDR and pool membership before route activation. Snapshot feasibility is not a reservation or provider allocation-order guarantee.
 
 #### Negative Criteria
 
@@ -1505,5 +1508,71 @@ Separate offline and installed-runtime proof from bounded read-only cloud
 qualification. Never use create or IAM reconciliation as a read-only smoke test.
 
 <!-- /REQUIREMENT: REQ-043 -->
+
+
+<!-- REQUIREMENT: REQ-044 status=active priority=P1 type=feature -->
+### REQ-044: Identity-aware VPC choices and declarative MK8s placement
+
+#### User Story
+
+Operators select deployed networks/subnets without duplicate planned entries and configure new MK8s node-group scheduling labels and taints through the wizard and config.yaml.
+
+#### Acceptance Criteria
+
+- AC-001: Reconcile configured VPC intent with exact recorded Terraform identities and complete project/network-scoped discovery. A verified existing managed resource appears once and keeps its component-output binding. New resources remain planned; unavailable or conflicting identity never implies absence or safe automatic selection.
+- AC-002: Read only the recorded backend state with existing credentials, bounded transport and a non-recovering manifest read. Match recorded module names and logical keys, reject state/output disagreement and scope mismatch, and never infer ownership from matching names or CIDRs.
+- AC-003: Each newly added plain MK8s node group offers None, Label, Taint or Both. Persist only native node_labels and taints fields; render and deploy them through the existing Terraform node template. None adds no custom placement fields. Preserve automatic labels and existing groups.
+- AC-004: Allow multiple labels/taints and choose NoSchedule, PreferNoSchedule or NoExecute, defaulting to NoSchedule and persisting provider enum spellings. Validate syntax, string types, duplicate keys or key/effect pairs, supported effects and provider-ignored node label keys before save/render. Cancel incomplete placement atomically.
+- AC-005: Display matching Pod selector/toleration examples as guidance only. These settings configure newly created nodes, including replacements and scale-out; they neither modify workloads nor reconcile existing live node objects.
+
+#### Negative Criteria
+
+- NC-001: No name-based resource adoption, discarded Terraform dependency, wizard Terraform initialization, credential creation, raw state output, compatibility shim, duplicate placement schema, app integration or implicit node rollout.
+
+#### Validation Method
+
+Trace provider discovery and recorded identity through selection, saved binding and rendered Terraform; trace wizard placement through saved YAML and node-template rendering.
+
+#### Test Method
+
+Exercise deployed/fresh/unresolved resources, state/output disagreement, authentication and scope failures, two-group placement, all modes/effects, malformed input and cancellation at every placement prompt.
+
+#### Evaluation Method
+
+Separate deterministic source and installed-source verification from independently authorized live deployment and scheduling evidence.
+
+<!-- /REQUIREMENT: REQ-044 -->
+
+<!-- REQUIREMENT: REQ-045 status=satisfied priority=P1 type=feature -->
+### REQ-045: Full add-only component selection wizard
+
+#### User Story
+
+Operators add multiple Infra and Apps components to an existing project in one interactive component-add invocation, preserving existing authored settings.
+
+#### Acceptance Criteria
+
+- AC-001: `component add --config <config.yaml>` without selectors always presents Infra then Apps multi-select sections from the active selectable catalog. Both start empty; either section may be empty, and both empty produce no write.
+- AC-002: Backtracking preserves confirmed selections. The text fallback resolves component IDs, displayed numeric indexes, all and none through the shared resolver restricted to selectable entries. Invalid input retries the same section.
+- AC-003: Reuse the existing naming, target selection, dependency expansion, source validation and full field wizard for additions. Apps require an existing or newly selected MK8s target; an invalid selection returns to Infra with choices retained. Existing lifecycle restrictions, including dedicated Soperator ownership, remain authoritative.
+- AC-004: Preserve explicit selectors and noninteractive behavior, existing-component values, repeated-instance rules and the config-only publication boundary. Selection cancellation does not write. The field wizard retains its existing guarded exit-and-save behavior; missing required fields prevent publication.
+
+#### Negative Criteria
+
+- NC-001: No whole-configuration editing/removal, new flags, compatibility path, schema migration, automatic render or deployment.
+
+#### Validation Method
+
+Trace omitted-selector input through both section prompts, normalization, add targets, the shared field wizard and the existing config writer.
+
+#### Test Method
+
+Cover mixed multi-selection, empty scopes, backtracking, text input validation, cancellation, target prerequisites, preservation and explicit-selector/noninteractive regressions.
+
+#### Evaluation Method
+
+Use deterministic CLI tests and terminal prompt checks; distinguish source verification from live cloud deployment evidence.
+
+<!-- /REQUIREMENT: REQ-045 -->
 
 <!-- maintain-project-specs:requirements:end -->

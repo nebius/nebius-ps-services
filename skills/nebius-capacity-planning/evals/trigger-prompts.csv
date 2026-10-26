@@ -12,7 +12,11 @@ case-10,false,Diagnose why my existing Kubernetes deployment is being OOM killed
 case-11,false,Compare AWS and Azure architectures for this product; Nebius is out of scope.
 case-12,false,Configure Nebius user credentials and grant permission to read quotas.
 case-13,true,"Assess our Nebius Dev/Test design and put exact node pools, presets, boot disks, storage and network needs in an opening provisioning summary, with per-container allocations."
-case-14,true,Use the existing capacity report with --tenant <tenant-id> --project <project-id> --quota-check --quota-multiplier 2. Keep cloud access read-only.
+case-14,true,Use the existing capacity report with --tenant <tenant-id> --region <region-id> --quota-check --quota-multiplier 2. Keep cloud access read-only.
 case-15,true,Use --quota-request to request only the verified shortfalls for twice this design sizing using my existing human IAM profile.
 case-16,false,Approve all pending quota requests in my tenant and change its IAM roles.
 case-17,true,Check this capacity plan for a tenant only; project selection is not yet decided and my human authentication is unavailable.
+case-18,true,Use the design from our conversation to inventory everything we must provision on Nebius; traffic measurements are not available yet.
+case-19,true,"Assess the design under this folder’s docs for tenant <tenant-id>, compare all regions by default, and show tenant totals grouped by region."
+case-20,true,Compare this Nebius design with --tenant <tenant-id> --region all using the official Python SDK and no project selection.
+case-21,false,List timestamped GPU capacity advice for this Nebius tenant using the SDK; no application design or sizing is involved.

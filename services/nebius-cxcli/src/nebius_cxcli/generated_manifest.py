@@ -179,30 +179,37 @@ def write_generated_manifest(
     )
 
 
-def load_generated_manifest(generated_dir: Path) -> dict[str, Any]:
+def load_generated_manifest(generated_dir: Path, *, read_only: bool = False) -> dict[str, Any]:
     from .deployment_recovery import is_deployment_preview
 
-    if not is_deployment_preview():
+    path = manifest_path_for_generated_dir(generated_dir)
+    content: bytes | None = None
+    if not read_only and not is_deployment_preview():
         recover_project_bundle(generated_dir.parent)
     else:
         from .project_bundle_transaction import ProjectBundleTransaction
 
-        ProjectBundleTransaction(generated_dir.parent).snapshot_preimages(
-            [manifest_path_for_generated_dir(generated_dir)], read_only=True
+        snapshot = ProjectBundleTransaction(generated_dir.parent).snapshot_preimages(
+            [path], read_only=True
         )
-    path = manifest_path_for_generated_dir(generated_dir)
-    if not path.exists():
+        content = snapshot[path].content
+    if content is None and not path.exists():
         raise ValueError(
             f"Generated manifest not found: {path}. Rerun `nebius-cxcli render <config.yaml>` first."
         )
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    if content is None:
+        if read_only or is_deployment_preview():
+            raise ValueError("Generated manifest changed during read-only inspection")
+        content = path.read_bytes()
+    payload = json.loads(content)
     if not isinstance(payload, dict):
         raise ValueError(f"Generated manifest root must be a mapping: {path}")
     if payload.get("schema") != GENERATED_MANIFEST_SCHEMA:
         raise ValueError(
             f"Unsupported generated manifest schema in {path}: {payload.get('schema')!r}"
         )
-    if not isinstance(payload.get("execution", {}).get("backend"), dict):
+    execution = payload.get("execution")
+    if not isinstance(execution, Mapping) or not isinstance(execution.get("backend"), dict):
         raise ValueError("Generated manifest is missing its frozen execution backend; rerender")
     return payload
 

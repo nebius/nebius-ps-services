@@ -300,6 +300,7 @@ from .mk8s_node_groups import (
 from .mk8s_node_groups import (
     gpu_enabled as mk8s_gpu_enabled,
 )
+from .mk8s_placement import prompt_node_placement
 from .mk8s_preflight import (
     has_mk8s_gpu_stack_compatibility_preflight_targets,
     has_mk8s_resource_name_preflight_targets,
@@ -976,6 +977,18 @@ from .upgrade_wizard import (
     recommended_choice_value,
     soperator_compatibility_choice_for_hop,
     soperator_group_override,
+)
+from .vpc_choices import (
+    PLANNED_BINDING_TOKEN_PREFIX as _PLANNED_BINDING_TOKEN_PREFIX,
+)
+from .vpc_choices import (
+    PlannedBindingRef as _PlannedBindingRef,
+)
+from .vpc_choices import (
+    parse_planned_vpc_ref as _parse_planned_vpc_ref,
+)
+from .vpc_choices import (
+    resolve_wizard_provider_choices,
 )
 from .wireguard_clients import (
     WireGuardClientGenerationRequest,
@@ -20137,18 +20150,32 @@ def _prompt_component_scope_selection(
     action: str,
     scope: ComponentScope,
     entries: tuple[ComponentEntry, ...],
+    defaults: set[str] | None = None,
 ) -> set[str]:
-    if not entries:
+    selectable_entries = tuple(entry for entry in entries if entry.selectable)
+    if not selectable_entries:
         console.print(
             f"{_component_selector_scope_label(scope)} components available to {action}: (none)"
         )
         return set()
-    selected = _prompt_component_with_checkboxes(
-        scope=scope,
-        entries=entries,
-        defaults=set(),
-    )
-    selected_ids = {token for token in selected if token}
+    selected_defaults = set(defaults or ()) & {entry.id for entry in selectable_entries}
+    while True:
+        selected = _prompt_component_with_checkboxes(
+            scope=scope,
+            entries=selectable_entries,
+            defaults=selected_defaults,
+        )
+        try:
+            selected_ids = _resolve_component_ids_from_tokens(
+                scope=scope,
+                tokens=selected,
+                entries=selectable_entries,
+                defaults=selected_defaults,
+            )
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"{error_markup('Invalid selection:')} {exc}")
+            continue
+        break
     _print_component_scope_selection_summary(
         scope=scope,
         selected=selected_ids,
@@ -20480,7 +20507,6 @@ _NETWORK_ONLY_INFRA_COMPONENT_IDS = frozenset({"managed-postgresql"})
 _NETWORK_ATTACHED_INFRA_COMPONENT_IDS = (
     _SUBNET_ATTACHED_INFRA_COMPONENT_IDS | _NETWORK_ONLY_INFRA_COMPONENT_IDS
 )
-_PLANNED_BINDING_TOKEN_PREFIX = "planned:"
 
 
 def _parse_vpc_id_overrides(
@@ -20531,66 +20557,6 @@ def _parse_vpc_id_overrides(
     if bare_values and scoped_values:
         raise RuntimeError(f"Do not mix bare and scoped {option_name} values in one command.")
     return tuple(bare_values), scoped_values
-
-
-@dataclass(frozen=True)
-class _PlannedBindingRef:
-    source_instance: str
-    source_output: str
-    key: str | None = None
-    attribute: str | None = None
-
-
-def _parse_planned_vpc_ref(value: str, *, option_name: str, field_name: str) -> _PlannedBindingRef:
-    token = value.strip()
-    if token.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
-        token = token[len(_PLANNED_BINDING_TOKEN_PREFIX) :]
-    component_selector, separator, output_selector = token.partition(".")
-    component_raw, instance_separator, instance_raw = component_selector.partition("@")
-    component_id = normalize_component_token(component_raw)
-    instance_id = normalize_component_token(instance_raw) if instance_separator else ""
-    if component_id != "vpc" or not instance_separator or not instance_id:
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Expected 'vpc@<vpc-instance>.<output>'."
-        )
-    if not INSTANCE_ID_PATTERN.fullmatch(instance_id):
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. VPC instance id must use lowercase letters, digits, and hyphens."
-        )
-    output_parts = [part.strip() for part in output_selector.split(".") if part.strip()]
-    if not separator or not output_parts:
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Expected 'vpc@<vpc-instance>.<output>'."
-        )
-    output_name = output_parts[0].replace("-", "_").lower()
-    if field_name == "network_id":
-        if output_name != "network_id" or len(output_parts) != 1:
-            raise RuntimeError(
-                f"Invalid {option_name} value '{value}'. Network refs must use "
-                "'vpc@<vpc-instance>.network_id'."
-            )
-        return _PlannedBindingRef(source_instance=instance_id, source_output="network_id")
-    if output_name != "subnets" or len(output_parts) != 3:
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Subnet refs must use "
-            "'vpc@<vpc-instance>.subnets.<subnet-key>.id'."
-        )
-    subnet_key = output_parts[1]
-    attribute = output_parts[2].replace("-", "_")
-    if not subnet_key or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", attribute):
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Subnet key and attribute must be non-empty."
-        )
-    if attribute != "id":
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Subnet refs for subnet_id must end in '.id'."
-        )
-    return _PlannedBindingRef(
-        source_instance=instance_id,
-        source_output="subnets",
-        key=subnet_key,
-        attribute=attribute,
-    )
 
 
 def _selected_infra_rows_for_vpc_override(
@@ -24122,13 +24088,16 @@ def _wizard_field_provider_default_value(
         full_path_label=full_path_label,
         args=args,
     )
-    choices = provider_lookup.resolve(
+    choices = resolve_wizard_provider_choices(
+        read_field=_read_payload_field,
+        entry=entry,
+        provider_lookup=provider_lookup,
         provider=provider,
         args=args,
         payload=payload,
-        field_path=full_path_label,
+        full_path_label=full_path_label,
     )
-    if not choices:
+    if not choices or provider_lookup.vpc_diagnostics(full_path_label):
         return _WIZARD_DEFAULT_MISSING
     if _is_string_sequence_type_hint(type_hint):
         return [choice.value for choice in choices if choice.value]
@@ -24178,21 +24147,15 @@ def _resolve_dynamic_field_choices(
         choices: list[OptionChoice] = []
         seen: set[str] = set()
         for provider, args in provider_specs:
-            provider_choices = provider_lookup.resolve(
+            provider_choices = resolve_wizard_provider_choices(
+                read_field=_read_payload_field,
+                entry=entry,
+                provider_lookup=provider_lookup,
                 provider=provider,
                 args=args,
                 payload=payload,
-                field_path=full_path_label,
+                full_path_label=full_path_label,
             )
-            if provider in {"project_networks", "project_subnets"}:
-                provider_choices = _combined_vpc_choices(
-                    payload=payload,
-                    entry=entry,
-                    full_path_label=full_path_label,
-                    provider=provider,
-                    args=args,
-                    live_choices=provider_choices,
-                )
             for item in provider_choices:
                 if item.value in seen:
                     continue
@@ -24222,11 +24185,14 @@ def _resolve_dynamic_field_choices(
                 full_path_label=full_path_label,
                 args=resolved_args,
             )
-            provider_choices = provider_lookup.resolve(
+            provider_choices = resolve_wizard_provider_choices(
+                read_field=_read_payload_field,
+                entry=entry,
+                provider_lookup=provider_lookup,
                 provider=provider,
                 args=resolved_args,
                 payload=payload,
-                field_path=full_path_label,
+                full_path_label=full_path_label,
             )
             for item in provider_choices:
                 if item.value in seen:
@@ -24261,144 +24227,6 @@ def _provider_sources_for_field(
 ) -> tuple[str, ...]:
     specs = _provider_source_specs_for_field(entry=entry, full_path_label=full_path_label)
     return tuple(dict.fromkeys(provider for provider, _args in specs))
-
-
-def _planned_vpc_rows(payload: dict[str, Any]) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
-    infra = payload.get("infra")
-    components = infra.get("components") if isinstance(infra, Mapping) else None
-    if not isinstance(components, list):
-        return []
-    rows: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
-    for row in components:
-        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
-            continue
-        if component_type_id(row) != "vpc":
-            continue
-        instance_id = component_instance_id(row)
-        if not instance_id:
-            continue
-        inputs = row.get("inputs")
-        if not isinstance(inputs, dict):
-            inputs = {}
-        rows.append((row, instance_id, inputs))
-    return rows
-
-
-def _planned_network_choice(instance_id: str, inputs: Mapping[str, Any]) -> OptionChoice:
-    network = inputs.get("network")
-    name = ""
-    if isinstance(network, Mapping):
-        name = _non_empty_text(network.get("name"))
-    label_name = name or instance_id
-    return OptionChoice(
-        value=f"{_PLANNED_BINDING_TOKEN_PREFIX}vpc@{instance_id}.network_id",
-        label=f"planned: {label_name}  (infra:vpc@{instance_id})",
-        metadata={"planned": True, "component": "vpc", "instance_id": instance_id},
-    )
-
-
-def _planned_subnet_choices_for_vpc(
-    *,
-    instance_id: str,
-    inputs: Mapping[str, Any],
-) -> list[OptionChoice]:
-    subnets = inputs.get("subnets")
-    if not isinstance(subnets, Mapping):
-        return []
-    choices: list[OptionChoice] = []
-    for subnet_key, subnet_value in subnets.items():
-        key = str(subnet_key).strip()
-        if not key:
-            continue
-        name = ""
-        cidrs: list[str] = []
-        if isinstance(subnet_value, Mapping):
-            name = _non_empty_text(subnet_value.get("name"))
-            raw_cidrs = subnet_value.get("ipv4_private_cidrs")
-            if isinstance(raw_cidrs, list):
-                cidrs = [str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip()]
-        suffix = f" ({', '.join(cidrs)})" if cidrs else ""
-        label_name = name or key
-        choices.append(
-            OptionChoice(
-                value=(f"{_PLANNED_BINDING_TOKEN_PREFIX}vpc@{instance_id}.subnets.{key}.id"),
-                label=f"planned: {label_name}  (infra:vpc@{instance_id}.subnets.{key}){suffix}",
-                metadata={
-                    "planned": True,
-                    "component": "vpc",
-                    "instance_id": instance_id,
-                    "subnet_key": key,
-                    "private_cidrs": tuple(cidrs),
-                },
-            )
-        )
-    return choices
-
-
-def _combined_vpc_choices(
-    *,
-    payload: dict[str, Any],
-    entry: ComponentEntry,
-    full_path_label: str,
-    provider: str,
-    args: Mapping[str, Any],
-    live_choices: list[OptionChoice],
-) -> list[OptionChoice]:
-    choices = list(live_choices)
-    seen = {choice.value for choice in choices}
-    planned: list[OptionChoice] = []
-    if provider == "project_networks":
-        include_planned_networks = not (
-            entry.scope == "infra"
-            and entry.id == "vpc"
-            and full_path_label.endswith(".inputs.network.existing_id")
-        )
-        if include_planned_networks:
-            for _row, instance_id, inputs in _planned_vpc_rows(payload):
-                network = inputs.get("network")
-                existing_id = ""
-                if isinstance(network, Mapping):
-                    existing_id = _non_empty_text(network.get("existing_id"))
-                if existing_id:
-                    continue
-                planned.append(_planned_network_choice(instance_id, inputs))
-    elif provider == "project_subnets":
-        network_id_path = _non_empty_text(args.get("network_id_path"))
-        selected_network = (
-            _non_empty_text(_read_payload_field(payload, network_id_path))
-            if network_id_path
-            else _non_empty_text(args.get("network_id"))
-        )
-        if selected_network:
-            selected_planned_ref: _PlannedBindingRef | None = None
-            if selected_network.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
-                try:
-                    selected_planned_ref = _parse_planned_vpc_ref(
-                        selected_network,
-                        option_name="planned network choice",
-                        field_name="network_id",
-                    )
-                except RuntimeError:
-                    selected_planned_ref = None
-            for _row, instance_id, inputs in _planned_vpc_rows(payload):
-                network = inputs.get("network")
-                existing_id = ""
-                if isinstance(network, Mapping):
-                    existing_id = _non_empty_text(network.get("existing_id"))
-                if selected_planned_ref is not None:
-                    if instance_id != selected_planned_ref.source_instance:
-                        continue
-                elif existing_id != selected_network:
-                    continue
-                planned.extend(
-                    _planned_subnet_choices_for_vpc(instance_id=instance_id, inputs=inputs)
-                )
-    for choice in planned:
-        if choice.value in seen:
-            continue
-        choices.append(choice)
-        seen.add(choice.value)
-    return choices
 
 
 def _private_ipv4_network(value: str) -> ipaddress.IPv4Network | None:
@@ -25077,11 +24905,14 @@ def _provider_allowed_values_for_field(
 
     allowed: set[str] = set()
     for provider, resolved_args in provider_specs:
-        for item in provider_lookup.resolve(
+        for item in resolve_wizard_provider_choices(
+            read_field=_read_payload_field,
+            entry=entry,
+            provider_lookup=provider_lookup,
             provider=provider,
             args=resolved_args,
             payload=payload,
-            field_path=full_path_label,
+            full_path_label=full_path_label,
         ):
             allowed.update(_provider_choice_allowed_values(item))
     return allowed, providers
@@ -25092,6 +24923,9 @@ def _provider_choice_allowed_values(choice: OptionChoice) -> set[str]:
     value = str(choice.value).strip()
     if value:
         values.add(value)
+    live_id = choice.metadata.get("live_id")
+    if isinstance(live_id, str) and live_id:
+        values.add(live_id)
     if bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
         preset = _non_empty_text(choice.metadata.get("preset"))
         if preset:
@@ -25515,8 +25349,11 @@ def _provider_required_live_options_error(
         f"via provider source(s): {provider_names}."
     )
     if provider_lookup is not None:
+        diagnostics = provider_lookup.vpc_diagnostics(field_path_label)
         last_error = provider_lookup.last_error()
-        if last_error:
+        if diagnostics:
+            message += " " + " ".join(diagnostics)
+        elif last_error:
             message += f" {last_error}"
     message += (
         " Resolve live project access or pass explicit --network-id/--subnet-id "
@@ -25823,7 +25660,7 @@ def _choice_by_value(
     if not selected:
         return None
     for choice in choices or ():
-        if choice.value == selected:
+        if choice.value == selected or choice.metadata.get("live_id") == selected:
             return choice
     return None
 
@@ -29868,44 +29705,16 @@ def _run_component_field_wizard(
                 return ()
             return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
 
-        def _planned_vpc_subnet_cidrs(value: str) -> tuple[str, ...]:
-            try:
-                binding_ref = _parse_planned_vpc_ref(
-                    value,
-                    option_name="planned subnet choice",
-                    field_name="subnet_id",
-                )
-            except RuntimeError:
-                return ()
-            if binding_ref.key is None:
-                return ()
-            for _row, instance_id, inputs in _planned_vpc_rows(payload):
-                if instance_id != binding_ref.source_instance:
-                    continue
-                subnet = read_component_path(inputs, f"subnets.{binding_ref.key}")
-                if not isinstance(subnet, Mapping):
-                    return ()
-                raw_cidrs = subnet.get("ipv4_private_cidrs")
-                if not isinstance(raw_cidrs, Sequence) or isinstance(raw_cidrs, str):
-                    return ()
-                return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
-            return ()
-
         def _selected_cluster_subnet_cidrs() -> tuple[str, ...]:
             subnet_label = f"{component_path_label}.inputs.cluster.subnet_id"
             subnet_id = _non_empty_text(_read_payload_field(payload, subnet_label))
             if not subnet_id:
                 return ()
-            if subnet_id.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
-                return _planned_vpc_subnet_cidrs(subnet_id)
-
-            network_id = _non_empty_text(
-                _read_payload_field(payload, f"{component_path_label}.inputs.cluster.network_id")
-            )
-            subnet_choices = _mk8s_provider_choices(
-                provider="project_subnets",
-                args={"network_id": network_id} if network_id else {},
-                field_path=subnet_label,
+            subnet_choices = _resolve_dynamic_field_choices(
+                payload=payload,
+                entry=entry,
+                full_path_label=subnet_label,
+                provider_lookup=provider_lookup,
             )
             return _choice_private_cidrs(_choice_by_value(subnet_choices, subnet_id))
 
@@ -30041,6 +29850,19 @@ def _run_component_field_wizard(
                     group_prefix=group_prefix,
                     node_count=int(node_count),
                 )
+
+            placement, status = prompt_node_placement(
+                prefix=group_prefix,
+                group_name=group_key,
+                prompt=_prompt_loop_value,
+                emit=lambda message: console.print(escape(message)),
+            )
+            if status != "ok":
+                _restart_group_creation(group_key)
+                if status == "quit":
+                    return None, True
+                continue
+            group.update(placement)
 
             resource, status = _prompt_loop_value(
                 f"{group_prefix}.resource",
@@ -32584,25 +32406,28 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     provider_lookup=provider_lookup,
                 )
-                if (
-                    _provider_auto_select_single_enabled(
-                        entry=entry,
-                        full_path_label=full_path_label,
+                if not (provider_lookup and provider_lookup.vpc_diagnostics(full_path_label)) and (
+                    (
+                        _provider_auto_select_single_enabled(
+                            entry=entry,
+                            full_path_label=full_path_label,
+                        )
+                        and len(field_choices) == 1
+                        and not _has_required_prompt_value(
+                            current,
+                            type_hint=field_type_hints.get(full_path_label),
+                        )
                     )
-                    and len(field_choices) == 1
-                    and not _has_required_prompt_value(
-                        current,
-                        type_hint=field_type_hints.get(full_path_label),
-                    )
-                ) or (
-                    _provider_auto_select_first_enabled(
-                        entry=entry,
-                        full_path_label=full_path_label,
-                    )
-                    and field_choices
-                    and not _has_required_prompt_value(
-                        current,
-                        type_hint=field_type_hints.get(full_path_label),
+                    or (
+                        _provider_auto_select_first_enabled(
+                            entry=entry,
+                            full_path_label=full_path_label,
+                        )
+                        and field_choices
+                        and not _has_required_prompt_value(
+                            current,
+                            type_hint=field_type_hints.get(full_path_label),
+                        )
                     )
                 ):
                     current = field_choices[0].value
@@ -32610,8 +32435,25 @@ def _run_component_field_wizard(
                     full_path_label,
                     (set(), ()),
                 )
+                vpc_diagnostics = (
+                    provider_lookup.vpc_diagnostics(full_path_label) if provider_lookup else ()
+                )
+                for diagnostic in vpc_diagnostics:
+                    console.print(warning_markup(escape(diagnostic)))
+                if any(
+                    source in {"project_networks", "project_subnets"}
+                    for source in _provider_sources_for_field(
+                        entry=entry, full_path_label=full_path_label
+                    )
+                ):
+                    allowed_provider_values, providers = set(), ()
                 if field_choices:
-                    allowed_provider_values = {choice.value for choice in field_choices}
+                    allowed_provider_values = set().union(
+                        *(_provider_choice_allowed_values(choice) for choice in field_choices)
+                    )
+                    selected_current = _choice_by_value(field_choices, current)
+                    if selected_current is not None:
+                        current = selected_current.value
                     providers = _provider_sources_for_field(
                         entry=entry,
                         full_path_label=full_path_label,
@@ -34778,6 +34620,8 @@ def _materialize_singleton_provider_defaults(
                 full_path_label=full_path_label,
                 provider_lookup=provider_lookup,
             )
+            if provider_lookup.vpc_diagnostics(full_path_label):
+                continue
             if auto_select_single and len(choices) != 1:
                 continue
             if auto_select_first and not choices:
@@ -34853,6 +34697,11 @@ def _require_vpc_networking_for_noninteractive(
                     )
                 )
             )
+            diagnostics = provider_lookup.vpc_diagnostics(field_label)
+            if diagnostics:
+                raise RuntimeError(
+                    "Cannot automatically select VPC networking: " + " ".join(diagnostics)
+                )
             if len(choices) == 1:
                 _set_payload_value_creating_containers(payload, field_path, choices[0].value)
                 continue
@@ -52496,8 +52345,8 @@ def component_add_command(
             help=(
                 "Optional infra module or app chart selector(s) to add. Use "
                 "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', or "
-                "'<id>@<resource-name-or-target-id>'. Omit to prompt "
-                "interactively. Pass the project config with --config; config.yaml "
+                "'<id>@<resource-name-or-target-id>'. Omit to select multiple Infra "
+                "and Apps components interactively. Pass the project config with --config; config.yaml "
                 "is not a positional argument. The app scope prefix is plural "
                 "'apps:', not 'app:'. "
                 "For target-bound app charts, use 'apps:<app-id>@<target-id>' "
@@ -52621,6 +52470,12 @@ def component_add_command(
 ) -> None:
     """Add source-defined components to an existing project config.yaml.
 
+    Omit component selectors to choose multiple Infra components, then multiple
+    Apps components, and configure the additions through the full field wizard.
+    Leave either selection empty to skip it. Existing component settings are
+    preserved. Apps require an existing or newly selected MK8s target.
+    This command saves configuration only; validate and render before deployment.
+
     Flags:
 
       --config <config.yaml>
@@ -52689,6 +52544,7 @@ def component_add_command(
             option_name="--app-version",
         )
         provider_lookup = ProviderOptionLookup()
+        provider_lookup.configure_vpc_identity(_paths)
         provider_scope_validated = False
 
         def _ensure_provider_scope_validated() -> None:
@@ -52724,42 +52580,31 @@ def component_add_command(
 
         raw_tokens = _split_multi_value_tokens(component_ids)
         if not raw_tokens and interactive_mode:
+            requested_infra: set[str] = set()
+            requested_apps: set[str] = set()
             while True:
                 try:
                     requested_infra = _prompt_component_scope_selection(
                         action="add",
                         scope="infra",
                         entries=infra_entries,
+                        defaults=requested_infra,
                     )
                 except (_WizardBackRequested, _WizardQuitRequested):
                     console.print("No component changes applied.")
                     return
-                requested_apps: set[str] = set()
-                select_apps = not requested_infra
-                if requested_infra:
-                    apps_decision = _wizard_continue_phase(
-                        "Select apps components to add too?",
-                        default=None,
-                        allow_back=True,
+                try:
+                    requested_apps = _prompt_component_scope_selection(
+                        action="add",
+                        scope="apps",
+                        entries=app_entries,
+                        defaults=requested_apps,
                     )
-                    if _wizard_phase_back_requested(apps_decision):
-                        continue
-                    if _wizard_phase_stop_requested(apps_decision):
-                        console.print("No component changes applied.")
-                        return
-                    select_apps = bool(apps_decision)
-                if select_apps:
-                    try:
-                        requested_apps = _prompt_component_scope_selection(
-                            action="add",
-                            scope="apps",
-                            entries=app_entries,
-                        )
-                    except _WizardBackRequested:
-                        continue
-                    except _WizardQuitRequested:
-                        console.print("No component changes applied.")
-                        return
+                except _WizardBackRequested:
+                    continue
+                except _WizardQuitRequested:
+                    console.print("No component changes applied.")
+                    return
                 app_target_issue = _app_selection_without_cluster_target_issue(
                     selected_infra=set(enabled_infra) | requested_infra,
                     selected_apps=set(enabled_apps) | requested_apps,

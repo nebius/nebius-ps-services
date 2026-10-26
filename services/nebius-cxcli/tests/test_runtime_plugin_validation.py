@@ -682,6 +682,50 @@ def test_runtime_validation_plugins_allow_mk8s_autoscaling_node_groups(
     )
 
 
+@pytest.mark.parametrize(
+    "placement",
+    [
+        {"node_labels": {"scheduling.example.com/pool": 7}},
+        {"node_labels": {"kubernetes.io/role": "core"}},
+        {"taints": [{"key": "pool", "value": "task", "effect": "NoSchedule"}]},
+    ],
+)
+def test_runtime_validation_rejects_invalid_authored_node_placement(monkeypatch, placement):
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "tasks": {
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "node_count": 4,
+                                **placement,
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    }
+    with pytest.raises(ValueError, match=r"node_groups\.tasks\.(node_labels|taints)"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
 def test_runtime_validation_plugins_reject_mk8s_node_count_with_autoscaling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

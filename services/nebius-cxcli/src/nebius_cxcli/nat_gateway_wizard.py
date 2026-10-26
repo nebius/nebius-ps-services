@@ -158,8 +158,6 @@ def configure_nat(
         inputs["gateway_subnet_cidr"] = ask(
             "inputs.gateway_subnet_cidr", inputs.get("gateway_subnet_cidr", "/28")
         )
-        if network_id:
-            sdk.validate_subnet_cidr(network_id, inputs["gateway_subnet_cidr"])
         inputs["ssh_user_name"] = ask("inputs.ssh_user_name", inputs.get("ssh_user_name", "ubuntu"))
         inputs["ssh_public_key"] = ask("inputs.ssh_public_key", inputs.get("ssh_public_key"))
         inputs["admin_cidrs"] = ask(
@@ -237,6 +235,14 @@ def configure_nat(
         for r in candidate["infra"]["components"]
     ]
     validate_nat_config(candidate)
+    from .nat_gateway_address_plan import assess_config_address_space
+
+    capacity = assess_config_address_space(candidate, sdk_factory=sdk_factory)
+    emit(capacity.message())
+    emit(
+        "Address preview assumes new reservations. The fresh deployment plan checks retained resources; "
+        "insufficient or unresolved new capacity blocks provisioning, but this draft can be saved."
+    )
     report = assess_live_quotas(candidate, context="NAT wizard")
     for line in format_quota_report_lines(report, phase="wizard", markup=False):
         emit(line)

@@ -407,6 +407,14 @@ def manager_fixture(monkeypatch, *, current="table-original", enabled=True, owne
         def network_cidrs(self, *args):
             return ["10.0.0.0/8"]
 
+        def network(self, *args):
+            return NS(spec=NS(ipv4_private_pools=NS(pools=[NS(id="pool")])))
+
+        def address_pool(self, identity, **kwargs):
+            from nebius_cxcli.nat_gateway_address_space import AddressBlock, AddressPool, IPv4
+
+            return AddressPool(identity, (AddressBlock(IPv4("10.0.0.0/8")),))
+
         def check_source_policy(self, *args):
             effects.append("source")
 
@@ -432,7 +440,11 @@ def manager_fixture(monkeypatch, *, current="table-original", enabled=True, owne
     executor = NS(
         config=payload,
         paths=NS(infra_dir="fixture"),
-        cli=NS(terraform_show_json=lambda *a, **kw: {}, _terraform_state_resources=lambda raw: []),
+        cli=NS(
+            terraform_show_json=lambda *a, **kw: {},
+            _terraform_state_resources=lambda raw: [],
+            progress_console=NS(print=lambda *a, **kw: None),
+        ),
         manifest={
             "render": {
                 "module_sources": [
