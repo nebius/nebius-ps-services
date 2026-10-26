@@ -271,7 +271,7 @@ def test_pyproject_uses_a_uv_development_group() -> None:
     assert "dev" not in project.get("optional-dependencies", {})
     dev = pyproject["dependency-groups"]["dev"]
     assert not any(requirement.startswith("build") for requirement in dev)
-    assert any(requirement.startswith("setuptools>=83.0.0,<84.0.0") for requirement in dev)
+    assert any(requirement.startswith("setuptools>=83.0.0,<85.0.0") for requirement in dev)
     assert any(requirement.startswith("setuptools-scm") for requirement in dev)
     assert pyproject["tool"]["uv"] == {
         "required-version": ">=0.12.9,<0.13",
