@@ -112,6 +112,7 @@ class LocalReadiness:
     path_degraded: bool = False
     degraded_reasons: tuple[str, ...] = ()
     candidate_preparation_required: bool = False
+    static_route_repair_ready: bool = False
     cold_standby_ready: bool = False
     routing_hygiene_ready: bool = True
 
@@ -131,7 +132,10 @@ class LocalReadiness:
     def transfer_ready(self) -> bool:
         """Return whether a non-owner can safely enter the fenced transfer chain."""
 
-        return self.routing_hygiene_ready and (self.promotion_ready or self.cold_standby_ready)
+        repairable = self.static_route_repair_ready and self.service_healthy and self.bgp_ready
+        return self.routing_hygiene_ready and (
+            self.promotion_ready or self.cold_standby_ready or repairable
+        )
 
     @property
     def transfer_blocked_reasons(self) -> tuple[str, ...]:

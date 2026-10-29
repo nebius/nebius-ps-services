@@ -2708,3 +2708,50 @@ def test_failed_effect_leaves_the_pre_effect_checkpoint_for_exact_replay() -> No
     assert checkpoints.value.pending_action is not None
     replay = runtime.policy.decide(Snapshots().observe(), checkpoints.value)
     assert replay.action == checkpoints.value.pending_action
+
+
+def test_repairable_static_path_prepares_only_after_confirmed_transfer(policy):
+    repairable = LocalReadiness(
+        True,
+        False,
+        True,
+        False,
+        candidate_preparation_required=True,
+        static_route_repair_ready=True,
+    )
+    initial = _snapshot(
+        readiness=repairable,
+        transfer_intent=TransferIntent.PLANNED_FAILOVER,
+    )
+    first = policy.decide(initial, ControllerCheckpoint())
+    assert first.action is not None
+    assert first.action.kind is ActionKind.STOP_FORMER_OWNER
+    assert not first.forwarding_enabled
+
+    owned = replace(initial, cloud=_owned_cloud())
+    prepared = policy.decide(owned, _proven_transfer_checkpoint(owned))
+    assert prepared.action is not None
+    assert prepared.action.kind is ActionKind.PREPARE_CANDIDATE_DATAPLANE
+    assert prepared.action.takeover_fence_required
+    assert not prepared.forwarding_enabled
+
+
+@pytest.mark.parametrize("locked", [True, False])
+def test_repairable_static_path_does_not_bypass_lock_or_cloud_authority(policy, locked):
+    repairable = LocalReadiness(
+        True,
+        False,
+        True,
+        False,
+        candidate_preparation_required=True,
+        static_route_repair_ready=True,
+    )
+    snapshot = _snapshot(
+        readiness=repairable,
+        apply_locked=locked,
+        cloud=_cloud(authoritative=locked),
+        transfer_intent=TransferIntent.PLANNED_FAILOVER,
+    )
+    decision = policy.decide(snapshot, ControllerCheckpoint())
+    assert decision.action is None
+    assert not decision.forwarding_enabled

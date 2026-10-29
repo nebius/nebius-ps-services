@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from .local_commands import CURRENT, run
+from .vm_ha.static_routes import select_static_routes, static_route_candidates
+from .xfrm_state import usable_xfrm_devices
 
 IPSEC_OVERHEAD_BYTES = 64  # NAT-T ESP overhead for IPv4 (bytes)
 
@@ -378,3 +380,38 @@ class XFRMManager:
                 new_lines.append(f"{key}={value}")
         sysctl_conf.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
         print(f"[XFRM] ✓ Updated {sysctl_conf} (persistent sysctl settings)")
+
+
+def vm_ha_static_endpoints(
+    config: dict[str, Any], endpoints: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Keep one static writer per destination without changing ordinary routing."""
+    vm_ha = config.get("vm_ha")
+    if not isinstance(vm_ha, dict) or vm_ha.get("enabled") is False:
+        return endpoints
+    if not any(endpoint.get("mode") == "static" for endpoint in endpoints):
+        return endpoints
+    observations = []
+    for arguments in (
+        ["ip", "-d", "-j", "link", "show", "type", "xfrm"],
+        ["ip", "-j", "xfrm", "state"],
+        ["ip", "-j", "xfrm", "policy"],
+    ):
+        result = run(arguments, capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            raise RuntimeError("unable to observe VM-HA static-route paths")
+        try:
+            observations.append(json.loads(result.stdout))
+        except json.JSONDecodeError:
+            observations.append(result.stdout)
+    devices = usable_xfrm_devices(*observations)
+    selected = select_static_routes(static_route_candidates(config), devices)
+    filtered = []
+    for endpoint in endpoints:
+        copy = dict(endpoint)
+        if endpoint.get("mode") == "static":
+            copy["remote_prefixes"] = [
+                prefix for prefix, device in selected.items() if device == endpoint["name"]
+            ]
+        filtered.append(copy)
+    return filtered

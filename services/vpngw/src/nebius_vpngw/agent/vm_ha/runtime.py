@@ -39,6 +39,11 @@ from nebius_vpngw.agent.vm_ha.inhibition import (
 )
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
 from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, MTLSSnapshot
+from nebius_vpngw.agent.vm_ha.static_routes import (
+    StaticRouteCandidate,
+    select_static_routes,
+    static_route_candidates,
+)
 from nebius_vpngw.agent.vm_ha.transport import (
     MutualTLSConfig,
     MutualTLSPeerTransport,
@@ -56,6 +61,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
 from nebius_vpngw.agent.vm_ha_controller import (
     RouteReconciliationContext as ControllerRouteContext,
 )
+from nebius_vpngw.agent.xfrm_state import usable_xfrm_devices as _usable_xfrm_devices
 from nebius_vpngw.deploy.route_manager import NebiusSDKRouteBackend
 from nebius_vpngw.deploy.vm_ha_cloud import (
     AllocationOwner,
@@ -862,6 +868,8 @@ class LocalDataPlaneObservation:
     established_ike_sa_count: int = 0
     bgp_export_state: BGPExportState = BGPExportState.UNKNOWN
     routing_hygiene_ready: bool = True
+    static_route_repair_required: bool = False
+    available_static_prefixes: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -917,19 +925,6 @@ def _json_or_text(result: CommandResult, description: str) -> object:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
         return result.stdout
-
-
-def _recursive_values(value: object, key_names: frozenset[str]) -> set[str]:
-    found: set[str] = set()
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if str(key) in key_names and isinstance(item, (str, int)):
-                found.add(str(item))
-            found.update(_recursive_values(item, key_names))
-    elif isinstance(value, list):
-        for item in value:
-            found.update(_recursive_values(item, key_names))
-    return found
 
 
 def _established_bgp_sessions(value: object) -> set[str]:
@@ -1014,21 +1009,6 @@ def _learned_bgp_prefixes(value: object) -> set[str]:
     return learned
 
 
-def _xfrm_if_ids(value: object) -> set[str]:
-    raw = _recursive_values(value, frozenset({"if_id", "ifId"}))
-    if isinstance(value, str):
-        raw.update(re.findall(r"\bif_id\s+(0[xX][0-9a-fA-F]+|[0-9]+)\b", value))
-    normalized: set[str] = set()
-    for item in raw:
-        try:
-            interface_id = int(item, 0)
-        except ValueError:
-            continue
-        if interface_id > 0:
-            normalized.add(str(interface_id))
-    return normalized
-
-
 def _ike_sa_ids(raw: str) -> tuple[str, ...]:
     """Extract exact IKE_SA unique IDs from a complete raw VICI response."""
 
@@ -1041,32 +1021,6 @@ def _ike_sa_ids(raw: str) -> tuple[str, ...]:
     if len(observed) != event_count or len(set(observed)) != len(observed):
         raise RuntimeError("local IKE SA observation is malformed")
     return observed
-
-
-def _usable_xfrm_devices(links: object, state: object, policies: object) -> set[str]:
-    if (
-        not isinstance(links, list)
-        or not isinstance(state, (list, str))
-        or not isinstance(policies, (list, str))
-    ):
-        return set()
-    active_if_ids = _xfrm_if_ids(state) & _xfrm_if_ids(policies)
-    devices: set[str] = set()
-    for link in links:
-        if not isinstance(link, Mapping):
-            continue
-        if_name = link.get("ifname")
-        link_info = link.get("linkinfo")
-        if not isinstance(if_name, str) or not isinstance(link_info, Mapping):
-            continue
-        info_data = link_info.get("info_data")
-        if not isinstance(info_data, Mapping):
-            continue
-        if_id = info_data.get("if_id", info_data.get("ifId"))
-        link_if_ids = _xfrm_if_ids({"if_id": if_id})
-        if if_name.startswith("xfrm") and bool(link_if_ids & active_if_ids):
-            devices.add(if_name)
-    return devices
 
 
 def _policy_digest(value: Mapping[str, Iterable[str]]) -> str:
@@ -1205,6 +1159,7 @@ def _passive_bgp_policy_matches(
 class LocalDataPlaneObserver:
     """Read-only observation with one deadline for the entire command sequence."""
 
+    static_candidates: tuple[StaticRouteCandidate, ...]
     commands: DataPlaneCommandSet
     runner: CommandRunner
     command_timeout: float
@@ -1225,6 +1180,7 @@ class LocalDataPlaneObserver:
         self.runner = source.runner
         self.command_timeout = source.command_timeout
         self.state_path = source.state_path
+        self.static_candidates = source.static_candidates
         self.expected_bgp_exports = dict(source.expected_bgp_exports)
         self.bgp_export_observation_required = source.bgp_export_observation_required
         self.tunnel_cold_passive = source.tunnel_cold_passive
@@ -1377,7 +1333,21 @@ class LocalDataPlaneObserver:
                         and device in usable_xfrm_devices
                     ):
                         usable_xfrm.add(str(network))
+        selected = select_static_routes(self.static_candidates, usable_xfrm_devices)
+        available_static = frozenset(
+            prefix for prefix, device in selected.items() if device in usable_xfrm_devices
+        )
+        installed = set()
+        if isinstance(routes, list):
+            for route in routes:
+                if isinstance(route, Mapping):
+                    installed.add((route.get("dst"), route.get("dev")))
+        repair_required = any(
+            (prefix, selected[prefix]) not in installed for prefix in available_static
+        )
         return LocalDataPlaneObservation(
+            static_route_repair_required=repair_required,
+            available_static_prefixes=available_static,
             service_healthy=services,
             forwarding_enabled=self._forwarding(),
             static_prefixes=frozenset(static_prefixes),
@@ -1438,6 +1408,7 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         routing_lock_path: Path = Path("/run/nebius-vpngw/fix-routes.lock"),
         active_preparer: Callable[[], None] | None = None,
         blocked_preparer: Callable[[], None] | None = None,
+        static_candidates: tuple[StaticRouteCandidate, ...] = (),
         tunnel_cold_passive: bool = False,
         passive_materialization_attempts: int = 12,
         passive_materialization_interval: float = 0.5,
@@ -1489,6 +1460,7 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         self.routing_lock_path = routing_lock_path
         self.active_preparer = active_preparer
         self.blocked_preparer = blocked_preparer
+        self.static_candidates = static_candidates
         self.tunnel_cold_passive = tunnel_cold_passive
         self.passive_materialization_attempts = passive_materialization_attempts
         self.passive_materialization_interval = passive_materialization_interval
@@ -1809,7 +1781,7 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
             os.close(lock_fd)
 
     def prepare_candidate(self, action: ControllerAction) -> None:
-        if not self.tunnel_cold_passive:
+        if not self.tunnel_cold_passive and not self.static_candidates:
             raise RuntimeError("candidate tunnel preparation is not enabled for this runtime")
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -1817,22 +1789,48 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("candidate tunnel preparation requires passive fenced mode")
-            load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
-            if load.returncode != 0:
-                raise RuntimeError("candidate tunnel configuration could not be loaded")
-            for attempt in range(1, self.passive_materialization_attempts + 1):
-                listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
-                if listed.returncode == 0 and _ike_sa_ids(listed.stdout):
-                    break
-                if attempt < self.passive_materialization_attempts:
-                    self.sleeper(self.passive_materialization_interval)
-            else:
-                raise RuntimeError("candidate IKE SA establishment did not converge")
+            if self.tunnel_cold_passive:
+                load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
+                if load.returncode != 0:
+                    raise RuntimeError("candidate tunnel configuration could not be loaded")
+                for attempt in range(1, self.passive_materialization_attempts + 1):
+                    listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+                    if listed.returncode == 0 and _ike_sa_ids(listed.stdout):
+                        break
+                    if attempt < self.passive_materialization_attempts:
+                        self.sleeper(self.passive_materialization_interval)
+                else:
+                    raise RuntimeError("candidate IKE SA establishment did not converge")
+            self._repair_static_routes()
             if self._forwarding():
                 raise RuntimeError("candidate tunnel preparation changed forwarding state")
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
+
+    def _repair_static_routes(self, deadline: float | None = None) -> bool:
+        if not self.static_candidates:
+            return False
+
+        def command(*arguments: str) -> CommandResult:
+            if deadline is not None:
+                return self._run_before(deadline, self.commands.ip, *arguments)
+            return self._run(self.commands.ip, *arguments)
+
+        links = _json_object(command("-d", "-j", "link", "show", "type", "xfrm"), "XFRM interfaces")
+        states = _json_or_text(command("-j", "xfrm", "state"), "XFRM state")
+        policies = _json_or_text(command("-j", "xfrm", "policy"), "XFRM policy")
+        devices = _usable_xfrm_devices(links, states, policies)
+        selected = select_static_routes(self.static_candidates, devices)
+        repaired = False
+        for prefix, device in selected.items():
+            if device not in devices:
+                continue
+            result = command("route", "replace", prefix, "dev", device)
+            if result.returncode != 0:
+                raise RuntimeError("VM-HA local static-route selection failed")
+            repaired = True
+        return repaired and all(device in devices for device in selected.values())
 
     def emergency_fence(self, action: ControllerAction) -> None:
         """Physically disable forwarding without waiting for the ordinary routing lock."""
@@ -1858,6 +1856,19 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         repair_deadline = action.repair_deadline_at - 1.0
         try:
             reasons = set(action.repair_reasons)
+            static_repaired = False
+            if "static-routes-not-ready" in reasons and self.static_candidates:
+                self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    static_repaired = self._repair_static_routes(repair_deadline)
+                finally:
+                    os.close(lock_fd)
+            if static_repaired and "local-service-unhealthy" not in reasons:
+                if "bgp-not-ready" not in reasons:
+                    return
+                reasons.discard("xfrm-not-ready")
             encrypted_path_unhealthy = bool({"local-service-unhealthy", "xfrm-not-ready"} & reasons)
             if encrypted_path_unhealthy:
                 result = self._run_before(
@@ -1894,7 +1905,7 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
                     raise RuntimeError("local tunnel state did not reload")
             if self.monotonic_clock() >= repair_deadline:
                 raise TimeoutError
-        except (RuntimeError, TimeoutError):
+        except (OSError, RuntimeError, ValueError, TimeoutError):
             self.emergency_fence(action)
 
     def enable_active(self, action: ControllerAction) -> None:
@@ -2368,7 +2379,18 @@ class BoundRouteRuntime:
         )
         static_only = bool(self.static_manifest.prefixes) and not self.bgp_policies
         candidate_preparation_required = bool(
-            static_only and passive_mode and not readiness.promotion_ready
+            passive_mode
+            and (
+                (static_only and not readiness.promotion_ready)
+                or observed.static_route_repair_required
+            )
+        )
+        static_route_repair_ready = bool(
+            passive_mode
+            and observed.static_route_repair_required
+            and required_xfrm_prefixes.issubset(
+                observed.usable_xfrm_prefixes | observed.available_static_prefixes
+            )
         )
         cold_standby_ready = bool(
             candidate_preparation_required
@@ -2380,6 +2402,7 @@ class BoundRouteRuntime:
         )
         return replace(
             readiness,
+            static_route_repair_ready=static_route_repair_ready,
             candidate_preparation_required=candidate_preparation_required,
             cold_standby_ready=cold_standby_ready,
         )
@@ -3449,6 +3472,7 @@ def build_runtime_ports(
             "runner": runner,
             "monotonic_clock": effective_monotonic_clock,
             "tunnel_cold_passive": bool(static_records) and not bgp_records,
+            "static_candidates": static_route_candidates(config),
         }
         if active_preparer is not None:
             data_plane_kwargs["active_preparer"] = active_preparer

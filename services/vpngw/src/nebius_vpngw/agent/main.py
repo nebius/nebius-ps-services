@@ -124,7 +124,7 @@ from .vm_ha_controller import (
     TransferIntent,
     VMHAController,
 )
-from .xfrm_manager import XFRMManager
+from .xfrm_manager import XFRMManager, vm_ha_static_endpoints
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 STATE_PATH = Path("/etc/nebius-vpngw/last-applied.json")
@@ -4939,7 +4939,7 @@ class Agent:
                 update_firewall_from_config(cfg, require_reload=True)
                 interface_endpoints = self.ss.render_and_apply(cfg)
                 if interface_endpoints:
-                    self.xfrm.setup_interfaces(interface_endpoints)
+                    self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
                 self.frr.render_and_apply(
                     cfg,
                     advertise_local_prefixes=False,
@@ -4998,7 +4998,7 @@ class Agent:
                 print("[Agent] No changes detected; skipping config render")
                 if interface_endpoints:
                     print("[Agent] Ensuring XFRM interfaces are present...")
-                    self.xfrm.setup_interfaces(interface_endpoints)
+                    self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
                 if lock_fd is not None:
                     enforce_routing_invariants_locked(cfg)
                 else:
@@ -5008,7 +5008,7 @@ class Agent:
             interface_endpoints = self.ss.render_and_apply(cfg)
             if interface_endpoints:
                 print("[Agent] Setting up XFRM interfaces...")
-                self.xfrm.setup_interfaces(interface_endpoints)
+                self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
             self.frr.render_and_apply(cfg)
             self.state.save_last_applied(cfg)
             print("[Agent] Applied and persisted new configuration")
