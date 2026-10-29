@@ -2757,5 +2757,20 @@ safe diagnostic before provisioning, including dry-run and recreation. Local reg
 and packaging checks pass; no additional live deployment is claimed.
 
 <!-- /REQUIREMENT: REQ-019 -->
+<!-- REQUIREMENT: REQ-021 status=active priority=P1 type=bugfix -->
+### REQ-021: Tunnel host firewall rule installation
+
+- Install configured tunnel INPUT and OUTPUT rules even before the XFRM
+  interfaces exist. Skip disabled tunnels using the canonical mapping.
+- Repair missing tunnel host rules on unchanged configuration reconciliation
+  without requiring a full firewall reset.
+- Verify live rules after installation. A successful UFW command alone is
+  insufficient evidence. IPsec establishment and ICMP reachability are not
+  substitutes for this check.
+- Continuous HA readiness checks and activation hooks are outside this fix.
+- Regression coverage must begin with no tunnel devices or host allow rules,
+  then verify that device creation cannot leave BGP blocked by default INPUT.
+
+<!-- /REQUIREMENT: REQ-021 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

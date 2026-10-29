@@ -6568,6 +6568,18 @@ xfrm*:
 - Updates local prefix rules when configuration changes
 - Maintains firewall state in `/etc/vpngw_peer_ips`, `/etc/vpngw_mgmt_cidrs`, and `/etc/vpngw_local_prefixes`
 
+**Tunnel host access:** After any required UFW rebuild, the agent derives the
+expected XFRM interface names from the resolved configuration and installs
+missing INPUT and OUTPUT allow rules. Rule creation does not depend on the
+interfaces already existing. This is required during initial HA passive
+materialization, which prepares the firewall before creating tunnel devices.
+Unchanged configurations also repair missing host rules. The agent checks the
+live filter table after installation before reporting firewall reconciliation
+success. Continuous HA readiness and activation checks are separate work.
+
+An established IPsec SA or successful tunnel ping does not prove BGP host
+access. UFW can accept ICMP while dropping a new TCP SYN to port 179.
+
 **Security Benefits:**
 
 - Limits attack surface by denying all non-essential inbound traffic
