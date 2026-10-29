@@ -387,7 +387,8 @@ def normalize_vm_ha_observation(value: object) -> tuple[tuple[str, str], ...]:
         leaves.append((path or "/", encoded))
 
     visit(value, "")
-    result = tuple(leaves)
+    # Traversal order can differ from JSON-pointer order after escaping or list index 9.
+    result = tuple(sorted(leaves))
     if result != tuple(sorted(result)) or len({path for path, _value in result}) != len(result):
         raise ValueError("VM-HA observation paths are not canonical")
     return result
