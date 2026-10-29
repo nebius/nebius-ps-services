@@ -130,5 +130,3 @@ def test_configured_host_rules_admit_bgp_after_late_interface_creation(network, 
         if server.poll() is None:
             server.kill()
         server.communicate(timeout=5)
-
-

@@ -62,7 +62,7 @@ def ensure_tunnel_host_rules(cfg: dict[str, Any]) -> None:
     """Repair missing rules, including on first boot before device creation.
 
     UFW persists interface rules even when the interface does not exist yet.
-    Recheck live rules before reporting materialization or promotion success.
+    Recheck live rules before reporting firewall reconciliation success.
     """
     rules = _tunnel_host_rules(cfg)
     missing = _missing_tunnel_host_rules(rules)
