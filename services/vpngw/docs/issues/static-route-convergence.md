@@ -29,3 +29,12 @@ The focused unit tests cover selection, local observation, and guarded repair.
 They do not prove convergence through the real standby status and CLI admission
 path. Complete that coverage and fix convergence before treating this issue as
 resolved. No production takeover is part of this branch separation.
+
+## Composed simulation added after separation
+
+The [neighbor failover simulation](static-route-failover-simulation.md) connects
+the real route observer, HA decision, and repair adapter. Both active-owner
+route-movement cases fail on the original code and pass with the partial fix.
+The no-replacement-path case reaches the forwarding fence. A strict expected
+failure records the remaining standby status/admission defect and reproduces
+`standby-ready-evidence-invalid` when run with `--runxfail`.
