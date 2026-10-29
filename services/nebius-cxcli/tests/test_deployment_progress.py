@@ -148,7 +148,7 @@ def test_target_seals_reconcile_anchor_before_install_completion(
 
 
 def executor(tmp_path):
-    payload = {"infra": {"components": []}, "apps": {"charts": []}}
+    payload = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     local = paths(tmp_path)
     manifest = generation(payload).materialize(local)
     return deployment_cli._CliDeploymentExecutor(
@@ -476,7 +476,7 @@ def test_executor_reuses_preflight_inputs_at_real_artifact_boundary(
     tmp_path, monkeypatch, preflight_values
 ):
     runner = executor(tmp_path)
-    runner.manifest["deploy"] = {"targets": [], "validations": []}
+    runner.manifest["execution"] = {"targets": [], "validations": []}
     runner.plan = SimpleNamespace(target_ref="", action=DeploymentAction.INSTALL)
     runner.lease = SimpleNamespace(assert_held=lambda: None, operation_id="fixture")
     runner._bound_identities = lambda: {}

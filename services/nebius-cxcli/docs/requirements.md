@@ -720,10 +720,13 @@ the selected VM before they invoke privileged remote helpers.
 #### Acceptance Criteria
 
 - AC-001: `ssh-jumphost` and `wireguard` accept `--ssh-known-hosts-file PATH`; when omitted, the path is `<project>/generated/ssh_known_hosts`.
-- AC-002: The selected file must already exist and contain an independently verified key for the target host. Missing, unknown, or mismatched identities fail before any remote helper runs.
+- AC-002: The selected file must contain an independently authenticated key for the target host. For NAT product-provisioned identities only, missing default-file entries may be recovered through exact-instance Compute metadata. WireGuard authenticates its connection and host public key through SecretStash as specified in REQ-052. Explicit operator files and existing pins remain immutable. Guest-generated identities need independently supplied trust. Missing, unknown, or mismatched identities fail before any remote helper runs.
 - AC-003: SSH uses strict host-key checking and the selected cxcli trust file without falling back to the user's global known-hosts database.
 - AC-004: The cxcli-managed deployments-root `.gitignore` excludes each project `generated/ssh_known_hosts` file while preserving the rest of the generated deployment contract.
 - AC-005: Day-2 selection resolves exactly one enabled component instance before output lookup or SSH. An exact instance ID takes precedence; shared type selectors matching multiple instances fail with explicit-instance guidance.
+
+- AC-006: NAT uses protected pre-provisioned Ed25519 identity generation, authenticated recovery and atomic public-pin publication. WireGuard uses the separate SecretStash lifecycle in REQ-052. Bind to project, instance, boot disk, allocation and address. Preserve existing NAT storage and routing/recovery ownership; never rotate an existing guest identity automatically. Carry prepared inputs across previews, preflights and admission without recording secrets in config, generated tfvars, reports or recovery records.
+- AC-007: Reject empty, unrelated, malformed and unsafe target trust before local client-output mutation or SSH. Disable inherited additional trust sources, key updates and connection reuse; preserve the exact trust pathname. Errors must not expose remote output or private key material.
 
 #### Negative Criteria
 
@@ -743,7 +746,7 @@ occur before the VM-local `sudo` helper is invoked.
 #### Evaluation Method
 
 Confirm both SSH-backed command families use one trust-policy implementation
-and that no first-use trust path remains.
+and that no unauthenticated first-use trust path remains.
 
 <!-- /REQUIREMENT: REQ-027 -->
 
@@ -1356,7 +1359,7 @@ MK8s and Soperator targets, with independently selectable telemetry destinations
 #### Acceptance Criteria
 
 - AC-001: `grafana install` requires explicit `--config` and `--target`, loads that managed target, runs the interactive observability wizard, atomically persists choices into the same configuration, renders, applies through existing lifecycle owners, and verifies the result. Automation resolves flags, saved choices, then defaults without prompting. Cancellation before save changes nothing; partial apply preserves desired state for retry.
-- AC-002: Metrics, logs and traces default to local in every environment. Each supports local, remote or both. Optional write-URL flags override Nebius endpoint templates without implicitly enabling remote export. Custom write/read endpoints and credentials are independent; no cloud credentials are sent to custom destinations implicitly.
+- AC-002: Explicit Grafana installation defaults metrics, logs and traces to local in every environment. New ordinary MK8s targets in the creation/component-add wizard default to Nebius remote storage with collection enabled and no local Grafana or storage; saved choices remain authoritative. Each supports local, remote or both. Optional write-URL flags override Nebius endpoint templates without implicitly enabling remote export. Custom write/read endpoints and credentials are independent; no cloud credentials are sent to custom destinations implicitly.
 - AC-003: Catalog Apps expose independent VictoriaMetrics, VictoriaLogs, VictoriaTraces and optional Pushgateway installations. Collector selection reuses compatible owned pipelines per signal/scope: native Soperator collectors first, existing compatible owners next, Nebius agent for unowned Nebius-only signals, VMAgent for other metrics, OpenTelemetry for other logs/traces. Never duplicate collection or silently adopt resources.
 - AC-004: Local datasource types are prometheus, victoriametrics-logs-datasource and jaeger, respectively. Remote Nebius defaults are prometheus, loki and tempo. Repeatable --datasource NAME TYPE URL configures query connections; --default-datasource selects one. Names, stable UIDs, credentials, type validation and plugin provisioning are shared by CLI and wizard.
 - AC-005: Local retention defaults are metrics 90d, logs 30d and traces 7d. Storage is persistent, private and separately owned from Grafana. Pushgateway defaults disabled, is asked in the wizard, and when selected has one replica, a retained 1Gi claim and five-second label-honoring scrape. Preserve explicit existing sizing and configuration.
@@ -1440,23 +1443,33 @@ Separate source and Linux fixture verification from fresh authorized nonproducti
 
 #### User Story
 
-Operators configure a reusable CPU-only NAT gateway through the normal component wizard, with live discovery, strict quota checks, dedicated networking and recoverable route activation.
+Operators configure a reusable CPU-only NAT gateway through the normal component wizard, with live discovery, strict quota checks, selectable gateway subnet placement and recoverable route activation.
 
 #### Acceptance Criteria
 
-- AC-001: Register infra:nat-gateway with portable/local Terraform sources. Terraform creates and deletes every gateway infrastructure resource; the Python SDK owns discovery, validation and explicitly delegated external subnet attachment updates only.
+- AC-001: Register infra:nat-gateway with portable/local Terraform sources. Terraform creates and deletes permanent gateway infrastructure. The Python SDK owns discovery, validation, explicitly delegated external subnet attachment updates, and journaled creation/deletion of temporary egress-test VMs, disks and private allocations.
 - AC-002: Offer live project CPU-only platforms/presets, validated by gpu_count=0. Prefer cpu-d3 and 4vcpu-16gb only when available. Support configurable storage and live-resolved driverless images without static resource inventories.
-- AC-003: Own an explicit dedicated gateway subnet, stable private/public allocations, persistent forwarding/NAT and isolated direct gateway egress. Support existing and same-deployment VPC networks/subnets. Reject wrong-parent/network targets, overlaps, self-routing and competing owners.
-- AC-004: Preserve supported non-default routes in owned policy tables and preview default-route replacement plus retained exceptions. Reject unsupported routes and source drift; later policy refresh is explicit. Terraform remains the attachment owner for its subnets; external SDK attachment requires explicit delegation and resource-version checks preserving unrelated fields.
+- AC-003: Create an explicit gateway subnet or reuse a suitable existing or same-deployment subnet without adopting or changing its ownership, pools or routes. Own stable private/public allocations and persistent forwarding/NAT. Keep gateway direct egress separate from workload NAT routing. Support existing and same-deployment VPC networks/subnets. Reject wrong-parent/network targets, overlaps, self-routing and competing owners.
+- AC-004: Create a separate owned route table per selected workload subnet, preserving supported non-default routes and preview default-route replacement plus retained exceptions. Reject unsupported routes and source drift; later policy refresh is explicit. Terraform remains the attachment owner for its subnets; external SDK attachment requires explicit delegation and resource-version checks preserving unrelated fields.
 - AC-005: Check current tenant/project quotas and exact live presets, aggregate demand, distinguish unknown/inactive usage from zero, and include additional/replacement and implicit network resource demand. Unresolved required quotas and confirmed shortages block NAT deployment; draft configuration remains savable. Quota is not physical capacity.
-- AC-006: Prepare infrastructure before guest readiness and routing activation. Freeze stages and resume by observation. Strict trusted SSH verifies the exact instance; missing trust leaves provisioned resources unactivated. Report provider, guest, routing and end-to-end evidence separately.
+- AC-006: Prepare infrastructure before guest readiness and routing activation. Freeze stages and resume by observation. Strict trusted SSH verifies the exact instance; unavailable authenticated host-key evidence leaves provisioned resources unactivated. Report provider, guest, routing and end-to-end evidence separately.
 - AC-007: Store attachment preimages and operation progress in the protected regular Object Storage backend with conditional writes and cross-host locking. Restore and verify attachments before Terraform retirement, reject unknown consumers/drift, and guard direct Terraform/CI bypasses including resources removed from configuration.
 - AC-008: Provide NAT status and explicit configuration-only route refresh. Preserve existing generic infra and Soperator behavior, unrelated edits and secrets. Document single-VM outages and preserve allocations across VM replacement without automatic egress fallback.
 - AC-009: Assess usable contiguous private address space and aggregate all competing planned reservations before NAT provisioning. Complete scoped pool/allocation inventory and fresh Terraform actions distinguish feasible, insufficient and unresolved capacity; insufficient or unresolved capacity blocks new address demand while well-formed drafts remain savable. Retained subnets, VM-only replacement and route restoration require no extra subnet capacity. Account for occupied child pools and allocations, preserve pool-tree identity, and grant no capacity credit for pending deletion. Verify realized subnet CIDR and pool membership before route activation. Snapshot feasibility is not a reservation or provider allocation-order guarantee.
 
+- AC-010: Use fresh provider inventory plus clearly marked planned resources and exact managed identities for network/subnet choices. Immediately after VPC selection, offer eligible existing subnets, eligible planned subnets, dedicated creation and refresh in one gateway-subnet picker without a separate create/reuse question. Default new selections to creation and preserve valid saved selections; derive the existing create/reuse configuration from the choice. Support previous-step navigation, transactional cancellation, edit preservation, dependency invalidation and local input retries. Explain public-IP capability separately from effective routing; reject unsuitable gateway reuse without changing it. New gateway boot disks default to 40 GiB, subject to the live image minimum; preserve valid explicit sizes.
+- AC-011: Default-select automatic IPv4 egress verification, explicitly deselectable. Sequentially create a private-only SDK probe VM in every selected workload subnet, admit transient resource/address demand, verify fresh HTTPS egress against the gateway public IP, and independently confirm exact-resource cleanup. No package download may be required to bootstrap the probe. Perform the complete test automatically inside deploy, including no-change deployments: configure temporary SSH access, connect through the trusted gateway, collect and validate the fresh result, and clean up exact resources. No manual SSH, probe-key setup, separate test command, serial-log reads or logging permission is required. Bind results to the exact SDK-created private instance using a deployment-generated pinned host identity; missing or untrusted results are inconclusive, not success.
+- AC-012: Failed or inconclusive enabled verification fails deployment and conditionally restores only attachments changed by that activation from per-activation preimages, using each field's existing owner. Preserve concurrent changes and gateway resources. Journal probe operations, cleanup and restoration under the non-expiring shared lock; ambiguous outcomes require reconciliation, and process termination leaves explicit cleanup-pending state. Unresolved SSH collector shutdown blocks probe deletion until reconciliation explicitly confirms the prior collectors and descendants have stopped. Report provider, guest, attachment, egress, restoration and cleanup evidence independently.
+
+- AC-013: NAT subnet pickers omit existing-managed ownership annotations while preserving exact identities, bindings, capability labels, saved selections and navigation. Remove admin_cidrs from the wizard, config and module contract; obsolete input fails with conversion guidance. Permit SSH from any IPv4 source with non-root public-key-only authentication, effective SSH hardening and fail2ban (3 failures per 600 seconds, 3600-second ban). Preserve bounded forwarding sources and strict host trust. Require exact matching client identity and read-only security readiness before route activation; dynamic bans must neither bypass nor invalidate owned NAT firewall rules.
+
+- AC-014: Normal NAT wizard completion saves routing.enabled=true without an activation/preparation question, including edits of disabled configurations. Show route impact as an informational summary and explain external attachment delegation before explicit workload selection. The wizard only saves configuration; validate and render precede deploy, which provisions the gateway, verifies trusted readiness, activates routes and runs optional tests. Test opt-out never skips readiness or activation. Keep explicit routing.enabled=false as the operational preparation/restoration control, with no compatibility aliases or migration shims.
+
+- AC-015: Fresh NAT gateways receive a deployment-generated, pinned Ed25519 host identity before provisioning. Rebuilt execution environments, source/staged admission planners and interrupted route-restoration plans must carry the same prepared identity inputs, bound to unchanged NAT configuration and rendered module identity, without serializing private keys into recovery or admission records. Pass private material only through protected runtime files, sensitive Terraform inputs/state and authenticated Compute cloud-init; never config, generated tfvars, diagnostics or the routing journal. Recover retained product identities from exact-instance Compute metadata, validate the key pair and recheck binding before publishing a missing public pin. Preserve existing pins and explicit operator trust files. Rendering preserves the default trust file as runtime data, excludes it from configuration snapshots and never enrolls staged pins. Existing guest-generated identities require independently supplied trust and retain their original cloud-init without VM or disk replacement. SSH trust never depends on serial logs, network-first enrollment or automatic IAM changes.
+
 #### Negative Criteria
 
-- NC-001: No SDK infrastructure creation/deletion, Terraform provisioners, dual subnet ownership, implicit route adoption, GPU presets, automatic HA, or silent quota fallback.
+- NC-001: No SDK permanent infrastructure creation/deletion, Terraform provisioners, dual subnet ownership, implicit route adoption, GPU presets, automatic HA, or silent quota fallback. SDK deletion is restricted to exact journaled temporary probe identities.
 - NC-002: Never claim live forwarding from infrastructure readiness alone or publish credentials/private environment values.
 
 #### Validation Method
@@ -1509,7 +1522,6 @@ qualification. Never use create or IAM reconciliation as a read-only smoke test.
 
 <!-- /REQUIREMENT: REQ-043 -->
 
-
 <!-- REQUIREMENT: REQ-044 status=active priority=P1 type=feature -->
 ### REQ-044: Identity-aware VPC choices and declarative MK8s placement
 
@@ -1556,6 +1568,7 @@ Operators add multiple Infra and Apps components to an existing project in one i
 - AC-002: Backtracking preserves confirmed selections. The text fallback resolves component IDs, displayed numeric indexes, all and none through the shared resolver restricted to selectable entries. Invalid input retries the same section.
 - AC-003: Reuse the existing naming, target selection, dependency expansion, source validation and full field wizard for additions. Apps require an existing or newly selected MK8s target; an invalid selection returns to Infra with choices retained. Existing lifecycle restrictions, including dedicated Soperator ownership, remain authoritative.
 - AC-004: Preserve explicit selectors and noninteractive behavior, existing-component values, repeated-instance rules and the config-only publication boundary. Selection cancellation does not write. The field wizard retains its existing guarded exit-and-save behavior; missing required fields prevent publication.
+- AC-005: A scalar infra resource name confirmed in the initial component-add naming phase is not asked again by the field wizard. Retain the confirmed name and matching instance identity for default and custom answers, including nested catalog-declared scalar names. Create and names not previously confirmed retain their field prompts; unrelated fields and existing rows remain unchanged.
 
 #### Negative Criteria
 
@@ -1574,5 +1587,291 @@ Cover mixed multi-selection, empty scopes, backtracking, text input validation, 
 Use deterministic CLI tests and terminal prompt checks; distinguish source verification from live cloud deployment evidence.
 
 <!-- /REQUIREMENT: REQ-045 -->
+
+<!-- REQUIREMENT: REQ-046 status=satisfied priority=P1 type=feature -->
+### REQ-046: Named shared storage attachment wizard
+
+#### User Story
+
+Operators configure shared filesystems before new ordinary MK8s node groups, then select storage by its configured name independently for each group.
+
+#### Acceptance Criteria
+
+- AC-001: Ordinary create and component-add field wizards configure selected VPC components, then selected SFS components, then remaining infrastructure in stable order. Existing unselected components and dedicated Soperator ordering remain unchanged.
+- AC-002: Each new ordinary MK8s node group offers eligible configured filesystems under `Attach shared storage to node group "<name>":`. Display effective filesystem names and distinguish duplicate names; never expose the raw storage field path or the generated single-filesystem key as the normal label or confirmation.
+- AC-003: All eligible filesystems start selected for each new group. Users can select a subset or none independently. An explicit empty selection remains empty, and text input supports displayed indexes and none with Enter accepting the displayed selection. Back, quit and cancellation retain their navigation meanings.
+- AC-004: Save existing internal filesystem keys in sfs_filesystem_keys, including an empty list for explicit opt-out. Only offer renderer-resolvable storage associations. No eligible SFS means no attachment prompt; existing groups and headless input remain unchanged.
+- AC-005: Explain that this configures worker-node attachments, while mounting, CSI and PV/PVC setup are separate. Confirm selected names or none without claiming live attachment or provisioning.
+
+#### Negative Criteria
+
+- NC-001: No new configuration schema, compatibility layer, cross-component storage binding, generic multi-select behavior change, implicit deployment, CSI/PV/PVC creation, or Soperator role-storage change.
+
+#### Validation Method
+
+Trace SFS configuration through component ordering, named selection, saved keys and rendered node-group filesystem IDs and mount tags.
+
+#### Test Method
+
+Cover ordering, names and duplicate names, defaults/subsets/none, independent groups, text/TTY input and navigation, no/ambiguous SFS, existing-component preservation and Soperator regressions.
+
+#### Evaluation Method
+
+Use deterministic offline tests and a mocked terminal interaction. Keep source evidence distinct from live deployment, which is outside this change.
+
+<!-- /REQUIREMENT: REQ-046 -->
+
+<!-- REQUIREMENT: REQ-047 status=satisfied priority=P1 type=feature -->
+### REQ-047: Clear observability, bucket label and VPN wizard defaults
+
+#### User Story
+
+Operators can accept understandable defaults for managed telemetry, optional bucket metadata and VPN connectivity without knowing internal field paths or YAML syntax.
+
+#### Acceptance Criteria
+
+- AC-001: New ordinary MK8s targets offer Nebius-managed observability by default, In-cluster observability, or Disabled, as refined by REQ-050. Default acceptance enables all three signals through the Nebius collector and remote routing without Grafana or local stores. The existing enabled field continues to control collection; false disables automatic telemetry setup. Local opt-in uses the existing Grafana routing wizard. Dedicated Soperator defaults are unchanged. REQ-050 refines the ordinary observability selection and explicit Grafana installation workflow.
+- AC-002: Resolve regional project-scoped Nebius destinations through canonical endpoint templates and the supported collector authentication/discovery path. Show signals, destinations and application OTLP ingestion guidance without secrets. Application trace instrumentation remains separate. Preserve saved settings, existing collector ownership and target isolation; backtracking cleans only current-session additions and restores preexisting disabled collector rows that setup activated.
+- AC-003: Bucket labels use an optional guided name/value editor, default no labels. Preserve string values; support keeping, editing and clearing saved maps, explicit duplicate replacement and cancellation without partial edits. Persist the existing inputs.labels map.
+- AC-004: WireGuard exposes and accepts the existing defaults: new public IP true, client keepalive 25 seconds and NAT true. False and zero remain explicit values. Reuse requires an existing allocation ID. Show the derived gateway-name-public-ip name while leaving automatic naming derived; retain explicit overrides and offer an explicit reset to automatic. Ask the create/reuse choice before its dependent allocation ID, and clear that ID only after choosing creation. Keepalive accepts integer seconds from 0 through 65535. Explain keepalive zero and NAT return-route requirements.
+- AC-005: Preserve the shared-storage wizard changes, headless interfaces and Terraform contracts. No compatibility aliases, cloud mutation or unrelated project changes are introduced.
+
+#### Negative Criteria
+
+- NC-001: Do not reinterpret observability.enabled=false as remote collection, install duplicate collectors, remove preexisting backends on navigation, or send Nebius credentials to custom destinations.
+- NC-002: Do not require YAML for guided labels or persist stale automatically derived allocation names.
+
+#### Validation Method
+
+Inspect saved configuration and rendered collector values plus target-scoped app selection; distinguish local tests from live ingestion evidence.
+
+#### Test Method
+
+Cover default acceptance, local opt-in, telemetry disable, saved settings, target isolation, navigation, guided label operations, WireGuard false/zero/reuse and gateway renaming. Run focused routing, rendering, wizard, documentation and static checks.
+
+#### Evaluation Method
+
+Review exact product prompts and source contracts independently. No live provisioning or ingestion claim is required.
+
+<!-- /REQUIREMENT: REQ-047 -->
+
+<!-- REQUIREMENT: REQ-048 status=satisfied priority=P1 type=product -->
+### REQ-048: Local Terraform wrapper package integrity
+
+#### User Story
+
+Operators can initialize locally rendered bundled wrappers and their sibling modules.
+
+#### Acceptance Criteria
+
+- AC-001: Local WireGuard, SSH jump-host, NFS and NAT gateway sources retain the containing package and module subdirectory through rendering.
+- AC-002: Backendless Terraform initialization resolves sibling VM modules without package escapes; metadata discovery reads the selected module directory.
+- AC-003: Portable Git sources, input schemas and Terraform resource ownership remain unchanged.
+
+#### Negative Criteria
+
+- NC-001: No global package-root inference, wrapper rewrites, compatibility shims or cloud mutations are required.
+
+#### Validation Method
+
+Compare module-only and package/subdirectory source initialization using the installed Terraform executable.
+
+#### Test Method
+
+Cover four catalog sources, metadata, renderer preservation, portable controls and a provider-free sibling-module fixture.
+
+#### Evaluation Method
+
+Separate offline initialization evidence from authenticated render and live deployment.
+
+<!-- /REQUIREMENT: REQ-048 -->
+
+<!-- REQUIREMENT: REQ-049 status=satisfied priority=P1 type=product -->
+### REQ-049: Private managed infrastructure deployment without Kubernetes access
+
+#### User Story
+
+Operators can deploy managed CPU-only MK8s infrastructure from outside its private network when no in-cluster work is configured.
+
+#### Acceptance Criteria
+
+- AC-001: Managed CPU targets without enabled charts, in-cluster integrations or known local application bindings complete infrastructure deployment and required readiness through Nebius SDK reads without Kubernetes access.
+- AC-002: Bind the exact Terraform-owned cluster identity, project and desired name; require the configured endpoint, settled cluster and node groups, complete group inventory and all desired nodes ready. Missing, ambiguous, denied or incomplete evidence fails explicitly within bounded deadlines.
+- AC-003: Application, GPU and external targets retain their Kubernetes identity, ownership, inventory and workload validation. Known local application resources or bindings cannot be silently converted into infrastructure-only acceptance. Without local history, existing workloads remain explicitly uninspected; infrastructure acceptance does not claim their absence or removal.
+- AC-004: Initial deployment, retry, final verification and baseline publication use the same eligibility boundary. Reports identify provider infrastructure evidence and never claim Kubernetes workload or GPU verification from cloud readiness.
+- AC-005: Source-config quota assessment (validate, quota-check, quota-request and render) and generated deployment preflight use a fresh Terraform plan to credit retained standalone shared filesystems and managed WireGuard/NAT address allocations when generated infrastructure and its manifest are available. No-op storage needs no additional quota; same-resource growth requires only its increase; creates and replacements require full new demand. Credit each filesystem independently only when its complete inputs and Nebius scope match the generated runtime snapshot and its retention is proven by the plan. Unrelated component edits and new or changed sibling filesystems must not remove valid retained credit. Retained allocations require an unchanged component declaration, exact module/project/resource identity and known unchanged address kind; replacements and uncertain identities retain full demand. NAT plans use the existing read-only lifecycle owner, never a fabricated authorization flag or route mutation. Missing, ambiguous, stale or unknown evidence earns no speculative credit; a missing generated bundle or manifest retains full configured demand.
+
+#### Negative Criteria
+
+- NC-001: Do not create a public Kubernetes endpoint, fabricate a Kubernetes UID, silently skip required validation or bypass Terraform resource ownership.
+- NC-002: No automatic VPN activation, remote command execution or SDK substitution for Kubernetes application writes.
+
+#### Validation Method
+
+Replay the ordinary deployment command against a private infrastructure-only target and independently read provider postconditions; distinguish authenticated live proof from offline tests.
+
+#### Test Method
+
+Cover cloud-only execution and final acceptance without any Kubernetes calls; test incomplete readiness, missing groups, identity mismatch, deadlines, API failures and application/external/GPU/history controls.
+
+#### Evaluation Method
+
+Review evidence scope and unchanged application ownership safeguards; distinguish infrastructure verification from uninspected workloads and guest data paths.
+
+<!-- /REQUIREMENT: REQ-049 -->
+
+<!-- REQUIREMENT: REQ-050 status=active priority=P1 type=feature -->
+### REQ-050: Unified ordinary MK8s observability and verified signal delivery
+
+#### User Story
+
+Operators choose Nebius-managed telemetry by default or a complete in-cluster stack through one workflow, and receive an OK only after actual signal delivery and Grafana queries succeed.
+
+#### Acceptance Criteria
+
+- AC-001: Ordinary MK8s offers Nebius-managed observability by default, in-cluster observability, or disabled. Managed mode enables metrics/logs/traces through the Nebius Kubernetes agent without local stores, Grafana or its database. Local mode uses VictoriaMetrics, VictoriaLogs, VictoriaTraces and Grafana, with no implicit remote copy. Existing per-signal opt-outs remain effective across rendering, routing and verification, including later re-enablement. Explicit managed selection restores canonical Nebius write and reserved read connections while preserving separately named query connections. Existing platform VM monitoring and Soperator-native ownership are unchanged.
+- AC-002: Creation, component addition, headless configuration and grafana install share one intent resolver and dependency workflow. Explicit grafana install enters local-only in-cluster intent from managed-only settings; explicit signal overrides win and established local installations retain saved advanced settings. Configuration changes are target-scoped; normal whole-project deployment remains visible.
+- AC-003: Retain distinct OTLP gateway and node-log collector components with clear names. Report effective producer transport and resolved project/region. Preserve supported Nebius metadata/IAM discovery, stable-label scraping and custom destination credential isolation. Prometheus application metrics and instrumented OTLP/gRPC traces are supported; generic OTLP metrics are not implied.
+- AC-004: General PostgreSQL is a Database app with user-owned settings and Secret references. A separately identified Grafana PostgreSQL dependency alone receives Grafana users, authentication and ingress policy. Reject ambiguous old bindings before mutation; retain data and credentials through explicit migration.
+- AC-005: Collector changes use a target-bound resumable prepare/quiesce/activate/verify handover. Never leave competing collectors active for the same signal. New configurations advertise a stable trace ingress; existing owner-specific client endpoints require explicit reconfiguration. Preserve local data and checkpoints on failure.
+- AC-006: Required deployment validation emits bounded current-run metric/log/trace probes through actual collection paths, queries selected backends and the correct Grafana datasources, and binds evidence to project, target, generation and time. Managed Grafana uses an explicitly selected human IAM profile and verified project datasource identity, separate from producer/backend identities. Missing or skipped required proof fails validation without rolling back resources.
+- AC-007: Screen, JSON and Markdown report the same per-signal readiness, delivery and Grafana evidence. Report configured, ready, verified and unavailable distinctly; never infer ingestion from workload or datasource health alone. Preflight read access where feasible, bound requests/polling, sanitize errors and clean only owned probe resources.
+
+#### Negative Criteria
+
+- NC-001: No duplicate collection, implicit dual export, secret values in config/reports, portal datasource mutations, compatibility shims, silent database replacement or Soperator ownership changes.
+- NC-002: Unrelated samples, empty queries, HTTP-200 query errors, stale reports and skipped required checks cannot yield observability OK.
+
+#### Validation Method
+
+Inspect shared intent, rendered pinned chart contracts, deployment execution and authoritative query results. Local tests are separate from live managed/local trials.
+
+#### Test Method
+
+Exercise entrypoint parity, defaults, transitions/restart, disabled signals, generic and Grafana database coexistence, authentication/project mismatches, backend/Grafana failures, probe cleanup, retained volumes and Soperator regressions.
+
+#### Evaluation Method
+
+Use scoped offline checks and separately authorized live product trials. No live qualification is inferred from source or mocked tests.
+
+<!-- /REQUIREMENT: REQ-050 -->
+
+<!-- REQUIREMENT: REQ-051 status=satisfied priority=P1 type=architecture -->
+### REQ-051: Component-owned configuration without a deploy section
+
+#### User Story
+
+Operators configure infrastructure and applications with their owners, without a separate deployment-settings registry.
+
+#### Acceptance Criteria
+
+- AC-001: Required source version v2 accepts only component-owned settings; reject any root deploy before normalization, authentication, source acquisition or writes. No legacy readers, aliases or implicit conversion.
+- AC-002: Managed cluster policy belongs beside inputs; external clusters use infra.external_clusters and never become Terraform subjects. Cluster observability, secret synchronization and GPU deployment checks share one exact-target resolver. VM observability is per instance.
+- AC-003: Soperator chart entries own rollout, profiling, smoke checks and registration evidence outside native values. External desired platform stays with external infrastructure. Preserve target identities, evidence fingerprints, independent defaults and explicit disables.
+- AC-004: All authoring, validation, rendering, deployment, access, lifecycle, reporting and recovery paths use the same schema. Source projections never recreate deploy or drop external records. Ordinary-app publication preserves protected infrastructure and native application authority.
+- AC-005: Generated manifest v3 stores derived targets, outputs, watchers and checks under execution. Frozen/config recovery validates embedded contracts before effects and preserves historical records unchanged.
+- AC-006: Supported cutover finishes old active attempts with their matching CLI, explicitly rewrites source, performs normal full render and deploy, then uses new accepted baselines for upgrades and ordinary apps. No destructive reset or converter is introduced.
+
+#### Negative Criteria
+
+- NC-001: No dual old/new paths, runtime deploy bridge, resource renaming, secret values in configuration, automatic history rewriting or external-cluster Terraform adoption.
+
+#### Validation Method
+
+Inspect source-to-runtime-to-source projections, exact identity ownership and generated/frozen schemas; separate offline evidence from live qualification.
+
+#### Test Method
+
+Cover early rejection, every writer, normalization idempotency, managed/external/VM target isolation, wizard cancellation, guarded publication, unchanged resource identities and old-history cutover.
+
+#### Evaluation Method
+
+Run focused offline tests, quality and installed-wheel checks; verify complete removal of active old authored references.
+
+<!-- /REQUIREMENT: REQ-051 -->
+
+<!-- REQUIREMENT: REQ-052 status=active priority=P0 type=security -->
+### REQ-052: Team-owned WireGuard access through SecretStash
+
+#### User Story
+
+Gateway administrators need to provision, recover and issue VPN clients without
+relying on one administrator's laptop or distributing SSH keys through Git.
+
+#### Acceptance Criteria
+
+- AC-001: New WireGuard deployments select an existing IAM group from complete live SDK listings of the exact tenant and project. Preserve exact identity; revalidate before grants. Denied, partial or malformed listings fail without cached or guessed fallback. Group membership remains externally managed.
+- AC-002: The wizard automatically adds a visible dedicated mysterybox infrastructure row and exact access.secretstash_ref for each fresh WireGuard gateway. Terraform owns its login, host-identity and connection-record secret containers, dedicated attached VM service account, group, membership and narrow permits; the SDK owns payload versions and primary publication. The group reads login and connection payloads; the VM reads only its pinned host payload. Human readers use their own identity. No static service-account credential or token is distributed.
+- AC-003: A conditional remote operation journal serializes gateway lifecycle mutations across machines in a regular S3 backend bucket. Persist safe resource/operation references before dependent steps. Ambiguous writes retain recovery evidence; no lease-expiry takeover, key regeneration or foreign resource adoption.
+- AC-004: Terraform and cloud-init contain only public bootstrap values and immutable secret references. The guest installs the validated host pair before authorizing administrator login, fails closed on bootstrap errors, and validates/reuses its persisted identity on subsequent boots without SecretStash. Login rotation never changes frozen cloud-init or replaces VM/disk.
+- AC-005: The existing client-generation command resolves an authenticated current READY connection record and pinned login version directly through the SDK, rechecks the binding, and uses a protected temporary key with strict host pinning and no inherited identity or connection reuse. Issuance requires neither Terraform, Kubernetes, Compute reads nor provisioning authority. Preserve secure client files and serialized guest allocation.
+- AC-006: Login rotation stages a candidate, tests candidate-only login, suspends issuance, removes and verifies rejection of the old key, then publishes READY. Interrupted operations resume from exact journals without restoring retired keys. Retire the binding before supported gateway deletion or replacement; retain secrets by default.
+- AC-007: This is a new-deployment contract with no legacy personal-key or Compute-recovery fallback. SecretStash access is direct and does not select external-secrets or generic Kubernetes secret-sync components. Trusted gateway admins retain full sudo.
+- AC-008: Render, validation, preview and quota observation are read-only; deployment applies the separate access Terraform root and verifies exact outputs before SDK credential initialization and VM planning. Project and gateway locks cover both roots through READY publication. Operator grants target individual login and connection secrets. Report direct broad grants without revoking user-managed access. Group visibility never implies grant authority.
+- AC-009: Reject existing client output before remote allocation; ambiguous allocation or local publication failures identify the requested client and never automatically allocate another peer.
+- AC-010: Unchanged render/deploy reuses exact access resources, keys, versions and frozen bootstrap, including after login rotation. Terraform never manages WireGuard payloads or resets the primary version. Both roots are captured, recovered, validated and reported; old SDK-owned deployments are rejected before mutations without migration or adoption.
+- AC-011: Verified gateway destruction retains the access root and a disabled, explicitly retained owner declaration. Retained access remains tracked after former network dependencies are removed; block owner/dependency removal and retired-generation reuse.
+- AC-012: Selecting any MysteryBox infrastructure component never implicitly selects External Secrets Operator. ESO is independently selected by the user; selecting ESO automatically configures eligible application-secret sync on its target unless opted out. WireGuard secrets never enter Kubernetes sync. Ordinary MysteryBox configuration starts with an explicit per-target sync choice: select targets first when several exist; default to current effective intent, otherwise No. Yes offers explicit ESO activation and namespaces; No persists false. Unselected targets stay unchanged. Stage each target until complete; preserve back/quit. Kubernetes naming and ESO policy appear only with effective sync. Without effective sync, it collects only secret names and payload keys/types, omits new sync metadata and sync claims, and preserves existing entries.
+
+- AC-013: WireGuard local_subnets selects default client destination IPv4 CIDRs, distinct from gateway placement. The wizard lists live SDK subnets in the selected project/VPC with names, IDs and effective CIDRs; labels shared network pools, deduplicates route values and never preselects new destinations. Preserve explicit saved routes and manual CIDR entry for planned or otherwise reachable networks. Empty selection means tunnel-only routes. Discovery failure is explicit and never presented as a live empty inventory. WireGuard SDK construction identifies cxcli with its versioned user-agent while preserving strict authentication.
+
+#### Negative Criteria
+
+- NC-001: Never persist private SSH keys in source config, generated Terraform inputs/state, cloud-init, Git, logs, reports or lifecycle journals. Never send credentials to configuration-selected arbitrary API endpoints.
+- NC-002: Removing IAM membership alone does not revoke copied SSH keys. Do not claim SecretStash group isolation confines a gateway root administrator or that local tests establish live provider qualification.
+
+#### Validation Method
+
+Trace configuration, render, deployment, guest boot, day-2, rotation and deletion
+through their single lifecycle owners and inspect secret-bearing boundaries.
+
+#### Test Method
+
+Use mocked SDK/object-store and guest fixtures for pagination, identity denial,
+concurrency, interrupted publication, strict SSH, bootstrap failure and rotation.
+
+#### Evaluation Method
+
+Qualify fresh nonproduction install, issuance by any selected-group member,
+permission boundaries, concurrency, rotation and reboot. Require fresh handshake,
+bidirectional traffic and an authenticated private-service request, followed by
+local route/DNS restoration. No second human is required; inherited admin access
+is not evidence of group-only isolation.
+
+<!-- /REQUIREMENT: REQ-052 -->
+
+<!-- REQUIREMENT: REQ-053 status=satisfied priority=P0 type=functional -->
+### REQ-053: Reliable WireGuard private-network access
+
+#### User Story
+
+Operators need working private-network access after installation and safe networking
+updates for an existing gateway without replacing its resources or credentials.
+
+#### Acceptance Criteria
+
+- AC-001: One guest implementation owns initial and subsequent networking. Default MTU is min(1420, uplink MTU minus 80); explicit integer MTU is 1280..1420 and cannot exceed that limit. Persist the effective MTU in server/client configurations and scoped bidirectional TCP MSS rules without duplication.
+- AC-002: Preserve exact applied bootstrap per owned generation independently of mutable networking assets. Keep VM/disk replacement guards, validate ownership and immutable artifact digests, and keep previews read-only. Reject unsupported frozen-input changes.
+- AC-003: Authenticated in-place reconciliation and same-client refresh preserve keys, peers, addresses and route overrides. Fence concurrent writers; missing keys fail without generation. Retry and rollback preserve authoritative state.
+- AC-004: Automatically verify matching connected clients during deploy; missing or ambiguous prerequisites remain pending. Exercised route, MTU, TLS or authentication failures return nonzero while preserving infrastructure success. Explicit verification requires current private endpoint/CA, intended tunnel, nonanonymous identity, uncompressed complete discovery response larger than 4096 bytes and peer transfer evidence. Never activate VPN or change global kubeconfig implicitly.
+- AC-005: Publish separate durable client outcomes without secrets or response bodies. No Kubernetes target adds no Kubernetes dependency. Verify recovery, original kubectl behavior, reconnection and a second deployment with unchanged resource and credential identities.
+
+#### Negative Criteria
+
+- NC-001: No state surgery, replacement, firewall reset, key rotation, public endpoint, broad port opening or historical PASS reuse for this repair.
+
+#### Validation Method
+
+Trace source, bundle, ownership, guest state, client route and published reports.
+
+#### Test Method
+
+Unit, real template, isolated Linux packet-path and concurrency regressions.
+
+#### Evaluation Method
+
+Native repair and repeat deploy followed by independent identity and laptop traffic checks.
+
+<!-- /REQUIREMENT: REQ-053 -->
 
 <!-- maintain-project-specs:requirements:end -->

@@ -11,6 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import nat_security
+from nat_security import BAN_CHAIN, security_status, valid_config
+
 CONFIG = Path("/etc/nebius-nat.json")
 
 
@@ -39,14 +42,12 @@ def rules(config: dict, interface: str) -> list[tuple[str, str, list[str]]]:
             ["-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
         ),
     ]
-    for cidr in config["admin_cidrs"]:
-        result.append(
-            (
-                "filter",
-                "CXCLI_NAT_INPUT",
-                ["-s", cidr, "-p", "tcp", "--dport", "22", "-j", "ACCEPT"],
-            )
-        )
+    result.extend(
+        [
+            ("filter", "CXCLI_NAT_INPUT", ["-p", "tcp", "--dport", "22", "-j", BAN_CHAIN]),
+            ("filter", "CXCLI_NAT_INPUT", ["-p", "tcp", "--dport", "22", "-j", "ACCEPT"]),
+        ]
+    )
     for cidr in config["source_cidrs"]:
         result.append(
             ("filter", "CXCLI_NAT_FORWARD", ["-s", cidr, "-o", interface, "-j", "ACCEPT"])
@@ -80,6 +81,24 @@ def normalized_rule(tokens: list[str]) -> list[str]:
 
 
 def exact_rules(desired: list, hooks: list) -> bool:
+    bans = run("iptables", "-w", "5", "-S", BAN_CHAIN, check=False)
+    if bans.returncode:
+        return False
+    for line in bans.stdout.splitlines():
+        if not line.startswith("-A "):
+            continue
+        tokens = shlex.split(line)
+        if (
+            len(tokens) != 6
+            or tokens[:3] != ["-A", BAN_CHAIN, "-s"]
+            or tokens[4:] != ["-j", "DROP"]
+        ):
+            return False
+        try:
+            if ipaddress.IPv4Network(tokens[3], strict=True).prefixlen != 32:
+                return False
+        except ValueError:
+            return False
     for table, parent, chain in hooks:
         actual = run("iptables", "-w", "5", "-t", table, "-S", chain, check=False)
         if actual.returncode:
@@ -105,7 +124,15 @@ def main() -> int:
         raise ValueError("usage: nebius-nat configure|status")
     content = CONFIG.read_bytes().strip()
     config = json.loads(content)
-    for key in ("source_cidrs", "admin_cidrs"):
+    if not valid_config(config) or "admin_cidrs" in config:
+        raise ValueError("Invalid NAT security profile")
+    for key, path in (
+        ("guest_program_sha256", Path(__file__)),
+        ("security_program_sha256", Path(nat_security.__file__)),
+    ):
+        if config.get(key) != hashlib.sha256(path.read_bytes().strip()).hexdigest():
+            raise ValueError("NAT installed program differs from Terraform intent")
+    for key in ("source_cidrs",):
         if not config.get(key):
             raise ValueError("Empty NAT source policy")
         for cidr in config[key]:
@@ -124,6 +151,9 @@ def main() -> int:
         ("nat", "POSTROUTING", "CXCLI_NAT_POSTROUTING"),
     ]
     if action == "configure":
+        # Fail2ban owns entries only. Never flush live bans on NAT restart.
+        if run("iptables", "-w", "5", "-S", BAN_CHAIN, check=False).returncode:
+            run("iptables", "-w", "5", "-N", BAN_CHAIN)
         run("sysctl", "-w", "net.ipv4.ip_forward=1")
         for table, _, chain in hooks:
             run("iptables", "-w", "5", "-t", table, "-N", chain, check=False)
@@ -137,18 +167,20 @@ def main() -> int:
                 run("iptables", "-w", "5", "-t", table, "-I", parent, "1", "-j", chain)
     forwarding = Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() == "1"
     valid = exact_rules(desired, hooks)
+    security = security_status(config) if action == "status" else {}
     print(
         json.dumps(
             {
-                "schema": 1,
+                "schema": 2,
                 "config_sha256": hashlib.sha256(content).hexdigest(),
                 "interface": interface,
                 "forwarding": forwarding,
                 "rules_valid": valid,
+                **security,
             }
         )
     )
-    return 0 if forwarding and valid else 1
+    return 0 if forwarding and valid and all(security.values()) else 1
 
 
 if __name__ == "__main__":

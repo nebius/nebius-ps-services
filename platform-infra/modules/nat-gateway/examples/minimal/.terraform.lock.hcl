@@ -2,16 +2,16 @@
 # Manual edits may be lost in future updates.
 
 provider "registry.terraform.io/nebius/nebius" {
-  version     = "0.6.73"
-  constraints = ">= 0.6.8, < 0.7.0"
+  version     = "0.6.75"
+  constraints = ">= 0.6.8, >= 0.6.74, < 0.7.0"
   hashes = [
-    "h1:4gHojEEYD1VGbxzoJipDxW/UmSw+E+TFpqsuE3Vb04A=",
-    "zh:29eeeebf10bfe1f5a6bf27f68675fc35bc72552b44cb0c1950f9c27a60fbbe8a",
-    "zh:512978283953fc16b6c0646c0f97dc440720ed5501943ae241fb6a11c414f2db",
-    "zh:618d3db6a504349c9414ab716b102ad7d2a06402009457a21dd2ea76d633154d",
-    "zh:9b404c2cefe6b0bb50404aca726ac9e3c0187356d4b57aa95e69970ab9b01f65",
-    "zh:afb98c22e40c0bbf887af158782676d3048551659a9c2c416b60dee0f22408c2",
-    "zh:e55d94181288fc4b57e41139f6c7b85b99053e321a8274e245047930acc05ade",
+    "h1:zoASeM+iIqvGr//Yno/dLjbgilW+Tv36+A9JPh4DlX4=",
+    "zh:6e5db40e8861abf30dd4672abc6fdc34a024e9d15571249d42731fb9e675169a",
+    "zh:82d86e92ce9ade69a3a64b60c819977ac3498e9a920b87c190d4b9e05b132496",
+    "zh:9b16d8e34fc331178e0e69aee6c0ec2ba3c1c88316b1eb0c55bb64e7493f20af",
+    "zh:9c723834dedaaa3493c95d71e26c30b3f425e01faa319326e52063636783ef79",
+    "zh:b7b2dff8a2d702294594cd96f71383deafeee4537c1e3921b3669b9e79fe3da9",
     "zh:f809ab383cca0a5f83072981c64208cbd7fa67e986a86ee02dd2c82333221e32",
+    "zh:f8498156910c3104a0169f0d731365a2241a32591093951975661477b5917653",
   ]
 }

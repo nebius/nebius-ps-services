@@ -118,13 +118,25 @@ Optional arguments:
 
 The live path takes its local locks first, validates the current non-agent
 administrative profile by minting a human-user access token with
-`nebius iam get-access-token` while discarding stdout, resolves authoritative
+`nebius iam get-access-token` while discarding stdout and provider stderr, resolves authoritative
 project metadata once, and performs one convergence pass. It never prints or
 persists that human token. All bootstrap IAM and authorized-key operations use
 the validated human profile until the agent service account is ready. The path
 creates or reuses the project-parented service account, reconciles the one
 exact-permit group, ensures one membership, maintains the canonical credential
 and profile, and verifies project access plus tenant quota-allowance listing.
+
+Live `ensure` allows the CLI to open browser sign-in within a three-minute
+authentication bound. Run it directly after explicit invocation; an expired
+human login is not a reason to ask the user to run a separate terminal command
+or repeat permission. If browser sign-in cannot complete, report
+`blocked-admin-auth` and the actual browser or authentication blocker. Never
+print authorization URLs or raw authentication diagnostics. Preview and
+repair-lease checks remain non-browser; `verify` and diagnosis never launch
+human authentication. Before adding a group permit, setup validates every
+membership page so an unexpected member cannot receive the new permission.
+Membership is checked again after permit writes to detect concurrent drift.
+Human and agent ancestry reads use `nebius iam v2 project get`.
 
 An existing credential normally must resolve to `codex-agent-sa` under the
 selected project before mutation. One exception is a failed get-by-ID whose

@@ -3899,5 +3899,43 @@ native skill-trigger, comparative quality and natural-lifetime checks honestly.
 
 <!-- /REQUIREMENT: REQ-051 -->
 
+<!-- REQUIREMENT: REQ-052 status=satisfied priority=P1 type=feature -->
+### REQ-052: Complete explicit agent authentication bootstrap safely
+
+#### User Story
+
+Users invoking agent authentication setup need an expired human login to open
+its browser sign-in and continue creating the fixed service account in the
+selected project, without another permission prompt.
+
+#### Acceptance Criteria
+
+- AC-001: Explicit live ensure permits one bounded foreground browser authentication for the selected non-agent administrative profile before IAM changes. Token output and raw authentication diagnostics are suppressed.
+- AC-002: The fixed service account is project-parented; its deterministic tenant group contains only project admin and tenant viewer permits and the fixed account membership. Validate existing permits and all membership pages before changing either grant surface.
+- AC-003: Diagnose and runtime verify never launch browser login or mutate IAM, credentials or profiles. Dry-run and repair-lease keep non-browser administrative checks. Failures identify the human bootstrap boundary without implying agent credential failure.
+- AC-004: Setup preserves one-pass convergence, bounded credential replacement, active-profile restoration, exact project selection and no-op repeat behavior. Project metadata uses the supported IAM v2 project API. Source and installed skills remain aligned.
+
+#### Negative Criteria
+
+- NC-001: Do not create duplicate accounts, grant unexpected group members additional access, expose tokens or browser authorization URLs, or rotate credentials on an unclassified failure.
+- NC-002: Do not bypass authentication or re-prompt for authorization already supplied by explicit setup invocation. Runtime hooks remain separately installed.
+
+#### Validation Method
+
+Compare deterministic failing controls with the repaired implementation and
+independently inspect authorized live account, group and runtime postconditions.
+
+#### Test Method
+
+Cover expired human login, rejected login with sanitized output, read-only
+browser suppression and combined permit/membership drift before mutation.
+
+#### Evaluation Method
+
+Maintain canonical trigger cases for both skills; distinguish static checks,
+installation parity, native triggering, comparative quality and live evidence.
+
+<!-- /REQUIREMENT: REQ-052 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

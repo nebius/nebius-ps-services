@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
 
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.inventory_ops as inventory_ops
+from nebius_cxcli.cluster_config import cluster_rows, require_cluster_row
 from nebius_cxcli.component_sources import ComponentOutput, reset_component_sources_cache
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
@@ -41,6 +41,16 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         )
     )
     assert isinstance(payload, dict)
+    # Inventory tests opt into collection explicitly; defaults have their own tests.
+    for target in cluster_rows(payload):
+        if "observability" in target:
+            target["observability"]["enabled"] = False
+            target["observability"].pop("routing", None)
+    payload["apps"]["charts"] = [
+        row
+        for row in payload.get("apps", {}).get("charts", [])
+        if row.get("id") != "nebius-observability-agent" or row.get("id") in selected_apps
+    ]
     return payload
 
 
@@ -83,7 +93,7 @@ def _align_infra_resource_name(
             chart["instance_id"] = resource_name
         if chart.get("target_ref") == old_instance_id:
             chart["target_ref"] = resource_name
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
             target["instance_id"] = resource_name
 
@@ -116,24 +126,20 @@ def _markdown_headings(markdown: str) -> list[str]:
 
 
 def _enable_mk8s_observability(payload: dict, *, target_ref: str = "mk8s") -> None:
-    deploy = payload.setdefault("deploy", {})
-    assert isinstance(deploy, dict)
-    targets = deploy.setdefault("targets", [{"instance_id": target_ref}])
-    assert isinstance(targets, list)
-    target: dict[str, Any] | None = next(
-        (
-            item
-            for item in targets
-            if isinstance(item, dict) and item.get("instance_id") == target_ref
-        ),
-        None,
-    )
-    if target is None:
-        target = {"instance_id": target_ref}
-        targets.append(target)
+    target = require_cluster_row(payload, target_ref)
     observability = target.setdefault("observability", {})
     assert isinstance(observability, dict)
     observability["enabled"] = True
+    from nebius_cxcli.observability_routing import enable_app
+
+    enable_app(
+        payload,
+        target_ref,
+        next(entry for entry in component_entries("apps") if entry.id == "grafana"),
+    )
+    from nebius_cxcli.deploy_targets import strip_app_chart_target_refs
+
+    strip_app_chart_target_refs(payload)
 
 
 def _install_vpc_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -371,7 +377,7 @@ def test_write_inventory_lists_selected_security_and_platform_components(
             },
         ],
     }
-    payload["deploy"]["targets"][0]["secrets"] = {
+    cluster_rows(payload)[0]["secrets"] = {
         "mysterybox": {
             "enabled": True,
             "sync_namespaces": ["ns1", "ns2"],
@@ -523,7 +529,6 @@ def test_write_inventory_uses_grafana_status_target_metadata_when_tf_outputs_una
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
     mk8s_inputs.setdefault("cluster", {})["cluster_name"] = "cluster1"
-    payload["deploy"] = {"targets": [{"instance_id": "cluster1"}]}
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -819,7 +824,6 @@ def test_write_inventory_lists_pending_grafana_links_per_target(
     cluster2["instance_id"] = "cluster2"
     cluster2["inputs"]["cluster_name"] = "cluster2"
     payload["infra"]["components"].append(cluster2)
-    payload["deploy"] = {"targets": []}
     _enable_mk8s_observability(payload, target_ref="cluster1")
     _enable_mk8s_observability(payload, target_ref="cluster2")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -864,7 +868,6 @@ def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s["instance_id"] = "cluster1"
     mk8s["inputs"]["cluster_name"] = "cluster1"
-    payload["deploy"] = {"targets": []}
     _enable_mk8s_observability(payload, target_ref="cluster1")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -963,21 +966,18 @@ def test_write_inventory_omits_disabled_observability_signal_endpoints(tmp_path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    payload["deploy"] = {
-        "targets": [
-            {
-                "instance_id": "mk8s",
-                "observability": {
-                    "enabled": True,
-                    "kubernetes": {
-                        "logs": {"enabled": False},
-                        "metrics": {"enabled": True},
-                        "traces": {"enabled": False},
-                    },
+    require_cluster_row(payload, "mk8s").update(
+        {
+            "observability": {
+                "enabled": True,
+                "kubernetes": {
+                    "logs": {"enabled": False},
+                    "metrics": {"enabled": True},
+                    "traces": {"enabled": False},
                 },
             }
-        ]
-    }
+        }
+    )
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -1007,8 +1007,12 @@ def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
-    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = True
-    payload["deploy"]["observability"].setdefault("vm", {}).setdefault("logs", {})["enabled"] = True
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm").setdefault(
+        "observability", {}
+    )["enabled"] = True
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+        "observability"
+    ].setdefault("vm", {}).setdefault("logs", {})["enabled"] = True
     vm = _infra_component_row(payload, "vm")
     vm_inputs = vm.setdefault("inputs", {})
     assert isinstance(vm_inputs, dict)
@@ -1048,7 +1052,9 @@ def test_write_inventory_includes_vm_metrics_even_when_project_observability_is_
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
-    payload.setdefault("deploy", {}).setdefault("observability", {})["enabled"] = False
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm").setdefault(
+        "observability", {}
+    )["enabled"] = False
     vm = _infra_component_row(payload, "vm")
     vm_inputs = vm.setdefault("inputs", {})
     assert isinstance(vm_inputs, dict)
@@ -1154,6 +1160,7 @@ def test_write_inventory_includes_wireguard_handoff(
 
     payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
     wireguard = _infra_component_row(payload, "wireguard-gw")
+    wireguard["access"] = {"admin_group_id": "group-test-admins"}
     _align_infra_resource_name(payload, wireguard, "wg-gw")
     wireguard_inputs = wireguard.setdefault("inputs", {})
     assert isinstance(wireguard_inputs, dict)
@@ -1165,12 +1172,14 @@ def test_write_inventory_includes_wireguard_handoff(
             "preset": "2vcpu-8gb",
             "source_image_family": "ubuntu24.04-driverless",
             "ssh_user_name": "ubuntu",
-            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
             "local_subnets": ["10.20.0.0/16", "10.30.0.0/16"],
             "wireguard_tunnel_cidr": "10.8.0.1/22",
             "wireguard_listen_port": 51820,
         }
     )
+    from nebius_cxcli.wireguard_dependencies import materialize_wireguard_dependencies
+
+    materialize_wireguard_dependencies(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -1233,6 +1242,7 @@ def test_write_inventory_wireguard_handoff_without_local_client_configs(
 
     payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
     wireguard = _infra_component_row(payload, "wireguard-gw")
+    wireguard["access"] = {"admin_group_id": "group-test-admins"}
     _align_infra_resource_name(payload, wireguard, "wg-gw")
     wireguard_inputs = wireguard.setdefault("inputs", {})
     assert isinstance(wireguard_inputs, dict)
@@ -1244,12 +1254,14 @@ def test_write_inventory_wireguard_handoff_without_local_client_configs(
             "preset": "2vcpu-8gb",
             "source_image_family": "ubuntu24.04-driverless",
             "ssh_user_name": "ubuntu",
-            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
             "local_subnets": ["10.20.0.0/16"],
             "wireguard_tunnel_cidr": "10.8.0.1/22",
             "wireguard_listen_port": 51820,
         }
     )
+    from nebius_cxcli.wireguard_dependencies import materialize_wireguard_dependencies
+
+    materialize_wireguard_dependencies(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)

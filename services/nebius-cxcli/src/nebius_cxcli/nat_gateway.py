@@ -94,6 +94,22 @@ def target_key(target: Mapping[str, Any]) -> str:
     return str(target["subnet_id"])
 
 
+def target_policy_key(target: Mapping[str, Any]) -> str:
+    """Table identity follows the consumer, independently of its source policy."""
+    return "subnet-" + fingerprint(target_key(target))[:24]
+
+
+def verification_enabled(row: Mapping[str, Any]) -> bool:
+    verification = row.get("routing", {}).get("verification", {"enabled": True})
+    if (
+        not isinstance(verification, Mapping)
+        or set(verification) != {"enabled"}
+        or not isinstance(verification["enabled"], bool)
+    ):
+        raise ValueError("NAT routing.verification requires a boolean enabled field")
+    return verification["enabled"]
+
+
 def validate_nat_config(payload: Mapping[str, Any]) -> None:
     rows = nat_rows(payload)
     all_rows = {
@@ -121,11 +137,54 @@ def validate_nat_config(payload: Mapping[str, Any]) -> None:
         routing = row.get("routing")
         if (
             not isinstance(routing, Mapping)
-            or set(routing) != {"version", "enabled", "targets", "policies"}
+            or set(routing) - {"version", "enabled", "targets", "policies", "verification"}
+            or not {"version", "enabled", "targets", "policies"}.issubset(routing)
             or routing.get("version") != 1
             or not isinstance(routing.get("enabled"), bool)
         ):
             raise ValueError(f"NAT {name} requires routing version, enabled, targets and policies")
+        verification_enabled(row)
+        mode = inputs.get("gateway_subnet_mode", "create")
+        subnet_binding = row.get("bindings", {}).get("inputs.gateway_subnet_id")
+        subnet_id = inputs.get("gateway_subnet_id")
+        if mode not in {"create", "reuse"}:
+            raise ValueError("NAT gateway_subnet_mode must be create or reuse")
+        if mode == "reuse":
+            if bool(subnet_id) == bool(subnet_binding):
+                raise ValueError("NAT reuse requires exactly one gateway subnet ID or binding")
+            if "gateway_subnet_cidr" in inputs:
+                raise ValueError("NAT reused subnets cannot specify gateway_subnet_cidr")
+            if subnet_binding and (
+                subnet_binding.get("source_component") != "vpc"
+                or subnet_binding.get("source_output") != "subnets"
+                or subnet_binding.get("attribute") != "id"
+                or not subnet_binding.get("key")
+            ):
+                raise ValueError("NAT gateway subnet requires a canonical VPC subnet binding")
+            if subnet_binding:
+                vpc = all_rows.get(subnet_binding.get("source_instance"), {})
+                if vpc.get("id") != "vpc" or subnet_binding["key"] not in vpc.get("inputs", {}).get(
+                    "subnets", {}
+                ):
+                    raise ValueError("NAT gateway subnet must reference an enabled VPC subnet")
+                network_binding = row.get("bindings", {}).get("inputs.network_id")
+                if network_binding:
+                    if network_binding != {
+                        "source_component": "vpc",
+                        "source_instance": subnet_binding["source_instance"],
+                        "source_output": "network_id",
+                    }:
+                        raise ValueError(
+                            "NAT gateway subnet and network must use the same VPC binding"
+                        )
+                elif vpc.get("inputs", {}).get("network", {}).get("existing_id") != inputs.get(
+                    "network_id"
+                ):
+                    raise ValueError(
+                        "NAT gateway subnet and network must use the same existing VPC"
+                    )
+        elif subnet_id or subnet_binding:
+            raise ValueError("NAT gateway_subnet_id is only valid in reuse mode")
         policies = routing["policies"]
         if not isinstance(policies, Mapping) or not policies:
             raise ValueError(f"NAT {name} requires at least one reviewed routing policy")
@@ -146,6 +205,12 @@ def validate_nat_config(payload: Mapping[str, Any]) -> None:
         targets = routing["targets"]
         if not isinstance(targets, list) or not targets:
             raise ValueError("Select at least one NAT workload subnet")
+        if routing["enabled"] and len(
+            {t.get("policy") for t in targets if isinstance(t, Mapping)}
+        ) != len(targets):
+            raise ValueError(
+                "NAT requires one route table per workload subnet; detach and refresh routes"
+            )
         for target in targets:
             if not isinstance(target, Mapping) or target.get("policy") not in policies:
                 raise ValueError("NAT target references an unknown routing policy")
@@ -191,10 +256,22 @@ def validate_nat_config(payload: Mapping[str, Any]) -> None:
             else:
                 raise ValueError("NAT target owner must be terraform or external")
             key = target_key(target)
+            if (subnet_id and target.get("subnet_id") == subnet_id) or (
+                subnet_binding
+                and target.get("vpc_instance") == subnet_binding["source_instance"]
+                and target.get("subnet_key") == subnet_binding["key"]
+            ):
+                raise ValueError("The gateway subnet cannot be a NAT workload target")
             if key in used:
                 raise ValueError("A workload subnet cannot have multiple NAT owners")
             used.add(key)
-        for key in ("admin_cidrs", "source_cidrs"):
+        if "admin_cidrs" in inputs:
+            raise ValueError(
+                "NAT admin_cidrs was removed: SSH now uses public keys and fail2ban from any "
+                "IPv4 source. For an existing gateway, first disable routing and deploy with "
+                "the previous matching CLI/module, then remove inputs.admin_cidrs and upgrade."
+            )
+        for key in ("source_cidrs",):
             cidrs = inputs.get(key)
             if not isinstance(cidrs, list) or not cidrs:
                 raise ValueError(f"NAT {key} requires explicit IPv4 ranges")
@@ -227,7 +304,17 @@ def routing_preview(row: Mapping[str, Any]) -> str:
         for route in canonical_routes(policy["routes"]):
             if route["destination_cidr"] != "0.0.0.0/0":
                 lines.append(f"    retain {route['destination_cidr']} -> {route['allocation_id']}")
+    lines.append("Gateway subnet: " + row.get("inputs", {}).get("gateway_subnet_mode", "create"))
     lines.append(
-        "Activation requires trusted SSH readiness. Quota headroom is not a capacity reservation."
+        "Routes activate during deploy after gateway readiness checks."
+        if routing["enabled"]
+        else "Routing disabled: deploy prepares the gateway and restores original workload routes."
+    )
+    lines.append(
+        "Automatic private-subnet Internet tests: "
+        + ("enabled" if verification_enabled(row) else "disabled")
+    )
+    lines.append(
+        "Gateway readiness requires trusted SSH. Quota headroom is not a capacity reservation."
     )
     return "\n".join(lines)

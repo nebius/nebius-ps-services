@@ -950,9 +950,12 @@ processes need provider-native renewal, bounded helper calls, or restart.
 Read-only runtime diagnosis uses `agent-nebius-auth-setup.sh verify` and never
 requires a human/admin profile. It verifies token mint, project access,
 authoritative project-to-tenant ancestry, and one tenant quota-allowance list
-call. Exact IAM planning remains separate and returns `blocked-admin-auth` when
-the required non-agent administrative profile cannot authenticate
-non-interactively.
+call. Explicit live setup allows bounded browser sign-in for its human profile
+and suppresses raw authentication diagnostics; it does not hand an expired
+login back as a manual terminal task before attempting that authorized flow.
+Preview and repair-lease checks remain non-browser. Setup rejects unexpected
+members before adding missing group permissions. A failed human sign-in is
+`blocked-admin-auth`, separate from agent runtime credential failure.
 
 ### Agentic SDLC Skills
 

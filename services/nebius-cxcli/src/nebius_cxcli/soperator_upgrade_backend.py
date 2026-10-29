@@ -57,18 +57,18 @@ def build_soperator_infrastructure_authority(
 ) -> SoperatorInfrastructureAuthority:
     """Resolve exactly one supported ownership/backend pair without fallback."""
 
+    from .deploy_targets import deploy_target_is_external_mk8s
+
     normalized_target = _text(target_ref)
     generated_kind = _text(generated_target.get("kind")).lower()
     generated_ownership = _text(generated_target.get("ownership")).lower()
     generated_component = _text(generated_target.get("component_id")).lower()
-    source_kind = _text((source_target or {}).get("kind")).lower()
-    source_ownership = _text((source_target or {}).get("ownership")).lower()
+    source_external = deploy_target_is_external_mk8s(source_target or {})
     source_instance = _text((source_target or {}).get("instance_id"))
     modules = tuple(sorted({_text(value) for value in terraform_modules if _text(value)}))
     managed_instance = _text(managed_component_instance)
     external_markers = {
-        source_kind == "external-mk8s",
-        source_ownership == "external",
+        source_external,
         generated_kind == "external-mk8s",
         generated_ownership == "external",
     }

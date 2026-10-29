@@ -49,12 +49,12 @@ def config(*, owner="external", enabled=True):
             "boot_disk_type": "NETWORK_SSD",
             "ssh_user_name": "ubuntu",
             "ssh_public_key": "ssh-ed25519 public-test",
-            "admin_cidrs": ["192.0.2.0/24"],
             "source_cidrs": ["10.0.0.0/8"],
             "gateway_subnet_cidr": "/28",
         },
         "routing": {
             "version": 1,
+            "verification": {"enabled": False},
             "enabled": enabled,
             "targets": [target],
             "policies": {
@@ -92,6 +92,7 @@ def config(*, owner="external", enabled=True):
         },
         "infra": {"components": [row, vpc] if owner == "terraform" else [row]},
         "apps": {"charts": []},
+        "version": "v2",
     }
 
 
@@ -172,7 +173,7 @@ def test_same_run_network_binding_and_no_consumer_reference_in_nat_module(monkey
     assert "network_id = module.network.network_id" in rendered["nat"]
     assert "module.network.subnet" not in rendered["nat"]
     assert "cxcli_nat_route_overrides" in rendered["network"]
-    assert 'module.nat.route_table_ids["default"]' in rendered["network"]
+    assert "module.nat." not in rendered["network"]
 
 
 @pytest.mark.parametrize(
@@ -436,6 +437,20 @@ def manager_fixture(monkeypatch, *, current="table-original", enabled=True, owne
             effects.append("attach")
             live["route"] = desired
 
+    class Access:
+        def __init__(self, *args, **kwargs):
+            self.public_key = "fixture"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def preflight(self, **kwargs):
+            effects.append("probe-ssh")
+
+    monkeypatch.setattr(deployment, "ProbeSSH", Access)
     monkeypatch.setattr(deployment, "NatGatewaySDK", SDK)
     executor = NS(
         config=payload,
@@ -466,6 +481,10 @@ def manager_fixture(monkeypatch, *, current="table-original", enabled=True, owne
         "network_subnet_ids": {"value": {"work": "subnet-work"}},
     }
     monkeypatch.setattr(deployment, "resolve_ssh_known_hosts_file", lambda *args: "trusted")
+    monkeypatch.setattr(deployment, "prepare_host_identity", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        deployment, "prepare_ssh_host_trust", lambda *args: effects.append("trust") or "trusted"
+    )
     monkeypatch.setattr(deployment, "verify_guest", lambda *args, **kwargs: effects.append("guest"))
 
     def plan(**kwargs):
@@ -482,6 +501,7 @@ def test_no_attachment_before_guest_readiness_and_plan(monkeypatch):
     manager.complete()
     assert (
         effects.index("policy")
+        < effects.index("trust")
         < effects.index("guest")
         < effects.index("plan")
         < effects.index("attach")
@@ -491,18 +511,119 @@ def test_no_attachment_before_guest_readiness_and_plan(monkeypatch):
     )
 
 
-def test_readiness_failure_leaves_original_route(monkeypatch):
+@pytest.mark.parametrize("boundary", ["prepare_ssh_host_trust", "verify_guest"])
+def test_readiness_failure_leaves_original_route(monkeypatch, boundary):
     manager, _sdk, _record, target, live, effects = manager_fixture(monkeypatch)
 
     def fail(*args, **kwargs):
         raise RuntimeError("untrusted host")
 
-    monkeypatch.setattr(deployment, "verify_guest", fail)
+    monkeypatch.setattr(deployment, boundary, fail)
     with pytest.raises(RuntimeError, match="untrusted"):
         manager.complete()
     assert (
         live["route"] == "table-original" and "attach" not in effects and target["pending"] is None
     )
+
+
+@pytest.mark.parametrize("tests_enabled", [True, False])
+def test_activation_verifies_routes_before_optional_probes(monkeypatch, tests_enabled):
+    from nebius_cxcli import nat_gateway_probes as probes
+
+    manager, _sdk, record, _target, live, effects = manager_fixture(monkeypatch)
+    manager.rows[0]["routing"]["verification"]["enabled"] = tests_enabled
+    real_preflight, real_verify = probes.preflight, manager.verify
+
+    def preflight(sdk, row, record, payload):
+        effects.append("probe-preflight")
+        assert "guest" in effects and live["route"] == "table-original"
+        if tests_enabled:
+            return {"fixture": True}
+        return real_preflight(sdk, row, record, payload)
+
+    def verify():
+        real_verify()
+        assert live["route"] == "table-nat"
+        effects.append("verified")
+
+    def run(*args, **kwargs):
+        assert tests_enabled and "verified" in effects
+        assert live["route"] == "table-nat"
+        effects.append("probe")
+
+    monkeypatch.setattr(probes, "preflight", preflight)
+    monkeypatch.setattr(probes, "run", run)
+    monkeypatch.setattr(manager, "verify", verify)
+    manager.complete()
+    assert (
+        effects.index("guest")
+        < effects.index("probe-preflight")
+        < effects.index("plan")
+        < effects.index("attach")
+        < effects.index("verified")
+    )
+    assert ("probe" in effects) is tests_enabled
+    if tests_enabled:
+        assert effects.index("verified") < effects.index("probe")
+    assert record["phase"] == "active" and record["activation"]["phase"] == "complete"
+    assert record["activation"]["probes"] == {}
+
+
+def test_probe_preflight_failure_leaves_original_route(monkeypatch):
+    from nebius_cxcli import nat_gateway_probes as probes
+
+    manager, _sdk, record, target, live, effects = manager_fixture(monkeypatch)
+    manager.rows[0]["routing"]["verification"]["enabled"] = True
+
+    def fail(*args, **kwargs):
+        assert "guest" in effects
+        raise RuntimeError("probe prerequisites unavailable")
+
+    monkeypatch.setattr(probes, "preflight", fail)
+    monkeypatch.setattr(probes, "run", lambda *a, **kw: pytest.fail("probe before admission"))
+    with pytest.raises(RuntimeError, match="probe prerequisites unavailable"):
+        manager.complete()
+    assert live["route"] == "table-original" and target["pending"] is None
+    assert "plan" not in effects and "attach" not in effects
+    assert record["activation"]["phase"] == "restored"
+
+
+def test_no_change_deploy_retests_each_activation_automatically(monkeypatch):
+    from nebius_cxcli import nat_gateway_probes as probes
+
+    manager, _sdk, record, target, live, effects = manager_fixture(monkeypatch)
+    manager.rows[0]["routing"]["verification"]["enabled"] = True
+    activations = []
+    monkeypatch.setattr(probes, "preflight", lambda *args: {})
+
+    def run(_sdk, record, prepared, **kwargs):
+        assert "ssh" in prepared and live["route"] == "table-nat"
+        assert effects.index("probe-ssh") < effects.index("attach")
+        activations.append(record["activation"]["id"])
+
+    monkeypatch.setattr(probes, "run", run)
+    manager.complete()
+    assert target["installed"] == "table-nat"
+    manager.complete()
+    assert len(set(activations)) == 2
+    assert record["activation"]["phase"] == "complete"
+
+
+def test_probe_forwarding_failure_precedes_route_activation(monkeypatch):
+    from nebius_cxcli import nat_gateway_probes as probes
+
+    manager, _sdk, record, _target, live, effects = manager_fixture(monkeypatch)
+    manager.rows[0]["routing"]["verification"]["enabled"] = True
+    monkeypatch.setattr(probes, "preflight", lambda *args: {})
+
+    def fail(self, **kwargs):
+        raise RuntimeError("forwarding disabled")
+
+    monkeypatch.setattr(deployment.ProbeSSH, "preflight", fail)
+    with pytest.raises(RuntimeError, match="forwarding disabled"):
+        manager.complete()
+    assert live["route"] == "table-original" and "attach" not in effects
+    assert record["activation"]["phase"] == "restored"
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -540,6 +661,7 @@ def test_restore_does_not_require_stale_source_routes_or_ssh(monkeypatch):
     target["installed"] = "table-nat"
     intent = copy.deepcopy(manager.rows[0])
     intent["routing"].pop("enabled")
+    intent["routing"].pop("verification", None)
     record["intent"] = deployment.fingerprint(intent)
     # The SDK fixture intentionally has no CPU/image/subnet allocation methods.
     # These are provisioning checks and must not block emergency restoration.
@@ -564,6 +686,7 @@ def test_terraform_detach_uses_historical_route_despite_changed_vpc_input(monkey
     row = manager.rows[0]
     intent = copy.deepcopy(row)
     intent["routing"].pop("enabled")
+    intent["routing"].pop("verification", None)
     record["intent"] = deployment.fingerprint(intent)
     target["installed"] = "table-nat"
     record["targets"] = {target_key(target): target}
@@ -643,3 +766,72 @@ def test_inventory_repeated_tokens_fail_without_partial_inventory(monkeypatch):
     monkeypatch.setattr(sdk, "call", lambda *a: NS(items=[], next_page_token="repeat"))
     with pytest.raises(RuntimeError, match="Repeated"):
         sdk.pages(lambda: None, lambda token: token)
+
+
+def test_reused_gateway_requires_public_capability_and_direct_route(monkeypatch):
+    sdk = NatGatewaySDK.__new__(NatGatewaySDK)
+    subnet = NS(
+        metadata=NS(id="subnet-gateway", name="gateway"),
+        status=NS(
+            state=NS(name="READY"),
+            route_table=NS(id="table-direct"),
+            ipv4_private_pools=[NS(pool_id="pool", cidrs=["10.0.0.0/24"])],
+            ipv4_public_pools=[NS(pool_id="public", cidrs=["203.0.113.0/24"])],
+        ),
+    )
+    monkeypatch.setattr(sdk, "subnet", lambda *a: subnet)
+    monkeypatch.setattr(
+        sdk,
+        "route_policy",
+        lambda *a: policy_snapshot(
+            "table-direct", [{"destination_cidr": "0.0.0.0/0", "default_egress_gateway": True}]
+        ),
+    )
+    assert not sdk.reusable_subnet("subnet-gateway", "network")["reason"]
+    subnet.status.ipv4_public_pools = []
+    with pytest.raises(ValueError, match="public IP"):
+        sdk.reusable_subnet("subnet-gateway", "network")
+    subnet.status.ipv4_public_pools = [NS(cidrs=["203.0.113.0/24"])]
+    monkeypatch.setattr(
+        sdk,
+        "route_policy",
+        lambda *a: policy_snapshot(
+            "table-custom", [{"destination_cidr": "0.0.0.0/0", "allocation_id": "another-nat"}]
+        ),
+    )
+    with pytest.raises(ValueError, match="direct default"):
+        sdk.reusable_subnet("subnet-gateway", "network")
+
+
+def test_reused_subnet_allocation_containment_without_claiming_pool_ownership():
+    from nebius_cxcli.nat_gateway_address_inventory import verify_gateway_address
+
+    sdk = NS(network=lambda _: NS(spec=NS(ipv4_private_pools=NS(pools=[NS(id="inherited-pool")]))))
+    subnet = NS(
+        metadata=NS(id="subnet-gateway"),
+        status=NS(ipv4_private_pools=[NS(pool_id="inherited-pool", cidrs=["10.0.0.0/24"])]),
+    )
+    allocation = NS(
+        status=NS(
+            details=NS(
+                subnet_id="subnet-gateway",
+                version=NS(name="IPV4"),
+                pool_id="inherited-pool",
+                allocated_cidr="10.0.0.4/32",
+            )
+        )
+    )
+    inputs = {"network_id": "network", "gateway_subnet_mode": "reuse"}
+    verify_gateway_address(sdk, subnet, inputs, allocation)
+    allocation.status.details.allocated_cidr = "10.1.0.4/32"
+    with pytest.raises(RuntimeError, match="outside"):
+        verify_gateway_address(sdk, subnet, inputs, allocation)
+
+
+def test_same_gateway_and_workload_subnet_is_rejected():
+    payload = config()
+    inputs = payload["infra"]["components"][0]["inputs"]
+    inputs.update(gateway_subnet_mode="reuse", gateway_subnet_id="subnet-work")
+    inputs.pop("gateway_subnet_cidr")
+    with pytest.raises(ValueError, match="gateway subnet"):
+        validate_nat_config(payload)

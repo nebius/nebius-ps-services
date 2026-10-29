@@ -173,13 +173,20 @@ def state_and_manifest(data=None):
     settings = backend_settings_from_config(data)
     manifest = {
         "schema": GENERATED_MANIFEST_SCHEMA,
-        "execution": {"backend": asdict(settings)},
+        "execution": {
+            "backend": asdict(settings),
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "project": {"tenant_id": "tenant-test", "project_id": "project-test"},
         "render": {
             "module_sources": [
                 {"component_id": "vpc", "instance_id": "vpc", "module_name": "vpc_renamed_2"}
             ]
         },
+        "runtime_config": {"version": "v2"},
     }
     attrs = {"id": SUBNET, "parent_id": "project-test", "network_id": NETWORK}
     state = {

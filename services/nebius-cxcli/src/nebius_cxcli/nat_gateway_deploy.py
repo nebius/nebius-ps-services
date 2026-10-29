@@ -7,6 +7,7 @@ import ipaddress
 import json
 import re
 import subprocess
+import uuid
 from contextlib import ExitStack
 from contextvars import ContextVar
 from pathlib import Path
@@ -14,10 +15,15 @@ from typing import Any
 
 from .component_sources import component_output_root_name
 from .nat_gateway import ROUTE_OVERRIDES, fingerprint, nat_rows, target_key
+from .nat_gateway_activation_inputs import activation_subnet_contracts
+from .nat_gateway_probe_ssh import ProbeSSH
 from .nat_gateway_sdk import NatGatewaySDK
-from .nat_gateway_state import NatState, assert_activation_plan
+from .nat_gateway_ssh import ssh_identity_options
+from .nat_gateway_state import NatState, activation_pending, assert_activation_plan
 from .object_storage_transport import object_storage_transport
 from .runtime_config import to_plain_data
+from .ssh_host_enrollment import prepare_ssh_host_trust
+from .ssh_host_identity import prepare_host_identity
 from .ssh_trust import resolve_ssh_known_hosts_file, ssh_trust_options
 from .terraform_backend import backend_settings_from_config
 
@@ -27,6 +33,13 @@ CURRENT_NAT: ContextVar[Any] = ContextVar("cxcli_nat_deployment", default=None)
 def guard_direct_mutation(
     cli: Any, config: Any, paths: Any, runtime_env: Any, *, initialize: bool = False
 ) -> None:
+    from .wireguard_host_identity import CURRENT_WIREGUARD_IDENTITIES, wireguard_rows
+
+    if wireguard_rows(config) and CURRENT_WIREGUARD_IDENTITIES.get() is None:
+        raise RuntimeError(
+            "WireGuard infrastructure must use render/deploy with protected host identities; "
+            "direct Terraform mutation is disabled"
+        )
     manager = CURRENT_NAT.get()
     if manager is not None:
         manager.assert_held()
@@ -75,8 +88,6 @@ def verify_guest(
         "ConnectTimeout=15",
         *ssh_trust_options(known_hosts),
     ]
-    if private_key is not None:
-        command.extend(["-i", str(private_key.expanduser().resolve(strict=True))])
     command.extend(
         [
             f"{user}@{address}",
@@ -84,7 +95,14 @@ def verify_guest(
         ]
     )
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=330, check=False)
+        with ssh_identity_options(inputs["ssh_public_key"], private_key) as identity:
+            result = subprocess.run(
+                [command[0], *identity, *command[1:]],
+                capture_output=True,
+                text=True,
+                timeout=330,
+                check=False,
+            )
     except (OSError, subprocess.TimeoutExpired):
         raise RuntimeError(
             "NAT guest readiness could not be verified; routes remain at their last confirmed attachment"
@@ -95,12 +113,15 @@ def verify_guest(
         )
     report = json.loads(result.stdout)
     if (
-        report.get("schema") != 1
+        report.get("schema") != 2
         or report.get("config_sha256") != outputs["guest_config_sha256"]
         or report.get("forwarding") is not True
         or report.get("rules_valid") is not True
+        or report.get("ssh_policy_valid") is not True
+        or report.get("ssh_listener_ready") is not True
+        or report.get("ssh_ban_service_ready") is not True
     ):
-        raise RuntimeError("NAT guest forwarding configuration differs from Terraform intent")
+        raise RuntimeError("NAT guest forwarding or SSH security differs from Terraform intent")
     return report
 
 
@@ -116,6 +137,8 @@ class NatDeployment:
         self.overrides: dict[str, Any] = {}
         self.retirement_required = False
         self._resources: list[dict[str, Any]] | None = None
+        self._host_identity_env: dict[str, str] = {}
+        self._host_identity_modules: dict[str, str] = {}
 
     def __enter__(self) -> NatDeployment:
         self.token = CURRENT_NAT.set(self)
@@ -175,6 +198,22 @@ class NatDeployment:
         if binding:
             inputs["network_id"] = module_outputs(outputs, binding["source_instance"]).get(
                 "network_id", ""
+            )
+        binding = row.get("bindings", {}).get("inputs.gateway_subnet_id")
+        if binding:
+            source = module_outputs(outputs, binding["source_instance"])
+            value = source.get(binding["source_output"], {})
+            if binding.get("key") is not None:
+                value = value.get(binding["key"], {})
+            if binding.get("attribute") is not None:
+                value = value.get(binding["attribute"], "")
+            inputs["gateway_subnet_id"] = value or self._subnet_id(
+                {
+                    "owner": "terraform",
+                    "vpc_instance": binding["source_instance"],
+                    "subnet_key": binding["key"],
+                },
+                outputs,
             )
         return inputs
 
@@ -261,6 +300,16 @@ class NatDeployment:
         if len(candidates) > 1 or (own_subnet and candidates and own_subnet != candidates[0]):
             raise RuntimeError("NAT dedicated subnet identity is ambiguous")
         with NatGatewaySDK(inputs["parent_id"]) as sdk:
+            if inputs.get("gateway_subnet_mode", "create") == "reuse" and inputs.get(
+                "gateway_subnet_id"
+            ):
+                if inputs["gateway_subnet_id"] in candidates:
+                    raise ValueError(
+                        "Cannot reuse the subnet currently owned by this NAT module; keep create mode or select an independently owned subnet"
+                    )
+                sdk.reusable_subnet(inputs["gateway_subnet_id"], network)
+                if not own_subnet:
+                    sdk.require_private_capacity(inputs["gateway_subnet_id"], network)
             sdk.cpu_preset(inputs["platform"], inputs["preset"])
             image = sdk.image(
                 inputs["source_image_id"], platform=inputs["platform"], preset=inputs["preset"]
@@ -274,11 +323,20 @@ class NatDeployment:
 
     def prepare(self) -> None:
         if self.prepared:
-            self._set_overrides()
+            self.apply_runtime_inputs(self.executor)
             return
         payload = to_plain_data(self.executor.config)
         self.rows = nat_rows(payload)
         state = self._open()
+        if any(activation_pending(record) for record in state.value["gateways"].values()):
+            if self.executor.options.dry_run:
+                raise RuntimeError(
+                    "Unfinished NAT activation requires deploy recovery before preview"
+                )
+            self.restore_activations()
+            raise RuntimeError(
+                "Interrupted NAT activation restored and probes cleaned; rerun deploy from this checkpoint"
+            )
         if not self.rows:
             if any(
                 record["phase"] not in {"detached", "retired"}
@@ -314,6 +372,7 @@ class NatDeployment:
                 record = None
             intent = copy.deepcopy(row)
             intent["routing"].pop("enabled")
+            intent["routing"].pop("verification", None)
             digest = fingerprint(intent)
             if record and record["intent"] != digest and record.get("phase") != "detached":
                 raise RuntimeError(
@@ -416,6 +475,7 @@ class NatDeployment:
                                     "Unfinished NAT Terraform attachment has drifted"
                                 )
                         self.overrides[key] = original
+        self._prepare_host_identities(outputs)
         if preview_needed:
             from .nat_gateway_address_plan import assess_config_address_space
 
@@ -427,11 +487,73 @@ class NatDeployment:
             )
         self.prepared = True
         self.assert_attachments()
-        self._set_overrides()
+        self.apply_runtime_inputs(self.executor)
 
-    def _set_overrides(self) -> None:
+    def _prepare_host_identities(
+        self, outputs: dict[str, Any], *, retained_only: bool = False
+    ) -> None:
+        self._host_identity_env = {}
+        self._host_identity_modules = {}
+        for row in self.rows:
+            module_name = self._module_name("nat-gateway", row["instance_id"])
+            self._host_identity_modules[row["instance_id"]] = module_name
+            own = module_outputs(outputs, row["instance_id"])
+            identities = {
+                resource["values"]["id"]
+                for resource in self._module_resources("nat-gateway", row["instance_id"])
+                if resource.get("mode") == "managed"
+                and resource.get("type") == "nebius_compute_v1_instance"
+                and (resource.get("values") or {}).get("id")
+            }
+            if own.get("instance_id"):
+                identities.add(own["instance_id"])
+            if len(identities) > 1:
+                raise RuntimeError("NAT host identity has conflicting Terraform instance IDs")
+            if retained_only and not identities:
+                continue
+            with NatGatewaySDK(row["inputs"]["parent_id"]) as sdk:
+                self._host_identity_env.update(
+                    prepare_host_identity(
+                        sdk,
+                        namespace="nat-host-keys",
+                        instance_id=next(iter(identities), ""),
+                        paths=self.executor.report_paths,
+                        infra_dir=self.executor.paths.infra_dir,
+                        module_name=module_name,
+                        preview=self.executor.options.dry_run,
+                    )
+                )
+
+    def apply_runtime_inputs(self, executor: Any) -> None:
+        """Bind prepared inputs to root or admission planners without persisting keys."""
+        if not self.prepared:
+            raise RuntimeError("NAT runtime inputs require a prepared deployment owner")
+        if nat_rows(to_plain_data(executor.config)) != self.rows:
+            raise RuntimeError("NAT runtime inputs differ from the prepared configuration")
+        modules = [
+            item
+            for item in executor.manifest.get("render", {}).get("module_sources", [])
+            if item.get("component_id") == "nat-gateway"
+        ]
+        actual = {item.get("instance_id"): item.get("module_name") for item in modules}
+        if len(actual) != len(modules) or actual != self._host_identity_modules:
+            raise RuntimeError("NAT runtime inputs differ from the prepared module identities")
+        self._set_overrides(executor)
+        executor.runtime_env.update(self._host_identity_env)
+
+    def _set_overrides(self, executor: Any) -> None:
         if self.rows:
-            self.executor.runtime_env["TF_VAR_" + ROUTE_OVERRIDES] = json.dumps(self.overrides)
+            expected = {
+                target_key(target)
+                for row in self.rows
+                for target in row["routing"]["targets"]
+                if target["owner"] == "terraform"
+            }
+            if not expected.issubset(self.overrides):
+                raise RuntimeError(
+                    "NAT route override map is incomplete; refusing uncontrolled routing"
+                )
+            executor.runtime_env["TF_VAR_" + ROUTE_OVERRIDES] = json.dumps(self.overrides)
 
     def assert_attachments(self) -> None:
         if self.state is None:
@@ -476,6 +598,19 @@ class NatDeployment:
                 (item["component_id"], item["instance_id"]): item["module_name"]
                 for item in self.executor.manifest.get("render", {}).get("module_sources", [])
             }
+            for row in self.rows:
+                inputs = self._inputs(row, outputs)
+                if inputs.get("gateway_subnet_mode") == "reuse" and inputs.get("gateway_subnet_id"):
+                    allocation_address = f"module.{self._module_name('nat-gateway', row['instance_id'])}.nebius_vpc_v1_allocation.private"
+                    if any(
+                        r.get("address") == allocation_address
+                        and "create" in r.get("change", {}).get("actions", [])
+                        for r in plan.get("resource_changes", [])
+                    ):
+                        with NatGatewaySDK(inputs["parent_id"]) as sdk:
+                            sdk.require_private_capacity(
+                                inputs["gateway_subnet_id"], self._network_id(row, outputs)
+                            )
             report = assess_plan_address_space(to_plain_data(self.executor.config), plan, modules)
             if report.capacities or report.status != "feasible":
                 self.executor.cli.progress_console.print(report.message(), markup=False)
@@ -524,6 +659,10 @@ class NatDeployment:
                 for r in state.value["gateways"].values()
                 if address.startswith(f"module.{r['module_name']}.")
             ]
+            if any(activation_pending(record) for record in records):
+                raise RuntimeError(
+                    "NAT retirement blocked by unfinished activation or pending probe cleanup"
+                )
             if not records or any(r["phase"] != "detached" for r in records):
                 raise RuntimeError(
                     "Restore NAT routing before retirement: set routing.enabled=false, render and deploy; then remove the component and deploy again"
@@ -587,78 +726,37 @@ class NatDeployment:
         self.state.save()
 
     def complete(self) -> None:
-        if not self.rows:
-            self.finalize_retirement()
-            return
+        try:
+            self._complete_activation()
+        except Exception as error:
+            if self.state is not None and any(
+                record.get("activation", {}).get("phase") not in {None, "complete", "restored"}
+                for record in self.state.value["gateways"].values()
+            ):
+                try:
+                    self.restore_activations()
+                except Exception as recovery_error:
+                    raise RuntimeError(
+                        "NAT activation failed; restoration or probe cleanup is pending. Inspect nat status and resume after resolving the reported drift or operation."
+                    ) from recovery_error
+            raise error
+
+    def _apply_routes(self, desired: dict[str, str], purpose: str) -> None:
         assert self.state is not None
-        outputs = self.outputs()
-        desired: dict[str, str] = {}
-        external_transitions: list[tuple[dict[str, Any], dict[str, Any], str]] = []
-        for row in self.rows:
-            inputs = self._inputs(row, outputs)
-            record = self.state.value["gateways"][row["instance_id"]]
-            own = module_outputs(outputs, row["instance_id"])
-            record["outputs"], record["network_id"] = own, inputs["network_id"]
-            self.state.save()
-            with NatGatewaySDK(inputs["parent_id"]) as sdk:
-                if row["routing"]["enabled"]:
-                    for key, policy in row["routing"]["policies"].items():
-                        sdk.check_source_policy(policy, inputs["network_id"])
-                        sdk.workload_policy(
-                            own["route_table_ids"][key],
-                            inputs["network_id"],
-                            policy,
-                            own["private_allocation_id"],
-                        )
-                    if set(inputs["source_cidrs"]) != set(sdk.network_cidrs(inputs["network_id"])):
-                        raise RuntimeError(
-                            "NAT network ranges differ from the reviewed source policy"
-                        )
-                    sdk.gateway(own, inputs)
-                    verify_guest(
-                        own,
-                        inputs,
-                        known_hosts=resolve_ssh_known_hosts_file(
-                            self.executor.report_paths, self.executor.options.ssh_known_hosts_file
-                        ),
-                        private_key=self.executor.options.ssh_private_key,
-                    )
-                for key, target in record["targets"].items():
-                    if target["owner"] == "terraform":
-                        target["subnet_id"] = module_outputs(outputs, target["vpc_instance"])[
-                            "subnet_ids"
-                        ][target["subnet_key"]]
-                    if target["subnet_id"] == own["subnet_id"]:
-                        raise RuntimeError("Gateway subnet cannot consume its own NAT route")
-                    subnet = sdk.subnet(target["subnet_id"], record["network_id"])
-                    route = (
-                        own["route_table_ids"][target["policy"]]
-                        if row["routing"]["enabled"]
-                        else target["original"]
-                    )
-                    if target["owner"] == "terraform":
-                        expected = target["installed"] or target["original"]
-                        if row["routing"]["enabled"] and subnet.spec.route_table_id not in {
-                            expected,
-                            route,
-                        }:
-                            raise RuntimeError("Terraform-owned NAT subnet attachment drift")
-                        desired[target["subnet_id"]] = route
-                        target["pending"] = {
-                            "desired": route,
-                            "expected": expected if row["routing"]["enabled"] else route,
-                            "operation_id": "terraform",
-                        }
-                        if row["routing"]["enabled"]:
-                            self.overrides.pop(key, None)
-                    else:
-                        external_transitions.append((record, target, route))
-                self.state.save()
-        self._set_overrides()
+        if not self.prepared and self.rows:
+            self._prepare_host_identities(self.outputs(), retained_only=True)
+            self.executor.runtime_env.update(self._host_identity_env)
+        self._set_overrides(self.executor)
         self.activating = True
         try:
-            plan_file, _ = self.executor._terraform_plan(purpose="Admit NAT route activation")
-            assert_activation_plan(self.executor.observation_plan, desired)
+            plan_file, _ = self.executor._terraform_plan(purpose=purpose)
+            assert_activation_plan(
+                self.executor.observation_plan,
+                desired,
+                subnet_contracts=activation_subnet_contracts(
+                    self.executor.config, self.executor.manifest, self.state.value["gateways"]
+                ),
+            )
             self.state.save()
             self.assert_held()
             if any(
@@ -677,10 +775,135 @@ class NatDeployment:
                 )
         finally:
             self.activating = False
+
+    def restore_activations(self) -> None:
+        from .nat_gateway_recovery import restore_activations
+
+        restore_activations(self, NatGatewaySDK)
+
+    def _complete_activation(self) -> None:
+        if not self.rows:
+            self.finalize_retirement()
+            return
+        assert self.state is not None
+        outputs = self.outputs()
+        from . import nat_gateway_probes
+
+        prepared_probes: dict[str, Any] = {}
+        desired: dict[str, str] = {}
+        external_transitions: list[tuple[dict[str, Any], dict[str, Any], str]] = []
+        for row in self.rows:
+            inputs = self._inputs(row, outputs)
+            record = self.state.value["gateways"][row["instance_id"]]
+            own = module_outputs(outputs, row["instance_id"])
+            record["outputs"], record["network_id"] = own, inputs["network_id"]
+            record["activation"] = {
+                "id": uuid.uuid4().hex,
+                "phase": "preflight",
+                "previous_phase": record["phase"],
+                "attachments": {},
+                "probes": {},
+            }
+            self.state.save()
+            with NatGatewaySDK(inputs["parent_id"]) as sdk:
+                known_hosts = None
+                if row["routing"]["enabled"]:
+                    for key, policy in row["routing"]["policies"].items():
+                        sdk.check_source_policy(policy, inputs["network_id"])
+                        sdk.workload_policy(
+                            own["route_table_ids"][key],
+                            inputs["network_id"],
+                            policy,
+                            own["private_allocation_id"],
+                        )
+                    if set(inputs["source_cidrs"]) != set(sdk.network_cidrs(inputs["network_id"])):
+                        raise RuntimeError(
+                            "NAT network ranges differ from the reviewed source policy"
+                        )
+                    sdk.gateway(own, inputs)
+                    known_hosts = prepare_ssh_host_trust(
+                        sdk,
+                        own,
+                        self.executor.report_paths,
+                        self.executor.options.ssh_known_hosts_file,
+                    )
+                    verify_guest(
+                        own,
+                        inputs,
+                        known_hosts=known_hosts,
+                        private_key=self.executor.options.ssh_private_key,
+                    )
+                for key, target in record["targets"].items():
+                    if target["owner"] == "terraform":
+                        target["subnet_id"] = module_outputs(outputs, target["vpc_instance"])[
+                            "subnet_ids"
+                        ][target["subnet_key"]]
+                    if target["subnet_id"] == own["subnet_id"]:
+                        raise RuntimeError("Gateway subnet cannot consume its own NAT route")
+                    subnet = sdk.subnet(target["subnet_id"], record["network_id"])
+                    route = (
+                        own["route_table_ids"][target["policy"]]
+                        if row["routing"]["enabled"]
+                        else target["original"]
+                    )
+                    record["activation"]["attachments"][key] = {
+                        "before": subnet.spec.route_table_id or "",
+                        "effective_before": subnet.status.route_table.id,
+                        "desired": route,
+                    }
+                    if target["owner"] == "terraform":
+                        expected = target["installed"] or target["original"]
+                        if row["routing"]["enabled"] and subnet.spec.route_table_id not in {
+                            expected,
+                            route,
+                        }:
+                            raise RuntimeError("Terraform-owned NAT subnet attachment drift")
+                        desired[target["subnet_id"]] = route
+                        target["pending"] = {
+                            "desired": route,
+                            "expected": expected if row["routing"]["enabled"] else route,
+                            "operation_id": "terraform",
+                        }
+                        self.overrides[key] = route or None
+                    else:
+                        external_transitions.append((record, target, route))
+                self.state.save()
+                prepared_probes[row["instance_id"]] = nat_gateway_probes.preflight(
+                    sdk, row, record, to_plain_data(self.executor.config)
+                )
+                prepared_probe = prepared_probes[row["instance_id"]]
+                if prepared_probe is not None:
+                    assert known_hosts is not None
+                    access = self.stack.enter_context(
+                        ProbeSSH(
+                            own,
+                            inputs,
+                            known_hosts=known_hosts,
+                            private_key=self.executor.options.ssh_private_key,
+                        )
+                    )
+                    access.preflight(assert_held=self.assert_held)
+                    prepared_probe["ssh"] = access
+                record["activation"]["phase"] = "activating"
+                self.state.save()
+        self._apply_routes(desired, "Admit NAT route activation")
         for record, target, route in external_transitions:
             with NatGatewaySDK(record["project_id"]) as sdk:
                 self._attach(sdk, record, target, route)
         self.verify()
+        for row in self.rows:
+            record = self.state.value["gateways"][row["instance_id"]]
+            if prepared_probes[row["instance_id"]] is not None:
+                record["activation"]["phase"] = "verifying"
+                self.state.save()
+                with NatGatewaySDK(record["project_id"]) as sdk:
+                    nat_gateway_probes.run(
+                        sdk,
+                        record,
+                        prepared_probes[row["instance_id"]],
+                        save=self.state.save,
+                        assert_held=self.assert_held,
+                    )
         for row in self.rows:
             record = self.state.value["gateways"][row["instance_id"]]
             for target in record["targets"].values():
@@ -691,6 +914,7 @@ class NatDeployment:
                 )
                 target["pending"] = None
             record["phase"] = "active" if row["routing"]["enabled"] else "detached"
+            record["activation"]["phase"] = "complete"
             self.state.save()
 
         self.finalize_retirement()
@@ -699,6 +923,14 @@ class NatDeployment:
         if self.state is None:
             return
         current = {row["instance_id"] for row in self.rows}
+        if any(
+            activation_pending(record)
+            for name, record in self.state.value["gateways"].items()
+            if name not in current
+        ):
+            raise RuntimeError(
+                "NAT retirement blocked by unfinished activation or pending probe cleanup"
+            )
         retired = [
             name
             for name, record in self.state.value["gateways"].items()
@@ -727,7 +959,10 @@ class NatDeployment:
             with NatGatewaySDK(record["project_id"]) as sdk:
                 if row["routing"]["enabled"]:
                     own = record["outputs"]
-                    inputs = {**row["inputs"], "network_id": record["network_id"]}
+                    inputs = {
+                        **self._inputs(row, self.outputs()),
+                        "network_id": record["network_id"],
+                    }
                     sdk.gateway(own, inputs)
                     for key, policy in row["routing"]["policies"].items():
                         sdk.workload_policy(

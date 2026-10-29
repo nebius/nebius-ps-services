@@ -20,7 +20,11 @@ def test_recovery_keeps_current_state_without_completed_generation_archives(tmp_
     project.mkdir(parents=True)
     target = project / "config.yaml"
     transaction = ProjectBundleTransaction(project)
-    for value in ("first", "second", "current"):
+    for value in (
+        "version: v2\ncompatibility:\n  fixture: 'first'\n",
+        "version: v2\ncompatibility:\n  fixture: 'second'\n",
+        "version: v2\ncompatibility:\n  fixture: 'current'\n",
+    ):
         transaction.commit({target: value})
     generation = transaction.current_generation_sha256()
     archives = set(transaction.generations_dir.iterdir())
@@ -32,7 +36,9 @@ def test_recovery_keeps_current_state_without_completed_generation_archives(tmp_
     restore_execution_cache(restored, cache)
     recovered = ProjectBundleTransaction(restored / "tenant" / "project")
     assert recovered.current_generation_sha256() == generation
-    assert (recovered.project_dir / "config.yaml").read_text() == "current"
+    assert (
+        recovered.project_dir / "config.yaml"
+    ).read_text() == "version: v2\ncompatibility:\n  fixture: 'current'\n"
 
 
 def test_recovery_preserves_only_pending_generation_and_its_baseline(tmp_path):
@@ -42,7 +48,9 @@ def test_recovery_preserves_only_pending_generation_and_its_baseline(tmp_path):
     config = project / "config.yaml"
     baseline = project / "generated" / "reports" / "ordinary-apps-baseline.json"
     dashboard = project / "generated" / "grafana_dashboards" / "target" / "example.json"
-    ProjectBundleTransaction(project).commit({config: "old"})
+    ProjectBundleTransaction(project).commit(
+        {config: "version: v2\ncompatibility:\n  fixture: 'old'\n"}
+    )
 
     def crash(name):
         if name == "after-commit":
@@ -51,13 +59,17 @@ def test_recovery_preserves_only_pending_generation_and_its_baseline(tmp_path):
     transaction = ProjectBundleTransaction(project, failpoint=crash)
     with pytest.raises(OSError, match="simulated crash"):
         transaction.commit(
-            {config: "new", baseline: '{"schema":"nebius-cxcli-ordinary-apps/v1"}', dashboard: "{}"}
+            {
+                config: "version: v2\ncompatibility:\n  fixture: 'new'\n",
+                baseline: '{"schema":"nebius-cxcli-ordinary-apps/v1"}',
+                dashboard: "{}",
+            }
         )
     journal = json.loads(transaction.journal_path.read_text())
     pending = transaction.generations_dir / journal["generationId"]
     (pending / "generated" / "reports" / "soperator-unused.json").write_text("{}")
     cache = capture_execution_cache(root)
-    assert config.read_text() == "old"
+    assert config.read_text() == "version: v2\ncompatibility:\n  fixture: 'old'\n"
     assert json.loads(transaction.journal_path.read_text())["status"] == "committed"
     staged = {name for name in cache if "project-bundle-generations" in name}
     expected = {
@@ -73,7 +85,9 @@ def test_recovery_preserves_only_pending_generation_and_its_baseline(tmp_path):
     restore_execution_cache(restored, cache)
     recovered = ProjectBundleTransaction(restored / "tenant" / "project")
     assert recovered.recover()
-    assert (recovered.project_dir / "config.yaml").read_text() == "new"
+    assert (
+        recovered.project_dir / "config.yaml"
+    ).read_text() == "version: v2\ncompatibility:\n  fixture: 'new'\n"
     assert (recovered.project_dir / dashboard.relative_to(project)).read_text() == "{}"
     assert (recovered.project_dir / baseline.relative_to(project)).read_bytes() == (
         pending / baseline.relative_to(project)
@@ -93,7 +107,9 @@ def test_recovery_capture_rejects_incomplete_pending_generation(tmp_path):
 
     transaction = ProjectBundleTransaction(project, failpoint=crash)
     with pytest.raises(OSError, match="simulated crash"):
-        transaction.commit({project / "config.yaml": "new"})
+        transaction.commit(
+            {project / "config.yaml": "version: v2\ncompatibility:\n  fixture: 'new'\n"}
+        )
     journal = json.loads(transaction.journal_path.read_text())
     (transaction.generations_dir / journal["generationId"] / "config.yaml").unlink()
     with pytest.raises(ProjectBundleSafetyError, match="incomplete"):
@@ -104,7 +120,7 @@ def test_recovery_ignores_uncommitted_staging_without_replaying_it(tmp_path):
     project = tmp_path / "tenant" / "project"
     project.mkdir(parents=True)
     config = project / "config.yaml"
-    config.write_text("old")
+    config.write_text("version: v2\ncompatibility:\n  fixture: 'old'\n")
 
     def crash(name):
         if name == "after-stage-generation":
@@ -112,10 +128,13 @@ def test_recovery_ignores_uncommitted_staging_without_replaying_it(tmp_path):
 
     transaction = ProjectBundleTransaction(project, failpoint=crash)
     with pytest.raises(OSError, match="simulated crash"):
-        transaction.commit({config: "uncommitted"})
+        transaction.commit({config: "version: v2\ncompatibility:\n  fixture: 'uncommitted'\n"})
     cache = capture_execution_cache(tmp_path)
     assert set(cache) == {"tenant/project/config.yaml"}
-    assert base64.b64decode(cache["tenant/project/config.yaml"]) == b"old"
+    assert (
+        base64.b64decode(cache["tenant/project/config.yaml"])
+        == b"version: v2\ncompatibility:\n  fixture: 'old'\n"
+    )
     assert any(transaction.generations_dir.iterdir())
 
 
@@ -153,7 +172,7 @@ def test_recovery_roundtrip_and_link_rejection(tmp_path):
     ):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}")
+        path.write_text("version: v2\n" if path.name == "config.yaml" else "{}")
     cache = capture_execution_cache(root)
     assert len(cache) == 5
     second = tmp_path / "second"

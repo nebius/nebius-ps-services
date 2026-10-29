@@ -31,6 +31,7 @@ import nebius_cxcli.cli as cli
 import nebius_cxcli.flux_ops as flux_ops
 import nebius_cxcli.soperator_wizard_deployment as wizard_deployment
 from nebius_cxcli import mk8s_exec
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
     SourceProfile,
@@ -544,6 +545,7 @@ def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> 
             "components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}]
         },
         "apps": {"charts": charts or []},
+        "version": "v2",
     }
 
 
@@ -583,6 +585,10 @@ def _clear_runtime_auth_env() -> None:
     for name in _RUNTIME_AUTH_ENV_KEYS:
         os.environ.pop(name, None)
     cli._RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = None
+
+
+def _empty_runtime_config():
+    return {"version": "v2", "infra": {"components": []}, "apps": {"charts": []}}
 
 
 def _fake_paths(tmp_path: Path) -> ProjectPaths:
@@ -629,11 +635,7 @@ def _assert_compatibility_details_hidden(output: str) -> None:
 def _mk8s_gpu_fabric_payload(*, fabric: str = "fabric-4") -> dict[str, Any]:
     return {
         "client_info": {
-            "nebius": {
-                "tenant_id": "tenant-1",
-                "project_id": "project-1",
-                "region_id": "eu-north1",
-            }
+            "nebius": {"tenant_id": "tenant-1", "project_id": "project-1", "region_id": "eu-north1"}
         },
         "infra": {
             "components": [
@@ -661,14 +663,10 @@ def _mk8s_gpu_fabric_payload(*, fabric: str = "fabric-4") -> dict[str, Any]:
         },
         "apps": {
             "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {},
-                }
+                {"id": "soperator", "instance_id": "cluster1", "enabled": True, "values": {}}
             ]
         },
+        "version": "v2",
     }
 
 
@@ -680,7 +678,19 @@ def test_render_blocks_direct_mk8s_gpu_fabric_drift(
     paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (paths.generated_dir / "nebius-cxcli-manifest.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
-        cli, "load_generated_manifest", lambda _generated_dir: {"runtime_config": {}}
+        cli,
+        "load_generated_manifest",
+        lambda _generated_dir: {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
     )
     monkeypatch.setattr(
         cli,
@@ -953,8 +963,14 @@ def test_upgrade_readonly_context_does_not_materialize_terraform_tfvars(
     (generated_dir / "nebius-cxcli-manifest.json").write_text(
         json.dumps(
             {
-                "schema": "nebius-cxcli-generated/v2",
-                "execution": {"backend": {}},
+                "schema": "nebius-cxcli-generated/v3",
+                "execution": {
+                    "backend": {},
+                    "targets": [],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
                 "runtime_config": {
                     "client_info": {
                         "client_name": "client-a",
@@ -966,6 +982,7 @@ def test_upgrade_readonly_context_does_not_materialize_terraform_tfvars(
                     },
                     "infra": {"components": []},
                     "apps": {"charts": []},
+                    "version": "v2",
                 },
                 "render": {"terraform_tfvars": {"sentinel": "value"}},
             }
@@ -1361,7 +1378,20 @@ def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_value
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    manifest = {
+        "execution": {
+            "targets": [_mk8s_target(paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
     prompt_paths: list[str] = []
     wait_calls: list[tuple[str, str]] = []
     rich_console = cli.Console(record=True, width=300)
@@ -1603,7 +1633,20 @@ def test_upgrade_node_template_guided_backtracks_across_setup_prompts(
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    manifest = {
+        "execution": {
+            "targets": [_mk8s_target(paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
     prompt_paths: list[str] = []
     responses: dict[str, list[Any]] = {
         "upgrade.node_template.target": ["infra:mk8s@mk8s"],
@@ -1832,7 +1875,7 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest = {"deploy": {"targets": []}}
+    manifest = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     plan_stages: list[dict[str, str]] = []
     apply_stages: list[dict[str, str]] = []
     wait_calls: list[tuple[str, str]] = []
@@ -2152,7 +2195,7 @@ def test_upgrade_node_template_safe_surge_quota_blocks_before_mutation(
             ),
         )
     )
-    manifest = {"deploy": {"targets": []}}
+    manifest = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     calls: list[str] = []
 
     class FakeSdk:
@@ -2628,7 +2671,7 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest = {"deploy": {"targets": []}}
+    manifest = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     plan_stages: list[dict[str, str]] = []
     apply_stages: list[dict[str, str]] = []
     wait_calls: list[tuple[str, str]] = []
@@ -2912,7 +2955,20 @@ def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    manifest = {
+        "execution": {
+            "targets": [_mk8s_target(paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
     calls: list[object] = []
     live_status = {
         "value": SimpleNamespace(
@@ -3074,7 +3130,7 @@ def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
 
 def test_node_template_target_choices_do_not_label_endpoint_access() -> None:
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 {
                     "component_id": "mk8s",
@@ -3104,8 +3160,14 @@ def test_node_template_target_choices_do_not_label_endpoint_access() -> None:
                     "cluster_id": "mk8scluster-external",
                     "flux_dir": "generated/flux/targets/onboarded",
                 },
-            ]
-        }
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
 
     choices = cli._managed_mk8s_upgrade_target_choices(manifest)
@@ -3149,12 +3211,7 @@ def test_upgrade_helm_chart_delegates_before_mutating_source(
             {
                 "infra": {
                     "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {},
-                        }
+                        {"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}
                     ]
                 },
                 "apps": {
@@ -3169,12 +3226,26 @@ def test_upgrade_helm_chart_delegates_before_mutating_source(
                         }
                     ]
                 },
+                "version": "v2",
             }
         ),
         encoding="utf-8",
     )
     generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    manifest: dict[str, Any] = {
+        "execution": {
+            "targets": [_mk8s_target(paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
     calls: list[object] = []
 
     monkeypatch.setattr(
@@ -3257,7 +3328,7 @@ def test_upgrade_helm_chart_readiness_requires_generated_target(
         cli._verify_helm_chart_upgrade_ready(
             SimpleNamespace(),
             paths,
-            {"deploy": {"targets": []}},
+            {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"},
             plan,
             observations={},
         )
@@ -3265,7 +3336,7 @@ def test_upgrade_helm_chart_readiness_requires_generated_target(
 
 def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> None:
     external_manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 {
                     "target_ref": "mk8s",
@@ -3276,8 +3347,14 @@ def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> No
                     "flux_dir": "flux/mk8s",
                     "cluster_id": "cluster-1",
                 }
-            ]
-        }
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     with pytest.raises(RuntimeError) as external_error:
         cli._resolve_managed_mk8s_upgrade_target(
@@ -3289,7 +3366,7 @@ def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> No
     )
 
     wrong_component_manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 {
                     "target_ref": "vpc",
@@ -3300,8 +3377,14 @@ def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> No
                     "component_output_ref": "infra.vpc.cluster_id",
                     "flux_dir": "flux/vpc",
                 }
-            ]
-        }
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     with pytest.raises(RuntimeError) as component_error:
         cli._resolve_managed_mk8s_upgrade_target(
@@ -3436,11 +3519,26 @@ def test_manifest_deploy_targets_require_internal_target_ref_to_match_instance_i
     with pytest.raises(
         ValueError,
         match=(
-            r"Generated manifest deploy\.targets\[0\]\.target_ref "
+            r"Generated manifest execution.targets\[0\]\.target_ref "
             r"must equal instance_id 'cluster1'"
         ),
     ):
-        cli._manifest_deploy_targets({"deploy": {"targets": [target]}})
+        cli._manifest_deploy_targets(
+            {
+                "execution": {
+                    "targets": [target],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "infra": {"components": []},
+                "apps": {"charts": []},
+                "version": "v2",
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            }
+        )
 
 
 def test_manifest_deploy_targets_reject_legacy_target_shape(tmp_path: Path) -> None:
@@ -3450,24 +3548,69 @@ def test_manifest_deploy_targets_reject_legacy_target_shape(tmp_path: Path) -> N
 
     with pytest.raises(
         ValueError,
-        match=r"Generated manifest deploy\.targets\[0\]\.target_ref is required",
+        match=r"Generated manifest execution.targets\[0\]\.target_ref is required",
     ):
-        cli._manifest_deploy_targets({"deploy": {"targets": [target]}})
+        cli._manifest_deploy_targets(
+            {
+                "execution": {
+                    "targets": [target],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "infra": {"components": []},
+                "apps": {"charts": []},
+                "version": "v2",
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            }
+        )
 
 
 def test_manifest_deploy_targets_reject_malformed_target_rows() -> None:
     with pytest.raises(
         ValueError,
-        match=r"Generated manifest deploy\.targets\[0\] must be a mapping",
+        match=r"Generated manifest execution.targets\[0\] must be a mapping",
     ):
-        cli._manifest_deploy_targets({"deploy": {"targets": ["cluster1"]}})
+        cli._manifest_deploy_targets(
+            {
+                "execution": {
+                    "targets": ["cluster1"],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "infra": {"components": []},
+                "apps": {"charts": []},
+                "version": "v2",
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            }
+        )
 
 
 def test_manifest_deploy_targets_accept_external_mk8s_target(tmp_path: Path) -> None:
     fake_paths = _fake_paths(tmp_path)
     target = _external_mk8s_target(fake_paths, target_ref="cluster1")
 
-    assert cli._manifest_deploy_targets({"deploy": {"targets": [target]}}) == [target]
+    assert cli._manifest_deploy_targets(
+        {
+            "execution": {
+                "targets": [target],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "infra": {"components": []},
+            "apps": {"charts": []},
+            "version": "v2",
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        }
+    ) == [target]
 
 
 def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> None:
@@ -3660,6 +3803,7 @@ def test_strict_config_runs_builtin_mk8s_gpu_runtime_rules(
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     monkeypatch.setattr(cli, "materialize_compute_boot_disk_defaults", lambda _payload: None)
     for name in (
@@ -3722,17 +3866,14 @@ def test_validation_scope_summary_lines_group_enabled_components_concisely(
 
     lines = cli._validation_scope_summary_lines(
         {
-            "infra": {
-                "components": [
-                    {"id": "mk8s", "enabled": True},
-                ]
-            },
+            "infra": {"components": [{"id": "mk8s", "enabled": True}]},
             "apps": {
                 "charts": [
                     {"id": "nvidia-gpu-operator", "enabled": True, "group": "platform"},
                     {"id": "nvidia-network-operator", "enabled": True, "group": "platform"},
                 ]
             },
+            "version": "v2",
         },
         source_profile=SourceProfile.PORTABLE,
     )
@@ -3868,7 +4009,7 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
         cli,
         "mk8s_gpu_validation_warnings",
         lambda _config: (
-            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
+            "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
         ),
     )
 
@@ -4726,17 +4867,19 @@ def test_load_generated_context_exports_manifest_tool_versions(
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     flux_version, terraform_version = _bundled_tool_versions()
     fake_manifest = {
-        "tools": {
-            "flux_version": flux_version,
-            "terraform_version": terraform_version,
-        },
-        "render": {
-            "terraform_tfvars": {
-                "mk8s_cluster_name": "clust1",
-            }
-        },
+        "tools": {"flux_version": flux_version, "terraform_version": terraform_version},
+        "render": {"terraform_tfvars": {"mk8s_cluster_name": "clust1"}},
         "runtime_config": {
-            "client_info": {"client_name": "client-a", "nebius": {"project_id": "project-456"}}
+            "client_info": {"client_name": "client-a", "nebius": {"project_id": "project-456"}},
+            "version": "v2",
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
         },
     }
     runtime_config = SimpleNamespace(client_info=SimpleNamespace(client_name="client-a"))
@@ -4827,9 +4970,11 @@ def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workd
 
 
 def test_render_snapshot_cutoff_precedes_generated_writes(tmp_path, monkeypatch):
-    (tmp_path / "config.yaml").write_text("{}\n")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n"
+    )
     paths = _fake_paths(tmp_path)
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _: ("cfg", paths))
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _: (_empty_runtime_config(), paths))
 
     def reject(*args):
         raise ValueError("unfinished snapshot requires previous cxcli binary")
@@ -4861,11 +5006,15 @@ def test_render_command_invokes_renderer(
         file=progress_output, force_terminal=terminal, width=160, _environ={"TERM": "xterm"}
     )
     monkeypatch.setattr(cli, "progress_console", progress_console)
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, Any] = {}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(
         cli,
         "render_terraform_artifacts",
@@ -4984,15 +5133,15 @@ def test_render_command_invokes_renderer(
         "Next step: deploy the rendered bundle:",
         f"nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}",
     ]
-    assert calls["terraform_config"] == "cfg"
+    assert calls["terraform_config"] == _empty_runtime_config()
     assert calls["terraform_profile"] == SourceProfile.PORTABLE
-    assert calls["outputs_config"] == "cfg"
+    assert calls["outputs_config"] == _empty_runtime_config()
     assert calls["outputs_paths"] == fake_paths
-    assert calls["flux_config"] == "cfg"
+    assert calls["flux_config"] == _empty_runtime_config()
     assert calls["flux_outputs"] == {}
-    assert calls["manifest_config"] == "cfg"
+    assert calls["manifest_config"] == _empty_runtime_config()
     assert calls["manifest_profile"] == SourceProfile.PORTABLE
-    assert calls["lock_config"] == "cfg"
+    assert calls["lock_config"] == _empty_runtime_config()
     assert calls["lock_paths"].project_dir == fake_paths.project_dir
     assert calls["lock_paths"].generated_dir != fake_paths.generated_dir
 
@@ -5026,7 +5175,9 @@ def test_internal_render_command_suppresses_deploy_hint_context(
 def test_render_command_persists_quota_report_and_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     report = QuotaReport(
@@ -5069,7 +5220,9 @@ def test_render_command_persists_quota_report_and_warns(
         ),
     )
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
     monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
     monkeypatch.setattr(
@@ -5128,7 +5281,7 @@ def test_render_command_persists_quota_report_and_warns(
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
 
     assert result.exit_code == 0, result.output
-    assert captured["quota_config"] == "cfg"
+    assert captured["quota_config"] == _empty_runtime_config()
     assert captured["quota_paths"] == fake_paths
     assert captured["quota_phase"] == "render"
     assert captured["quota_all_regions"] is False
@@ -5145,11 +5298,15 @@ def test_render_command_persists_quota_report_and_warns(
 def test_render_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, Any] = {}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
     monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
     monkeypatch.setattr(
@@ -5672,14 +5829,18 @@ def test_kube_context_name_for_target_rejects_ambiguous_current_context(
 def test_render_command_requires_force_in_noninteractive_overwrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
 
     called: dict[str, bool] = {"rendered": False}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: False)
     monkeypatch.setattr(
         cli,
@@ -5697,7 +5858,9 @@ def test_render_command_requires_force_in_noninteractive_overwrite(
 def test_render_command_force_allows_noninteractive_overwrite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
@@ -5732,7 +5895,9 @@ def test_render_command_force_allows_noninteractive_overwrite(
     stale_report.write_text("{}\n", encoding="utf-8")
     calls: dict[str, bool] = {"rendered": False}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: False)
     monkeypatch.setattr(
         cli,
@@ -5775,13 +5940,17 @@ def test_render_command_force_allows_noninteractive_overwrite(
 def test_render_command_prompts_before_overwrite_when_interactive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
     calls: dict[str, bool] = {"rendered": False}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: True)
     monkeypatch.setattr(
         cli,
@@ -5813,13 +5982,17 @@ def test_render_command_prompts_before_overwrite_when_interactive(
 def test_render_command_decline_is_clean_cancel_not_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
     calls: dict[str, bool] = {"rendered": False}
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: True)
     monkeypatch.setattr(
         cli,
@@ -5861,13 +6034,17 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
     progress_output = StringIO()
     progress_console = Console(file=progress_output, force_terminal=False)
     monkeypatch.setattr(cli, "progress_console", progress_console)
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     preserved = fake_paths.generated_dir / "existing.txt"
     preserved.write_text("keep-me\n", encoding="utf-8")
 
-    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(
+        cli, "_load_runtime_context", lambda _path: (_empty_runtime_config(), fake_paths)
+    )
     monkeypatch.setattr(cli, "_can_prompt_for_render_overwrite", lambda: False)
     monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
@@ -5908,12 +6085,21 @@ def test_deploy_command_uses_single_canonical_path(
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "render": {"module_sources": []},
+        "runtime_config": {"version": "v2"},
     }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli,
         "_ensure_ci_workflow_for_deployments_root",
@@ -5954,7 +6140,7 @@ def test_deploy_command_uses_single_canonical_path(
     assert "Deploy completed" in output
     assert "Deploy completed from" not in output
     assert captured == {
-        "config": "cfg",
+        "config": _empty_runtime_config(),
         "paths": fake_paths,
         "manifest": manifest,
         "options": cli.DeployOptions(job_policy="wait-then-cancel", job_wait_timeout="1h"),
@@ -6222,10 +6408,15 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
         ]
     )
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     soperator_spec = {
         "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -6359,13 +6550,18 @@ def test_acceptance_test_smoke_runner_runs_explicit_suite_for_all_targets(
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster-a"),
                 _mk8s_target(fake_paths, target_ref="cluster-b"),
             ],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     smoke_specs = [
         {
@@ -6534,7 +6730,7 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
         "--average-bus-bandwidth-threshold-gbps 300"
     ) in benchmark_help
     stale_help_terms = (
-        "deploy.targets[].validations",
+        "infra.components[].validations",
         "validations.mk8s_gpu",
         "cuda_smoke",
         "nccl.enabled",
@@ -6930,13 +7126,18 @@ def test_acceptance_test_benchmark_runner_runs_explicit_k8s_suite_for_all_target
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster-a"),
                 _mk8s_target(fake_paths, target_ref="cluster-b"),
             ],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     benchmark_specs = [
         {
@@ -7034,10 +7235,15 @@ def test_acceptance_test_benchmark_runner_rejects_same_target_k8s_and_slurm_repo
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths, target_ref="sop-cluster1")],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     report_file = "acceptance-benchmark-report-sop-cluster1.json"
     soperator_spec = {
@@ -7100,10 +7306,15 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     benchmark_spec = {
         "kind": "mk8s_nccl",
@@ -7188,10 +7399,15 @@ def test_acceptance_test_benchmark_runner_passes_slurm_nccl_overrides(
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths, target_ref="sop-cluster1")],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     soperator_spec = {
         "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -7278,13 +7494,18 @@ def test_acceptance_test_benchmark_all_targets_uses_report_context_without_terra
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster-a"),
                 _mk8s_target(fake_paths, target_ref="cluster-b"),
             ],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     benchmark_specs = [
         {
@@ -7531,12 +7752,21 @@ def test_deploy_command_prints_ssh_jumphost_access_hint(
     _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "render": {"module_sources": []},
+        "runtime_config": {"version": "v2"},
     }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7569,9 +7799,21 @@ def test_deploy_command_prints_wireguard_access_commands(
 ) -> None:
     _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7610,9 +7852,21 @@ def test_deploy_command_prints_wireguard_generation_command(
 ) -> None:
     _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7674,9 +7928,21 @@ def test_deploy_command_passes_one_run_validation_skip_flags(
     _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli,
         "deploy_rendered_bundle",
@@ -7714,9 +7980,21 @@ def test_deploy_command_rejects_unknown_one_run_validation_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7739,9 +8017,21 @@ def test_deploy_command_rejects_legacy_cuda_smoke_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7764,9 +8054,21 @@ def test_deploy_command_rejects_benchmark_nccl_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7815,7 +8117,7 @@ def test_deploy_generated_artifacts_rejects_unknown_validation_kind_before_work(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 {
                     "component_id": "mk8s",
@@ -7826,7 +8128,12 @@ def test_deploy_generated_artifacts_rejects_unknown_validation_kind_before_work(
                 }
             ],
             "validations": [{"kind": "custom_future_validation", "target_ref": "mk8s"}],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[str] = []
 
@@ -7852,9 +8159,21 @@ def test_deploy_command_rejects_required_cluster_smoke_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(
         cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
@@ -7878,12 +8197,22 @@ def test_deploy_command_accepts_config_yaml_target(
 ) -> None:
     _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
     captured: dict[str, Any] = {}
 
     def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
         captured["target"] = target
-        return "cfg", fake_paths, manifest
+        return _empty_runtime_config(), fake_paths, manifest
 
     monkeypatch.setattr(cli, "_load_deploy_context", _fake_load)
     monkeypatch.setattr(
@@ -7928,9 +8257,21 @@ def test_destroy_command_passes_auto_auth_flag(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
-    monkeypatch.setattr(cli, "_load_destroy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_load_destroy_context", lambda _path: (_empty_runtime_config(), fake_paths, manifest)
+    )
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
     def _fake_destroy_generated_artifacts(
@@ -7956,7 +8297,7 @@ def test_destroy_command_passes_auto_auth_flag(
     output = _plain_output(result.output)
     assert "Local destroy completed from" in output
     assert captured == {
-        "config": "cfg",
+        "config": _empty_runtime_config(),
         "paths": fake_paths,
         "manifest": manifest,
         "yes": True,
@@ -7967,12 +8308,22 @@ def test_destroy_command_accepts_config_yaml_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
     captured: dict[str, Any] = {}
 
     def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
         captured["target"] = target
-        return "cfg", fake_paths, manifest
+        return _empty_runtime_config(), fake_paths, manifest
 
     monkeypatch.setattr(cli, "_load_destroy_context", _fake_load)
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
@@ -8013,7 +8364,17 @@ def test_destroy_command_confirmation_targets_infra_only_when_no_apps(
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     config = {"infra": {"components": [{"id": "vm", "enabled": True, "inputs": {}}]}}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
         cli,
@@ -8050,13 +8411,18 @@ def test_destroy_command_confirmation_deletes_apps_before_cluster_destroy(
     config = {
         "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+        "version": "v2",
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
             "targets": [_mk8s_target(fake_paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
         },
+        "runtime_config": {"version": "v2"},
     }
 
     monkeypatch.setattr(
@@ -8084,9 +8450,15 @@ def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_ap
     captured: dict[str, Any] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [_external_mk8s_target(fake_paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
     }
 
     monkeypatch.setattr(
@@ -9013,12 +9385,18 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     config = {
         "infra": {"components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]},
+        "version": "v2",
     }
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
@@ -9150,10 +9528,15 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     fake_paths = _fake_paths(tmp_path)
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_external_mk8s_target(fake_paths)],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[Any, ...]] = []
     messages: list[str] = []
@@ -9258,7 +9641,17 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
-    manifest = {"deploy": {"targets": [], "validations": []}}
+    manifest = {
+        "execution": {
+            "targets": [],
+            "validations": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
     calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
@@ -9382,11 +9775,17 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
+    config["infra"]["components"][0]["observability"] = {"enabled": True}
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[Any, ...]] = []
 
@@ -9481,14 +9880,17 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_uses_temp
     monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
+    config["infra"]["components"][0]["observability"] = {"enabled": True}
     manifest = {
-        "deploy": {
-            "targets": [
-                _mk8s_target(fake_paths),
-                _mk8s_target(fake_paths, target_ref="mk8s-2"),
-            ],
+        "execution": {
+            "targets": [_mk8s_target(fake_paths), _mk8s_target(fake_paths, target_ref="mk8s-2")],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[Any, ...]] = []
 
@@ -9590,13 +9992,18 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
         ]
     )
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster1"),
                 _mk8s_target(fake_paths, target_ref="cluster2"),
             ],
             "validations": [],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[Any, ...]] = []
 
@@ -9700,7 +10107,14 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
     config = {"apps": {"charts": []}}
     manifest = {
         "runtime_config": config,
-        "deploy": {"targets": [], "validations": []},
+        "execution": {
+            "targets": [],
+            "validations": [],
+            "backend": {},
+            "required_component_outputs": [],
+            "status_watchers": [],
+        },
+        "schema": "nebius-cxcli-generated/v3",
     }
     printed: list[str] = []
 
@@ -9746,7 +10160,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
@@ -9756,7 +10170,12 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
                     "target_ref": "mk8s",
                 }
             ],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[Any, ...]] = []
 
@@ -9888,10 +10307,15 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         "expect_gpu_nodes": False,
     }
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [cluster_smoke_validation],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[str, Any]] = []
     monkeypatch.setattr(
@@ -9988,12 +10412,21 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
-    manifest = {"deploy": {"targets": [_mk8s_target(fake_paths)]}}
+    manifest = {
+        "execution": {
+            "targets": [_mk8s_target(fake_paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
     with pytest.raises(
         RuntimeError,
-        match="Generated manifest is missing deploy\\.validations metadata",
+        match="Generated manifest is missing execution\\.validations metadata",
     ):
         cli._deploy_generated_artifacts(
             config,
@@ -10010,15 +10443,15 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
         "render": {"module_sources": []},
+        "runtime_config": {"version": "v2"},
     }
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
     with pytest.raises(
         RuntimeError,
-        match="Generated manifest is missing deploy\\.validations metadata",
+        match="Generated manifest is missing execution\\.validations metadata",
     ):
         cli._deploy_generated_artifacts(
             config,
@@ -10036,7 +10469,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
@@ -10054,7 +10487,12 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
                     "target_ref": "mk8s",
                 },
             ],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     status_start: list[tuple[str, str | None]] = []
     status_updates: list[str] = []
@@ -10082,7 +10520,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
-        assert validations == manifest["deploy"]["validations"]
+        assert validations == manifest["execution"]["validations"]
         assert reports_dir == fake_paths.reports_dir
         assert extra_env == {
             cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
@@ -10180,13 +10618,18 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         "target_ref": "cluster2",
     }
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster1"),
                 _mk8s_target(fake_paths, target_ref="cluster2"),
             ],
             "validations": [cluster1_validation, cluster2_validation],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
 
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
@@ -10286,13 +10729,18 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         "target_ref": "cluster2",
     }
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster1"),
                 _mk8s_target(fake_paths, target_ref="cluster2"),
             ],
             "validations": [cluster1_validation, cluster2_validation],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     printed: list[str] = []
 
@@ -10396,10 +10844,15 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         "report_file": "mysterybox-eso-connectivity-report-mk8s.json",
     }
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [optional_validation, required_validation],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     printed: list[str] = []
 
@@ -10504,7 +10957,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
@@ -10515,7 +10968,12 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
                     "target_ref": "mk8s",
                 }
             ],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     status_updates: list[str] = []
     printed: list[str] = []
@@ -10614,7 +11072,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     output_paths = _fake_paths(tmp_path / "permanent") if durable else fake_paths
     config = _config_with_enabled_mk8s()
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
@@ -10630,7 +11088,12 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
                     "target_ref": "mk8s",
                 },
             ],
-        }
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     printed: list[str] = []
 
@@ -10784,6 +11247,7 @@ def test_destroy_generated_artifacts_destroys_flux_before_non_mk8s_terraform(tmp
     config = {
         "infra": {"components": [{"id": "vm", "enabled": True}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+        "version": "v2",
     }
     calls = []
     monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *a: calls.append("backend"))
@@ -10830,16 +11294,21 @@ def test_destroy_rendered_flux_bundle_deletes_all_target_flux(
     config = {
         "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+        "version": "v2",
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster-a"),
                 _mk8s_target(fake_paths, target_ref="cluster-b"),
-            ]
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
         },
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[str, str | None]] = []
 
@@ -10908,14 +11377,18 @@ def test_destroy_rendered_flux_bundle_attempts_remaining_targets_after_target_fa
     fake_paths = _fake_paths(tmp_path)
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
             "targets": [
                 _external_mk8s_target(fake_paths, target_ref="external-a"),
                 _mk8s_target(fake_paths, target_ref="managed-b"),
-            ]
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
         },
+        "runtime_config": {"version": "v2"},
     }
     calls: list[tuple[str, str | None]] = []
     messages: list[str] = []
@@ -11141,7 +11614,25 @@ def test_destroy_generated_artifacts_rejects_every_mk8s_target(tmp_path, monkeyp
             cli, name, lambda *a, **k: pytest.fail("MK8s must use the SDK workflow")
         )
     with pytest.raises(ValueError, match="--target CLUSTER_ID"):
-        cli._destroy_generated_artifacts({}, paths, {"deploy": {"targets": [target]}}, yes=True)
+        cli._destroy_generated_artifacts(
+            {},
+            paths,
+            {
+                "execution": {
+                    "targets": [target],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "infra": {"components": []},
+                "apps": {"charts": []},
+                "version": "v2",
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            },
+            yes=True,
+        )
 
 
 def test_destroy_generated_artifacts_apps_only_failure_is_fatal(
@@ -11150,9 +11641,15 @@ def test_destroy_generated_artifacts_apps_only_failure_is_fatal(
     fake_paths = _fake_paths(tmp_path)
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {"targets": []},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
     }
     monkeypatch.setattr(
         cli,
@@ -11177,11 +11674,19 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
     config = {
         "infra": {"components": [{"id": "vm", "enabled": True, "inputs": {}}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+        "version": "v2",
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "render": {"module_sources": []},
+        "runtime_config": {"version": "v2"},
     }
     captured: dict[str, Any] = {}
     messages: list[str] = []
@@ -12849,12 +13354,7 @@ def test_flux_install_manifest_url_uses_default_pinned_release(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "components": {
-                    "infra": {},
-                    "apps": {},
-                },
-            },
+            {"components": {"infra": {}, "apps": {}}},
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -13602,6 +14102,7 @@ def test_sync_mysterybox_primary_version_ids_updates_unset_config_values(
     fake_paths.config_path.write_text(
         yaml.safe_dump(
             {
+                "version": "v2",
                 "infra": {
                     "components": [
                         {
@@ -13623,7 +14124,7 @@ def test_sync_mysterybox_primary_version_ids_updates_unset_config_values(
                             },
                         }
                     ]
-                }
+                },
             },
             sort_keys=False,
         ),
@@ -13668,6 +14169,7 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     source_payload = {
+        "version": "v2",
         "infra": {
             "components": [
                 {
@@ -13684,16 +14186,23 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
                     },
                 }
             ]
-        }
+        },
     }
     fake_paths.config_path.write_text(
         yaml.safe_dump(source_payload, sort_keys=False),
         encoding="utf-8",
     )
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "validations": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+        },
         "runtime_config": {
+            "version": "v2",
             **json.loads(json.dumps(source_payload)),
             "infra": {
                 **json.loads(json.dumps(source_payload["infra"])),
@@ -13720,7 +14229,6 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
                 ]
             }
         },
-        "deploy": {"targets": [], "validations": []},
     }
     manifest_path = fake_paths.generated_dir / "nebius-cxcli-manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -13784,6 +14292,7 @@ def test_sync_mysterybox_primary_version_ids_rejects_concurrent_bundle_edits(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     source_payload = {
+        "version": "v2",
         "infra": {
             "components": [
                 {
@@ -13800,11 +14309,17 @@ def test_sync_mysterybox_primary_version_ids_rejects_concurrent_bundle_edits(
                     },
                 }
             ]
-        }
+        },
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "runtime_config": json.loads(json.dumps(source_payload)),
         "render": {
             "terraform_tfvars": {
@@ -13870,6 +14385,7 @@ def test_sync_mysterybox_primary_version_ids_checks_only_changed_targets(
     fake_paths.config_path.write_text(
         yaml.safe_dump(
             {
+                "version": "v2",
                 "infra": {
                     "components": [
                         {
@@ -13886,7 +14402,7 @@ def test_sync_mysterybox_primary_version_ids_checks_only_changed_targets(
                             },
                         }
                     ]
-                }
+                },
             },
             sort_keys=False,
         ),
@@ -13914,13 +14430,22 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "render": {"module_sources": []},
+        "runtime_config": {"version": "v2"},
     }
 
     monkeypatch.setattr(
-        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_infra_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
 
     def _fake_ensure_terraform_backend_ready(config: object) -> None:
@@ -13966,7 +14491,7 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == "cfg"
+    assert captured["backend"] == _empty_runtime_config()
     assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
@@ -14004,10 +14529,22 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
-        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_infra_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
 
     def _fake_ensure_terraform_backend_ready(config: object) -> None:
@@ -14054,7 +14591,7 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == "cfg"
+    assert captured["backend"] == _empty_runtime_config()
     assert captured["init"] == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": {"TF_VAR_DEMO": "1"},
@@ -14065,13 +14602,13 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
         "initialize": False,
     }
     assert captured["apply"] == {
-        "config": "cfg",
+        "config": _empty_runtime_config(),
         "paths": fake_paths,
         "initialize": False,
         "manifest": manifest,
     }
     assert captured["inventory"] == {
-        "config": "cfg",
+        "config": _empty_runtime_config(),
         "paths": fake_paths,
     }
 
@@ -14081,10 +14618,22 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
-        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_infra_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
 
@@ -14116,9 +14665,9 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
 
     assert result.exit_code == 0, result.output
     assert "Terraform destroy completed from" in _plain_output(result.output)
-    assert captured["backend"] == "cfg"
+    assert captured["backend"] == _empty_runtime_config()
     assert captured["destroy"] == {
-        "config": "cfg",
+        "config": _empty_runtime_config(),
         "paths": fake_paths,
         "yes": True,
         "initialize": True,
@@ -14131,10 +14680,22 @@ def test_terraform_destroy_command_confirmation_targets_infra_dir(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
-        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_infra_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
     monkeypatch.setattr(
         cli,
@@ -14206,7 +14767,7 @@ def test_terraform_unlock_non_force_rejects_blank_lock_owner(
 
     with pytest.raises(RuntimeError, match="no owner metadata"):
         cli._unlock_terraform_state_lock(
-            "cfg",
+            _empty_runtime_config(),
             fake_paths,
             force=False,
         )
@@ -14229,10 +14790,22 @@ def test_terraform_unlock_command_reports_when_no_lock_is_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
-        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_infra_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
     monkeypatch.setattr(
         cli,
@@ -14257,7 +14830,17 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
     lock_info = SimpleNamespace(
         lock_id="lock-123",
         who="rezab@host",
@@ -14267,7 +14850,9 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     )
 
     monkeypatch.setattr(
-        cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_infra_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
     monkeypatch.setattr(
         cli,
@@ -14292,10 +14877,22 @@ def test_flux_bootstrap_command_rejects_missing_target(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}, "deploy": {}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
-        cli, "_load_generated_flux_context", lambda _path: ("cfg", fake_paths, manifest)
+        cli,
+        "_load_generated_flux_context",
+        lambda _path: (_empty_runtime_config(), fake_paths, manifest),
     )
 
     def _fake_ensure_runtime_auth_material(
@@ -14330,10 +14927,10 @@ def test_flux_bootstrap_command_rejects_missing_target(
     assert result.exit_code != 0
     assert "requires a declared cluster target" in _plain_output(result.output)
     assert captured["auth"] == {
-        "config": "cfg",
+        "config": _empty_runtime_config(),
         "need_terraform": False,
     }
-    assert captured["inventory"] == {"config": "cfg", "paths": fake_paths}
+    assert captured["inventory"] == {"config": _empty_runtime_config(), "paths": fake_paths}
 
 
 def test_flux_commands_reject_generated_infra_paths(tmp_path: Path) -> None:
@@ -15139,28 +15736,15 @@ def test_mysterybox_eso_wizard_hides_target_prompts_without_backend_component() 
         description="MK8s",
     )
     payload = {
-        "infra": {
-            "components": [
-                {"id": "mk8s", "instance_id": "mk8s", "enabled": True},
-            ]
-        },
-        "deploy": {
-            "targets": [
-                {
-                    "secrets": {
-                        "mysterybox": {
-                            "enabled": False,
-                        }
-                    }
-                }
-            ]
-        },
+        "infra": {"components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True}]},
+        "apps": {"charts": []},
+        "version": "v2",
     }
 
     assert cli._skip_mysterybox_eso_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].secrets.mysterybox.enabled",
+        full_path_label="infra.components[0].secrets.mysterybox.enabled",
     )
 
     payload["infra"]["components"].append(
@@ -15169,14 +15753,22 @@ def test_mysterybox_eso_wizard_hides_target_prompts_without_backend_component() 
     assert cli._skip_mysterybox_eso_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].secrets.mysterybox.enabled",
+        full_path_label="infra.components[0].secrets.mysterybox.enabled",
     )
 
     payload["infra"]["components"][1]["enabled"] = True
+    assert cli._skip_mysterybox_eso_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].secrets.mysterybox.enabled",
+    )
+    payload["apps"]["charts"] = [
+        {"id": "external-secrets", "instance_id": "mk8s", "target_ref": "mk8s", "enabled": True}
+    ]
     assert not cli._skip_mysterybox_eso_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].secrets.mysterybox.enabled",
+        full_path_label="infra.components[0].secrets.mysterybox.enabled",
     )
 
 
@@ -15194,43 +15786,46 @@ def test_mysterybox_eso_wizard_prompts_sync_namespaces_for_all_store_modes() -> 
                 {"id": "mysterybox", "instance_id": "mysterybox", "enabled": True},
             ]
         },
-        "deploy": {
-            "targets": [
+        "apps": {
+            "charts": [
                 {
-                    "secrets": {
-                        "mysterybox": {
-                            "enabled": True,
-                            "allow_all_namespaces": True,
-                        }
-                    }
+                    "id": "external-secrets",
+                    "instance_id": "mk8s",
+                    "target_ref": "mk8s",
+                    "enabled": True,
                 }
             ]
         },
+        "version": "v2",
+    }
+
+    payload["infra"]["components"][0]["secrets"] = {
+        "mysterybox": {"enabled": True, "allow_all_namespaces": True}
     }
 
     assert (
         cli._skip_mysterybox_eso_prompt(
             payload=payload,
             entry=entry,
-            full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+            full_path_label="infra.components[0].secrets.mysterybox.sync_namespaces",
         )
         is False
     )
-    del payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"]
+    del cluster_rows(payload)[0]["secrets"]["mysterybox"]["allow_all_namespaces"]
     assert (
         cli._skip_mysterybox_eso_prompt(
             payload=payload,
             entry=entry,
-            full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+            full_path_label="infra.components[0].secrets.mysterybox.sync_namespaces",
         )
         is False
     )
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"] = False
+    cluster_rows(payload)[0]["secrets"]["mysterybox"]["allow_all_namespaces"] = False
     assert (
         cli._skip_mysterybox_eso_prompt(
             payload=payload,
             entry=entry,
-            full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+            full_path_label="infra.components[0].secrets.mysterybox.sync_namespaces",
         )
         is False
     )
@@ -15240,21 +15835,21 @@ def test_wizard_selected_value_shows_boolean_secret_controls() -> None:
     assert (
         cli._wizard_visible_value(
             True,
-            path_label="deploy.targets[0].secrets.mysterybox.enabled",
+            path_label="infra.components[0].secrets.mysterybox.enabled",
         )
         == "true"
     )
     assert (
         cli._wizard_visible_value(
             ["default"],
-            path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+            path_label="infra.components[0].secrets.mysterybox.sync_namespaces",
         )
         == '["default"]'
     )
     assert (
         cli._wizard_visible_value(
             "super-secret",
-            path_label="deploy.targets[0].secrets.mysterybox.credentials_secret.key",
+            path_label="infra.components[0].secrets.mysterybox.credentials_secret.key",
         )
         == "<redacted>"
     )
@@ -16250,7 +16845,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -16264,9 +16859,15 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {"targets": [_mk8s_target(fake_paths)]},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [_mk8s_target(fake_paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
     }
     target_paths = _target_paths(fake_paths)
     target_paths.flux_dir.mkdir(parents=True, exist_ok=True)
@@ -16426,7 +17027,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     _stub_application_admission_for_effects_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -16440,9 +17041,15 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {"targets": [_mk8s_target(fake_paths)]},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [_mk8s_target(fake_paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
     }
     target_paths = _target_paths(fake_paths)
     target_paths.flux_dir.mkdir(parents=True, exist_ok=True)
@@ -16574,7 +17181,7 @@ def test_flux_apply_command_all_targets_reuses_preflight_contexts(
     _stub_application_admission_for_effects_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -16593,14 +17200,15 @@ def test_flux_apply_command_all_targets_reuses_preflight_contexts(
         },
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {
-            "targets": [
-                _mk8s_target(fake_paths),
-                _mk8s_target(fake_paths, target_ref="mk8s-2"),
-            ]
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [_mk8s_target(fake_paths), _mk8s_target(fake_paths, target_ref="mk8s-2")],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
         },
+        "runtime_config": {"version": "v2"},
     }
     captured: dict[str, Any] = {
         "handoffs": [],
@@ -16715,7 +17323,7 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -16729,9 +17337,15 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "deploy": {"targets": [_mk8s_target(fake_paths)]},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [_mk8s_target(fake_paths)],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
     }
     captured: dict[str, Any] = {}
 
@@ -16774,7 +17388,17 @@ def test_flux_destroy_command_confirmation_targets_flux_dir(
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
 
     monkeypatch.setattr(
         cli,
@@ -17270,7 +17894,17 @@ def test_flux_apply_command_fails_when_no_enabled_charts_exist(
         lambda _path: (
             fake_config,
             fake_paths,
-            {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}, "deploy": {}},
+            {
+                "schema": "nebius-cxcli-generated/v3",
+                "execution": {
+                    "backend": {},
+                    "targets": [],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
+                "runtime_config": {"version": "v2"},
+            },
         ),
     )
 
@@ -17298,7 +17932,17 @@ def test_email_command_handles_sent_and_noop(
         lambda _path: (
             "cfg",
             fake_paths,
-            {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}},
+            {
+                "schema": "nebius-cxcli-generated/v3",
+                "execution": {
+                    "backend": {},
+                    "targets": [],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
+                "runtime_config": {"version": "v2"},
+            },
         ),
     )
     monkeypatch.setattr(
@@ -17462,8 +18106,12 @@ def test_top_level_help_has_single_auth_command_surface() -> None:
 def test_render_command_fails_before_render_when_active_source_validation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", _fake_paths(tmp_path)))
+    (tmp_path / "config.yaml").write_text(
+        "version: v2\ninfra: {components: []}\napps: {charts: []}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        cli, "_load_context", lambda _path: (_empty_runtime_config(), _fake_paths(tmp_path))
+    )
     monkeypatch.setattr(
         cli,
         "_validate_active_component_sources",
@@ -17491,7 +18139,7 @@ def test_validate_active_component_sources_uses_active_catalog_not_config_source
     (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -17843,7 +18491,17 @@ def test_manifest_context_authenticates_before_tfvars_materialization(
 ) -> None:
     _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+        "runtime_config": {"version": "v2"},
+    }
     fake_config = SimpleNamespace()
     events: list[object] = []
 

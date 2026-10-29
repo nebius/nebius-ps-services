@@ -7,7 +7,7 @@ payloads.
 
 - Creates one `nebius_mysterybox_v1_secret` per `secrets` entry.
 - Creates one initial primary `nebius_mysterybox_v1_secret_version` per secret
-  when the secret is first deployed.
+  when the secret is first deployed and `create_initial_versions=true` (default).
 - Keeps the current primary `version_id` as metadata in the secret definition:
   use `n/a` before the first deploy, then record the created or operator-rotated
   `mbsecver-...` primary version ID.
@@ -42,7 +42,7 @@ write-only fields for secret payloads.
 ## MysteryBox Model
 
 Nebius MysteryBox stores sensitive data as encrypted secrets. A secret lives in
-a Nebius project, has one or more versions, and each version is an immutable
+a Nebius project, can initially have no versions, and each version is an immutable
 snapshot of key-value payload entries. MysteryBox returns the primary version
 when a caller does not request a specific version.
 
@@ -52,6 +52,14 @@ that initial version. The `version_id` field records the current primary
 MysteryBox version ID for downstream sync tools; set it to `n/a` before the
 first deploy, then update it to the created primary version ID or a later
 operator-rotated primary version ID.
+
+## Metadata-only containers
+
+Set `create_initial_versions = false` and declare only secret names, descriptions
+and labels. Omit `payload`, `payload_values` and `version_id`. Terraform creates
+containers without versions; an external lifecycle owner initializes and rotates
+payloads. The module ignores `primary_version_id` changes to preserve external
+publication. WireGuard uses this mode with the sibling `wireguard-access` module.
 
 ## Usage
 

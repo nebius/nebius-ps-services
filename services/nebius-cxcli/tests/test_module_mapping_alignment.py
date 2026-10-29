@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 import nebius_cxcli.component_sources as component_sources
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     SourceProfile,
@@ -112,7 +113,7 @@ def _payload_with_mk8s() -> dict:
                     chart["instance_id"] = "cluster-a"
                 if chart.get("target_ref") == old_instance_id:
                     chart["target_ref"] = "cluster-a"
-            for target in payload.get("deploy", {}).get("targets", []):
+            for target in cluster_rows(payload):
                 if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
                     target["instance_id"] = "cluster-a"
             return payload

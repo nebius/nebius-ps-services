@@ -78,6 +78,7 @@ def test_config_selection_round_trip_and_closed_fields():
         "infra": {"components": [{"id": "mk8s", "instance_id": "cluster"}]},
         "apps": {"charts": []},
         "compatibility": {"targets": {"cluster": {"version_set": None}}},
+        "version": "v2",
     }
     validate_selection(payload)
     assert (
@@ -116,6 +117,7 @@ def test_registry_is_only_default_pin_owner_and_conflicts_are_explicit():
                 }
             ]
         },
+        "version": "v2",
     }
     with pytest.raises(ValueError, match="conflicts with version set"):
         selected_inventory(config)
@@ -129,6 +131,7 @@ def test_frozen_catalog_drift_and_integrity(monkeypatch):
     config = {
         "infra": {"components": [{"id": "mk8s"}]},
         "apps": {"charts": [{"id": "nvidia-gpu-operator"}]},
+        "version": "v2",
     }
     frozen = freeze_catalog(config)
     current = load_component_sources()
@@ -254,6 +257,7 @@ def test_profile_and_explicit_set_resolve_before_catalog_hint(monkeypatch):
                 },
             ]
         },
+        "version": "v2",
     }
     monkeypatch.setattr("nebius_cxcli.compatibility_runtime.load_matrix", lambda: matrix)
     materialize_selection(payload)

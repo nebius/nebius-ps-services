@@ -117,6 +117,8 @@ def apply_ordinary_bundle(
                     )
                 cli._apply_rendered_flux(
                     replace(target_paths, flux_dir=prerequisite_dir),
+                    config=config,
+                    target_ref=target_ref,
                     extra_env=kube_env,
                     assert_authority=assert_authority,
                 )
@@ -168,6 +170,30 @@ def deploy_application_target(
         deploy_validations,
         target_ref=target_ref,
     )
+    from .deployment_infrastructure import (
+        infrastructure_only_target,
+        verify_infrastructure_target,
+    )
+
+    if infrastructure_only_target(
+        config,
+        target,
+        validations=target_validations,
+        application_identity=expected_identity,
+        paths=report_paths or paths,
+    ):
+        with SoperatorUpgradeProgress(cli.progress_console, prefix="Deploy").phase(
+            "infrastructure-readiness", f"Verify infrastructure for {target_ref} through Nebius API"
+        ):
+            proof = verify_infrastructure_target(
+                cli,
+                config,
+                paths,
+                target,
+                validations=target_validations,
+                assert_authority=deployment_lease.assert_held,
+            )
+        return {"infrastructure": proof, "grafana_statuses": [], "bootstrap_commands": []}
     pre_app_validations = (
         cli._pre_app_cluster_smoke_validations(target_validations) if target_has_apps else []
     )

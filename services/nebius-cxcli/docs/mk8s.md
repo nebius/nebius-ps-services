@@ -7,6 +7,38 @@ identity. Set `CONFIG` to the project file and replace `TARGET_ID` with its
 logical cluster instance ID. Versions, hardware presets, fabrics, and capacity
 must be available for that target; example values are not compatibility claims.
 
+## Private-cluster deployment
+
+For a managed CPU-only target with no enabled charts or in-cluster integrations,
+`deploy` uses the Nebius SDK to verify infrastructure after Terraform. This also
+works when `inputs.cluster.public_endpoint` is `false` and the runner cannot
+reach the private Kubernetes endpoint. The required smoke report is labeled
+**MK8s infrastructure readiness (Nebius API)**.
+
+Acceptance checks the Terraform-owned cluster ID, project and name, endpoint
+presence, settled cluster state, complete node-group inventory, desired capacity,
+ready nodes and absence of outdated nodes. API failures, missing groups and
+readiness timeouts fail deployment. Final verification reads the provider again.
+The report records each executed cluster, endpoint, inventory and node-group
+check. Deployment acceptance uses the same saved report as the final summary;
+missing or skipped required checks fail deployment.
+
+This verifies cloud infrastructure only. It does not inspect existing workloads,
+Helm releases, pod health or application ownership on a new runner. Known local
+application bindings or completed application evidence retain Kubernetes checks;
+removing charts from configuration does not uninstall them. Infrastructure-only
+acceptance never creates a Kubernetes UID binding or claims workload validation.
+
+App-bearing, GPU and external targets still require Kubernetes access. Use a
+runner on the private network or an established VPN/routed connection for their
+deployment, Flux operations and workload checks. The SDK is not a Kubernetes API
+proxy. Infrastructure-only deploy does not activate a VPN or persist kubeconfig.
+Keep the frozen generated bundle and rerun the original command after a failed
+deployment; do not rerender an interrupted operation just for this repair.
+
+See the official [cluster connection guide](https://docs.nebius.com/kubernetes/connect)
+and [node-group status contract](https://docs.nebius.com/terraform-provider/reference/resources/mk8s_v1_node_group#nested-schema-for-status).
+
 ## Cluster creation and node placement
 
 Run `nebius-cxcli component add infra:mk8s --config "$CONFIG"` to configure a
@@ -88,6 +120,32 @@ spec:
 Cluster deployment does not edit application manifests. Labels alone do not
 force applications onto a group; tolerations alone do not direct them to it.
 See [Kubernetes taints and tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/).
+
+### Shared storage for new node groups
+
+Ordinary `create` and `component add` configure selected VPC components first,
+then selected SFS components, then the remaining infrastructure. This lets you
+finish naming shared filesystems before choosing attachments for new node groups.
+Existing SFS configuration is also available when adding a cluster.
+
+For each new group, the wizard shows **Attach shared storage to node group
+"core-services":** and lists eligible filesystems by their configured names. All start
+checked. Use Space to toggle individual filesystems and Enter to confirm; you
+can uncheck all to attach none. The text prompt accepts comma-separated indexes,
+Enter for all, or `none`. Each group has an independent selection, and the
+confirmation shows the selected names or `none`. No eligible filesystem means
+no attachment prompt. Existing groups and Soperator's role-based storage flow
+are unchanged.
+
+The saved `sfs_filesystem_keys` list still contains internal references: for a
+single-filesystem SFS component, `default` identifies that filesystem. An empty
+list records an explicit opt-out. These references are resolved to filesystem
+IDs and mount tags during rendering; they are not access keys or PVC names.
+
+The wizard configures worker-node attachments for deployment. Node mounting,
+the CSI driver, and Kubernetes PV/PVC resources are separate setup steps;
+selecting storage here does not provision or mount it immediately. See the
+[Nebius shared filesystem CSI guide](https://docs.nebius.com/kubernetes/storage/filesystem-over-csi).
 
 ### Existing and planned VPC choices
 

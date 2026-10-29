@@ -41,12 +41,28 @@ def publish_deployment_reports(
         raise RuntimeError("Deployment report directories must not be symlinked")
     destination.reports_dir.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, str] = {}
+    client_verification = None
+    verification_path = source.reports_dir / "wireguard-client-verification.json"
+    if verification_path.exists():
+        client_verification = json.loads(_read_regular(verification_path))
+        if client_verification.get("schema") != "nebius-cxcli/wireguard-client-verification/v1":
+            raise RuntimeError("Invalid WireGuard client verification report")
+        outputs[verification_path.name] = json.dumps(client_verification, indent=2) + "\n"
+        outputs["wireguard-client-verification.md"] = _read_regular(
+            source.reports_dir / "wireguard-client-verification.md"
+        ).decode()
     markdown = source.reports_dir / "deploy-report.md"
     if markdown.exists():
         content = _read_regular(markdown).decode()
         content = content.replace(str(source.project_dir), str(destination.project_dir))
         for name in detail_names:
             content = content.replace(name, "deploy-report.json")
+        if client_verification is not None:
+            content += (
+                "\nWireGuard client access: "
+                + client_verification["status"]
+                + " — [verification report](wireguard-client-verification.md).\n"
+            )
         if failure is not None:
             message = (
                 str(failure)
@@ -63,6 +79,8 @@ def publish_deployment_reports(
                 {
                     "schema": "nebius-cxcli/deploy-summary/v1",
                     "status": "failed" if failure is not None else report.overall_status,
+                    "infrastructure_status": report.overall_status,
+                    "wireguard_client_verification": client_verification,
                     "total": report.total_count,
                     "completed": report.completed_count,
                     "execution_failure": (

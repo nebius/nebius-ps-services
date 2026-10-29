@@ -238,7 +238,7 @@ def change(address, kind, after, *, before=None, actions=None, unknown=None):
     }
 
 
-def subnet_change(address="module.nat.nebius_vpc_v1_subnet.gateway", cidr="/28", **kwargs):
+def subnet_change(address="module.nat.nebius_vpc_v1_subnet.gateway[0]", cidr="/28", **kwargs):
     return change(
         address,
         "subnet",
@@ -591,6 +591,9 @@ def test_wizard_preserves_well_formed_draft_after_capacity_failure(monkeypatch, 
         payload,
         payload["infra"]["components"][0],
         prefix="nat",
+        entry=__import__("nebius_cxcli.components", fromlist=["ComponentEntry"]).ComponentEntry(
+            "nat-gateway", "infra", "infra.components", "NAT"
+        ),
         lookup=Lookup(),
         prompt=prompt,
         is_back=lambda _: False,
@@ -599,7 +602,8 @@ def test_wizard_preserves_well_formed_draft_after_capacity_failure(monkeypatch, 
     )
     assert result["inputs"]["gateway_subnet_cidr"] == "/28"
     assert any(f"address space {status}" in line for line in emitted)
-    assert any("draft can be saved" in line for line in emitted)
+    assert any("configuration can be saved" in line for line in emitted)
+    assert result["routing"]["enabled"] is True
 
 
 def test_new_gateway_with_routing_disabled_still_hits_plan_gate(monkeypatch):

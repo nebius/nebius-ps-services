@@ -387,14 +387,11 @@ def test_soperator_cluster_validation_specs_for_enabled_soperator_target() -> No
                 }
             ]
         },
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "training",
-                    "kube_context": "training-context",
-                }
-            ]
+        "infra": {
+            "components": [],
+            "external_clusters": [{"instance_id": "training", "kube_context": "training-context"}],
         },
+        "version": "v2",
     }
 
     specs = soperator_cluster_validation_specs(payload)
@@ -436,7 +433,11 @@ def test_soperator_acceptance_benchmark_specs_carry_run_only_overrides() -> None
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "training", "kube_context": "training-context"}]},
+        "infra": {
+            "components": [],
+            "external_clusters": [{"instance_id": "training", "kube_context": "training-context"}],
+        },
+        "version": "v2",
     }
 
     specs = soperator_acceptance_benchmark_specs(
@@ -493,7 +494,11 @@ def test_soperator_acceptance_smoke_specs_use_acceptance_report_filename() -> No
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "training", "kube_context": "training-context"}]},
+        "infra": {
+            "components": [],
+            "external_clusters": [{"instance_id": "training", "kube_context": "training-context"}],
+        },
+        "version": "v2",
     }
 
     specs = soperator_acceptance_smoke_specs(
@@ -544,7 +549,10 @@ def test_soperator_cluster_validation_specs_use_custom_jail_storage_names() -> N
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "training"}]},
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "training", "enabled": True, "inputs": {}}]
+        },
+        "version": "v2",
     }
 
     specs = soperator_cluster_validation_specs(payload)

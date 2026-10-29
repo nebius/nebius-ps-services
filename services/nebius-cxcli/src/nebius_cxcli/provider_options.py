@@ -25,6 +25,7 @@ from .capacity_dashboard import (
     filter_capacity_resource_advice,
     list_capacity_resource_advice,
 )
+from .cluster_config import cluster_rows
 from .deploy_targets import deploy_target_is_external_mk8s
 from .sdk_auth import init_nebius_sdk
 from .soperator_install_progress import install_phase, install_progress_step
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
+        "wireguard_admin_groups",
         "mk8s_compatible_platforms",
         "mk8s_gpu_stack_presets",
         "mk8s_node_group_os_values",
@@ -696,6 +698,19 @@ class ProviderOptionLookup:
         self._vpc_identity_reader = VpcIdentityReader(paths)
         self._vpc_diagnostics.clear()
 
+    def refresh(self) -> None:
+        """Invalidate discovery snapshots without replacing authentication or state ownership."""
+        self._cache.clear()
+        if self._vpc_identity_reader is not None:
+            self._vpc_identity_reader.refresh()
+        self._compute_platform_preset_cache.clear()
+        self._compute_public_image_family_cache.clear()
+        self._mk8s_compatibility_cache.clear()
+        self._capacity_resource_advice_cache.clear()
+        self._vpc_diagnostics.clear()
+        self._last_vpc_complete = False
+        self._last_error = None
+
     def vpc_identity(self, payload: Mapping[str, Any]) -> VpcIdentitySnapshot:
         from .vpc_identity import VpcIdentitySnapshot
 
@@ -721,6 +736,31 @@ class ProviderOptionLookup:
         field_path: str,
     ) -> list[OptionChoice]:
         self._last_error = None
+        if provider == "wireguard_admin_groups":
+            # Identity-sensitive choices are always fresh and never use plugins/cache.
+            from .wireguard_secret_api import wireguard_api
+
+            nebius = payload.get("client_info", {}).get("nebius", {})
+            try:
+                with wireguard_api() as api:
+                    groups = api.admin_groups(
+                        nebius.get("tenant_id", ""), nebius.get("project_id", "")
+                    )
+                return [
+                    OptionChoice(
+                        value=item["id"],
+                        label=f"{item['name']} — {item['scope']} — {item['id']}",
+                        metadata={
+                            "live_id": item["id"],
+                            "parent_id": item["parent_id"],
+                            "scope": item["scope"],
+                        },
+                    )
+                    for item in groups
+                ]
+            except Exception:
+                self._last_error = "Complete live IAM group discovery failed for the selected tenant/project identity"
+                return []
         if provider in {"project_networks", "project_subnets"}:
             self._last_vpc_complete = False
         try:
@@ -1486,8 +1526,7 @@ class ProviderOptionLookup:
             payload=payload,
             field_path=field_path,
         )
-        deploy = payload.get("deploy")
-        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        targets = cluster_rows(payload)
         if isinstance(targets, list):
             for row in targets:
                 if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):

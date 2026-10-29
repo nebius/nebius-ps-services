@@ -172,6 +172,10 @@ class VpcIdentityReader:
         self.paths = paths
         self._cache: dict[tuple[str, ...], VpcIdentitySnapshot] = {}
 
+    def refresh(self) -> None:
+        """Discard the scope snapshot after an explicit wizard inventory refresh."""
+        self._cache.clear()
+
     def read(self, payload: Mapping[str, Any]) -> VpcIdentitySnapshot:
         client = payload.get("client_info", {})
         if not isinstance(client, Mapping) or not isinstance(client.get("nebius"), Mapping):

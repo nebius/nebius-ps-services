@@ -1,0 +1,28 @@
+{
+  "skill_name": "agent-nebius-auth-setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use agent-nebius-auth-setup live for project-test. The human CLI login expired, but I am signed in through the browser. Complete the setup.",
+      "expected_output": "Run the authorized bounded ensure workflow and allow its browser sign-in before reporting a blocker.",
+      "files": [],
+      "assertions": [
+        "Uses the canonical ensure helper for the selected project without another permission prompt.",
+        "Does not stop merely to ask the user to run a separate terminal sign-in command.",
+        "Never prints tokens, credential contents or authorization URLs.",
+        "Reports observed verification separately from unavailable live evidence."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Preview agent-nebius-auth-setup for project-test without changing anything. The human CLI login is expired.",
+      "expected_output": "Keep the preview non-browser and non-mutating; explain the administrative authentication blocker.",
+      "files": [],
+      "assertions": [
+        "Uses dry-run rather than live ensure.",
+        "Does not open browser authentication, create credentials or modify IAM.",
+        "Does not identify an expired human bootstrap login as proof of agent credential failure."
+      ]
+    }
+  ]
+}

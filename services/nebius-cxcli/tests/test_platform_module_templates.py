@@ -129,9 +129,9 @@ def test_ssh_jumphost_template_installs_vm_local_day2_allowed_cidr_helper(tmp_pa
 
 def test_wireguard_gw_passes_runtime_config_json_to_cloud_init() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    main_tf = (repo_root / "platform-infra" / "modules" / "wireguard-gw" / "main.tf").read_text(
-        encoding="utf-8"
-    )
+    main_tf = (
+        repo_root / "platform-infra" / "modules" / "wireguard-gw" / "cloud-init.tf"
+    ).read_text(encoding="utf-8")
 
     assert "wireguard_config_json = jsonencode({" in main_tf
     assert "endpoint_host                       = var.endpoint_host" in main_tf
@@ -258,7 +258,9 @@ def test_wireguard_gw_template_renders_shell_heredoc_terminators_at_column_zero(
     expression = (
         f'templatefile("{template_path}", {{ '
         'ssh_user_name = "ubuntu", '
-        f'ssh_public_key = "{_VALID_ED25519_PUBLIC_KEY}", '
+        'access_config_json = "{}", '
+        f'access_helper = indent(6, file("{template_path.parent / "wireguard_access.py"}")), '
+        f'network_helper = indent(6, file("{template_path.parent / "wireguard_network.py"}")), '
         "wireguard_config_json = jsonencode({ "
         'wireguard_tunnel_cidr = "10.8.0.1/22", '
         "wireguard_listen_port = 51820, "

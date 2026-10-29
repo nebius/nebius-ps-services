@@ -89,7 +89,7 @@ class CampaignGenerationHooks:
             manifest = self.cli.load_generated_manifest(staged.generated_dir)
             # Project transaction owns locators relative to the final project.
             manifest["paths"] = self.executor.manifest["paths"]
-            for target in manifest.get("deploy", {}).get("targets", []):
+            for target in manifest.get("execution", {}).get("targets", []):
                 if target.get("flux_dir"):
                     target["flux_dir"] = str(target["flux_dir"]).replace(
                         staged.generated_dir.relative_to(paths.repo_root).as_posix(),
@@ -486,7 +486,7 @@ class TerraformCampaignHooks(CampaignGenerationHooks):
                 assert_authority=assert_authority,
             )
         assert_authority()
-        self.executor.complete_nat()
+        self.executor.complete_gateway_preparation()
         _, after = self.executor._terraform_plan(purpose=f"Verify {stage_name} stage convergence")
         if terraform_changes(after):
             raise RuntimeError("Topology stage did not reach its admitted Terraform postconditions")

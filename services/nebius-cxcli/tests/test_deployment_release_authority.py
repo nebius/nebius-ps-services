@@ -32,7 +32,17 @@ def release_case(tmp_path, monkeypatch):
         version=expected.release, repo=expected.chart_oci_url("umbrella")
     )
     frozen = DeploymentGeneration(
-        {"runtime_config": copy.deepcopy(payload)},
+        {
+            "runtime_config": copy.deepcopy(payload),
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
         {
             "reports/soperator-release-snapshot-cluster.json": base64.b64encode(
                 json.dumps(expected.canonical_payload()).encode()

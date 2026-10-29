@@ -566,10 +566,28 @@ def _allocation_demand(inventory: _Inventory, resource: Mapping[str, Any], roots
             and owner["id"] == "nat-gateway"
             and resource["address"] == inventory.module(owner) + "nebius_vpc_v1_allocation.private"
         ):
-            address = inventory.module(owner) + "nebius_vpc_v1_subnet.gateway"
+            address = inventory.module(owner) + "nebius_vpc_v1_subnet.gateway[0]"
             gateway_subnet = inventory.resources.get(address)
             if gateway_subnet and _dedicated_subnet(gateway_subnet):
                 return
+            if owner["inputs"].get("gateway_subnet_mode") == "reuse":
+                binding = owner.get("bindings", {}).get("inputs.gateway_subnet_id") or {}
+                source = inventory.rows.get(binding.get("source_instance"))
+                if (
+                    source is not None
+                    and binding.get("source_output") == "subnets"
+                    and binding.get("attribute") == "id"
+                ):
+                    matches = [
+                        item
+                        for item in inventory.resources.values()
+                        if item.get("type") == "nebius_vpc_v1_subnet"
+                        and item.get("mode") == "managed"
+                        and item["address"].startswith(inventory.module(source))
+                        and item.get("index") == binding.get("key")
+                    ]
+                    if len(matches) == 1 and _dedicated_subnet(matches[0]):
+                        return
         raise AddressSpaceUnresolved("Planned allocation source membership is unresolved")
     if not set(candidates) & roots:
         return
@@ -765,8 +783,19 @@ def assess_config_address_space(
                     },
                 )
         elif row["id"] == "nat-gateway":
+            if inputs.get("gateway_subnet_mode", "create") == "reuse":
+                if inputs.get("gateway_subnet_id"):
+                    add(
+                        prefix + "nebius_vpc_v1_allocation.private",
+                        "allocation",
+                        {
+                            "parent_id": project,
+                            "ipv4_private": {"subnet_id": inputs["gateway_subnet_id"]},
+                        },
+                    )
+                continue
             add(
-                prefix + "nebius_vpc_v1_subnet.gateway",
+                prefix + "nebius_vpc_v1_subnet.gateway[0]",
                 "subnet",
                 {
                     "parent_id": project,

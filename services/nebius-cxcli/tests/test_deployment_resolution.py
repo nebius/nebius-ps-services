@@ -67,7 +67,19 @@ def test_application_render_reuses_every_generation_release(
     for target, snapshot in zip(("cluster", "second"), snapshots, strict=True):
         bind_snapshot(payload, files, snapshot, target=target)
     frozen = DeploymentGeneration(
-        {"runtime_config": payload, "render": {"inputs": freeze_catalog(payload)}}, files
+        {
+            "runtime_config": payload,
+            "render": {"inputs": freeze_catalog(payload)},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        files,
     )
     before = copy.deepcopy(frozen)
 
@@ -152,7 +164,19 @@ def test_application_render_consumes_frozen_dashboard_assets(tmp_path, monkeypat
         {} if frozen_input == "missing" else {asset: base64.b64encode(json_bytes(stored)).decode()}
     )
     frozen = DeploymentGeneration(
-        {"runtime_config": payload, "render": {"inputs": freeze_catalog(payload)}}, files
+        {
+            "runtime_config": payload,
+            "render": {"inputs": freeze_catalog(payload)},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        files,
     )
     before = copy.deepcopy(frozen)
     # The real private deployment cache has no authored source. Even when one
@@ -260,7 +284,25 @@ def test_output_resolution_is_derived_from_frozen_inputs_and_repeats_across_runn
         {
             "runtime_config": payload,
             "render": {"inputs": freeze_catalog(payload)},
-            "deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/targets/cluster"}]},
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": "flux/targets/cluster",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "backend": {},
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+            "schema": "nebius-cxcli-generated/v3",
         },
         {
             "flux/targets/cluster/kustomization.yaml": base64.b64encode(

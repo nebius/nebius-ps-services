@@ -246,6 +246,29 @@ jobs:
           set -euo pipefail
           make ci-quality verify-wheel-cli
 
+      - name: Verify NAT SSH protection in isolated Ubuntu systemd
+        timeout-minutes: 20
+        run: python3 ../../platform-infra/modules/nat-gateway/tests/systemd/run.py
+
+      - name: Verify WireGuard rendered cloud-init size and decoded scripts
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          uv run --locked --no-sync --no-python-downloads pytest \
+            -p no:cacheprovider -m integration tests/test_wireguard_guest_access.py
+
+      - name: Verify private NAT probe SSH transport
+        timeout-minutes: 10
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          docker info >/dev/null
+          uv run --locked --no-sync --no-python-downloads pytest \
+            -p no:cacheprovider -m integration tests/test_nat_gateway_probe_ssh_integration.py
+
       - name: Qualify pinned Grafana charts, API and PostgreSQL persistence
         run: |
           set -euo pipefail

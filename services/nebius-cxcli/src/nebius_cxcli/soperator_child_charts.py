@@ -6,6 +6,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .component_defaults import read_component_path, set_component_path
 from .component_instances import component_instance_id, component_type_id
 from .deploy_targets import app_chart_target_ref
@@ -49,9 +50,7 @@ def _app_chart_rows(payload: Mapping[str, Any]) -> list[Any]:
 
 
 def _deploy_target_rows(payload: Mapping[str, Any]) -> list[Any]:
-    deploy = payload.get("deploy")
-    targets = _mapping(deploy).get("targets")
-    return targets if isinstance(targets, list) else []
+    return cluster_rows(payload)
 
 
 def _enabled_app_rows(payload: Mapping[str, Any], app_id: str) -> tuple[dict[str, Any], ...]:

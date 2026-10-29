@@ -120,7 +120,7 @@ def test_upgrade_planner_binds_the_configuration_it_read(
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "cluster-a"}]},
+        "version": "v2",
     }
     paths.config_path.write_text(yaml.safe_dump(source))
     original = paths.config_path.read_bytes()

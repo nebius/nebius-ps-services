@@ -148,6 +148,20 @@ def verify_gateway_address(
         for pool in subnet.status.ipv4_private_pools
         for cidr in pool.cidrs
     ]
+    if inputs.get("gateway_subnet_mode", "create") == "reuse":
+        details = private_allocation.status.details
+        if (
+            details.subnet_id != subnet.metadata.id
+            or _token(details.version) != "IPV4"
+            or not details.allocated_cidr
+            or IPv4(details.allocated_cidr).prefixlen != 32
+            or not any(
+                details.pool_id == identity and IPv4(details.allocated_cidr).subnet_of(cidr)
+                for identity, cidr in ranges
+            )
+        ):
+            raise RuntimeError("NAT private allocation is outside the reused subnet pools")
+        return
     if len(ranges) != 1:
         raise RuntimeError("NAT gateway must have one resolved dedicated IPv4 range")
     pool_id, cidr = ranges[0]

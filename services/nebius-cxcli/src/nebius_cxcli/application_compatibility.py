@@ -210,7 +210,7 @@ def bind_application_artifacts(paths, config, inputs):
     from .deploy_targets import enabled_cluster_target_refs, flux_target_dir
 
     if any(
-        row.get("id") == "soperator" or "soperator_registration" in row
+        row.get("id") == "soperator" or "registration" in row
         for row in to_plain_data(config).get("apps", {}).get("charts", [])
     ):
         for ref in enabled_cluster_target_refs(config):

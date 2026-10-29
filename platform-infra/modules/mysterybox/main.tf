@@ -5,6 +5,18 @@ resource "nebius_mysterybox_v1_secret" "this" {
   name        = each.value.name
   description = each.value.description
   labels      = each.value.labels
+
+  lifecycle {
+    # Primary publication and rotation belong to the payload lifecycle owner.
+    ignore_changes = [primary_version_id]
+
+    precondition {
+      condition = var.create_initial_versions || (
+        length(var.payload_values) == 0 && length(local.configured_primary_version_ids) == 0
+      )
+      error_message = "Metadata-only secrets must not receive payload_values or version_id."
+    }
+  }
 }
 
 resource "nebius_mysterybox_v1_secret_version" "this" {

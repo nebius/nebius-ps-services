@@ -36,7 +36,7 @@ components:
     nat-gateway:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/nat-gateway?ref=main
-        local: ../../platform-infra/modules/nat-gateway
+        local: ../../platform-infra//modules/nat-gateway
       ui:
         title: Custom NAT gateway (single CPU VM)
         group: Network
@@ -49,8 +49,8 @@ components:
       defaults:
         inputs.platform: cpu-d3
         inputs.preset: 4vcpu-16gb
-        inputs.gateway_subnet_cidr: /28
-        inputs.boot_disk_size_gib: 20
+        inputs.gateway_subnet_mode: create
+        inputs.boot_disk_size_gib: 40
         inputs.boot_disk_type: NETWORK_SSD
         inputs.ssh_user_name: shared.admin_ssh.user_name
     managed-postgresql:
@@ -81,7 +81,7 @@ components:
     nfs:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/nfs?ref=main
-        local: ../../platform-infra/modules/nfs
+        local: ../../platform-infra//modules/nfs
       ui:
         title: VM-based NFS bridge (non-HA)
         group: Storage
@@ -131,7 +131,7 @@ components:
     wireguard-gw:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-gw?ref=main
-        local: ../../platform-infra/modules/wireguard-gw
+        local: ../../platform-infra//modules/wireguard-gw
       ui:
         title: WireGuard VPN gateway
         group: Network
@@ -149,7 +149,7 @@ components:
     ssh-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=main
-        local: ../../platform-infra/modules/ssh-jumphost
+        local: ../../platform-infra//modules/ssh-jumphost
       ui:
         title: SSH-only hardened jump host
         group: Security
@@ -342,7 +342,7 @@ components:
         namespace: observability
         name: nebius-observability-agent
       # Keep customer-facing toggles under config.yaml
-      # deploy.targets[].observability and derive them from the paired
+      # infra.components[].observability and derive them from the paired
       # component_cli_settings.yaml MK8s observability settings at render time.
       # Only put explicit Nebius-specific chart deltas here when cxcli must
       # override an upstream chart default.
@@ -428,7 +428,7 @@ components:
           chart: opentelemetry-collector
           version: 0.173.1
       ui:
-        title: opentelemetry-collector
+        title: OpenTelemetry OTLP gateway
         group: Observability
         enabled: false
       release:
@@ -446,7 +446,7 @@ components:
           chart: opentelemetry-collector
           version: 0.173.1
       ui:
-        title: opentelemetry-collector
+        title: OpenTelemetry node log collector
         group: Observability
         enabled: false
       release:
@@ -504,7 +504,7 @@ components:
         timeout: 10m
         install_after:
           - gateway-helm
-          - postgresql
+          - grafana-postgresql
       defaults:
         # Keep CPU-only platform/observability pods off expensive GPU nodes by
         # default. Nebius GPU worker nodes carry `nebius.com/gpu=true`; CPU nodes
@@ -751,11 +751,46 @@ components:
           version: 0.20.6
       ui:
         title: PostgreSQL application database
+        group: Database
+        enabled: false
+      release:
+        namespace: database
+        name: postgresql
+        timeout: 10m
+      defaults:
+        values.image.tag: "18.6@sha256:86c951e05bf56c93d95d397747fb8820ac76cc3bedb78f43abd83eedbe3666ae"
+        values.replicaCount: 1
+        values.affinity: *nebius_cpu_only_node_affinity
+        values.service.type: ClusterIP
+        values.persistence.enabled: true
+        values.persistence.storageClass: compute-csi-default-sc
+        values.persistence.size: 10Gi
+        values.persistence.accessModes: [ReadWriteOnce]
+        values.persistentVolumeClaimRetentionPolicy:
+          enabled: true
+          whenDeleted: Retain
+          whenScaled: Retain
+        values.auth.username: postgres
+        values.auth.database: postgres
+      wizard:
+        values.auth.existingSecret:
+          required: true
+          type_hint: string
+
+    grafana-postgresql:
+      # Separate durable application database; single primary, not database HA.
+      source:
+        portable:
+          repo: oci://registry-1.docker.io/cloudpirates/postgres
+          chart: postgres
+          version: 0.20.6
+      ui:
+        title: Grafana PostgreSQL database
         group: Observability
         enabled: false
       release:
         namespace: observability
-        name: postgresql
+        name: grafana-postgresql
         timeout: 10m
       defaults:
         values.image.tag: "18.6@sha256:86c951e05bf56c93d95d397747fb8820ac76cc3bedb78f43abd83eedbe3666ae"

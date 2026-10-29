@@ -10,9 +10,6 @@ variable "image_id" {
 variable "ssh_public_key" {
   type = string
 }
-variable "admin_cidrs" {
-  type = list(string)
-}
 variable "network_private_cidrs" {
   type = list(string)
 }
@@ -23,7 +20,6 @@ module "nat" {
   name            = "example-nat"
   source_image_id = var.image_id
   ssh_public_key  = var.ssh_public_key
-  admin_cidrs     = var.admin_cidrs
   source_cidrs    = var.network_private_cidrs
   routing_policies = {
     default = []

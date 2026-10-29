@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from re import Pattern
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .component_instances import (
     component_instance_id,
     component_type_id,
@@ -165,7 +166,7 @@ def _validate_mk8s_gpu(
         if legacy_gpu_validation_overrides is not None:
             raise ValueError(
                 f"{inputs_label}.gpu_validation_overrides is no longer supported; use "
-                "deploy.targets[].deployment_testing.mk8s_gpu.*"
+                "cluster settings[].deployment_testing.mk8s_gpu.*"
             )
         _validate_mk8s_inputs(
             payload,
@@ -307,16 +308,15 @@ def _validate_mk8s_inputs(
     gpu_fabric_checks: list[tuple[str, str, str]] = []
     mig_configured = _mk8s_mig_configured(inputs, as_text)
     project_gpu_deployment_testing_by_label: list[tuple[str, Mapping[str, Any]]] = []
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if isinstance(targets, list):
         for index, raw_target in enumerate(targets):
             if not isinstance(raw_target, Mapping):
                 continue
             if "validations" in raw_target:
                 raise ValueError(
-                    f"deploy.targets[{index}].validations is no longer supported; "
-                    "use deploy.targets[].deployment_testing"
+                    f"cluster settings[{index}].validations is no longer supported; "
+                    "use cluster settings[].deployment_testing"
                 )
             deployment_testing = raw_target.get("deployment_testing")
             if not isinstance(deployment_testing, Mapping):
@@ -325,7 +325,7 @@ def _validate_mk8s_inputs(
             if isinstance(mk8s_gpu_deployment_testing, Mapping):
                 project_gpu_deployment_testing_by_label.append(
                     (
-                        f"deploy.targets[{index}].deployment_testing.mk8s_gpu",
+                        f"cluster settings[{index}].deployment_testing.mk8s_gpu",
                         mk8s_gpu_deployment_testing,
                     )
                 )
@@ -628,6 +628,8 @@ def _validate_wireguard(
     if wireguard_enabled:
         ssh_user_name = as_text(get_path(payload, f"{base}.ssh_user_name"))
         _validate_linux_user_name(ssh_user_name, field_label=f"{base}.ssh_user_name")
+        if ssh_user_name in {"root", "admin"}:
+            raise ValueError(f"{base}.ssh_user_name must not be root or admin")
         wireguard_name = as_text(get_path(payload, f"{base}.name"))
         if not wireguard_name:
             raise ValueError(f"{base}.name is required when enabled=true")
@@ -659,15 +661,19 @@ def _validate_wireguard(
                 "(example: 10.8.0.1/22)"
             )
 
-        listen_port = get_path(payload, f"{base}.wireguard_listen_port", 51820)
-        try:
-            listen_port_int = int(listen_port)
-        except Exception as exc:
-            raise ValueError(
-                f"{base}.wireguard_listen_port must be an integer between 1 and 65535"
-            ) from exc
-        if listen_port_int < 1 or listen_port_int > 65535:
+        listen_port_int = _integer_or_none(
+            get_path(payload, f"{base}.wireguard_listen_port", 51820)
+        )
+        if listen_port_int is None or not 1 <= listen_port_int <= 65535:
             raise ValueError(f"{base}.wireguard_listen_port must be an integer between 1 and 65535")
+
+        keepalive = _integer_or_none(
+            get_path(payload, f"{base}.client_default_persistent_keepalive", 25)
+        )
+        if keepalive is None or not 0 <= keepalive <= 65535:
+            raise ValueError(
+                f"{base}.client_default_persistent_keepalive must be an integer between 0 and 65535"
+            )
 
         local_subnets = get_path(payload, f"{base}.local_subnets", None)
         if local_subnets is None:
@@ -845,6 +851,10 @@ def _validate_mysterybox(
         _validate_mysterybox_secrets(
             mysterybox_secrets,
             enabled=mysterybox_enabled,
+            metadata_only=(inputs if isinstance(inputs, Mapping) else row).get(
+                "create_initial_versions"
+            )
+            is False,
             secrets_path=secrets_path,
             enabled_label=f"{row_label}.enabled",
             as_text=as_text,
@@ -856,6 +866,7 @@ def _validate_mysterybox_secrets(
     mysterybox_secrets: Any,
     *,
     enabled: bool,
+    metadata_only: bool,
     secrets_path: str,
     enabled_label: str,
     as_text: Callable,
@@ -878,11 +889,11 @@ def _validate_mysterybox_secrets(
             "name",
             "description",
             "labels",
-            "version_id",
-            "eso_version_policy",
-            "kubernetes_secret_name",
-            "payload",
         }
+        if not metadata_only:
+            supported_keys.update(
+                {"version_id", "eso_version_policy", "kubernetes_secret_name", "payload"}
+            )
         unknown_keys = sorted(str(key) for key in secret if str(key) not in supported_keys)
         if unknown_keys:
             raise ValueError(f"{secret_label} has unsupported field(s): " + ", ".join(unknown_keys))
@@ -892,6 +903,8 @@ def _validate_mysterybox_secrets(
         if secret_name in seen_names:
             raise ValueError(f"{secrets_path} names must be unique")
         seen_names.add(secret_name)
+        if metadata_only:
+            continue
         kubernetes_secret_name = as_text(secret.get("kubernetes_secret_name"))
         if kubernetes_secret_name and not id_pattern.fullmatch(kubernetes_secret_name):
             raise ValueError(

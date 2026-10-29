@@ -51,6 +51,7 @@ def test_deployment_status_reporting_without_api_watchers_is_not_an_api_failure(
     config = {
         "infra": {"components": [{"id": "vpc", "enabled": True, "inputs": {}}]},
         "apps": {"charts": []},
+        "version": "v2",
     }
     with deployment_status_reporting(config, status_watchers=[], emit=messages.append):
         pass

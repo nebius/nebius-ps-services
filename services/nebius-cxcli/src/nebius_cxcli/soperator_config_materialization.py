@@ -12,6 +12,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .component_instances import (
     INSTANCE_ID_FIELD,
     component_instance_id,
@@ -125,8 +126,7 @@ def _soperator_nodeset_values_are_gpu(nodeset: Mapping[str, Any]) -> bool:
 
 
 def _external_mk8s_target_refs(payload: Mapping[str, Any]) -> set[str]:
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if not isinstance(targets, list):
         return set()
     return {
@@ -367,8 +367,7 @@ def _soperator_app_target_refs(payload: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _external_mk8s_inputs_by_target(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if not isinstance(targets, list):
         return {}
     result: dict[str, dict[str, Any]] = {}

@@ -128,7 +128,28 @@ def bundles(tmp_path, monkeypatch, request, deployment_profile):
 
     def generation(files):
         return DeploymentGeneration(
-            {"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}]}},
+            {
+                "execution": {
+                    "targets": [
+                        {
+                            "target_ref": "cluster",
+                            "flux_dir": "flux/cluster",
+                            "instance_id": "cluster",
+                            "access": "external",
+                            "component_id": "mk8s",
+                            "ownership": "managed",
+                            "cluster_id_output_name": "cluster" + "_cluster_id",
+                            "component_output_ref": "cluster" + ".cluster_id",
+                        }
+                    ],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            },
             {"flux/cluster/" + name: base64.b64encode(raw).decode() for name, raw in files.items()},
         )
 

@@ -99,6 +99,7 @@ def reconcile_vpc_choices(
                                 "lifecycle": "existing",
                                 "binding_ref": candidate.value,
                                 "live_id": identity.id,
+                                "resource_label": observed.label,
                             },
                         )
                     )

@@ -72,11 +72,42 @@ def status(
                     "workload_egress": "not measured",
                     "routing": [],
                 }
+                activation = record.get("activation", {})
+                result["last_activation"] = {
+                    "id": activation.get("id"),
+                    "phase": activation.get("phase"),
+                }
+                result["probe_results"] = [
+                    {
+                        "subnet_id": probe["subnet_id"],
+                        "result": probe.get("result", "inconclusive"),
+                        "cleanup": probe.get("cleanup", "pending"),
+                    }
+                    for probe in activation.get("probes", {}).values()
+                ]
+                if (
+                    activation.get("phase") == "complete"
+                    and result["probe_results"]
+                    and all(
+                        isinstance(p["result"], dict)
+                        and p["result"].get("ok") is True
+                        and p["cleanup"] == "complete"
+                        for p in result["probe_results"]
+                    )
+                ):
+                    result["workload_egress"] = (
+                        "verified during last activation; not a continuous health check"
+                    )
                 if own:
                     inputs = {
                         **row["inputs"],
                         "network_id": record.get("network_id") or row["inputs"].get("network_id"),
                     }
+                    binding = row.get("bindings", {}).get("inputs.gateway_subnet_id")
+                    if binding:
+                        inputs["gateway_subnet_id"] = module_outputs(
+                            outputs, binding["source_instance"]
+                        )["subnets"][binding["key"]]["id"]
                     with NatGatewaySDK(inputs["parent_id"]) as sdk:
                         result["gateway"] = sdk.gateway(own, inputs)
                         for key, policy in row["routing"]["policies"].items():
@@ -152,12 +183,20 @@ def refresh_routes(
                         "Set routing.enabled=false and deploy restoration before refreshing routes"
                     )
                 network = record.get("network_id") or row["inputs"].get("network_id")
+                from .nat_gateway import target_policy_key
+
+                policies = {}
                 with NatGatewaySDK(row["inputs"]["parent_id"]) as sdk:
-                    for key, policy in row["routing"]["policies"].items():
-                        if policy["source_table_id"]:
-                            row["routing"]["policies"][key] = sdk.route_policy(
-                                policy["source_table_id"], network
-                            )
+                    for target in row["routing"]["targets"]:
+                        policy = row["routing"]["policies"][target["policy"]]
+                        key = target_policy_key(target)
+                        policies[key] = (
+                            sdk.route_policy(policy["source_table_id"], network)
+                            if policy["source_table_id"]
+                            else policy
+                        )
+                        target["policy"] = key
+                row["routing"]["policies"] = policies
                 replacements[row["instance_id"]] = row
             updated["infra"]["components"] = [
                 replacements.get(r["instance_id"], r) for r in updated["infra"]["components"]
@@ -228,21 +267,29 @@ def reconcile(
     confirm_requests_settled: Annotated[
         bool,
         typer.Option(
-            help="Confirm all prior unacknowledged API requests are terminal and no writer is running."
+            help="Confirm prior API requests are terminal, no writer is running, and all probe SSH collectors and descendants have stopped on their original runners."
         ),
     ] = False,
 ) -> None:
-    """Reconcile ambiguous SDK submissions from live attachments without changing routes."""
+    """Reconcile settled attachment and temporary probe outcomes without mutations."""
     try:
         if not confirm_requests_settled:
             raise ValueError(
-                "Confirm prior requests are terminal with --confirm-requests-settled; observation alone cannot prove this"
+                "Use --confirm-requests-settled only after prior API requests are terminal, writers "
+                "and probe SSH collectors (including descendants) have stopped on their original "
+                "runners; observation alone cannot prove this"
             )
         with context(config_path, readonly=False) as (cli, _config, _paths, _env, state):
             state.acquire()
             try:
                 for record in state.value["gateways"].values():
                     with NatGatewaySDK(record["project_id"]) as sdk:
+                        from .nat_gateway_probe_resources import ProbeResources
+
+                        for probe in record.get("activation", {}).get("probes", {}).values():
+                            ProbeResources(sdk, probe, state.save, state.assert_held).reconcile(
+                                ssh_collectors_stopped=confirm_requests_settled
+                            )
                         for target in record["targets"].values():
                             pending = target.get("pending")
                             if not pending or target["owner"] != "external":
@@ -264,7 +311,9 @@ def reconcile(
                             state.save()
             finally:
                 state.release()
-            cli.console.print("Pending attachments reconciled without route changes. Rerun deploy.")
+            cli.console.print(
+                "Pending attachments and probe outcomes reconciled without resource mutations. Rerun deploy for restoration and cleanup."
+            )
     except Exception as exc:
         from . import cli
 

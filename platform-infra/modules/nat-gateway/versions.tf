@@ -3,7 +3,7 @@ terraform {
   required_providers {
     nebius = {
       source  = "nebius/nebius"
-      version = ">= 0.6.8, < 0.7.0"
+      version = ">= 0.6.74, < 0.7.0"
     }
   }
 }

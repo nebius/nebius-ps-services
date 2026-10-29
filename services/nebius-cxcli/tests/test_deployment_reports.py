@@ -85,3 +85,18 @@ def test_failed_native_identity_is_retained_without_raw_error_payloads(tmp_path)
         "state": "FAILED",
         "exit_code": "125:0",
     }
+
+
+def test_current_pending_replaces_prior_pass_in_combined_summary(tmp_path):
+    from nebius_cxcli.wireguard_verification import write_report
+
+    source, destination = paths(tmp_path / "private"), paths(tmp_path / "workspace")
+    source.reports_dir.mkdir(parents=True)
+    (source.reports_dir / "deploy-report.md").write_text("Infrastructure results\n")
+    report = build_deploy_validation_report([], reports_dir=source.reports_dir)
+    for status in ("PASS", "PENDING"):
+        write_report(source.reports_dir, [{"status": status, "reason": "fixture"}])
+        publish_deployment_reports(source, destination, [], report)
+        combined = json.loads((destination.reports_dir / "deploy-report.json").read_text())
+        assert combined["wireguard_client_verification"]["status"] == status
+        assert combined["infrastructure_status"] == report.overall_status

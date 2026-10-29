@@ -18,7 +18,7 @@ from .deploy_targets import (
 if TYPE_CHECKING:
     from .components import ComponentEntry
 
-CONFIG_VERSION = "v1"
+CONFIG_VERSION = "v2"
 
 
 @dataclass(frozen=True)

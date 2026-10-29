@@ -14,6 +14,7 @@ import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.flux_render as flux_render_module
 import nebius_cxcli.soperator_config_materialization as soperator_config
 from nebius_cxcli import cli
+from nebius_cxcli.cluster_config import cluster_rows, require_cluster_row
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     SourceProfile,
@@ -59,6 +60,91 @@ from soperator_fixtures import expected_soperator_release_names, sample_snapshot
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+
+
+def test_operator_ssh_trust_survives_render_without_entering_generation(tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text("cluster: lab\n")
+    paths = resolve_project_paths(config)
+    paths.generated_dir.mkdir()
+    before = project_generation_snapshot_sha256(paths)
+    trust = paths.generated_dir / "ssh_known_hosts"
+    trust.write_text("original-pin\n")
+    trust.chmod(0o600)
+    assert project_generation_snapshot_sha256(paths) == before
+    staged = staged_generated_paths(paths)
+    plan = build_project_generation_plan(
+        final_paths=paths,
+        staged_paths=staged,
+        config_path=config,
+        config_content=config.read_text(),
+    )
+    assert trust not in plan.writes and trust not in plan.removals
+    trust.write_text("current-pin\n")
+    promote_staged_generated_paths(staged, paths)
+    assert trust.read_text() == "current-pin\n"
+    assert trust.stat().st_mode & 0o777 == 0o600
+    assert project_generation_snapshot_sha256(paths) == before
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "hardlink", "writable", "staged"])
+def test_render_refuses_unsafe_or_conflicting_ssh_trust(tmp_path, unsafe):
+    import os
+
+    paths = resolve_project_paths(tmp_path / "config.yaml")
+    paths.generated_dir.mkdir()
+    trust = paths.generated_dir / "ssh_known_hosts"
+    trust.write_text("operator-pin\n")
+    trust.chmod(0o600)
+    staged = staged_generated_paths(paths)
+    if unsafe == "symlink":
+        target = tmp_path / "original"
+        trust.rename(target)
+        trust.symlink_to(target)
+    elif unsafe == "hardlink":
+        os.link(trust, tmp_path / "alias")
+    elif unsafe == "writable":
+        trust.chmod(0o666)
+    else:
+        (staged.generated_dir / "ssh_known_hosts").write_text("foreign-pin\n")
+    with pytest.raises((RuntimeError, OSError)):
+        promote_staged_generated_paths(staged, paths)
+    assert trust.read_text() == "operator-pin\n"
+    assert not staged.generated_dir.exists()
+
+
+def test_render_excludes_concurrent_ssh_enrollment(tmp_path):
+    import fcntl
+    import os
+
+    paths = resolve_project_paths(tmp_path / "config.yaml")
+    paths.generated_dir.mkdir()
+    staged = staged_generated_paths(paths)
+    directory = os.open(paths.generated_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="SSH trust is being updated"):
+            promote_staged_generated_paths(staged, paths)
+        assert paths.generated_dir.exists()
+    finally:
+        os.close(directory)
+
+
+@pytest.mark.parametrize("existing_directory", [False, True])
+@pytest.mark.parametrize("symlink", [False, True])
+def test_render_never_enrolls_staged_ssh_trust(tmp_path, existing_directory, symlink):
+    paths = resolve_project_paths(tmp_path / "config.yaml")
+    if existing_directory:
+        paths.generated_dir.mkdir()
+    staged = staged_generated_paths(paths)
+    trust = staged.generated_dir / "ssh_known_hosts"
+    if symlink:
+        trust.symlink_to(tmp_path / "missing")
+    else:
+        trust.write_text("unverified-pin\n")
+    with pytest.raises(RuntimeError, match="Staged render cannot supply SSH trust"):
+        promote_staged_generated_paths(staged, paths)
+    assert not (paths.generated_dir / "ssh_known_hosts").exists()
 
 
 @pytest.mark.parametrize(
@@ -235,10 +321,10 @@ def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_r
         final_paths=final_paths,
         staged_paths=staged_paths,
         config_path=config_path,
-        config_content="new: true\n",
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
 
-    assert plan.writes[config_path] == b"new: true\n"
+    assert plan.writes[config_path] == b"version: v2\ncompatibility: {fixture: new}\n"
     assert plan.writes[final_paths.infra_dir / "main.tf"] == b"terraform {}\n"
     assert obsolete in plan.removals
     assert preserved not in plan.removals
@@ -268,7 +354,7 @@ def test_project_generation_plan_ignores_operation_receipts_created_after_admiss
         final_paths=final_paths,
         staged_paths=staged_paths,
         config_path=config_path,
-        config_content="new: true\n",
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
     (final_paths.reports_dir / "soperator-release-intent-cluster-a.json").write_text(
         "{}\n", encoding="utf-8"
@@ -307,7 +393,7 @@ def test_project_generation_plan_ignores_operation_receipts_created_after_admiss
         final_paths=final_paths,
         staged_paths=staged_paths,
         config_path=config_path,
-        config_content="new: true\n",
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
 
     assert admitted.sha256 == recovered.sha256
@@ -337,7 +423,7 @@ def test_validation_refresh_preserves_committed_render_generation(tmp_path: Path
         final_paths=paths,
         staged_paths=staged,
         config_path=config_path,
-        config_content="new: true\n",
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
     transaction = ProjectBundleTransaction(paths.project_dir)
     transaction.commit(
@@ -367,10 +453,10 @@ def test_project_generation_plan_rebases_an_exact_project_root_alias(tmp_path: P
         final_paths=final_paths,
         staged_paths=staged_paths,
         config_path=alias / "config.yaml",
-        config_content="new: true\n",
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
 
-    assert plan.writes[config_path.resolve()] == b"new: true\n"
+    assert plan.writes[config_path.resolve()] == b"version: v2\ncompatibility: {fixture: new}\n"
 
 
 def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
@@ -582,9 +668,24 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         )
     )
     assert isinstance(payload, dict)
+    # Renderer fixtures isolate their explicitly selected Apps. The production
+    # managed-observability default is exercised by test_observability_e2e.
+    if "soperator" not in selected_apps and "grafana" not in selected_apps:
+        for target in cluster_rows(payload):
+            if "observability" in target:
+                target["observability"]["enabled"] = False
+                target["observability"].pop("routing", None)
+        payload["apps"]["charts"] = [
+            row
+            for row in payload.get("apps", {}).get("charts", [])
+            if row.get("id") != "nebius-observability-agent" or row.get("id") in selected_apps
+        ]
     if "soperator" in selected_apps:
         soperator = next(chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator")
         soperator["version"] = "4.1.7"
+    from nebius_cxcli.wireguard_dependencies import materialize_wireguard_dependencies
+
+    materialize_wireguard_dependencies(payload)
     return payload
 
 
@@ -732,7 +833,7 @@ def _align_infra_resource_name(
             chart["instance_id"] = resource_name
         if chart.get("target_ref") == old_instance_id:
             chart["target_ref"] = resource_name
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
             target["instance_id"] = resource_name
 
@@ -749,6 +850,23 @@ def _set_catalog_override(
 
 def _local_catalog_path() -> Path:
     return Path(__file__).resolve().parents[1] / "component_sources.yaml"
+
+
+@pytest.mark.parametrize("component", ["wireguard-gw", "ssh-jumphost", "nfs", "nat-gateway"])
+def test_render_local_wrapper_preserves_package_and_metadata(component: str) -> None:
+    package = Path(__file__).resolve().parents[3] / "platform-infra"
+    payload = {
+        "infra": {
+            "components": [
+                {"id": component, "instance_id": "gateway", "enabled": True, "inputs": {}}
+            ]
+        }
+    }
+    plans = _build_module_plans(payload, source_profile=SourceProfile.LOCAL)
+    assert len(plans) == 1
+    assert f'source = "{package}//modules/{component}"' in _render_module_block(plans[0])
+    entry = next(item for item in component_entries("infra") if item.id == component)
+    assert entry.metadata_source == str(package / "modules" / component)
 
 
 def _catalog(
@@ -1392,7 +1510,7 @@ def test_load_config_persists_nfs_csi_app_row_for_direct_config_edit(
     render_project(config, paths, source_profile=SourceProfile.PORTABLE)
 
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    charts = persisted["apps"]["charts"]
+    charts = [row for row in persisted["apps"]["charts"] if row["id"] == "csi-driver-nfs"]
     assert [chart["id"] for chart in charts] == ["csi-driver-nfs"]
     assert charts[0]["instance_id"] == "cluster1"
     assert charts[0]["enabled"] is True
@@ -1420,10 +1538,6 @@ def test_load_config_persists_unscoped_nfs_csi_rows_for_each_mk8s_target(
     nfs_inputs.pop("kubernetes_target_ref", None)
     nfs_inputs["ssh_user_name"] = "ubuntu"
     payload["infra"]["components"] = [cluster1, cluster2, nfs]
-    payload["deploy"]["targets"] = [
-        {"instance_id": "cluster1"},
-        {"instance_id": "cluster2"},
-    ]
     payload["apps"]["charts"] = []
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -1432,7 +1546,7 @@ def test_load_config_persists_unscoped_nfs_csi_rows_for_each_mk8s_target(
     render_project(config, paths, source_profile=SourceProfile.PORTABLE)
 
     persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    charts = persisted["apps"]["charts"]
+    charts = [row for row in persisted["apps"]["charts"] if row["id"] == "csi-driver-nfs"]
     assert [(chart["id"], chart["instance_id"], chart["enabled"]) for chart in charts] == [
         ("csi-driver-nfs", "cluster1", True),
         ("csi-driver-nfs", "cluster2", True),
@@ -1482,7 +1596,7 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     soperator["profile"] = "nebius-cpu-v1"
     soperator["values"]["partitionProfile"] = "shape-default"
     soperator["values"]["topologyProfile"] = "disabled"
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         gpu_validation = target.get("validations", {}).get("mk8s_gpu", {})
         for check in gpu_validation.values():
             if isinstance(check, dict) and "enabled" in check:
@@ -1843,7 +1957,7 @@ def test_render_soperator_uses_cluster_target_name_not_client_name(tmp_path: Pat
         if isinstance(row, dict) and row.get("enabled") is True:
             row["instance_id"] = "soperator-cluster1"
             row.pop("target_ref", None)
-    for row in payload.get("deploy", {}).get("targets", []):
+    for row in cluster_rows(payload):
         if isinstance(row, dict) and row.get("instance_id") == "mk8s":
             row["instance_id"] = "soperator-cluster1"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -2514,7 +2628,9 @@ def test_render_soperator_notifier_mysterybox_eso_secret_source(tmp_path: Path) 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
 
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator"})
+    payload = _starter_payload(
+        selected_infra={"mk8s"}, selected_apps={"soperator", "external-secrets"}
+    )
     soperator_chart = next(
         chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
     )
@@ -2612,7 +2728,7 @@ def test_render_soperator_mk8s_node_groups_attach_sibling_sfs(tmp_path: Path) ->
     for chart in payload["apps"]["charts"]:
         if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
             chart["instance_id"] = "cluster1"
-    payload["deploy"]["targets"][0]["instance_id"] = "cluster1"
+    cluster_rows(payload)[0]["instance_id"] = "cluster1"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -2681,7 +2797,7 @@ def test_render_target_scoped_sfs_attachments_use_sfs_module_when_ids_match(
     for chart in payload["apps"]["charts"]:
         if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
             chart["instance_id"] = "cluster1"
-    payload["deploy"]["targets"][0]["instance_id"] = "cluster1"
+    cluster_rows(payload)[0]["instance_id"] = "cluster1"
 
     plans = _build_module_plans(payload, source_profile=SourceProfile.LOCAL)
     main_tf = "\n\n".join(_render_module_block(plan) for plan in plans)
@@ -2761,7 +2877,7 @@ def test_render_plain_mk8s_node_group_attach_explicit_sfs_keys(tmp_path: Path) -
             },
         }
     }
-    payload["deploy"]["targets"][0]["instance_id"] = "cluster1"
+    cluster_rows(payload)[0]["instance_id"] = "cluster1"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -3287,7 +3403,6 @@ def test_render_row_level_vpc_bindings_for_vm(monkeypatch: pytest.MonkeyPatch) -
                 "preset": "4vcpu-16gb",
                 "source_image_family": "ubuntu24.04",
                 "ssh_user_name": "ubuntu",
-                "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
                 "wireguard_tunnel_cidr": "10.9.0.1/22",
                 "local_subnets": ["10.0.0.0/8"],
             },
@@ -3664,8 +3779,12 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"grafana"})
+    cluster_rows(payload)[0]["observability"]["enabled"] = False
+    cluster_rows(payload)[0]["observability"].pop("routing", None)
+    payload["apps"]["charts"] = [
+        row for row in payload["apps"]["charts"] if row["id"] != "nebius-observability-agent"
+    ]
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -3766,7 +3885,7 @@ def test_render_project_materializes_observability_agent_scrape_config(
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    cluster_rows(payload)[0]["observability"]["enabled"] = True
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -3797,7 +3916,7 @@ def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
 
     payload = _starter_payload(
         selected_infra={"mk8s", "mysterybox"},
-        selected_apps=set(),
+        selected_apps={"external-secrets"},
     )
     _infra_component_row(payload, "mysterybox")["inputs"] = {
         "parent_id": "project-456",
@@ -3813,7 +3932,7 @@ def test_render_native_mysterybox_eso_objects_in_external_secrets_release(
             }
         ],
     }
-    payload["deploy"]["targets"][0]["secrets"] = {
+    cluster_rows(payload)[0]["secrets"] = {
         "mysterybox": {
             "enabled": True,
             "allow_all_namespaces": False,
@@ -3938,7 +4057,7 @@ def test_render_native_mysterybox_eso_defaults_to_cluster_wide_store(
 
     payload = _starter_payload(
         selected_infra={"mk8s", "mysterybox"},
-        selected_apps=set(),
+        selected_apps={"external-secrets"},
     )
     _infra_component_row(payload, "mysterybox")["inputs"] = {
         "parent_id": "project-456",
@@ -3950,7 +4069,7 @@ def test_render_native_mysterybox_eso_defaults_to_cluster_wide_store(
             }
         ],
     }
-    payload["deploy"]["targets"][0]["secrets"] = {
+    cluster_rows(payload)[0]["secrets"] = {
         "mysterybox": {
             "enabled": True,
             "sync_namespaces": ["default", "app"],
@@ -4572,19 +4691,16 @@ def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
         gpu_preset="8gpu-128vcpu-1600gb",
     )
     _align_infra_resource_name(payload, mk8s, "demo-cluster")
-    payload["deploy"] = {
-        "targets": [
-            {
-                "instance_id": "demo-cluster",
-                "deployment_testing": {
-                    "mk8s_gpu": {
-                        "operator_readiness": {"enabled": False},
-                        "gpu_visibility": {"enabled": True, "max_nodes": 2},
-                    }
-                },
+    require_cluster_row(payload, "demo-cluster").update(
+        {
+            "deployment_testing": {
+                "mk8s_gpu": {
+                    "operator_readiness": {"enabled": False},
+                    "gpu_visibility": {"enabled": True, "max_nodes": 2},
+                }
             }
-        ],
-    }
+        }
+    )
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -4615,6 +4731,7 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
 
     payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
     wireguard = _infra_component_row(payload, "wireguard-gw")
+    wireguard.setdefault("access", {}).update(admin_group_id="group-placeholder")
     wireguard["inputs"] = {
         "parent_id": "project-456",
         "network_id": "vpcnetwork-123",
@@ -4647,6 +4764,37 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
     assert '"wg_gw_subnet_id": "subnet-123"' in tfvars
     assert '"wg_gw_wireguard_tunnel_cidr": "10.9.0.1/22"' in tfvars
     assert "wg_gw_ssh_public_key" not in tfvars
+    assert "access_bootstrap = var.wg_gw_access_bootstrap" in main_tf
+    assert "access_bootstrap" not in tfvars
+    assert "group-placeholder" not in tfvars
+    variables = (paths.infra_dir / "variables.tf").read_text()
+    bootstrap = variables.split('variable "wg_gw_access_bootstrap" {', 1)[1].split("\n}", 1)[0]
+    assert "map(string)" in bootstrap and "sensitive" not in bootstrap
+
+    access_main = (paths.access_infra_dir / "main.tf").read_text()
+    assert 'module "wireguard_gw_access"' in access_main
+    assert (
+        "/wireguard-access" in access_main and 'admin_group_id = "group-placeholder"' in access_main
+    )
+    assert "mysterybox" not in main_tf
+    access_vars = json.loads((paths.access_infra_dir / "terraform.auto.tfvars.json").read_text())
+    assert access_vars["wireguard_gw_access_create_initial_versions"] is False
+    assert (
+        "terraform.tfstate.wireguard-access" in (paths.access_infra_dir / "backend.tf").read_text()
+    )
+    first = {
+        str(path.relative_to(paths.generated_dir)): path.read_bytes()
+        for root in paths.terraform_dirs
+        for path in root.iterdir()
+        if path.is_file()
+    }
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+    assert first == {
+        str(path.relative_to(paths.generated_dir)): path.read_bytes()
+        for root in paths.terraform_dirs
+        for path in root.iterdir()
+        if path.is_file()
+    }
 
 
 def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
@@ -4734,7 +4882,7 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -4744,7 +4892,6 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
-        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
                 {
@@ -4753,7 +4900,7 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
                     "enabled": True,
                     "source": str(mk8s_dir),
                     "inputs": {},
-                },
+                }
             ]
         },
         "apps": {
@@ -4836,7 +4983,7 @@ def test_render_supports_infra_input_binding_from_component_output(
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -4846,7 +4993,6 @@ def test_render_supports_infra_input_binding_from_component_output(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
-        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
                 {
@@ -4939,7 +5085,7 @@ def test_render_supports_app_input_binding_from_component_output(
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -5047,7 +5193,7 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -5057,7 +5203,6 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
-        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
                 {
@@ -5177,7 +5322,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -5187,7 +5332,6 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
-        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
                 {
@@ -5328,12 +5472,12 @@ def test_api_import_declarations_survive_load_and_render_without_provisioning(
 
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={grafana_id})
+    cluster_rows(payload)[0]["observability"]["enabled"] = True
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False))
     # Materialize the source-owned Grafana row through the real config loader.
     config = load_config(config_path)
-    normalized = to_plain_data(config)
+    normalized = to_dynamic_payload(to_plain_data(config))
     strip_app_chart_target_refs(normalized)
     row = next(item for item in normalized["apps"]["charts"] if item["id"] == grafana_id)
     value = dashboard("imported-board")
@@ -5379,9 +5523,11 @@ def test_api_import_declarations_survive_load_and_render_without_provisioning(
     release = yaml.safe_load((target_dir / "helmrelease-observability-grafana.yaml").read_bytes())
     owner = release["metadata"]["annotations"]["cxcli.nebius.com/app-owner"]
     assert owner
-    assert {"name": "postgresql", "namespace": "observability"} in release["spec"]["dependsOn"]
+    assert {"name": "grafana-postgresql", "namespace": "observability"} in release["spec"][
+        "dependsOn"
+    ]
     database = yaml.safe_load(
-        (target_dir / "helmrelease-observability-postgresql.yaml").read_bytes()
+        (target_dir / "helmrelease-observability-grafana-postgresql.yaml").read_bytes()
     )
     assert database["metadata"]["annotations"]["cxcli.nebius.com/app-owner"] == owner
     assert (
@@ -5391,7 +5537,7 @@ def test_api_import_declarations_survive_load_and_render_without_provisioning(
     assert "SELECT 1" in database["spec"]["postRenderers"][0]["kustomize"]["patches"][0]["patch"]
     assert (
         release["spec"]["values"]["grafana.ini"]["database"]["host"]
-        == "postgresql.observability.svc:5432"
+        == "grafana-postgresql.observability.svc:5432"
     )
     assert "dashboard_imports" not in release["spec"]["values"]
     assert "imported-board" not in yaml.safe_dump(release)

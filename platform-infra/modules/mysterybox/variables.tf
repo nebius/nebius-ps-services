@@ -13,7 +13,8 @@ variable "secrets" {
     List of MysteryBox secret definitions.
     Each secret name is the stable identity for Terraform outputs and runtime
     payload injection. Terraform creates one initial primary version per
-    secret from the declared payload shape. The optional version_id records the
+    secret from the declared payload shape when create_initial_versions=true.
+    Set false to manage metadata-only containers. The optional version_id records the
     current primary MysteryBox version after deployment; use "n/a" or leave it
     unset before the first deploy. Payload entries define MysteryBox payload
     keys and value types; values are passed separately in `payload_values` to
@@ -24,9 +25,9 @@ variable "secrets" {
     description = optional(string, null)
     labels      = optional(map(string), {})
     version_id  = optional(string)
-    payload = map(object({
+    payload = optional(map(object({
       type = optional(string, "text")
-    }))
+    })), {})
   }))
   nullable = false
 
@@ -66,9 +67,9 @@ variable "secrets" {
   validation {
     condition = alltrue([
       for item in var.secrets :
-      length(item.payload) > 0
+      var.create_initial_versions ? length(item.payload) > 0 : length(item.payload) == 0
     ])
-    error_message = "Every secret definition requires a non-empty payload map."
+    error_message = "Payload maps are required only when create_initial_versions=true; metadata-only secrets must omit payload."
   }
 
   validation {
@@ -110,4 +111,11 @@ variable "payload_values" {
   default     = {}
   nullable    = false
   sensitive   = true
+}
+
+variable "create_initial_versions" {
+  description = "Create initial payload versions. Set false for metadata-only containers whose versions are owned outside Terraform."
+  type        = bool
+  default     = true
+  nullable    = false
 }

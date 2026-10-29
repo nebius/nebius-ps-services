@@ -90,6 +90,17 @@ separate tests check version and callback reachability. Regenerate
 `scripts/generate_cli_contract.py` writes that fixture and has no check-only
 mode; documentation-only reorganization keeps it unchanged.
 
+After reviewing an intentional CLI change, refresh the fixture in the locked
+environment and review its diff before running `make all`:
+
+```bash
+uv run --locked --no-sync --no-python-downloads python scripts/generate_cli_contract.py --output tests/fixtures/cli_contract.json
+git diff -- tests/fixtures/cli_contract.json
+```
+
+Help text participates in the command hashes, so a help-only CLI edit also needs
+this review. Do not regenerate the fixture to accept an unexplained mismatch.
+
 README tests derive command-index completeness from the registered tree and
 parse examples across operator guides without executing product callbacks.
 Link/anchor and SVG checks cover navigation and diagram semantics. Run Markdown

@@ -24,6 +24,55 @@ OWNER_ANNOTATION = "cxcli.nebius.com/app-owner"
 CLIENT_LABEL = "cxcli.nebius.com/grafana-database-client"
 
 
+def reject_old_grafana_binding(payload: Mapping[str, Any]) -> None:
+    """Reject the former implicit binding before normalization adds a new DB."""
+    charts = payload.get("apps", {}).get("charts", [])
+    for row in charts:
+        if row.get("id") != "postgresql" or not row.get("enabled"):
+            continue
+        values = row.get("values", {})
+        custom = values.get("customUser", {})
+        grafana_owned = (
+            custom.get("name") == "grafana"
+            and custom.get("existingSecret") == f"{row.get('release-name', 'postgresql')}-grafana"
+        ) or (
+            not values.get("auth", {}).get("existingSecret")
+            and any(
+                other.get("id") == "grafana"
+                and other.get("enabled")
+                and app_chart_target_ref(other) == app_chart_target_ref(row)
+                for other in charts
+            )
+        )
+        if grafana_owned:
+            raise ValueError(
+                "The postgresql app has an old Grafana database binding. Explicitly migrate "
+                "it to grafana-postgresql, preserving the release, namespace, PVC and Secrets, "
+                "and verify the database before deployment. No database was replaced."
+            )
+
+
+def validate_application_databases(payload: Mapping[str, Any]) -> None:
+    """Generic PostgreSQL retains chart settings; passwords stay in Secrets."""
+    reject_old_grafana_binding(payload)
+    for row in payload.get("apps", {}).get("charts", []):
+        if row.get("id") != "postgresql" or not row.get("enabled"):
+            continue
+        values = row.get("values", {})
+        auth = values.get("auth", {})
+        custom = values.get("customUser", {})
+        if auth.get("password") or custom.get("password"):
+            raise ValueError(
+                "PostgreSQL credentials must use existingSecret references, not passwords in config"
+            )
+        if not auth.get("existingSecret"):
+            raise ValueError(
+                "PostgreSQL requires values.auth.existingSecret for its administrator credentials"
+            )
+        if custom.get("name") and not custom.get("existingSecret"):
+            raise ValueError("PostgreSQL customUser requires its own existingSecret reference")
+
+
 def database_component_id() -> str:
     for module in load_component_sources().tf_modules:
         if module.observability.grafana.database_chart_component_id:
@@ -107,6 +156,7 @@ def validate_database_values(values: Mapping[str, Any]) -> None:
 
 def materialize_database_values(payload: dict[str, Any]) -> bool:
     """Derive chart identity/authentication and a namespaced ingress policy."""
+    validate_application_databases(payload)
     changed = False
     component_id = database_component_id()
     for row in payload.get("apps", {}).get("charts", []):

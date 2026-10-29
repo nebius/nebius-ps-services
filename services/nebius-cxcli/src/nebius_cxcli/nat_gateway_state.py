@@ -8,11 +8,19 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
+from .nat_gateway_activation_inputs import SubnetActivationContract
 from .object_storage_errors import ObjectStorageError
 
 
 def state_keys(state_key: str) -> tuple[str, str]:
     return state_key + ".nat.json", state_key + ".nat.lock"
+
+
+def activation_pending(record: dict[str, Any]) -> bool:
+    activation = record.get("activation", {})
+    return activation.get("phase") not in {None, "complete", "restored"} or any(
+        probe.get("cleanup") != "complete" for probe in activation.get("probes", {}).values()
+    )
 
 
 class NatState:
@@ -127,7 +135,87 @@ def assert_quota_resolved(report: Any) -> None:
         )
 
 
-def assert_activation_plan(plan: Mapping[str, Any], desired: Mapping[str, str]) -> None:
+def _activation_field_changed(
+    before: Any,
+    after: Any,
+    unknown: Any,
+    path: tuple[str | int, ...],
+    *,
+    canonical_vpc: bool,
+    inherited_public_pools: bool,
+) -> bool:
+    """Compare the authored fields of the canonical VPC subnet resource.
+
+    Nebius recomputes metadata and unconfigured pool defaults during updates.
+    Optional/computed is not sufficient permission to ignore a field: CIDRs,
+    pool selection and subnet identity remain protected even when unknown.
+    """
+    if path in {
+        ("created_at",),
+        ("updated_at",),
+        ("resource_version",),
+        ("status",),
+        ("labels_all",),
+    }:
+        return False
+    if path == ("metadata",) and before in (None, {}) and after in (None, {}):
+        return False  # The subnet schema exposes no writable metadata members.
+    if unknown is True:
+        if (
+            path == ("ipv4_public_pools",)
+            and inherited_public_pools
+            and isinstance(before, Mapping)
+            and before.get("use_network_pools") is True
+        ):
+            return False  # The canonical module authors null for inherited public pools.
+        # These CIDR members are never authored by the VPC module.
+        return not (
+            canonical_vpc
+            and len(path) == 6
+            and path[0] in {"ipv4_private_pools", "ipv4_public_pools"}
+            and path[1] == "pools"
+            and isinstance(path[2], int)
+            and path[3] == "cidrs"
+            and isinstance(path[4], int)
+            and path[5] in {"max_mask_length", "state"}
+        )
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        unknowns = unknown if isinstance(unknown, Mapping) else {}
+        return any(
+            _activation_field_changed(
+                before.get(key),
+                after.get(key),
+                unknowns.get(key),
+                (*path, key),
+                canonical_vpc=canonical_vpc,
+                inherited_public_pools=inherited_public_pools,
+            )
+            for key in set(before) | set(after) | set(unknowns)
+        )
+    if isinstance(before, list) and isinstance(after, list):
+        if len(before) != len(after):
+            return True
+        unknown_items = unknown if isinstance(unknown, list) else []
+        return len(unknown_items) > len(after) or any(
+            _activation_field_changed(
+                old,
+                new,
+                unknown_items[index] if index < len(unknown_items) else None,
+                (*path, index),
+                canonical_vpc=canonical_vpc,
+                inherited_public_pools=inherited_public_pools,
+            )
+            for index, (old, new) in enumerate(zip(before, after, strict=True))
+        )
+    return before != after or bool(unknown)
+
+
+def assert_activation_plan(
+    plan: Mapping[str, Any],
+    desired: Mapping[str, str],
+    *,
+    subnet_contracts: Mapping[str, SubnetActivationContract] | None = None,
+) -> None:
     """The second Terraform stage may change only admitted subnet route fields."""
     for resource in plan.get("resource_changes", []):
         change = resource.get("change", {})
@@ -138,12 +226,28 @@ def assert_activation_plan(plan: Mapping[str, Any], desired: Mapping[str, str]) 
             resource.get("type") != "nebius_vpc_v1_subnet"
             or change.get("actions") != ["update"]
             or before.get("id") not in desired
-            or after.get("route_table_id") != desired[before["id"]]
+            or after.get("id") != before.get("id")
+            or (after.get("route_table_id") or "") != (desired[before["id"]] or "")
+            or (change.get("after_unknown") or {}).get("route_table_id") is True
         ):
             raise RuntimeError("NAT activation plan contains an unapproved resource action")
-        # Computed provider status may be unknown, but every configurable field must stay fixed.
-        keys = (set(before) | set(after)) - {"route_table_id", "status", "updated_at"}
-        if any(before.get(key) != after.get(key) for key in keys):
+        unknown = change.get("after_unknown") or {}
+        contract = (subnet_contracts or {}).get(before["id"])
+        canonical_vpc = contract is not None and contract.address == resource.get("address")
+        keys = (set(before) | set(after) | set(unknown)) - {"route_table_id"}
+        if any(
+            _activation_field_changed(
+                before.get(key),
+                after.get(key),
+                unknown.get(key),
+                (key,),
+                canonical_vpc=canonical_vpc,
+                inherited_public_pools=bool(
+                    canonical_vpc and contract is not None and contract.inherited_public_pools
+                ),
+            )
+            for key in keys
+        ):
             raise RuntimeError(
                 "NAT activation plan changes more than the delegated route-table field"
             )

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from .generated_manifest import GENERATED_MANIFEST_FILENAME
+from .generated_manifest import GENERATED_MANIFEST_FILENAME, validate_manifest_contract
 from .paths import ProjectPaths
 from .terraform_backend import TerraformBackendSettings
 
@@ -81,13 +81,21 @@ class DeploymentGeneration:
 
     @classmethod
     def capture(cls, paths: ProjectPaths, manifest: Mapping[str, Any]) -> DeploymentGeneration:
+        validate_manifest_contract(manifest)
         files: dict[str, str] = {}
         candidates = [
-            *paths.infra_dir.glob("*.tf"),
-            *paths.infra_dir.glob("*.tf.json"),
-            *paths.infra_dir.glob("*.tfvars"),
-            *paths.infra_dir.glob("*.tfvars.json"),
-            *paths.infra_dir.glob(".terraform.lock.hcl"),
+            *(
+                path
+                for root in paths.terraform_dirs
+                for pattern in (
+                    "*.tf",
+                    "*.tf.json",
+                    "*.tfvars",
+                    "*.tfvars.json",
+                    ".terraform.lock.hcl",
+                )
+                for path in root.glob(pattern)
+            ),
             *(path for path in paths.flux_dir.rglob("*") if not path.is_dir() or path.is_symlink()),
             *(
                 path
@@ -114,7 +122,7 @@ class DeploymentGeneration:
         declared_root = Path(manifest.get("paths", {}).get("generated_dir") or paths.generated_dir)
         if not declared_root.is_absolute():
             declared_root = paths.repo_root / declared_root
-        for target in frozen.get("deploy", {}).get("targets", []):
+        for target in frozen.get("execution", {}).get("targets", []):
             raw = target.get("flux_dir")
             if raw:
                 path = Path(raw)
@@ -133,6 +141,7 @@ class DeploymentGeneration:
         manifest, files = payload.get("manifest"), payload.get("files")
         if not isinstance(manifest, dict) or not isinstance(files, dict):
             raise RuntimeError("Deployment generation is incomplete")
+        validate_manifest_contract(manifest)
         for name, value in files.items():
             _safe_relative(name)
             if not isinstance(value, str):
@@ -146,13 +155,14 @@ class DeploymentGeneration:
         manifest["paths"] = {
             "generated_dir": paths.generated_dir.relative_to(paths.repo_root).as_posix(),
             "infra_dir": paths.infra_dir.relative_to(paths.repo_root).as_posix(),
+            "access_infra_dir": paths.access_infra_dir.relative_to(paths.repo_root).as_posix(),
             "flux_dir": paths.flux_dir.relative_to(paths.repo_root).as_posix(),
             "reports_dir": paths.reports_dir.relative_to(paths.repo_root).as_posix(),
         }
         manifest["source_contract"] = {
             "config_path": paths.config_path.relative_to(paths.repo_root).as_posix()
         }
-        for target in manifest.get("deploy", {}).get("targets", []):
+        for target in manifest.get("execution", {}).get("targets", []):
             if target.get("flux_dir"):
                 target["flux_dir"] = (
                     (paths.generated_dir / _safe_relative(target["flux_dir"]))

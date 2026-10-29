@@ -23,7 +23,7 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
   workflow_run:
-    workflows: ["Merge automation CI", "vpngw-ci", "nebius-cxcli-ci", "nebius-cxcli-nsight", "github-report-ci", "Skills project specs CI", "courses-ci"]
+    workflows: ["Merge automation CI", "vpngw-ci", "nebius-cxcli-ci", "nebius-cxcli-nsight", "github-report-ci", "Skills project specs CI", "courses-ci", "AI Support Agent CI"]
     types: [in_progress, completed]
 
 permissions:

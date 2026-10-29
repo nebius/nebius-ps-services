@@ -23,6 +23,7 @@ import yaml
 
 from . import kubernetes_process
 from .app_mutation import app_mutation_scope
+from .cluster_config import cluster_rows
 from .component_instances import component_type_id
 from .deploy_targets import enabled_cluster_target_refs, flux_target_dir
 from .flux_render import render_flux
@@ -67,14 +68,14 @@ def protected_config_digest(config: Any) -> str:
             row
             for row in apps.get("charts", [])
             if isinstance(row, Mapping)
-            and (component_type_id(row) == "soperator" or "soperator_registration" in row)
+            and (component_type_id(row) == "soperator" or "registration" in row)
         ]
     native_targets = {
         row.get("target_ref") or row.get("instance_id")
         for row in apps.get("charts", [])
         if row.get("id") == "soperator"
     }
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict):
             # Native routing changes its protected child HelmReleases. Additional
             # app telemetry remains ordinary-owned.
@@ -90,7 +91,7 @@ def ordinary_config(config: Any) -> dict[str, Any]:
     payload.setdefault("apps", {})["charts"] = [
         row
         for row in payload.get("apps", {}).get("charts", [])
-        if component_type_id(row) != "soperator" and "soperator_registration" not in row
+        if component_type_id(row) != "soperator" and "registration" not in row
     ]
     return payload
 
@@ -124,13 +125,12 @@ def publish_ordinary_app_config(
         updated.setdefault("apps", {})["charts"] = [
             row
             for row in source.get("apps", {}).get("charts", [])
-            if component_type_id(row) == "soperator" or "soperator_registration" in row
+            if component_type_id(row) == "soperator" or "registration" in row
         ] + ordinary_config(candidate).get("apps", {}).get("charts", [])
         settings = {
-            row.get("instance_id"): row.get("observability")
-            for row in candidate.get("deploy", {}).get("targets", [])
+            row.get("instance_id"): row.get("observability") for row in cluster_rows(candidate)
         }
-        for row in updated.get("deploy", {}).get("targets", []):
+        for row in cluster_rows(updated):
             if settings.get(row.get("instance_id")) is not None:
                 row["observability"] = copy.deepcopy(settings[row["instance_id"]])
         from .observability_routing import app_row, resolve_settings
@@ -142,7 +142,7 @@ def publish_ordinary_app_config(
 
         def publication_digest(payload: Mapping[str, Any]) -> str:
             comparable = copy.deepcopy(dict(payload))
-            for row in comparable.get("deploy", {}).get("targets", []):
+            for row in cluster_rows(comparable):
                 if row.get("instance_id") in observability_target_refs:
                     row.get("observability", {}).pop("routing", None)
             return protected_config_digest(comparable)
@@ -356,13 +356,13 @@ def preserve_ordinary_app_generation(paths: ProjectPaths, staged: ProjectPaths) 
     candidate["runtime_config"]["apps"]["charts"] = [
         row
         for row in candidate["runtime_config"].get("apps", {}).get("charts", [])
-        if component_type_id(row) == "soperator" or "soperator_registration" in row
+        if component_type_id(row) == "soperator" or "registration" in row
     ] + ordinary_config(current["runtime_config"]).get("apps", {}).get("charts", [])
     settings = {
         row.get("instance_id"): row.get("observability")
-        for row in current["runtime_config"].get("deploy", {}).get("targets", [])
+        for row in cluster_rows(current["runtime_config"])
     }
-    for row in candidate["runtime_config"].get("deploy", {}).get("targets", []):
+    for row in cluster_rows(candidate["runtime_config"]):
         if settings.get(row.get("instance_id")) is not None:
             row["observability"] = copy.deepcopy(settings[row["instance_id"]])
     for key in ("app_scope", "ordinary_validations", "ordinary_files"):
@@ -583,13 +583,13 @@ def prepare_ordinary_apps(
         candidate["apps"]["charts"] = [
             row
             for row in candidate.get("apps", {}).get("charts", [])
-            if component_type_id(row) == "soperator" or "soperator_registration" in row
+            if component_type_id(row) == "soperator" or "registration" in row
         ] + ordinary_config(config).get("apps", {}).get("charts", [])
         settings_by_target = {
             row.get("instance_id"): row.get("observability")
-            for row in to_plain_data(config).get("deploy", {}).get("targets", [])
+            for row in cluster_rows(to_plain_data(config))
         }
-        for row in candidate.get("deploy", {}).get("targets", []):
+        for row in cluster_rows(candidate):
             settings = settings_by_target.get(row.get("instance_id"))
             if settings is not None:
                 row["observability"] = copy.deepcopy(settings)
@@ -1126,6 +1126,14 @@ def apply_ordinary_apps(
     assert_project_authority: Callable[[], None],
 ) -> list[dict[str, Any]]:
     with SoperatorOperationLocalLock(paths.project_dir / ".nebius-cxcli" / "config.lock"):
+        assert_project_authority()
+        from .deploy_validation_report import clear_deploy_validation_artifacts
+
+        selected_refs = {str(target["target_ref"]) for target in targets}
+        clear_deploy_validation_artifacts(
+            [item for item in validations if item.get("target_ref") in selected_refs],
+            reports_dir=paths.reports_dir,
+        )
         baseline = validate_ordinary_bundle(paths, manifest)
         if not targets:
             raise RuntimeError("Ordinary app apply requires an explicit cluster target")
@@ -1239,7 +1247,12 @@ def apply_ordinary_apps(
                 from .grafana_cluster import preflight_dashboard_ownership
                 from .grafana_database_runtime import preflight_grafana_database
                 from .nsight_runtime import prepare_nsight_viewers
+                from .observability_e2e import preflight as preflight_observability
 
+                preflight_observability(
+                    [dict(item) for item in validations if item.get("target_ref") == target_ref],
+                    reports_dir=paths.reports_dir,
+                )
                 preflight_grafana_database(config, target_ref=target_ref, extra_env=env)
                 preflight_dashboard_ownership(config, target=target_ref, env=env)
                 prepare_nsight_viewers(config, extra_env=env, target_ref=target_ref)
@@ -1316,6 +1329,17 @@ class OrdinaryAppWorkflow:
             if target_ref in bindings or (
                 selected_target_refs is not None and target_ref not in selected_target_refs
             ):
+                continue
+            from .deployment_infrastructure import infrastructure_only_target
+
+            if infrastructure_only_target(
+                config,
+                target,
+                validations=manifest.get("execution", {}).get("validations", []),
+                paths=paths,
+            ):
+                # Provider acceptance belongs to the deployment evidence, not
+                # the application journal's Kubernetes UID identity contract.
                 continue
             with ExitStack() as stack:
                 bound_target = dict(target)

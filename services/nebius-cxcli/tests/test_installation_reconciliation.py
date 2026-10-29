@@ -19,7 +19,20 @@ from test_deployment_state import Store, settings
 def installation(monkeypatch):
     identity = {"cluster_id": "cluster", "kubernetes_uid": "kube-uid"}
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     begun = state.begin(generation, plan={})
     state.accept(
         begun,
@@ -352,7 +365,31 @@ def test_accepted_binding_comes_from_authenticated_generation(monkeypatch):
         "populate_jail_image": "image",
     }
     generation = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "cluster", "ownership": "managed"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "ownership": "managed",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "flux_dir": "flux/targets/" + "cluster",
+                        "component_id": "mk8s",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "infra": {"components": []},
+            "apps": {"charts": []},
+            "version": "v2",
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "reports/soperator-release-snapshot-cluster.json": base64.b64encode(
                 json.dumps(snapshot).encode()
@@ -428,7 +465,20 @@ def test_accepted_observation_uses_verified_adapter_resource_evidence(monkeypatc
             }
         }
     }
-    generation = SimpleNamespace(manifest={"runtime_config": {}}, materialize=lambda paths: None)
+    generation = SimpleNamespace(
+        manifest={
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        materialize=lambda paths: None,
+    )
     monkeypatch.setattr(
         deployment_jail_state, "accepted_effective_generation", lambda *a: generation
     )

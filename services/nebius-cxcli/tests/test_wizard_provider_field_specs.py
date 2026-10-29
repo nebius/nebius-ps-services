@@ -214,6 +214,7 @@ def test_dynamic_choices_reuse_provider_source_specs_for_filter_args() -> None:
 
     class _FilterAwareLookup(ProviderOptionLookup):
         def __init__(self) -> None:
+            super().__init__()
             self.calls: list[tuple[str, dict[str, Any], str]] = []
 
         def resolve(
@@ -225,6 +226,7 @@ def test_dynamic_choices_reuse_provider_source_specs_for_filter_args() -> None:
             field_path: str,
         ) -> list[OptionChoice]:
             _ = payload
+            self._last_vpc_complete = True
             self.calls.append((provider, args, field_path))
             return [OptionChoice(value="vpcnetwork-prod-a", label="prod")]
 
@@ -269,6 +271,7 @@ def test_dynamic_vpc_choices_still_include_planned_networks() -> None:
         ) -> list[OptionChoice]:
             _ = args, payload, field_path
             assert provider == "project_networks"
+            self._last_vpc_complete = True
             return [OptionChoice(value="vpcnetwork-live", label="live network")]
 
     choices = _resolve_dynamic_field_choices(

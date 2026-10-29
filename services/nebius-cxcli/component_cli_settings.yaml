@@ -186,7 +186,7 @@ components:
                 - NCCL_DMABUF_ENABLE=1
         observability:
           # Settings-owned MK8s observability contract. The `config.yaml`
-          # `deploy.targets[].observability` rows decide whether cxcli deploys
+          # `infra.components[].observability` rows decide whether cxcli deploys
           # it per cluster; this block keeps agent choice, signal defaults, and
           # component-specific service buckets.
           primary_agent:
@@ -215,8 +215,8 @@ components:
           grafana:
             chart_component_id: grafana
             gateway_chart_component_id: gateway-helm
-            database_chart_component_id: postgresql
-            enabled_by_default: true
+            database_chart_component_id: grafana-postgresql
+            enabled_by_default: false
           service_metrics:
             buckets:
               compute:

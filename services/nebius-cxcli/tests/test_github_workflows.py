@@ -285,7 +285,9 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     workflow_text = _workflow_path("nebius-cxcli-ci.yml").read_text(encoding="utf-8")
     assert ".venv/bin/python" not in workflow_text
     assert "python -m pip" not in workflow_text
-    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 7
+    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 9
+    wg_step = _named_step(steps, "Verify WireGuard rendered cloud-init size and decoded scripts")
+    assert "-m integration tests/test_wireguard_guest_access.py" in wg_step["run"]
 
     makefile = _service_file("Makefile")
     assert "$(MAKE) -j2 check verify-wheel-cli" in makefile

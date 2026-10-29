@@ -7,8 +7,8 @@ output "boot_disk_id" {
   value       = module.vm.boot_disk_id
 }
 output "subnet_id" {
-  description = "Dedicated gateway subnet ID."
-  value       = nebius_vpc_v1_subnet.gateway.id
+  description = "Created or independently owned gateway subnet ID."
+  value       = local.subnet_id
 }
 output "private_ip" {
   description = "Gateway private IPv4 address."
@@ -28,7 +28,7 @@ output "public_allocation_id" {
 }
 output "gateway_route_table_id" {
   description = "Direct egress route table for the gateway subnet only."
-  value       = nebius_vpc_v1_route_table.gateway.id
+  value       = local.gateway_route_table_id
 }
 output "route_table_ids" {
   description = "Workload route table IDs by reviewed policy key; attach only after guest readiness."

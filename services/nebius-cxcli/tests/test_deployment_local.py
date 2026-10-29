@@ -24,13 +24,42 @@ def attempt(store, generation, controls):
 
 def test_changed_inputs_and_options_leave_prior_attempt_untouched(tmp_path):
     store = LocalObjectStore(tmp_path)
-    original = DeploymentGeneration({"runtime_config": {"value": 1}}, {})
+    original = DeploymentGeneration(
+        {
+            "runtime_config": {"compatibility": {"value": 1}, "version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     first = attempt(store, original, {"jobPolicy": "fail"})
     started = first.begin(original, plan={"controls": {"jobPolicy": "fail"}})
     first.checkpoint(started, stage="apply", evidence={"status": "executing"})
     before = (tmp_path / first.record_key).read_bytes()
     for generation, options in (
-        (DeploymentGeneration({"runtime_config": {"value": 2}}, {}), {"jobPolicy": "fail"}),
+        (
+            DeploymentGeneration(
+                {
+                    "runtime_config": {"compatibility": {"value": 2}, "version": "v2"},
+                    "schema": "nebius-cxcli-generated/v3",
+                    "execution": {
+                        "backend": {},
+                        "targets": [],
+                        "required_component_outputs": [],
+                        "status_watchers": [],
+                        "validations": [],
+                    },
+                },
+                {},
+            ),
+            {"jobPolicy": "fail"},
+        ),
         (original, {"jobPolicy": "wait"}),
     ):
         current = attempt(store, generation, options)
@@ -40,7 +69,20 @@ def test_changed_inputs_and_options_leave_prior_attempt_untouched(tmp_path):
 
 
 def test_matching_attempt_resumes_after_reopening_store(tmp_path):
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     first = attempt(LocalObjectStore(tmp_path), generation, {"jobWaitTimeout": "60s"})
     record = first.begin(generation, plan={"controls": {"jobWaitTimeout": "60s"}})
     record = first.checkpoint(record, stage="apply", evidence={"status": "executing"})
@@ -50,7 +92,20 @@ def test_matching_attempt_resumes_after_reopening_store(tmp_path):
 
 def test_completion_index_never_exposes_another_commands_active_attempt(tmp_path):
     store = LocalObjectStore(tmp_path)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     state = attempt(store, generation, {})
     record = state.begin(generation, plan={})
     assert state.latest_completed() is None
@@ -66,7 +121,20 @@ def test_completion_index_never_exposes_another_commands_active_attempt(tmp_path
 
 def test_fresh_attempt_does_not_read_corrupt_completion_hint(tmp_path):
     store = LocalObjectStore(tmp_path)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     state = attempt(store, generation, {})
     path = tmp_path / state.prefix / "state.json"
     path.parent.mkdir(parents=True)
@@ -86,8 +154,34 @@ def test_terminal_command_uses_current_completed_generation_without_rewriting_hi
     tmp_path, command
 ):
     store = LocalObjectStore(tmp_path)
-    old = DeploymentGeneration({"runtime_config": {"revision": 1}}, {})
-    current = DeploymentGeneration({"runtime_config": {"revision": 2}}, {})
+    old = DeploymentGeneration(
+        {
+            "runtime_config": {"compatibility": {"revision": 1}, "version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
+    current = DeploymentGeneration(
+        {
+            "runtime_config": {"compatibility": {"revision": 2}, "version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     state = DeploymentState(store, settings(), command=command, assert_held=lambda: None)
     terminal = state.accept(state.begin(old, plan={}), evidence={})
     prior_bytes = (tmp_path / state.record_key).read_bytes()
@@ -114,7 +208,20 @@ def test_terminal_command_uses_current_completed_generation_without_rewriting_hi
 )
 def test_current_command_completion_survives_failed_optional_index_publication(tmp_path, invalid):
     store = LocalObjectStore(tmp_path)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     state = DeploymentState(
         store,
         settings(),
@@ -132,8 +239,34 @@ def test_current_command_completion_survives_failed_optional_index_publication(t
 
 def test_active_command_keeps_its_exact_record_despite_new_baseline(tmp_path):
     store = LocalObjectStore(tmp_path)
-    old = DeploymentGeneration({"runtime_config": {"revision": 1}}, {})
-    current = DeploymentGeneration({"runtime_config": {"revision": 2}}, {})
+    old = DeploymentGeneration(
+        {
+            "runtime_config": {"compatibility": {"revision": 1}, "version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
+    current = DeploymentGeneration(
+        {
+            "runtime_config": {"compatibility": {"revision": 2}, "version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     state = DeploymentState(
         store,
         settings(),
@@ -151,7 +284,20 @@ def test_target_only_completion_preserves_other_targets_without_seeding_attempt(
     from nebius_cxcli.ordinary_apps import validate_accepted_deployment_record
 
     store = LocalObjectStore(tmp_path)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     identities = {ref: {"cluster_id": ref, "kubernetes_uid": ref + "-uid"} for ref in ("a", "b")}
     first = attempt(store, generation, {"allTargets": True})
     first.accept(
@@ -186,7 +332,20 @@ def test_target_only_completion_preserves_other_targets_without_seeding_attempt(
 
 def test_same_generation_command_can_add_completed_targets_without_losing_own_receipts(tmp_path):
     store = LocalObjectStore(tmp_path)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     command = DeploymentState(store, settings(), command="ordinary-apps", assert_held=lambda: None)
     a = {"identity": {"cluster_id": "a", "kubernetes_uid": "a-uid"}, "receipt": "command-owned"}
     terminal = command.accept(command.begin(generation, plan={}), evidence={"targets": {"a": a}})
@@ -212,7 +371,20 @@ def test_same_generation_command_can_add_completed_targets_without_losing_own_re
 
 def test_invalid_optional_index_cannot_fail_completed_generic_attempt(tmp_path):
     store = LocalObjectStore(tmp_path)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     state = attempt(store, generation, {})
     active = state.begin(generation, plan={})
     path = tmp_path / state.prefix / "state.json"

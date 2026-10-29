@@ -60,6 +60,13 @@
       "paths": [
         "**"
       ]
+    },
+    {
+      "file": "ai-support-agent-ci.yml",
+      "paths": [
+        "agents/ai-support-agent/**",
+        ".github/workflows/ai-support-agent-ci.yml"
+      ]
     }
   ],
   "merge_workflow": "skills-merge-pr.yml",

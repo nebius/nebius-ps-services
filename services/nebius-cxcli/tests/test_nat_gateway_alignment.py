@@ -17,6 +17,7 @@ def prepared_manager(monkeypatch, *, owner="external", current="table-original")
     )
     intent = copy.deepcopy(manager.rows[0])
     intent["routing"].pop("enabled")
+    intent["routing"].pop("verification", None)
     record["intent"] = deployment.fingerprint(intent)
     record["module_name"] = "nat"
     manager.executor.manifest = {
@@ -94,6 +95,7 @@ def test_partial_apply_recovers_identities_before_attachment_admission(monkeypat
     }
     intent = copy.deepcopy(row)
     intent["routing"].pop("enabled")
+    intent["routing"].pop("verification", None)
     record["intent"] = deployment.fingerprint(intent)
     outputs = manager.outputs()
     outputs["network_network_id"] = {"value": "network-test"}
@@ -203,6 +205,7 @@ def test_stale_outputs_cannot_override_current_resource_identity(monkeypatch, ki
     }
     intent = copy.deepcopy(row)
     intent["routing"].pop("enabled")
+    intent["routing"].pop("verification", None)
     record["intent"] = deployment.fingerprint(intent)
     outputs = manager.outputs()
     outputs["network_network_id"] = {"value": "network-test"}
@@ -232,6 +235,6 @@ def test_stale_outputs_cannot_override_current_resource_identity(monkeypatch, ki
     ],
 )
 def test_structural_validation_keeps_indexed_errors(component):
-    payload = {"infra": {"components": [component]}, "apps": {"charts": []}}
+    payload = {"infra": {"components": [component]}, "apps": {"charts": []}, "version": "v2"}
     with pytest.raises(ValueError, match=r"infra.components\[0\].*mapping"):
         validate_dynamic_payload_structure(payload)

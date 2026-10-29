@@ -368,7 +368,7 @@ class ObservabilityGrafanaSettings:
     chart_component_id: str = ""
     gateway_chart_component_id: str = ""
     database_chart_component_id: str = ""
-    enabled_by_default: bool = True
+    enabled_by_default: bool = False
 
 
 @dataclass(frozen=True)
@@ -2103,7 +2103,7 @@ def _parse_observability_grafana_settings(
         chart_component_id=chart_component_id,
         gateway_chart_component_id=_as_text(raw.get("gateway_chart_component_id")),
         database_chart_component_id=_as_text(raw.get("database_chart_component_id")),
-        enabled_by_default=bool(raw.get("enabled_by_default", True)),
+        enabled_by_default=bool(raw.get("enabled_by_default", False)),
     )
 
 
@@ -3366,24 +3366,24 @@ def _derived_mk8s_gpu_deployment_testing_wizard_fields(
 ) -> dict[str, dict[str, Any]]:
     deployment_testing = mk8s_gpu.deployment_testing
     return {
-        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
+        "infra.components[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
             "default": deployment_testing.operator_readiness.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "bool",
         },
-        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
+        "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
             "default": deployment_testing.gpu_visibility.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "bool",
         },
-        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
+        "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
             "default": deployment_testing.gpu_visibility.max_nodes,
             "write_default_to_config": True,
             "type_hint": "number",
         },
-        "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": {
+        "infra.components[].deployment_testing.mk8s_gpu.health_checker.enabled": {
             "default": deployment_testing.health_checker.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
@@ -3397,47 +3397,47 @@ def _derived_observability_wizard_fields(
 ) -> dict[str, dict[str, Any]]:
     if observability.mode == "kubernetes_agent":
         return {
-            "deploy.targets[].observability.enabled": {
+            "infra.components[].observability.enabled": {
                 "default": False,
             },
-            "deploy.targets[].observability.kubernetes.logs.enabled": {
+            "infra.components[].observability.kubernetes.logs.enabled": {
                 "default": observability.logs.enabled_by_default,
             },
-            "deploy.targets[].observability.kubernetes.logs.collect_agent_logs": {
+            "infra.components[].observability.kubernetes.logs.collect_agent_logs": {
                 "default": observability.logs.collect_agent_logs,
                 "prompt": False,
             },
-            "deploy.targets[].observability.kubernetes.logs.excluded_namespaces": {
+            "infra.components[].observability.kubernetes.logs.excluded_namespaces": {
                 "default": list(observability.logs.excluded_namespaces),
                 "prompt": False,
             },
-            "deploy.targets[].observability.kubernetes.metrics.enabled": {
+            "infra.components[].observability.kubernetes.metrics.enabled": {
                 "default": observability.metrics.enabled_by_default,
             },
-            "deploy.targets[].observability.kubernetes.metrics.collect_agent_metrics": {
+            "infra.components[].observability.kubernetes.metrics.collect_agent_metrics": {
                 "default": observability.metrics.collect_agent_metrics,
                 "prompt": False,
             },
-            "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+            "infra.components[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
                 "default": observability.metrics.collect_k8s_cluster_metrics,
             },
-            "deploy.targets[].observability.kubernetes.metrics.excluded_namespaces": {
+            "infra.components[].observability.kubernetes.metrics.excluded_namespaces": {
                 "default": list(observability.metrics.excluded_namespaces),
                 "prompt": False,
             },
-            "deploy.targets[].observability.kubernetes.traces.enabled": {
+            "infra.components[].observability.kubernetes.traces.enabled": {
                 "default": observability.traces.enabled_by_default,
             },
         }
     if observability.mode == "monitoring_agent":
         return {
-            "deploy.observability.enabled": {
+            "infra.components[].observability.enabled": {
                 "default": False,
             },
-            "deploy.observability.vm.logs.enabled": {
+            "infra.components[].observability.vm.logs.enabled": {
                 "default": observability.logs.enabled_by_default,
             },
-            "deploy.observability.vm.logs.systemd_units": {
+            "infra.components[].observability.vm.logs.systemd_units": {
                 "default": list(observability.logs.systemd_units),
             },
         }

@@ -16,6 +16,25 @@ variable "name" {
     error_message = "name must be a lowercase resource name of at most 41 characters."
   }
 }
+variable "gateway_subnet_mode" {
+  description = "Create an owned gateway subnet or reuse an independently owned subnet."
+  type        = string
+  default     = "create"
+  nullable    = false
+  validation {
+    condition     = contains(["create", "reuse"], var.gateway_subnet_mode)
+    error_message = "gateway_subnet_mode must be create or reuse."
+  }
+}
+variable "gateway_subnet_id" {
+  description = "Existing or same-deployment subnet ID, required only in reuse mode."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.gateway_subnet_mode == "reuse" ? try(length(trimspace(var.gateway_subnet_id)) > 0, false) : var.gateway_subnet_id == null
+    error_message = "Provide gateway_subnet_id only in reuse mode."
+  }
+}
 variable "gateway_subnet_cidr" {
   description = "Dedicated subnet IPv4 CIDR or provider-allocated prefix length."
   type        = string
@@ -47,7 +66,7 @@ variable "source_image_id" {
 variable "boot_disk_size_gib" {
   description = "Boot disk size, at least the resolved image minimum."
   type        = number
-  default     = 20
+  default     = 40
   validation {
     condition     = var.boot_disk_size_gib > 0 && floor(var.boot_disk_size_gib) == var.boot_disk_size_gib
     error_message = "boot_disk_size_gib must be a positive integer."
@@ -72,12 +91,19 @@ variable "ssh_public_key" {
   type        = string
   nullable    = false
 }
-variable "admin_cidrs" {
-  description = "Explicit IPv4 source ranges permitted to SSH to the gateway."
-  type        = list(string)
+variable "ssh_host_keys" {
+  description = "Protected runtime-only first-boot Ed25519 host identity. Empty preserves a retained guest-generated identity; never store private keys in config or tfvars."
+  type        = map(string)
+  sensitive   = true
+  nullable    = false
+  default     = {}
   validation {
-    condition     = length(var.admin_cidrs) > 0 && alltrue([for cidr in var.admin_cidrs : can(cidrnetmask(cidr)) && cidr != "0.0.0.0/0"])
-    error_message = "admin_cidrs requires restricted IPv4 CIDRs; unrestricted SSH is not supported."
+    condition = length(var.ssh_host_keys) == 0 || (
+      toset(keys(var.ssh_host_keys)) == toset(["ed25519_private", "ed25519_public"]) &&
+      can(regex("^-----BEGIN OPENSSH PRIVATE KEY-----", var.ssh_host_keys["ed25519_private"])) &&
+      can(regex("^ssh-ed25519 [A-Za-z0-9+/]+=*$", var.ssh_host_keys["ed25519_public"]))
+    )
+    error_message = "ssh_host_keys must be empty or contain exactly an Ed25519 OpenSSH private/public pair."
   }
 }
 variable "source_cidrs" {

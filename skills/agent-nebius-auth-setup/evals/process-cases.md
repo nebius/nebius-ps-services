@@ -35,3 +35,6 @@ selected and preserves only workflow-state expectations.
 | User supplies `--role`, `--confirm`, or `--service-account-name` | Reject the removed option; roles and the `codex-agent-sa` name are fixed and no digest is required. |
 | User explicitly requests a repair lease | Issue it directly after validating a working bound setup; no confirmation digest. |
 | User asks setup to install hooks as part of normal ensure | Keep hook installation separate and require that distinct explicit action. |
+| Explicit live ensure encounters an expired human session | Permit one CLI browser sign-in with a three-minute bound; continue bootstrap without a second approval or manual terminal handoff. Suppress tokens and raw auth diagnostics. |
+| Preview or repair-lease encounters an expired human session | Keep browser disabled and fail before IAM; do not turn a preview into interactive setup. |
+| Managed group has an unexpected or duplicate member and lacks a required permit | Reject the complete membership before adding any permit or membership. |

@@ -46,7 +46,7 @@ def _write_ssh_jumphost_config(
     instance_id: str = "ssh-jumphost",
 ) -> None:
     config_path.write_text(
-        f"""version: v1
+        f"""version: v2
 client_info:
   client_name: demo
   nebius:
@@ -72,7 +72,7 @@ apps:
 
 def _write_config_without_ssh_jumphost(config_path: Path) -> None:
     config_path.write_text(
-        """version: v1
+        """version: v2
 client_info:
   client_name: demo
   nebius:
@@ -137,7 +137,7 @@ def test_normalize_allowed_cidr_csv_canonicalizes_and_dedupes() -> None:
     )
 
 
-def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper() -> None:
+def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper(trusted_gateway_hosts: Path) -> None:
     component = select_ssh_jumphost_component(_ssh_jumphost_payload())
     calls: list[list[str]] = []
 
@@ -157,7 +157,7 @@ def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper() -> None:
             public_ip="203.0.113.10",
             ssh_user="ubuntu",
             ssh_private_key=None,
-            ssh_known_hosts_file=Path(__file__),
+            ssh_known_hosts_file=trusted_gateway_hosts,
             operation="add",
             allowed_cidrs=("198.51.100.0/24",),
         ),
@@ -167,7 +167,7 @@ def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper() -> None:
     assert "add-allowed-cidrs" in calls[0][-1]
     assert "--allowed-cidr 198.51.100.0/24" in calls[0][-1]
     assert "StrictHostKeyChecking=yes" in calls[0]
-    assert f"UserKnownHostsFile={Path(__file__).resolve()}" in calls[0]
+    assert f"UserKnownHostsFile={trusted_gateway_hosts.resolve()}" in calls[0]
     assert "GlobalKnownHostsFile=/dev/null" in calls[0]
     assert result.added == ("198.51.100.0/24",)
     assert result.allowed_cidrs == ("203.0.113.10/32", "198.51.100.0/24")
@@ -206,17 +206,17 @@ def test_update_ssh_jumphost_missing_trust_fails_before_remote_helper(
 def test_update_ssh_jumphost_rejects_unknown_or_mismatched_host_identity(
     tmp_path: Path,
     ssh_error: str,
+    trusted_gateway_hosts: Path,
 ) -> None:
     component = select_ssh_jumphost_component(_ssh_jumphost_payload())
-    known_hosts = tmp_path / "known_hosts"
-    known_hosts.write_text("host ssh-ed25519 AAAATEST\n", encoding="utf-8")
+    known_hosts = trusted_gateway_hosts
     calls: list[list[str]] = []
 
     def fail_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append(cmd)
         raise subprocess.CalledProcessError(255, cmd, stderr=ssh_error)
 
-    with pytest.raises(RuntimeError, match=ssh_error):
+    with pytest.raises(RuntimeError, match="SSH host key"):
         update_ssh_jumphost_allowed_cidrs(
             SshJumphostAllowedCidrRequest(
                 component=component,

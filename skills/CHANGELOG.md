@@ -371,6 +371,14 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ### Fixed
 
+- Let explicitly invoked agent-auth setup complete bounded browser sign-in for
+  an expired human session while suppressing authentication diagnostics. Keep
+  diagnosis, runtime verification and previews non-browser. Validate managed
+  group membership before adding permissions, and align both auth skills and
+  regression cases with these boundaries. Retain post-write membership
+  verification and use IAM v2 for project metadata reads. Correct stale hook
+  installation test totals to include the four shared runtime files.
+
 - Isolate native workflow CI fixtures from runner-installed system Git filters
   and run the owned-origin safety regressions in the same test step.
 

@@ -1064,21 +1064,6 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_deployment_testing_o
     )
     payload = {
         "__shared_admin_ssh_user_name__": "ubuntu",
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "mk8s",
-                    "deployment_testing": {
-                        "mk8s_gpu": {
-                            "gpu_visibility": {
-                                "enabled": True,
-                                "max_nodes": 0,
-                            }
-                        }
-                    },
-                }
-            ]
-        },
         "infra": {
             "mk8s": {
                 "node_groups": {
@@ -1088,15 +1073,30 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_deployment_testing_o
                         "platform": "gpu-h100-sxm",
                         "preset": "8gpu-128vcpu-1600gb",
                     }
-                },
-            }
+                }
+            },
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {},
+                    "deployment_testing": {
+                        "mk8s_gpu": {"gpu_visibility": {"enabled": True, "max_nodes": 0}}
+                    },
+                }
+            ],
         },
+        "apps": {"charts": []},
+        "version": "v2",
     }
+
+    payload["infra"]["components"][0]["inputs"] = payload["infra"]["mk8s"]
 
     with pytest.raises(
         ValueError,
         match=(
-            "deploy\\.targets\\[0\\]\\.deployment_testing\\.mk8s_gpu"
+            "cluster settings\\[0\\]\\.deployment_testing\\.mk8s_gpu"
             "\\.gpu_visibility\\.max_nodes must be > 0"
         ),
     ):

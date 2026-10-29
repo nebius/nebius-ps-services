@@ -1,4 +1,8 @@
 #cloud-config
+%{ if length(ssh_host_keys) > 0 ~}
+# cxcli-managed-host-identity-v1
+ssh_keys: ${jsonencode(ssh_host_keys)}
+%{ endif ~}
 users:
   - name: ${ssh_user_name}
     sudo: ALL=(ALL) NOPASSWD:ALL
@@ -7,8 +11,12 @@ users:
       - ${jsonencode(ssh_public_key)}
 ssh_pwauth: false
 disable_root: true
+bootcmd:
+  - [cloud-init-per, once, nat-mask-fail2ban, systemctl, mask, fail2ban.service]
 packages:
   - iptables
+  - fail2ban
+  - python3-systemd
 write_files:
   - path: /etc/sysctl.d/90-nebius-nat.conf
     permissions: '0644'
@@ -21,6 +29,10 @@ write_files:
     permissions: '0755'
     content: |
       ${indent(6, guest_program)}
+  - path: /usr/local/sbin/nat_security.py
+    permissions: '0644'
+    content: |
+      ${indent(6, security_program)}
   - path: /etc/systemd/system/nebius-nat.service
     permissions: '0644'
     content: |
@@ -38,3 +50,4 @@ runcmd:
   - [sysctl, --system]
   - [systemctl, daemon-reload]
   - [systemctl, enable, --now, nebius-nat.service]
+  - [python3, /usr/local/sbin/nat_security.py, bootstrap]

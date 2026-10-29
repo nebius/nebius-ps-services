@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .cluster_config import external_clusters
 from .component_instances import component_instance_id, component_type_id, normalize_component_token
 from .components import component_entries
 from .paths import ProjectPaths
@@ -38,7 +39,9 @@ def deploy_target_kind(row: Mapping[str, Any]) -> str:
 
 
 def deploy_target_is_external_mk8s(row: Mapping[str, Any]) -> bool:
-    return deploy_target_kind(row) == EXTERNAL_MK8S_TARGET_KIND
+    return deploy_target_kind(row) == EXTERNAL_MK8S_TARGET_KIND or (
+        "id" not in row and bool(row.get("cluster_id") or row.get("kube_context"))
+    )
 
 
 def _required_generated_target_field(
@@ -51,7 +54,7 @@ def _required_generated_target_field(
     value = row.get(field_name)
     normalized = normalize_component_token(value) if normalize_token else str(value or "").strip()
     if not normalized:
-        raise ValueError(f"Generated manifest deploy.targets[{index}].{field_name} is required")
+        raise ValueError(f"Generated manifest execution.targets[{index}].{field_name} is required")
     return normalized
 
 
@@ -63,7 +66,7 @@ def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]
     ``instance_id`` from authored config.
     """
     if not isinstance(row, Mapping):
-        raise ValueError(f"Generated manifest deploy.targets[{index}] must be a mapping")
+        raise ValueError(f"Generated manifest execution.targets[{index}] must be a mapping")
 
     instance_id = _required_generated_target_field(
         row, index=index, field_name=DEPLOY_TARGET_INSTANCE_ID_FIELD, normalize_token=True
@@ -73,14 +76,14 @@ def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]
     )
     if target_ref != instance_id:
         raise ValueError(
-            f"Generated manifest deploy.targets[{index}].{TARGET_REF_FIELD} must equal "
+            f"Generated manifest execution.targets[{index}].{TARGET_REF_FIELD} must equal "
             f"{DEPLOY_TARGET_INSTANCE_ID_FIELD} '{instance_id}'"
         )
 
     access = _required_generated_target_field(row, index=index, field_name="access").lower()
     if access not in {"external", "internal"}:
         raise ValueError(
-            f"Generated manifest deploy.targets[{index}].access must be external or internal"
+            f"Generated manifest execution.targets[{index}].access must be external or internal"
         )
 
     kind = deploy_target_kind(row)
@@ -90,7 +93,7 @@ def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]
         cluster_id = str(row.get("cluster_id", "") or "").strip()
         if not kube_context and not cluster_id:
             raise ValueError(
-                f"Generated manifest deploy.targets[{index}] external MK8s target requires "
+                f"Generated manifest execution.targets[{index}] external MK8s target requires "
                 "kube_context or cluster_id"
             )
         normalized = {
@@ -177,8 +180,7 @@ def enabled_cluster_target_refs(payload_or_config: Any) -> tuple[str, ...]:
                 continue
             _append(component_instance_id(row))
 
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = external_clusters(payload)
     if isinstance(targets, list):
         for row in targets:
             if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):

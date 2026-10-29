@@ -8,11 +8,13 @@ from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
 from rich.markup import escape
 
+from .cluster_config import soperator_row
 from .config_model import to_dynamic_payload
 from .deployment_iam import assert_service_account_names_available
 from .deployment_local import LocalExecutionOwner, LocalObjectStore
@@ -210,6 +212,17 @@ def _deploy_validated_bundle(
         desired_generation = generation
         execution_paths = _execution_paths(paths, Path(directory).resolve())
         execution_manifest: Mapping[str, Any] = generation.materialize(execution_paths)
+        if not options.dry_run:
+            from .wireguard_verification import write_report
+
+            pending = [
+                {
+                    "status": "PENDING",
+                    "reason": "Current deployment client verification has not completed",
+                }
+            ]
+            write_report(execution_paths.reports_dir, pending)
+            write_report(paths.reports_dir, pending)
         execution_config = runtime_config_from_manifest(execution_manifest)
         execution_paths.config_path.write_text(
             yaml.safe_dump(to_dynamic_payload(to_plain_data(execution_config)), sort_keys=False)
@@ -223,6 +236,11 @@ def _deploy_validated_bundle(
         from .nat_gateway_deploy import NatDeployment
 
         executor.nat = nat_resources.enter_context(NatDeployment(executor, settings=settings))
+        from .wireguard_host_identity import WireGuardHostIdentities
+
+        executor.wireguard_identities = nat_resources.enter_context(
+            WireGuardHostIdentities(executor, settings=settings)
+        )
         executor.desired_generation = desired_generation
         executor.source_generation = source_generation
         executor.accepted_evidence = accepted_record.get("evidence", {}) if accepted_record else {}
@@ -429,6 +447,21 @@ def _deploy_validated_bundle(
                         target_refs=set(executor.plan.selected_targets),
                     ),
                 )
+            from .wireguard_verification import verify_after_deploy
+
+            verify_after_deploy(executor, paths)
+            if executor.summary is not None:
+                from .deployment_reports import publish_deployment_reports
+
+                executor.summary = replace(
+                    executor.summary,
+                    validation_report=publish_deployment_reports(
+                        execution_paths,
+                        paths,
+                        cli._manifest_deploy_validations(executor.manifest),
+                        executor.summary.validation_report,
+                    ),
+                )
             return executor.summary
         except (Exception, KeyboardInterrupt) as exc:
             # Applications may have passed before final convergence or backend
@@ -501,6 +534,65 @@ def _preview_cannot_write() -> None:
     raise RuntimeError("Preview cannot write deployment authority")
 
 
+@contextmanager
+def quota_plan_runtime_env(
+    infra_dir: Path,
+    manifest: Mapping[str, Any],
+    runtime_env: Mapping[str, str] | None,
+) -> Iterator[dict[str, str]]:
+    """Read frozen gateway inputs without invoking mutable deployment preparation."""
+    from . import cli
+    from .nat_gateway import nat_rows
+    from .nat_gateway_deploy import CURRENT_NAT, NatDeployment
+    from .wireguard_host_identity import (
+        CURRENT_WIREGUARD_IDENTITIES,
+        WireGuardHostIdentities,
+        wireguard_rows,
+    )
+
+    wireguard = CURRENT_WIREGUARD_IDENTITIES.get()
+    if wireguard is not None and wireguard.prepared:
+        candidate = SimpleNamespace(
+            config=runtime_config_from_manifest(manifest),
+            manifest=manifest,
+            runtime_env=dict(runtime_env or {}),
+        )
+        wireguard.apply_runtime_inputs(candidate)
+        yield candidate.runtime_env
+        return
+    has_wireguard = bool(wireguard_rows(manifest.get("runtime_config", {})))
+    has_nat = bool(nat_rows(manifest.get("runtime_config", {})))
+    if (CURRENT_NAT.get() is not None and not has_wireguard) or not (
+        nat_rows(manifest.get("runtime_config", {}))
+        or wireguard_rows(manifest.get("runtime_config", {}))
+    ):
+        yield dict(runtime_env or {})
+        return
+    paths = cli.resolve_project_paths(infra_dir.parent.parent / "config.yaml")
+    if paths.infra_dir.resolve() != infra_dir.resolve():
+        raise RuntimeError("Quota plan infrastructure differs from its project")
+    executor = _CliDeploymentExecutor(
+        runtime_config_from_manifest(manifest),
+        paths,
+        manifest,
+        options=DeployOptions(dry_run=True),
+        lease=None,
+    )
+    with deployment_preview(True), ExitStack() as owners:
+        owner = (
+            owners.enter_context(NatDeployment(executor))
+            if has_nat and CURRENT_NAT.get() is None
+            else None
+        )
+        identities = owners.enter_context(WireGuardHostIdentities(executor))
+        executor.runtime_env = dict(runtime_env or {})
+        executor.runtime_env.update(cli._terraform_runtime_env(executor.config))
+        if owner is not None:
+            owner.prepare()
+        identities.prepare()
+        yield executor.runtime_env
+
+
 class _CliDeploymentExecutor:
     def __init__(
         self,
@@ -570,6 +662,12 @@ class _CliDeploymentExecutor:
     def _prepare_runtime_inputs(self) -> None:
         self.runtime_env = self.cli._terraform_runtime_env(self.config)
         self.runtime_env.update(self._runtime_payload_env)
+        from .wireguard_host_identity import CURRENT_WIREGUARD_IDENTITIES
+
+        wireguard = CURRENT_WIREGUARD_IDENTITIES.get()
+        if wireguard is not None:
+            wireguard.prepare()
+            wireguard.apply_runtime_inputs(self)
         selected = soperator_target(to_plain_data(self.config))
         if selected:
             self.cli.preflight_soperator_backup_inputs(
@@ -580,6 +678,12 @@ class _CliDeploymentExecutor:
                     self.config, target_ref=selected[0], prompt=False
                 )
             )
+        if getattr(self, "nat", None) is None:
+            from .nat_gateway_deploy import CURRENT_NAT
+
+            owner = CURRENT_NAT.get()
+            if owner is not None:
+                owner.apply_runtime_inputs(self)
 
     def restore_execution(self, cache: Mapping[str, Any]) -> None:
         """Resume execution state without replacing fresh immutable admission."""
@@ -850,6 +954,17 @@ class _CliDeploymentExecutor:
         self.observation_plan = payload
         if getattr(self, "nat", None) is not None:
             self.nat.check_plan(payload)
+        from .wireguard_host_identity import CURRENT_WIREGUARD_IDENTITIES
+
+        if wireguard := CURRENT_WIREGUARD_IDENTITIES.get():
+            wireguard.check_plan(payload)
+            from .wireguard_bootstrap import freeze_plan_bootstraps
+
+            if freeze_plan_bootstraps(wireguard, payload):
+                plan_file.unlink()
+                return self._terraform_plan(
+                    purpose=purpose, include_noop=include_noop, replace_addresses=replace_addresses
+                )
         self._observation = TerraformObservation(
             self.paths.infra_dir.resolve(), terraform_inputs(self.paths.infra_dir), payload
         )
@@ -922,7 +1037,7 @@ class _CliDeploymentExecutor:
                 assert_authority=assert_authority,
             )
         assert_authority()
-        self.complete_nat()
+        self.complete_gateway_preparation()
         _, after = self._terraform_plan(purpose="Verify project infrastructure convergence")
         if terraform_changes(after):
             raise RuntimeError("Project Terraform has not reached its admitted postconditions")
@@ -1338,9 +1453,11 @@ class _CliDeploymentExecutor:
             if dry_run:
                 self._prepared_release = prepared_release
 
-    def complete_nat(self) -> None:
+    def complete_gateway_preparation(self) -> None:
         if getattr(self, "nat", None) is not None:
             self.nat.complete()
+        if getattr(self, "wireguard_identities", None) is not None:
+            self.wireguard_identities.complete()
 
     def execute(self, admission: StageAdmission, *, recovering: bool) -> None:
         assert self.plan is not None
@@ -1396,7 +1513,7 @@ class _CliDeploymentExecutor:
             expected_identities=self._bound_identities(),
             on_target_identity=self._bind_application_identity,
             prepare_application_inputs=self._prepare_install_application_inputs,
-            on_terraform_complete=self.complete_nat,
+            on_terraform_complete=self.complete_gateway_preparation,
             on_target_inputs=self._admit_install_application_inputs,
             soperator_plan=self.plan,
             soperator_release_complete=release_complete,
@@ -1488,6 +1605,7 @@ class _CliDeploymentExecutor:
         )
 
         desired = (self.desired_generation or self.generation).manifest["runtime_config"]
+        from .deploy_targets import deploy_target_is_external_mk8s
         from .deployment_jail_state import jail_values
         from .soperator_jail_protection import freeze_jail_protection, protect_jail_directories
         from .soperator_registration import soperator_registration_target
@@ -1498,13 +1616,13 @@ class _CliDeploymentExecutor:
                 jail_values(desired, self.plan.target_ref),
                 paths=[],
                 layout="external"
-                if external and external.get("kind") == "external-mk8s"
+                if external and deploy_target_is_external_mk8s(external)
                 else "managed",
                 target_ref=self.plan.target_ref,
             )
         )
-        if external and external.get("kind") == "external-mk8s":
-            platform = external.get("soperator_desired_platform", {})
+        if external and deploy_target_is_external_mk8s(external):
+            platform = external.get("desired_platform", {})
             version = str(platform.get("kubernetes_version") or "")
             groups = platform.get("node_groups", {})
             remaining = set(groups)
@@ -1548,8 +1666,8 @@ class _CliDeploymentExecutor:
             raise RuntimeError("Rendered deployment has no exact Kubernetes version")
         rollout: Mapping[str, Any] = next(
             (
-                row.get("soperator_rollout", {})
-                for row in desired.get("deploy", {}).get("targets", [])
+                row.get("rollout", {})
+                for row in [soperator_row(desired, self.plan.target_ref) or {}]
                 if row.get("instance_id") == self.plan.target_ref
             ),
             {},
@@ -1810,7 +1928,12 @@ class _CliDeploymentExecutor:
         with tempfile.TemporaryDirectory(prefix="cxcli-compatibility-replay-") as directory:
             authored = _execution_paths(self.paths, Path(directory))
             manifest = self.generation.materialize(authored)
-            if terraform_inputs(authored.infra_dir) != terraform_inputs(self.paths.infra_dir):
+            if any(
+                terraform_inputs(original) != terraform_inputs(effective)
+                for original, effective in zip(
+                    authored.terraform_dirs, self.paths.terraform_dirs, strict=True
+                )
+            ):
                 raise RuntimeError("Recovery Terraform inputs differ from the admitted generation")
             config = runtime_config_from_manifest(manifest)
             original_env = self.cli._terraform_runtime_env(config)
@@ -1938,6 +2061,39 @@ class _CliDeploymentExecutor:
 
         if ref in self._verified_targets and not fresh:
             return self._verified_targets[ref]
+        from .deployment_infrastructure import (
+            infrastructure_only_target,
+            verify_infrastructure_target,
+        )
+
+        target = dict(self._selected_target(ref))
+        validations = self.cli._filter_validations_for_target(
+            self.cli._manifest_deploy_validations(self.manifest),
+            target_ref=ref,
+        )
+        if infrastructure_only_target(
+            self.config,
+            target,
+            validations=validations,
+            application_identity=self._bound_identities().get(ref),
+            paths=self.report_paths,
+        ):
+            accepted = self.accepted_evidence.get("targets", {}).get(ref, {})
+            proof = {
+                "infrastructure": verify_infrastructure_target(
+                    self.cli,
+                    self.config,
+                    self.paths,
+                    target,
+                    validations=validations,
+                    expected_cluster_id=accepted.get("infrastructure", {}).get("cluster_id", ""),
+                    assert_authority=self.lease.assert_held,
+                ),
+                "desiredBundle": target_bundle_digest(self._desired_application_generation(), ref),
+                "validations": "passed",
+            }
+            self._verified_targets[ref] = proof
+            return proof
         journal = self._application_journal()
         entry = journal.entry(ref)
         desired = target_bundle_digest(self._desired_application_generation(), ref)

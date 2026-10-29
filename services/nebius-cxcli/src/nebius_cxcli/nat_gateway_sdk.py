@@ -129,6 +129,41 @@ class NatGatewaySDK:
             ),
         )
 
+    def subnet_info(self, subnet_id: str, network_id: str) -> dict[str, Any]:
+        """Describe public allocation capability separately from effective routing."""
+        subnet = self.subnet(subnet_id, network_id)
+        policy = self.route_policy(subnet.status.route_table.id, network_id)
+        direct = any(
+            route["destination_cidr"] == "0.0.0.0/0" and route["default_egress_gateway"]
+            for route in policy["routes"]
+        )
+        private = [cidr for pool in subnet.status.ipv4_private_pools for cidr in pool.cidrs]
+        public = any(pool.cidrs for pool in subnet.status.ipv4_public_pools)
+        reasons = []
+        if subnet.status.state.name != "READY":
+            reasons.append("subnet is not ready")
+        if not private:
+            reasons.append("private address ranges are unresolved")
+        if not public:
+            reasons.append("public IP allocation is unavailable")
+        if not direct:
+            reasons.append("no direct default Internet route")
+        return {
+            "id": subnet.metadata.id,
+            "name": subnet.metadata.name,
+            "private_cidrs": private,
+            "public_ip_capable": public,
+            "direct_egress": direct,
+            "policy": policy,
+            "reason": "; ".join(reasons),
+        }
+
+    def reusable_subnet(self, subnet_id: str, network_id: str) -> dict[str, Any]:
+        info = self.subnet_info(subnet_id, network_id)
+        if info["reason"]:
+            raise ValueError("Gateway subnet cannot be reused: " + info["reason"])
+        return info
+
     def route_policy(self, table_id: str, network_id: str) -> dict[str, Any]:
         from nebius.api.nebius.vpc.v1 import (
             GetRouteTableRequest,
@@ -256,6 +291,18 @@ class NatGatewaySDK:
 
         return read_address_pool(self, pool_id, deadline=deadline)
 
+    def require_private_capacity(self, subnet_id: str, network_id: str) -> None:
+        from .nat_gateway_address_space import AddressDemand, assess_address_space
+
+        subnet = self.subnet(subnet_id, network_id)
+        pools = tuple(pool.pool_id for pool in subnet.status.ipv4_private_pools)
+        if not pools:
+            raise RuntimeError("Subnet private allocation capacity is unresolved")
+        assess_address_space(
+            tuple(self.address_pool(pool) for pool in pools),
+            (AddressDemand("temporary-private-allocation", pools, "/32"),),
+        ).require_feasible()
+
     def preset_resources(self, platform: str, preset: str) -> dict[str, int]:
         from nebius.api.nebius.common.v1 import GetByNameRequest
         from nebius.api.nebius.compute.v1 import PlatformServiceClient
@@ -368,19 +415,31 @@ class NatGatewaySDK:
             ):
                 raise RuntimeError("NAT allocation is not attached to the expected gateway")
         subnet = self.subnet(outputs["subnet_id"], inputs["network_id"])
-        if (
-            not subnet.spec.check_presence("ipv4_private_pools")
-            or subnet.spec.ipv4_private_pools.use_network_pools
-            or subnet.status.route_table.id != outputs["gateway_route_table_id"]
+        reuse = inputs.get("gateway_subnet_mode", "create") == "reuse"
+        if subnet.status.route_table.id != outputs["gateway_route_table_id"] or (
+            not reuse
+            and (
+                not subnet.spec.check_presence("ipv4_private_pools")
+                or subnet.spec.ipv4_private_pools.use_network_pools
+            )
         ):
             raise RuntimeError("Gateway subnet isolation or direct egress differs from intent")
+        if reuse:
+            if subnet.metadata.id != inputs.get("gateway_subnet_id"):
+                raise RuntimeError("Reused gateway subnet differs from intent")
+            info = self.reusable_subnet(subnet.metadata.id, inputs["network_id"])
+            if any(
+                route["allocation_id"] == outputs["private_allocation_id"]
+                for route in info["policy"]["routes"]
+            ):
+                raise RuntimeError("Gateway subnet contains a route to its own NAT allocation")
         from .nat_gateway_address_inventory import verify_gateway_address
 
         verify_gateway_address(self, subnet, inputs, private_allocation)
         expected = canonical_routes(
             [{"destination_cidr": "0.0.0.0/0", "default_egress_gateway": True}]
         )
-        if self.route_policy(outputs["gateway_route_table_id"], inputs["network_id"])[
+        if not reuse and self.route_policy(outputs["gateway_route_table_id"], inputs["network_id"])[
             "source_fingerprint"
         ] != fingerprint(expected):
             raise RuntimeError("Gateway direct egress route differs from intent")

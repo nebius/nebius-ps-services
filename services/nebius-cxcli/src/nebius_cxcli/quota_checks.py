@@ -2334,14 +2334,19 @@ def _requirements_for_component(
         from .nat_gateway import terraform_policies
 
         policies = terraform_policies(row)
+        creates_subnet = int(inputs.get("gateway_subnet_mode", "create") == "create")
         for quota_name, count, reason in (
             ("vpc.allocation.count", 1, "stable private NAT allocation"),
-            ("vpc.subnet.count", 1, "dedicated gateway subnet"),
-            ("vpc.pool.count", 1, "explicit gateway subnet private pool"),
-            ("vpc.route-table.count", 1 + len(policies), "gateway and workload routing tables"),
+            ("vpc.subnet.count", creates_subnet, "dedicated gateway subnet"),
+            ("vpc.pool.count", creates_subnet, "explicit gateway subnet private pool"),
+            (
+                "vpc.route-table.count",
+                creates_subnet + len(policies),
+                "gateway and workload routing tables",
+            ),
             (
                 "vpc.route.count",
-                1 + sum(1 + len(routes) for routes in policies.values()),
+                creates_subnet + sum(1 + len(routes) for routes in policies.values()),
                 "gateway default and preserved workload routes",
             ),
         ):

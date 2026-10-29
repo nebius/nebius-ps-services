@@ -9480,5 +9480,122 @@ The original closed-initialize warning was not reproduced or causally explained.
 
 <!-- /FEATURE: FEAT-050 -->
 
+<!-- FEATURE: FEAT-051 reqs=REQ-052 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-051: Foreground human bootstrap and fail-closed IAM preflight
+
+#### Requirements Covered
+
+- REQ-052: Explicit browser bootstrap and safe canonical agent authorization.
+
+#### Context Evidence
+
+Setup's human-profile token call forces no-browser and a ten-second auth
+window. The reported expired-login run timed out before IAM. The group path
+adds missing permits before checking unexpected membership.
+
+#### Design Details
+
+Keep one human token validation call. For live ensure, let the CLI open its
+browser with a three-minute authentication bound; discard token stdout and
+provider stderr and return a stable blocked-admin-auth diagnostic on failure.
+Other actions retain the short non-browser check. Do not add a login command,
+fallback identity, credential store or retry layer. Preflight full group
+membership before permit convergence, then retain exact membership readback after permit writes. Use the supported
+IAM v2 project get for both human ancestry discovery and agent verification;
+other IAM commands keep their existing supported API versions.
+
+#### Selected Option
+
+Repair the existing setup boundary; align diagnose guidance without granting
+it mutation authority or launching browser authentication from diagnosis.
+
+#### Alternatives Considered
+
+Manual sign-in handoff unnecessarily blocks an already authorized foreground
+setup. Automatic browser retries add ambiguity. Checking membership only after
+permit writes can grant unrelated members access before rejection.
+
+#### Implementation Boundaries
+
+Own the two auth skills, setup helper, focused tests, catalog docs and canonical
+spec pair. Preserve unrelated services, hooks, deployment and external grants.
+
+#### Test-First Success Criteria
+
+- TDD-001: Expired human-login fixture fails before repair and succeeds only when live ensure permits browser authentication; stdout and stderr contain no fixture token or authorization URL.
+- TDD-002: Unexpected or duplicate group membership combined with missing permits causes zero permit or membership writes.
+- TDD-003: Dry-run, repair-lease and verify remain non-browser; rejected human authentication stops before metadata/IAM.
+
+#### Validation Plan
+
+Run focused setup and contract tests, impacted runtime/hook suites, Bash and
+Python lint, metadata/portability checks and selected installation parity.
+
+#### Test Plan
+
+Use fake CLI state to observe command flags, calls and cloud-write counters.
+Run the user-authorized live ensure from the unsatisfied auth checkpoint and
+independently read back service-account parent, group grants and runtime access.
+
+#### Evaluation Plan
+
+Update trigger and process cases for both skills. Separate static definitions,
+actual npx installation and live helper results from fresh model triggering and
+comparative model quality, which require isolated authenticated runners.
+
+#### Rollout And Rollback
+
+Capture working bytes, patch source first, test, then synchronize the selected
+installed skill folders through the installer. Do not install hooks or revoke
+keys. Revert only owned source bytes if needed; never undo cloud state blindly.
+
+#### Done Definition
+
+Focused controls pass, both skills agree, selected installation matches source,
+and live auth results are independently verified with exact limits stated.
+
+#### Implementation Evidence
+
+Implemented the bounded foreground token call with suppressed provider output,
+pre-permit and post-permit membership checks, and IAM v2 project metadata reads.
+Both auth skills, catalog documentation, trigger/process/quality cases and
+selected installed payloads agree. Updated stale hook-install test totals to
+include the four shared runtime files; installer behavior was unchanged.
+
+#### Verification Evidence
+
+The original browser and unsafe-membership controls failed before repair and
+passed after repair. Independent review caught and reproduced a lost
+post-permit membership check; its regression now passes. Final setup suite:
+81 passing cases. Contract, auth-hook and runtime suites: 12, 21 and 6 passing
+cases. Installer suite: 27 initially passed; both stale count assertions were
+corrected and their complete tests passed on focused rerun (29 covered).
+ShellCheck, Ruff, Bash syntax, changed Markdown and whitespace checks passed.
+The changelog retains only its pre-existing duplicate Added-heading warning,
+confirmed against the prior revision. Code and security review found no
+remaining blocker.
+
+Authorized live setup created the fixed project-parented account, canonical
+tenant group, credential and profile. A final project read encountered a
+transport timeout; subsequent independent reads and runtime verification passed
+without key replacement or IAM intervention. Independent readback confirmed
+exact project-admin and tenant-viewer permits, one matching member, and the
+owned mode-0600 credential identity. Installed ensure exited successfully with
+credential and profile configuration unchanged, no new backup and no mutation
+steps. Installed verify passed project ancestry and tenant quota reads. This
+proves the named auth path, not deployment or workload health.
+
+Core, Codex and Claude structure checks passed; setup retains its intentional
+native disable-model-invocation extension. Actual pinned npx discovery, copied
+payload parity, repeated installation and isolation passed for both hosts.
+Installed skill bytes and modes match source; live hooks and registration were
+unchanged. There are 14 setup and 16 diagnose trigger definitions plus two
+quality cases per skill. These are STATIC_PASS definitions; fresh native model
+triggering and comparative quality remain UNAVAILABLE because isolated runner
+authentication was absent. The current session used the supplied skills and
+live helpers, which is separate from fresh model evaluation.
+
+<!-- /FEATURE: FEAT-051 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

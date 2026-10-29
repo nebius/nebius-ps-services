@@ -23,7 +23,7 @@ from .mk8s_gpu import (
     prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
 )
-from .mysterybox_eso import ensure_mysterybox_eso_app_rows
+from .mysterybox_eso import normalize_mysterybox_eso_project_settings
 from .observability import (
     materialize_observability_infra_values,
     resolve_observability_app_selection,
@@ -39,6 +39,7 @@ from .soperator_install_policy import (
 from .soperator_release import SoperatorArtifactRequest, VerifiedSoperatorSource
 from .soperator_upgrade_progress import sanitized_bounded_command_output
 from .terminal_styles import warning_markup
+from .wireguard_dependencies import materialize_wireguard_dependencies
 
 
 class ScaffoldResult(Protocol):
@@ -84,7 +85,6 @@ class ProjectCreationServices:
     dependency_seed_payload: Callable[..., dict[str, Any] | None]
     enabled_ids_from_runtime_payload: Callable[..., set[str]]
     ensure_deployments_gitignore: Callable[..., GitignoreResult]
-    ensure_mysterybox_eso_app_dependency_selection: Callable[..., tuple[set[str], tuple[str, ...]]]
     ensure_nfs_csi_app_dependency_selection: Callable[..., tuple[set[str], tuple[str, ...]]]
     ensure_payload_contains_component_rows: Callable[..., None]
     ensure_project_auth_identity: Callable[..., None]
@@ -95,9 +95,6 @@ class ProjectCreationServices:
     materialize_mk8s_image_defaults: Callable[..., None]
     materialize_planned_vpc_binding_tokens: Callable[..., None]
     materialize_singleton_provider_defaults: Callable[..., None]
-    materialize_soperator_child_chart_secret_dependencies: Callable[
-        ..., tuple[set[str], tuple[str, ...]]
-    ]
     materialize_vm_image_defaults: Callable[..., None]
     normalize_component_dependencies: Callable[..., tuple[set[str], set[str]]]
     optional_email_or_prompt: Callable[..., str | None]
@@ -105,7 +102,6 @@ class ProjectCreationServices:
     print_create_next_steps: Callable[..., None]
     print_incomplete_wizard_no_write_warning: Callable[..., None]
     print_mk8s_gpu_validation_warnings: Callable[..., None]
-    print_mysterybox_eso_app_dependency_adjustment: Callable[..., None]
     print_nfs_csi_app_dependency_adjustment: Callable[..., None]
     print_quota_remediation_hint: Callable[..., None]
     print_soperator_selection_adjustments: Callable[..., None]
@@ -611,14 +607,9 @@ class ProjectCreationWorkflow:
                     layout="managed",
                     legacy_active_source=False,
                 )
-        selected_apps, mysterybox_eso_app_labels = (
-            services.ensure_mysterybox_eso_app_dependency_selection(
-                final_payload,
-                selected_apps=selected_apps,
-                app_entries=app_entries,
-            )
-        )
-        services.print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
+        dependencies = materialize_wireguard_dependencies(final_payload)
+        selected_infra.update(dependencies)
+        normalize_mysterybox_eso_project_settings(final_payload)
         if interactive_mode and soperator_release is None:
             services.print_component_selection_summary(
                 selected_infra=selected_infra,
@@ -635,6 +626,7 @@ class ProjectCreationWorkflow:
             field_wizard_kwargs["align_infra_resource_names_before_apps"] = True
             field_wizard_kwargs["prompt_app_version_before_app_config"] = soperator_release is None
             field_wizard_kwargs["soperator_install"] = soperator_release is not None
+            field_wizard_kwargs["new_mk8s_target_refs"] = frozenset(selected_infra)
             config_yaml_override, wizard_completed = services.run_component_field_wizard(
                 config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
                 selected_infra=selected_infra,
@@ -669,14 +661,10 @@ class ProjectCreationWorkflow:
                 payload=final_payload, entries=app_entries
             )
         services.materialize_soperator_component_defaults(final_payload)
-        selected_apps, mysterybox_eso_app_labels = (
-            services.materialize_soperator_child_chart_secret_dependencies(
-                final_payload,
-                selected_apps=selected_apps,
-                app_entries=app_entries,
-            )
-        )
-        services.print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
+        from .soperator_child_charts import materialize_soperator_child_chart_values
+
+        materialize_soperator_child_chart_values(final_payload)
+        normalize_mysterybox_eso_project_settings(final_payload)
         services.materialize_mk8s_image_defaults(
             payload=final_payload,
             selected_infra=selected_infra,
@@ -800,11 +788,8 @@ class ProjectCreationWorkflow:
             final_payload,
             provider_lookup=provider_lookup,
         )
-        if ensure_mysterybox_eso_app_rows(final_payload, app_entries=app_entries):
-            selected_apps = services.enabled_ids_from_runtime_payload(
-                payload=final_payload,
-                entries=app_entries,
-            )
+        materialize_wireguard_dependencies(final_payload)
+        normalize_mysterybox_eso_project_settings(final_payload)
         selected_apps, nfs_csi_app_labels = services.ensure_nfs_csi_app_dependency_selection(
             final_payload,
             selected_apps=selected_apps,

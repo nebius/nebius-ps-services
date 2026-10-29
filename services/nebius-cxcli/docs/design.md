@@ -3682,13 +3682,11 @@ debt cannot grow, and coverage cannot regress below the ratcheted floors.
 
 #### Implementation Evidence
 
-Soperator source-contract tests use `tests/source_inspection.py` to select an
-exact top-level function by its defining file and name. Source edits before an
-imported function no longer redirect assertions or extracted callbacks to a
-neighboring definition through stale runtime line coordinates. The helper rejects
-missing, duplicate, and nested definitions and caches only by source content.
-Runtime code, lifecycle assertions, and public CLI behavior are unchanged; a
-fresh test run remains necessary after edits to validate one final checkout.
+Soperator source-contract tests, including onboarding ordering, use
+`tests/source_inspection.py` to select by defining file and name, ignoring stale
+imported line offsets. It rejects missing, duplicate and nested definitions and
+caches by content. Runtime behavior and assertions are unchanged; rerun tests
+after edits.
 
 `soperator_config_materialization.py` is the sole implementation of 165
 configuration materialization definitions removed from `cli.py`;
@@ -3702,14 +3700,10 @@ and `nebius-cxcli-ci` workflow implement the Python 3.12-3.14 source matrix,
 full offline suite, Ruff lint, format and mypy debt ratchets, branch coverage,
 and diff hygiene. The tag-only `nebius-cxcli-release` workflow replays that
 quality and exact-wheel contract against the tagged commit and its first
-parent before publishing. One generated whole-CLI contract covers every root,
-group, public leaf, parameter, hidden surface, and selected help clause: 45 public
-surfaces plus the hidden `mk8s-token` boundary. The isolated verifier exercises
-every public help and callback boundary from one exact wheel. That verifier
-passed locally on Python 3.12, and CI downloads the same artifact for declared
-Python 3.12, 3.13, and 3.14 jobs; the 3.13 and 3.14 jobs were not executed
-locally. The final aggregate source/package gate passed 2,707 offline tests,
-full-package Ruff, wheel build, and installed-wheel verification. The separate
+parent before publishing. One generated whole-CLI contract covers command metadata and help. Regeneration
+refreshes WireGuard's stale hash. CLI, inventory, schema and SSH fixtures follow
+SecretStash group/key ownership; redaction proves SSH runner reachability.
+Comparison and runtime behavior are unchanged. The separate
 branch-coverage run measured 70.41% globally and passed all five critical
 module floors. The package-wide mypy ceiling is 493 errors, the format-debt
 set contains 45 files, and neither ratchet may grow.
@@ -3730,6 +3724,15 @@ or wrong-path read, raw exception disclosure, missing diagnostic or footer,
 and an unexpected successful exit. Product exception handling is unchanged.
 
 #### Verification Evidence
+
+Python 3.13.14: fresh `make all` passes 9,295 unit tests and 58 public/one hidden
+wheel surfaces. All 30 integration and three acquired-chart cases pass separately
+(9,328 total). Grafana persistence and eight NAT systemd checks pass; disposable
+resources are removed. Other Python CI versions were not exercised.
+
+Onboarding follow-up: 99 registration/helper/docs tests pass on Python 3.13.14.
+Under line drift the original fails and repair passes; negative controls reject
+missing locks and reversed write/render order. Full Make was not rerun.
 
 The source-inspection repair has a controlled negative and positive result:
 shifting only imported line coordinates reproduces all 28 reported failures with
@@ -3786,8 +3789,8 @@ baselines. The remaining supported Python versions were not exercised locally.
 
 <!-- /FEATURE: FEAT-026 -->
 
-<!-- FEATURE: FEAT-027 reqs=REQ-027 status=ready delivery=unassessed priority=P1 version=3 -->
-### FEAT-027: Project-local fail-closed SSH host trust
+<!-- FEATURE: FEAT-027 reqs=REQ-027 status=ready delivery=implemented priority=P1 version=5 -->
+### FEAT-027: Authenticated gateway host identity
 
 #### Requirements Covered
 
@@ -3795,114 +3798,60 @@ baselines. The remaining supported Python versions were not exercised locally.
 
 #### Context Evidence
 
-Before FEAT-027, the SSH jump-host and WireGuard helpers passed
-`StrictHostKeyChecking=accept-new` before invoking VM-local helpers through
-`sudo`. That trusts an unseen first key and couples later runs to the user's
-machine-global OpenSSH state.
+NAT uses protected local identity and Compute recovery. WireGuard moves to FEAT-060.
 
 #### Design Details
 
-Resolve exact instance IDs before shared component-type selectors. A selector
-must identify exactly one enabled SSH jump-host or WireGuard instance before
-Terraform output lookup or remote execution; ambiguous shared types report the
-available instance choices.
-
-One shared SSH trust-policy module resolves `--ssh-known-hosts-file` or defaults
-to `ProjectPaths.generated_dir / "ssh_known_hosts"`. It requires a regular,
-readable file before subprocess execution and constructs SSH options with
-`StrictHostKeyChecking=yes`, the resolved `UserKnownHostsFile`, and
-`GlobalKnownHostsFile=/dev/null`. Both request models carry the resolved trust
-file, and every SSH command builder consumes the same policy.
-
-The CLI never creates or populates the trust file. Operators obtain the host
-public key through an independently authenticated channel and write standard
-OpenSSH known-hosts content. Missing, unknown, and mismatched keys remain
-ordinary fail-closed SSH errors. The managed deployments-root `.gitignore`
-adds `*/*/generated/ssh_known_hosts` so customer host identity and address
-material cannot be committed while the remaining generated contract stays
-versioned. Because `render` replaces the generated bundle, operators must
-provision the default trust file again after rendering or select an
-operator-managed path outside `generated/`.
+Preserve NAT storage, route ownership, exact project/VM/disk/allocation binding,
+immutable existing pins and authenticated Compute recovery. Shared strict SSH
+policy rejects missing/mismatched trust and disables extra trust, key updates and
+multiplexing. WireGuard uses SecretStash, without sensitive Terraform keys.
 
 #### Selected Option
 
-Use an explicit project-local trust file with a deterministic generated-folder
-default and an operator override. Do not reuse machine-global trust or add a
-first-use acceptance path.
+Separate lifecycle owners with shared SSH validation primitives.
 
 #### Alternatives Considered
 
-The user's ordinary OpenSSH known-hosts database was rejected because it mixes
-projects and retains stale-address coupling. Automatic `ssh-keyscan` was
-rejected because it does not authenticate the first observation. Deferring the
-fix was rejected because these commands run privileged remote helpers.
+Reject unchecked keyscan, first-use trust and insecure bypasses.
 
 #### Implementation Boundaries
 
-The shared policy owns path validation and SSH trust argv. Command callbacks
-resolve project paths and display sanitized failures. The SSH jump-host and
-WireGuard service modules continue to own their remote helper protocols.
+NAT behavior stays unchanged. FEAT-060 supersedes the former WireGuard lifecycle.
 
 #### Test-First Success Criteria
 
-Tests first require both command families to reject a missing trust file and to
-emit strict, project-local SSH options. Unknown and mismatched host failures do
-not invoke a remote helper or create WireGuard client output.
+- TDD-001: Trust failures precede SSH; NAT identity and routing remain unchanged.
 
 #### Validation Plan
 
-Run focused SSH/WireGuard service and CLI tests, contract/help tests, managed
-gitignore tests, security searches, and the full offline suite.
+Focused SSH/NAT tests and WireGuard tests under FEAT-060.
 
 #### Test Plan
 
-Inject subprocess results for exact, unknown, and mismatched identities;
-exercise default and explicit trust paths; and assert no `accept-new` or global
-known-hosts fallback remains.
+Exact identity, unknown/mismatched pins, concurrent publication and safe errors.
 
 #### Evaluation Plan
 
-Inspect every SSH invocation in the package and confirm both public command
-families route through the shared policy before remote execution.
+Separate local, deployed identity and VPN traffic evidence.
 
 #### Rollout And Rollback
 
-Ship the fail-closed behavior as the single canonical path. Operators must
-provision the trust file before their next day-2 command; no compatibility or
-insecure rollback flag is retained.
+No automatic key replacement or insecure rollback flag.
 
 #### Done Definition
 
-Both SSH-backed command families require authenticated project-local host
-identity, the default trust file is ignored by managed deployment repositories,
-and focused plus full offline tests pass.
+Strict trust throughout both command families with bounded evidence.
 
 #### Implementation Evidence
 
-Version 3: the SSH jump-host and WireGuard selectors resolve exact enabled
-instance IDs before matching shared component types, and reject multiple
-matches with explicit instance choices before any remote action.
-
-Both public callbacks resolve the shared project-local default or explicit
-override and carry it in their service request. Every SSH argv builder consumes
-the strict shared policy before invoking a remote helper; WireGuard generation
-does so before creating its local output directory. The managed deployments
-ignore block excludes exactly `*/*/generated/ssh_known_hosts`, and CLI help,
-README guidance, the whole-CLI contract fixture, and focused tests describe the
-same fail-closed behavior. Focused regression coverage also proves that
-missing, symlinked, and hard-linked trust files fail before remote execution,
-and that WireGuard does not create its output directory before trust
-validation.
+Shared SSH policy exists. New WireGuard implementation is tracked in FEAT-060.
 
 #### Verification Evidence
 
-Version 3: both gateway test modules reproduce ambiguous type selection and
-exact-instance shadowing before the fix. Regression cases pass for either
-component order, ambiguous shared types, exact IDs that equal a component
-type, and existing remote-operation behavior. This verifies selector repairs
-only; no live gateway was contacted.
-
-No independent verification evidence was recorded before schema migration.
+Previous contract: 339 focused tests and an authorized retained-key recovery
+proved strict enrollment/client creation. Fresh deployment and VPN traffic were
+not replayed; that evidence does not qualify the new SecretStash contract.
 
 <!-- /FEATURE: FEAT-027 -->
 
@@ -4233,12 +4182,7 @@ were repaired and reverified. No live cluster was contacted.
 
 #### Context Evidence
 
-The generic catalog already supplies ordinary MK8s apps. Soperator uses a
-frozen upstream Flux graph; its VM-stack Grafana is disabled at the existing
-post-render boundary. Upstream telemetry uses VictoriaMetrics and OpenTelemetry,
-not the separate generic Nebius agent. Before this change, generic guards
-rejected whole Soperator configurations and full rendering replaced shared
-generated roots.
+Generic app guards previously rejected Soperator; see ordinary_apps.py.
 
 #### Design Details
 
@@ -4340,8 +4284,7 @@ Resource-scoped ordinary MK8s app operations within existing commands.
 
 #### Alternatives Considered
 
-Special Soperator app commands, fixed optional-app allowlists, and new approval
-flags were rejected because ordinary apps retain normal MK8s semantics.
+Reject special commands, fixed app allowlists and new approval flags; retain normal MK8s app semantics.
 
 #### Implementation Boundaries
 
@@ -5746,12 +5689,7 @@ all frozen execution controls and identifies differing fields on rejection.
 
 #### Context Evidence
 
-Before this change, the wizard shared project creation but install combined creation/render/
-execution. Generic render/deploy dispatched Soperator to app-only paths. The release
-strategy supports install/no-op/in-place/protected transitions, while the earlier
-change detection and fixed-inventory campaigns do not cover general settings or
-resizing. Terraform previously preceded the Slurm gate, so unrestricted apply is
-not a safe replacement for component-aware planning.
+Earlier app-only deployment missed settings changes; see deployment_plan.py.
 
 #### Design Details
 
@@ -5947,10 +5885,7 @@ Terraform and live resources establish current state. Local command journals own
 
 #### Alternatives Considered
 
-- Keep create plus install: rejected because execution remains ambiguous.
-- App-only steady-state deploy: rejected because ordinary YAML edits cannot converge.
-- Remove guards and apply Terraform first: rejected because retirement and version
-  transitions need component-aware ordering before provider mutation.
+Reject ambiguous create/install, app-only deployment and Terraform-first execution; retain component-aware ordering.
 
 #### Implementation Boundaries
 
@@ -8994,6 +8929,8 @@ and live deployment qualification were not rerun in this alignment.
 <!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-047: Shared Grafana installation and telemetry routing
 
+FEAT-055 specializes new ordinary MK8s creation defaults to remote-only collection. Explicit Grafana installation retains the local defaults described here.
+
 Current shared deployment admission follows FEAT-048; descriptions below of
 backend generations and execution leases are superseded. Command-local recovery
 contracts remain unchanged.
@@ -9599,9 +9536,7 @@ unverified.
 
 #### Context Evidence
 
-Shared S3 active and accepted generations couple independent commands to cancelled
-attempts. Local upgrade, reconciliation and deployment journals already own
-useful recovery evidence and must remain separate from this backend coupling.
+Shared checkpoints coupled commands; local journals own recovery.
 
 #### Design Details
 
@@ -9735,9 +9670,7 @@ FEAT-047 and the remote-lease portion of FEAT-042; unrelated local recovery and 
 
 #### Alternatives Considered
 
-Keeping global checkpoints with improved diagnostics retains the original blocker.
-Deleting local journals violates the command-specific recovery requirement.
-Remote lease replacement introduces another shared lifecycle owner and is rejected.
+Reject global checkpoints, journal deletion and remote lease replacement; preserve local recovery ownership.
 
 #### Validation Plan
 
@@ -10025,7 +9958,7 @@ The focused report-contract, installation, progress, profiling and architecture 
 
 <!-- /FEATURE: FEAT-049 -->
 
-<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=12 -->
 ### FEAT-050: Custom NAT component and staged routing
 
 #### Requirements Covered
@@ -10038,9 +9971,9 @@ The generic infra catalog resolves Terraform modules; SDK helpers supply project
 
 #### Design Details
 
-Add a nat-gateway module composing vm and owning its explicit subnet, stable allocations, gateway egress table and workload route-policy tables. Register a Network component with a dedicated wizard. Discover CPU-only preset resources live and prefer cpu-d3/4vcpu-16gb. Use an autoallocated /28 subnet by default with configurable CIDR, Ubuntu 24.04 driverless image resolved to an ID, and a configurable 20 GiB network SSD enlarged for image requirements. Bootstrap persistent IPv4 forwarding and NAT using the actual default-route interface, scoped source ranges and restricted administration access.
+The nat-gateway module composes vm, creates an explicit gateway subnet and egress table or reuses an independently owned suitable subnet, and owns stable allocations plus per-workload route tables. Register a Network component with a dedicated wizard. Discover CPU-only preset resources live and prefer cpu-d3/4vcpu-16gb. Use an autoallocated /28 subnet by default with configurable CIDR, Ubuntu 24.04 driverless image resolved to an ID, and a configurable 40 GiB network SSD enlarged for image requirements. Bootstrap persistent IPv4 forwarding and NAT using the actual default-route interface, scoped forwarding source ranges and any-source IPv4 public-key-only administration with fail2ban.
 
-Store consumer routing metadata separately from module inputs. Existing source policies are copied into new owned tables, retaining non-default static routes and replacing only the default with the stable private allocation. Keep distinct policies, reject unsupported routes and report specific-route exceptions. Same-run network references feed NAT without consumer-subnet dependencies; attachment overrides belong to the VPC owner and are activated only after readiness.
+Store consumer routing metadata separately from module inputs. Each workload subnet receives its own stable-identity owned table, even when source policies match. Copy supported non-default static routes and replace only the default with the stable private allocation. Keep independent source snapshots, reject unsupported routes and report specific-route exceptions. Same-run network and gateway-subnet references feed NAT without reverse route-output dependencies; attachment overrides belong to the VPC owner and are activated only after readiness.
 
 Preflight live scope, quota and routing; freeze prepare/activate generations; Terraform prepares resources with old/default workload attachments; trusted SSH verifies guest state; Terraform activates owned subnet fields and SDK read-modify-update activates delegated external fields with exact resource versions. Independently observe every transition. Missing SSH trust leaves preparation resumable. Preserve the existing admission constraint against additional actions. Route restoration precedes removal, and direct Terraform mutations detect NAT in config and state and use the lifecycle owner.
 
@@ -10064,7 +9997,7 @@ Python SDK discovery and controlled external attachment updates with Terraform p
 
 #### Alternatives Considered
 
-Parent-prefix-only admission misses exhaustion and fragmentation. Manual subnet precreation or SDK reservation would change resource ownership and is rejected. SDK-owned infrastructure would duplicate Terraform planning/state. Manual routing does not meet the guided lifecycle. Shared-table mutation affects unselected consumers. Automatic HA adds failover/fencing outside the initial scope.
+Parent-prefix-only admission misses exhaustion and fragmentation. Mandatory manual subnet precreation would prevent guided creation; reuse remains an explicit choice. SDK reservation or permanent SDK-owned infrastructure would duplicate Terraform ownership/state. Temporary probes are the bounded, journaled SDK exception. Manual routing does not meet the guided lifecycle. Shared-table mutation affects unselected consumers. Automatic HA adds failover/fencing outside the initial scope.
 
 #### Implementation Boundaries
 
@@ -10089,23 +10022,119 @@ An authorized nonproduction trial verifies selected-subnet egress, unchanged uns
 
 #### Rollout And Rollback
 
-Ship an opt-in catalog component with no existing-config migration. Restore owned attachments before removing resources. Missing or conflicting restoration evidence fails closed. Do not delete external infrastructure or auto-change egress on failure.
+Ship an opt-in catalog component with no existing-config migration. Restore owned attachments before removing resources. Missing or conflicting restoration evidence fails closed. Do not delete external infrastructure. Failed or inconclusive enabled probes conditionally restore only the attachment changes of the current activation; preserve concurrent edits and existing gateway resources.
 
 #### Done Definition
 
 Module, wizard, quota, deployment, recovery, CLI, packaging and documentation align and pass focused verification; live qualification remains a separate explicit evidence lane.
 
+#### Accepted Refactor Contract
+
+The wizard uses shared exact-identity VPC choices, live inventory with explicit refresh, clearly marked planned resources, and a transactional step history. Network precedes a single gateway-subnet picker and workload multi-selection; compute/storage/access, default-on testing and route review follow. The picker lists eligible existing subnets first, eligible planned subnets second, then dedicated creation and live refresh. Creation remains the new-configuration default; valid saved selections remain selected. Lifecycle labels use resolved identity metadata, preserving bindings for existing managed resources without duplicate planned rows. Back retains valid answers; upstream changes invalidate dependent selections and reviewed snapshots. Reuse must already permit public allocation and direct egress; never reconfigure a reused subnet. Show capability and routing separately instead of inferring public/private from names.
+
+Add explicit gateway_subnet_mode=create|reuse and gateway_subnet_id literal/binding inputs, retaining gateway_subnet_cidr for creation. Explicit mode keeps Terraform resource cardinality known for planned IDs. Existing subnet/pool/route ownership is retained, including inherited private pools; verify allocation containment against effective pools without claiming exclusive CIDR ownership. New subnets remain explicit /28 by default. Account for mode-specific address and quota demand.
+
+The picker derives gateway_subnet_mode without prompting for it: subnet choices retain literal IDs or canonical bindings and clear creation-only CIDRs; creation clears reused IDs/bindings and visits a separate CIDR step. Back visits only visible steps, including returning directly from workload selection to a reused gateway choice. Explain unsuitable subnets without making them selectable. Empty successful inventory retains creation; incomplete discovery uses local retry/back instead of an empty list. Refresh rechecks choices; unavailable saved selections produce a notice and default to creation. Network changes invalidate dependent selections. No configuration migration, Terraform change or shared prompt API change is required.
+
+Remove VPC-to-NAT output references from controlled route fields. Complete runtime override maps carry preparation preimages, verified activation table IDs and restoration values. Reject missing entries before any controlled plan. This allows NAT reuse through aggregate VPC subnet outputs without a graph cycle. Keep Terraform-only mutation guards and route-field-only plan admission.
+
+Persist routing.verification.enabled, default true. The cxcli probe owner automatically creates one small private-only VM at a time using live CPU/image capabilities, a boot disk and a private allocation through the SDK. Admit transient demand separately from Terraform plans. Preflight the selected SSH client identity and effective gateway forwarding before route changes. Generate a temporary Ed25519 host key for each probe, inject it through authenticated Compute cloud-init, pin its public key locally and authorize only the already-selected deployment client public key on a password-locked unprivileged probe user. Verify exact instance/project, subnet, allocation, disk and private address before strict SSH through the gateway. Configure trust and client identity explicitly on both hops; no agent forwarding or client private-key copying. Cloud-init runs bounded direct IPv4 HTTPS egress checks with no proxy or bootstrap downloads; the destination must follow the selected default route. Write the result atomically into a root-owned directory as a root-owned 0644 file, readable but not writable by the probe user. The SSH collector validates run/activation, boot/time, configuration/program identity and the observed gateway public IP. Bound each SSH process tree to 30 seconds and all result collection to five minutes, cap output before buffering and terminate all owned children before cleanup. Serial-log transport, access checks and stream envelopes are removed, with no fallback path. Gateway trusted-SSH readiness remains required. Probe host private keys stay out of journals/config/reports and SDK failures are sanitized without losing operation identities. No manual test setup or separate test command is required; unchanged Terraform deployments still execute a new test activation.
+
+Probe effects are write-ahead journaled under the existing non-expiring NAT lock. Reconcile ambiguous submissions before retries, persist operation/resource IDs, delete only exact owned probes, and verify absence before advancing. Cleanup occurs on success/failure/cancellation and resumes after writer-quiescence reconciliation on process death. No TTL takeover. Capture per-activation explicit/effective route preimages independently of lifetime pre-NAT originals. Verification failure restores changed Terraform fields through admitted plans and delegated external fields through conditional SDK updates. Drift stops overwrite and records restoration pending. Disabled testing reports untested; successful testing proves only the sampled IPv4 path.
+
+Delivery order: canonical specs; wizard and create/reuse slice; graph-safe per-subnet routing; probes and restoration; focused tests, operator/module docs, changelogs and align. Keep the existing Python, SDK and Terraform stack and single-VM topology. No AI or compatibility layer. Qualify private-probe SSH collection, real egress, success/failure cleanup and route restoration in a separately authorized nonproduction trial before claiming live readiness.
+
 #### Implementation Evidence
 
-Implemented the address-space enhancement in nat_gateway_address_space.py, nat_gateway_address_inventory.py and nat_gateway_address_plan.py. Scoped SDK evidence feeds bounded pure CIDR feasibility; the wizard and prepare stage report advisory results, every fresh provisioning plan gates new address demand, and realized gateway CIDR, pool ancestry and private host containment are checked before route activation. Per-pool diagnostics keep unresolved evidence distinct from zero capacity. Terraform allocation, config/journal schemas and route-recovery ownership remain unchanged.
+The gateway picker now presents eligible existing/planned subnets, dedicated creation and refresh immediately after VPC selection. It derives the existing mode/ID/binding contract, keeps creation as the new default, and resolves saved literal IDs to canonical managed bindings only through unique exact live identity. A visited-step history skips creation-only CIDR prompts during reuse in both directions. Suitability explanations, local discovery retries, dependent-selection invalidation and transactional cancellation remain enforced. Exact network-ID reconciliation preserves gateway/workload selections and network-scoped route preimages across token-only changes. NAT VPC selectors require complete discovery even when no provider error is reported. Workload choices exclude the selected gateway by both token and proven live identity across refreshes.
 
-Implemented the opt-in catalog entry and Terraform module, live SDK CPU/preset/image/network discovery, transactional wizard and plan-derived shared quota admission. The module owns dedicated networking, stable allocations, route-policy tables, VM and persistent guest forwarding. Separate NAT modules own scoped SDK updates, conditional shared state, staged trusted-SSH readiness and activation, exact original-route restoration, interrupted-operation reconciliation, last-component retirement and direct-mutation guards. NAT status, refresh, reconcile and unlock commands, deploy SSH controls, CLI contract, examples and operator documentation are aligned. Route-only restoration remains possible after provisioning drift and uses historical Terraform attachment preimages even when the authored VPC route changes. Partial-apply recovery reconciles resource identities before attachment admission, rejects stale output identities and Terraform-owned external delegation, and completes a no-op retirement even when other components remain. Canonical structural validation precedes NAT semantics.
+Implemented the accepted refactor in the NAT wizard, shared exact-identity VPC selection/refresh, mode-aware Terraform module, routing validator/renderer, SDK checks, activation/recovery owner and probe modules. New disks default to 40 GiB. Reuse omits the create-only catalog CIDR default. Re-editing an existing target preserves its original source policy. Each target has an independent route table. Complete concrete override maps remove the VPC/NAT cycle. Resource moves preserve existing singleton Terraform identities; the module minimum is provider 0.6.74 and the minimal example lock resolves 0.6.75.
+
+Temporary probes use explicit SDK creation intents/idempotency keys and exact-resource cleanup. The standalone guest script pins a reviewed global IPv4 HTTPS endpoint and reports run, activation, program/configuration hashes and boot evidence. The bounded authenticated logging adapter requires provider stream identity; unknown submissions require explicit settled-request reconciliation. Per-activation explicit/effective attachment preimages remain distinct from lifetime originals. Recovery preserves unresolved requests and concurrent drift, handles inherited null routes, ignores retired ownership records, and attempts probe cleanup after independent attachment failures. NAT status reports historical test and cleanup results separately from current observations.
+
+A fresh alignment pass repairs shared-prompt empty multiselect defaults, excludes planned private-only gateway placement and retains network-scoped source snapshots independently of temporary target selection. A shared unfinished-activation predicate includes pending probe cleanup and gates preparation, deletion planning and retirement even after component removal. That earlier serial transport ran in an isolated subprocess with a shared token/transport deadline, bounded output and termination before cleanup; credentials travel only on stdin. Local network tests explicitly use the integration lane.
 
 #### Verification Evidence
 
-The complete NAT suite passes 124 tests, including an exhaustive tiny-space oracle, fragmented/exhausted pools, disabled blocks and masks, pending/unattached child reservations, dynamic allocations, inventory failures, fresh-plan aggregate demand, planned pool changes, unknown controls, no deletion credit, expansion/replacement, symbolic workload bindings, implicit compute demand, draft saves, retained/recovery exemptions and realized-address validation. The initial six independent read-only review findings were repaired. Before the follow-up alignment fixes, `make all` passed 8,457 tests with three skips and 18 integration tests deselected; lint, locked environment setup, wheel build and installed CLI verification also pass. The follow-up alignment reproduced and repaired AS-007 (SDK defaults and incomplete isolation proof), AS-008 (repeated automatic-prefix demand), and AS-009 (unchecked parent-pool expansion). All 319 focused NAT/deployment/render/MK8s/docs tests pass against the final source, including free and occupied parent/grandparent controls. Final read-only review found no remaining blocker in the repairs; the full suite was not repeated for these bounded fixes.
+The aligned gateway-picker revision passes 185 focused wizard, NAT, VPC identity, provider-choice, documentation and CLI contract/architecture tests. Coverage includes both prompt adapters, create/reuse switching, saved literals and bindings, planned private-only exclusion, stale/unlisted selections, empty/incomplete inventory, refresh, backtracking and cancellation. The saved managed-literal regression and five additional alignment cases failed before their repairs and passed afterward. The additional cases prove network-alias selection/preimage preservation, incomplete network/subnet discovery without provider errors, and gateway workload exclusion through both directions of identity representation changes. Independent read-only review reran the five regressions and confirmed all three alignment findings fixed with no remaining blocker. Scoped Ruff, formatting, mypy, diff checks and top-level/component-add CLI help smoke checks pass. User-facing Markdown passes; two pre-existing canonical-document blank-line findings are outside this revision. This is local fixture/source proof; live cloud inventory and deployment were not exercised.
 
-Scoped Ruff and mypy pass for the new address modules. The preceding implementation pass passed the repository type, format and CLI architecture ratchets. Markdown and paired canonical-spec validation pass. Isolated Terraform fmt/init/validate and five mock-provider tests pass with provider 0.6.8; the Terraform module was not changed. Installed-wheel CLI verification passes for 58 public and one hidden surface using the supported uv 0.13.5 toolchain. No live provisioning, guest reboot or workload egress trial was run. Snapshot races and provider allocation ordering remain documented limitations, and REQ-042 remains active pending live qualification.
+Fresh alignment validation passes 675 focused NAT, VPC identity, render, catalog, documentation, CLI contract/architecture and shared wizard tests. Regression tests reproduce empty-target refresh loops in both prompt adapters, private-only planned eligibility, snapshot loss across backtracking, removed-component cleanup bypass and slow-header/body log transport. Disabling the transport deadline makes both slow-stream negative controls fail as expected. Removal recovery is tested through unknown creation, settled absence, retry and retirement. Shared provider-selector fixtures now initialize the lookup and explicitly declare completed discovery. Scoped Ruff and mypy pass; format, type and CLI architecture ratchets pass with existing project debt unchanged.
+
+An additional disposable stateful Terraform mock harness on provider 0.6.75 passes preparation apply followed by activation plan; the production route-only admission guard accepts the actual JSON plan. Only the workload subnet route-table field changes; a deferred gateway-subnet data read causes no VM/allocation replacement. The harness omits only the reused-subnet pool-presence postcondition because Terraform mock nested-list status generation cannot supply those pool values, so this proves graph staging, not provider pool readiness. The prior module/minimal validation and six mock runs remain the baseline; no Terraform files changed in this align pass.
+
+For that earlier serial transport, the wheel built successfully and its isolated reader passed an authenticated loopback fixture. Complete installed CLI contract verification passes for 58 public and one hidden surface. The broad repository suite was not rerun.
+
+No live infrastructure was created or changed. The candidate serial stream resource_id envelope is not defined by the retrieved public serial-log documentation and has not been qualified in a live region/project. Preflight rejects absent or unsupported source envelopes before route cutover. Live probe execution, cleanup, reboot persistence and route restoration remain a separately authorized nonproduction evidence lane. Delivery is implemented, not live verified; REQ-042 stays active.
+
+#### Approved SSH and Picker Simplification
+
+Remove existing-managed ownership annotations only from NAT subnet displays; retain canonical choice tokens, metadata, saved selections and planned/capability information. Eliminate admin_cidrs from wizard/config/Terraform/guest policy; reject obsolete authored input with explicit conversion guidance and no compatibility reader. Keep bounded source_cidrs for forwarding.
+
+Use the vpngw public-facing SSH pattern: non-root public-key-only authentication, no password or keyboard-interactive fallback, MaxAuthTries 3, verbose logging, no X11/gateway-port/tunnel exposure, IPv4-only listening and a fail2ban SSH jail (maxretry 3, findtime 600, bantime 3600). Use journald with its Python backend. NAT owns permanent ordered SSH hooks and a dedicated ban chain; fail2ban owns only ban entries. Preserve bans during NAT reconfiguration and initialize chains before fail2ban startup. Bootstrap configuration must not depend on the subsequent full readiness check.
+
+Select the configured public key exactly through explicit matching private key, matching agent identity or matching standard local key, failing locally on ambiguity or absence. Preserve strict host verification. Schema-2 read-only guest readiness verifies the versioned configuration digest and installed guest/security program hashes, forwarding/static rules, valid dynamic ban rules, effective sshd policy/listener and active jail. No route cutover follows missing security evidence.
+
+Validation covers both picker adapters, binding preservation, obsolete input rejection, rendered SSH/jail policies, real isolated Ubuntu 24.04 service/socket startup and ban lifecycle, multiple agent identities, restarts and failure-before-cutover. Existing gateways detach with the previous matching CLI/module before upgrading and removing admin_cidrs; cloud-init replaces VM/boot disk while retaining allocations/routing ownership, and new exact host trust precedes activation. No live deployment is part of this change. Implementation is complete across NAT display, configuration rejection, exact client identity selection, Terraform guest/bootstrap/security policy, documentation and isolated CI validation. The static public-key authentication policy and dedicated ban chain are fixed in the module; no user-facing CIDR or parallel legacy policy remains.
+
+Focused local verification passes 396 NAT/VPC/render/package/documentation pytest cases, plus three cleanup fault-injection cases for ambiguous container launch and stop timeout/OSError. Real rendered cloud-init tests pass eight cases on isolated Ubuntu 24.04 ARM64 with systemd: service and socket startup, key authentication and root/password rejection, actual failed-public-key bans/unban/expiry, NAT/fail2ban restart, exact selection from a multi-key agent, invalid effective policy and stale installed guest/security programs. Module and minimal-example validation plus six Terraform mock-provider runs pass. Scoped Ruff and mypy, format/type/CLI architecture ratchets, workflow YAML and CLI help checks pass. The pre-existing duplicate Fixed heading in platform-infra CHANGELOG remains outside this revision.
+
+Independent report-only review passed 51 focused tests and three cleanup fault-injection cases. Its two findings were resolved: installed program identity is included in the readiness digest, and each exact task-owned fixture cleanup is independently attempted without masking the primary failure. No blocking finding remains. No live Nebius resources were modified; provider provisioning, guest behavior on Nebius images, full workload routing and automatic probe collection retain their separate live evidence requirements. REQ-042 stays active and feature delivery stays implemented rather than claiming live verification.
+
+#### Automatic Activation During Deployment
+
+Normal wizard completion sets routing.enabled=true, including edits of disabled configurations. Remove the activation/prepared selector; retain the final route summary and candidate validation without another prompt. The last interactive field is the independent, default-enabled Internet-test choice. Preserve outer save/cancel ownership, local retries, visible-step backtracking, selected targets and original policy snapshots. Explain external route-field delegation before target selection, then show attachment ownership and retained non-default routes in the summary.
+
+The configuration-only wizard precedes validate, render and deploy. Reuse the existing deployment sequence: provision permanent resources, verify trusted guest and provider readiness, preflight enabled-test prerequisites before cutover, activate owned/delegated route attachments, independently verify them, then run enabled probes before application setup. Test opt-out omits probes only. Preserve per-activation restoration, concurrent-change protection and durable cleanup/recovery. Authored routing.enabled=false remains the operational preparation/detachment control; deploy must not override it. Add no flags, schema versions, resource changes or backward-compatibility shims.
+
+Implementation removes the activation question, enables routing at normal wizard completion and retains candidate validation plus the outer save/cancel boundary. Delegation guidance precedes target selection; the summary and test choice distinguish activation from optional egress verification. The README, NAT guide, configuration reference and changelog match this flow. The deployment engine and explicit operational routing disable are unchanged.
+
+Focused verification passes 291 offline NAT, wizard, address-capacity, probe, SSH, deployment-adapter and documentation tests, with two integration cases deselected. New regressions cover fresh/edited configurations, enabled/disabled tests, final-step back/cancel, readiness and test-preflight ordering, authoritative route verification before probes, the real deployment callback before application inputs on changed and no-op plans, and the real shared wizard returning activation-enabled YAML on completion versus the original NAT row on final-step cancellation. Existing tests cover restoration, concurrent changes and cleanup. Scoped Ruff check/format, mypy for the two changed source modules, user-facing Markdown and diff checks pass. Independent report-only review found no blocking correctness or security issue. Follow-up alignment removed two extra blank separators in the canonical documents; their Markdown validation passes. Canonical paired-spec validation and component add, deploy and nat CLI help smoke checks pass. No live cloud operations or qualification were performed; serial-source identity and actual Nebius workload egress remain unverified, so REQ-042 stays active and FEAT-050 delivery remains implemented.
+
+#### Deployment-owned NAT host trust
+
+Automatic activation reaches strict SSH before a new project's host trust exists. The deployment owner must establish identity before provisioning, following the VPNGW pattern. Use the existing Python/OpenSSH and Terraform stack; no AI or application-stack changes are needed. Serial logs are not an SSH trust source.
+
+Under the existing deployment/NAT ownership lock, select an exact project/component-bound Ed25519 key in owner-only local runtime storage before planning a fresh VM. Generate with bounded ssh-keygen and publish exclusively; invalid or conflicting existing key material fails closed. Pass the standard cloud-init ssh_keys map through a sensitive runtime-only module argument excluded from config and generated tfvars. Terraform plans/state and authenticated Compute cloud-init necessarily contain this material and must remain protected; do not copy it to routing journals, reports, snapshots or ordinary outputs. A preview may use an ephemeral key when none is persisted, without creating a durable identity or cloud resources.
+
+For retained instances, obtain their current cloud-init through authenticated Compute reads, verify exact project/resource identity and recover the product-injected key pair. Validate that private and public keys agree before reuse. The current remote first-boot identity is authoritative; never rotate it from a stale local cache. Instances created without a product identity use an empty host-key input and independently supplied operator trust. The empty-input template must preserve previous cloud-init bytes, since the VM module replaces both VM and boot disk when its cloud-init digest changes. This preserves the existing VM as explicitly requested, not a parallel deprecated CLI or schema.
+
+Before readiness, resolve an explicit operator trust file unchanged or manage the default generated/ssh_known_hosts file. Existing pins are immutable. A missing entry may be published only from the validated product key after checking current Compute parent, running state, boot disk and public allocation/address against Terraform outputs and rechecking identity immediately before atomic publication. Use owner-only regular files, bounded exclusive locking and concurrent-change detection; preserve unrelated pins. Strict SSH remains enabled. Retained guest-generated keys need independent operator provisioning; no unchecked keyscan, accept-new, global fallback, remote key rotation or IAM repair is introduced.
+
+Pre-pinning is selected over serial-log enrollment to avoid log permissions, retention and source-envelope dependencies. A network-first key plus guest identity cannot independently authenticate the host. A full architecture checklist is unnecessary for this bounded integration; security, protected state, concurrency, deadlines and non-destructive retention are reviewed directly.
+
+Implement the NAT identity owner, sensitive rendering/module input and conditional cloud-init; wire preparation before planning and trust publication before readiness. Test generation/reuse, provider recovery, private/public mismatch, missing/unsafe files, concurrent changes, explicit trust, immutable existing pins, absent metadata, Terraform sensitivity and empty-input no-replacement behavior. Update README, module/NAT guidance and changelogs. Run focused tests and a retained-host deploy replay with independently supplied trust, separating that operational recovery from fresh automatic enrollment proof. That earlier delivery still required serial access for egress collection; the automated SSH probe revision below removes that dependency.
+
+Implemented the protected identity owner, authenticated Compute recovery, strict pin publication, sensitive runtime rendering and conditional cloud-init. Empty identities preserve both original template bytes and Terraform sensitivity metadata: expose only known map field names while retaining sensitivity on every key value. A native Terraform state-transition regression first reproduced an otherwise unchanged revision update and VM/disk replacement, then passed with all resources unchanged after the repair. Populated cloud-init remains sensitive.
+
+Rendering now treats the default known-hosts file as runtime data. It excludes pins from configuration snapshots, writes and tombstones, safely carries current bytes into a promoted bundle and holds the generated-directory lock through publication to exclude concurrent enrollment. It refuses unsafe files and any staged trust, including absent-current and dangling-symlink cases. The preservation regression failed before this owner repair. The earlier egress transport used the console-observed provider sp_resource_id label and reported HTTP 401/403 without response bodies or credentials; serial evidence is never imported by SSH trust.
+
+Follow-up alignment corrected missing host-key inputs in repeated preflight and source/staged admission planners. The existing NAT deployment owner now retains only its own identity inputs in memory and rebinds them with current route overrides after validating prepared ownership, unchanged normalized NAT rows and exact unique rendered module identities. The same checks cover root environment rebuilds. Child planners use the existing execution context; no arbitrary parent credentials or private input values enter admission/recovery records.
+
+For interrupted activation, recover retained identity inputs immediately before the Terraform restoration plan. This stays inside the recovery engine's error-isolation boundary: a Compute or key-recovery failure leaves Terraform restoration pending while independent external attachment restoration and probe cleanup are still attempted. Absent or removed VM identities never cause fresh key generation. README guidance now consistently states that rendering preserves the default known-hosts file.
+
+The final changed-scope alignment passes 404 tests, including deployment adapters/campaigns, repeated and cloned planners, root/child intent drift, retained-key route restoration and metadata-failure cleanup. Regression controls reproduced dropped runtime inputs before repair. Ruff and formatting, five focused source-module type checks, CLI help, Markdown and whitespace gates pass. The project-native mypy debt ratchet remains within its existing 493-error baseline; standalone checks of shared deployment/render modules still expose pre-existing debt. Final read-only code/security review found no remaining blocker. No cloud operation was run for this alignment; earlier retained-host and HTTP 403 observations below remain the last live evidence.
+
+Focused verification passes 346 Python tests, including real Terraform template and state-transition tests. Isolated Terraform initialization, validation and six mock-provider tests pass. Scoped Ruff, formatting, mypy, Markdown and whitespace gates pass. Independent review findings on directory-relative secret publication and staged trust admission were repaired and covered; final review has no blocking finding.
+
+Live retained-host validation used the independently supplied public pin as explicit operator recovery. Normal render preserved its exact bytes and owner-only mode. The final original deploy passed strict SSH/guest readiness with a no-change Terraform plan, then stopped at the separate serial-evidence preflight with HTTP 403 before probe creation or route cutover. This proves retained-host operation and rendering, not fresh automatic host provisioning or complete workload egress. No IAM expansion or key/VM replacement was performed. The log-read failure's precise authorization cause is not established; the revision below removes this prerequisite, while full live egress remains unverified. REQ-042 remains active and FEAT-050 delivery remains implemented.
+
+#### Automated SSH probe transport revision
+
+Selected the documented gateway jump-host test over serial collection: logging access currently fails before probe creation, and removing only preflight leaves serial-based result retrieval broken. Disabling verification would omit the requested test. Preserve existing resource ownership, sequential admission, result freshness, route restoration and cleanup recovery. Add SSH identity/forwarding, real result-file permissions, bounded process-tree termination, secret-redaction, no-change deployment and no-serial-request regressions. Earlier implementation and live evidence in this record describe the preceding serial transport; this revision is implemented, with no live claim.
+
+#### SSH probe implementation and verification
+
+Implemented automatic probe access and pinned SSH collection through the existing gateway, removed the NAT serial adapter, and preserved quota admission, per-subnet execution, fresh results, route restoration and exact cleanup. Gateway forwarding is checked before activation. Probe host identities are generated automatically, the restricted non-sudo user reads an atomic root-owned result, and SDK failures suppress secret-bearing provisioning diagnostics. Both hops use explicit trust and the exact selected client identity. The existing process supervisor bounds output, deadlines and descendants; unresolved shutdown retains a cleanup guard. The existing reconciliation confirmation explicitly covers stopped SSH collectors and descendants on their original runners. No new configuration flags, logging IAM changes or manual normal-path test steps are introduced.
+
+Validation: 401 focused NAT, CLI contract, documentation and deployment-adapter tests passed, including the isolated Ubuntu Docker fixture with cloud-init schema validation, two real SSH hops, immutable result permissions and wrong-host-key rejection. The fixture uses synthetic egress data, so it proves transport and permissions rather than Internet routing. Six changed source modules pass scoped mypy; the project-wide mypy ratchet remains at its existing 493-error baseline. Source and installed CLI help smoke checks pass. Independent code/security review found and verified repairs for the unresolved-collector reconciliation guard and exact fixture cleanup. No cloud resources were created or changed. Live Nebius boot, egress and cleanup/restoration proof remains pending; REQ-042 stays active and delivery stays implemented.
+
+#### Route-only activation admission repair
+
+The second Terraform stage compares authored subnet fields rather than raw provider result objects. Nebius provider 0.6.75 recomputes timestamps, resource versions, status, empty metadata and unconfigured nested CIDR metadata during route attachment updates. Admit those derived values while requiring known, unchanged subnet identity, parent/network, names, labels, CIDRs and configured pool selection. Preserve exact selected-subnet, update-only and requested-route checks, including known-null route restoration; reject unknown authored fields and unrelated actions before journal writes or apply.
+
+Optional/computed pool exceptions require a selected subnet ID and exact resource address under the canonical bundled VPC source recorded in the frozen render manifest. Resolve catalog defaults with the renderer's options, honor Terraform's optional-null defaults, and reject unresolved subnet-input bindings or replacement module sources. Whole public-pool recomputation is permitted only when the canonical module leaves public pools inherited; schema optional/computed flags alone grant no permission.
+
+Implementation: nat_gateway_state.py owns recursive admission; nat_gateway_activation_inputs.py binds computed-default exceptions to effective VPC inputs and source/module identity; nat_gateway_deploy.py passes that evidence before applying the exact saved plan. An offline Terraform 1.17.0 plan with Nebius 0.6.75 reproduces the original rejection and passes the repaired guard. Regression coverage includes nested pool changes and unknowns, identity, labels, replacement actions, custom sources, address substitution, catalog defaults, bindings, null defaults and apply ordering. Source validation remains separate from live route activation, egress probes and cleanup; REQ-042 stays active and delivery stays implemented.
 
 <!-- /FEATURE: FEAT-050 -->
 <!-- FEATURE: FEAT-051 reqs=REQ-043 status=ready delivery=verified priority=P1 version=3 -->
@@ -10227,7 +10256,6 @@ not run.
 
 <!-- /FEATURE: FEAT-051 -->
 
-
 <!-- FEATURE: FEAT-052 reqs=REQ-044 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-052: VPC choice reconciliation and declarative node-group placement
 
@@ -10301,13 +10329,15 @@ Baseline duplicate was reproduced locally and three existing wizard tests passed
 
 #### Context Evidence
 
-The existing component_add_command already accepts a batch of component additions and calls the shared field wizard. Its omitted-selector flow conditionally hides Apps behind an extra yes/no phase. The scope-selection helper passes text tokens through without resolving the numeric indexes advertised by the prompt. This feature supersedes the recovered pre-lifecycle baseline's optional Apps selection phase.
+Component add already shares selection, naming, field prompting and writing owners. The previous optional Apps phase and repeated scalar-name prompting violate the interaction contract.
 
 #### Design Details
 
 Always prompt Infra then Apps without the intermediate Apps question. Keep confirmed sets outside the selection retry loop and seed each revisited section with its prior choices. Start both sets empty. Resolve prompt tokens with the existing component-ID resolver over selectable entries only, retry invalid input within the current section, and show the resolved selection summary. Both empty is a no-op. Apps without a cluster target return to Infra with choices retained; selection back/quit keeps existing navigation semantics.
 
 Reuse the existing add-target construction, resource names, target binding, dependency expansion, source validation, field wizard and config writer. Configure only additions, retain the current field-level exit-and-save policy and required-field checks, and preserve lifecycle-owned publication restrictions. Explicit selectors bypass catalog selection as before. No public flags, schemas or dependencies change.
+
+Carry only resource names actually confirmed in the initial naming phase as invocation-local component/instance identities. The shared field wizard resolves the scalar name through catalog metadata and excludes its exact payload path using the existing already-handled prompt paths. This applies to nested scalar names as well as inputs.name. Do not infer confirmation from a populated default, persist prompt state in YAML, or suppress name editing in create or explicit-selector paths that did not ask the initial question. Regression coverage must exercise the real shared wizard and independently inspect saved YAML.
 
 #### Selected Option
 
@@ -10348,15 +10378,516 @@ Both sections and input normalization pass regression checks; help/docs match th
 
 #### Implementation Evidence
 
-Implemented in the existing CLI selection helper and component-add orchestration. Both sections are unconditional and retain confirmed choices. Selectable-only shared token parsing retries RuntimeError and ValueError failures in the same section. The field wizard, add-target construction and publication owners remain unchanged. README, changelog, command/argument help, its generated contract hash and canonical inventory tests are aligned.
+Single-confirmation refinement: pass confirmed component/instance identities into bound prompt paths. Retain handled nested names in structural discovery so their containing objects cannot re-prompt them.
+
+The selection helper and component-add orchestration implement unconditional Infra/Apps selection with retryable token parsing, preserved choices and aligned user documentation.
 
 #### Verification Evidence
 
-The new regressions first reproduced 13 expected failures in the original flow. Final component-add and prompt selection: 57 passed; CLI/help/docs contracts: 59 passed. Coverage includes mixed and Apps-only additions, empty/cancelled selections, backtracking, missing-target retry, numeric/keyword parsing, hidden entries, TTY checked defaults, preservation and existing field-exit behavior. Independent read-only review reproduced a malformed digit-like index escaping the retry boundary; its focused test failed before the fix, passed afterward, and independent recheck confirmed same-section recovery. No blocking review/security finding remains in the changed scope.
+Single-confirmation verification: both real WireGuard default/custom CLI cases fail with the pre-fix wizard and pass after repair, with saved-YAML readback. All 267 final component-add and wizard checks pass. Independent review reproduced the nested-object fallback, then verified its regression and 12 controls pass after repair. Ruff, Markdown, architecture/type ratchets and installed source loading pass. No live config replay was performed.
 
-Scoped Ruff lint and formatting passed. The CLI architecture ratchet passed at 1116 definitions against 1191 allowed; the mypy ratchet passed at 492 existing errors against 493 allowed. The PATH-installed CLI renders the new component-add help. Diff whitespace checks passed. Markdown checking found only two preexisting multiple-blank-line warnings, independently reproduced in the pre-task document snapshots and preserved as unrelated edits. Canonical pair validation passes. Evidence is source tests and installed help, not a live interactive cloud provisioning trial.
+Prior selection-flow verification: 57 component/prompt tests and 59 CLI/help/docs checks passed; final alignment covered 433 tests and five terminal interactions. Coverage included mixed/empty selections, backtracking, target validation, malformed indexes, cancellation and preserved rows. Scoped Ruff, architecture/type ratchets, installed help and canonical-pair validation passed. This was local interaction proof, not cloud provisioning.
 
 <!-- /FEATURE: FEAT-053 -->
+
+<!-- FEATURE: FEAT-054 reqs=REQ-046 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-054: Configure named SFS before node-group attachment choices
+
+#### Requirements Covered
+
+- REQ-046: Named shared storage attachment wizard.
+
+#### Context Evidence
+
+The shared field wizard in cli.py currently prioritizes VPC only, labels SFS choices with internal map keys, and passes an empty default into the node-group prompt. The generic multi-select helper restores current values when its result is empty. infra_render.py resolves selected keys into filesystem IDs and mount tags and restricts fallback association to a single SFS and at most one MK8s target.
+
+#### Design Details
+
+For ordinary workflows, stably order selected infrastructure as VPC, SFS, remaining components. Synchronize queued component identities after resource-name alignment so both pending components and backtracking targets remain reachable. Read names from completed SFS inputs. Single-filesystem names fall back to the component instance name; named-map entries follow the module name-or-map-key convention. Number duplicate display names. Use renderer-equivalent target association, without changing deployment wiring.
+
+Use a storage-specific checklist with all eligible keys initially selected, friendly node-group title and names-only summary. A submitted empty list is an explicit opt-out, distinct from back/quit/cancel. Text input accepts indexes and none, and blank accepts the displayed selection. Save the same internal key list, including empty lists, without exposing generated keys in the interaction. Omit the checklist without eligible storage. Keep existing group restart/navigation behavior and existing groups unchanged.
+
+Explain the node-attachment boundary and separate mount/CSI/PV/PVC setup. Reuse the deterministic Python/Typer/Questionary stack. [Questionary 2.1.1's official checkbox implementation](https://github.com/tmbo/questionary/blob/2.1.1/questionary/prompts/checkbox.py) returns an empty list for a confirmed empty selection. [Nebius's filesystem-over-csi guide](https://docs.nebius.com/kubernetes/storage/filesystem-over-csi) separates node attachments/mounts from Kubernetes volumes.
+
+#### Selected Option
+
+Reorder configuration and add a focused named-storage selection helper. Preserve existing configuration and rendering contracts.
+
+#### Alternatives Considered
+
+A label-only edit leaves ordering and defaults confusing. Changing generic multi-select semantics broadens unrelated wizard behavior. A schema rename or automatic CSI installation exceeds the requested interaction change.
+
+#### Implementation Boundaries
+
+Shared CLI wizard ordering, SFS choice presentation and ordinary node-group collection; focused prompt, orchestration and rendering tests; README, MK8s guidance and changelog. Dedicated Soperator lifecycle, cloud operations and generic prompt semantics remain outside scope.
+
+#### Test-First Success Criteria
+
+- TDD-001: Tests require SFS configuration before named per-group choices with all eligible entries checked.
+- TDD-002: Clearing all selections persists an empty list and renders no filesystem attachment; selecting entries resolves their original IDs and mount tags.
+
+#### Validation Plan
+
+Run focused wizard/navigation/Soperator and rendering tests, scoped Ruff checks, architecture/type ratchets, canonical-pair validation and changed-scope alignment with independent review.
+
+#### Test Plan
+
+Cover shuffled component order, stable same-priority ordering, existing SFS during component-add, configured and duplicate names, target eligibility, all/subset/none, independent node groups, text retry and navigation, cancellation, no-storage omission, saved YAML and render results.
+
+#### Evaluation Plan
+
+Mocked terminal interaction plus deterministic tests establish the user-visible contract. No live provisioning is necessary or claimed.
+
+#### Rollout And Rollback
+
+Ship through the existing package without flags or migration. Revert wizard changes to roll back; saved configurations and live resources need no transformation.
+
+#### Done Definition
+
+Named choices follow SFS configuration; defaults and opt-out work; saved keys render correctly; docs and canonical specs match; focused checks and independent review complete.
+
+#### Implementation Evidence
+
+Implemented named choice construction, text parsing and a storage-specific checklist in mk8s_storage.py, wired into ordinary node-group collection in cli.py. All eligible entries start checked; empty confirmation persists an empty key list; summaries use names. Stable VPC/SFS ordering retains dedicated Soperator behavior. Resource-name alignment now updates pending and previous queue entries. Existing schema, rendering, groups and headless input remain unchanged. README, MK8s guidance, changelog and canonical inventory tests are aligned.
+
+#### Verification Evidence
+
+325 focused storage/wizard/navigation/Soperator/provider/render/documentation tests passed, followed by 134 create/component-add entrypoint tests. The 41 new storage tests cover display names, duplicate-name disambiguation, selection defaults, subset/none, text and TTY controls, interruptions, target eligibility, ordering, existing groups, serialization, rendered attachments and renamed-component backtracking. An independent reviewer reproduced a pending MK8s component being skipped after name alignment; its regression failed with missing node_groups before queue synchronization and passed afterward. Independent final review reran all 41 storage tests and found no remaining serious issue.
+
+Scoped Ruff lint/format and diff checks pass. CLI architecture passes at 1116 definitions against 1191 allowed; the type ratchet passes with 492 existing errors against 493 allowed. Changed user documentation passes Markdown lint. Two preexisting canonical-spec blank-line warnings were independently confirmed unchanged. Canonical pair validation passes. Changed-scope security review found no secret, execution, IAM or publication changes; storage defaults reflect explicit user intent and remain opt-out. The PATH-installed CLI resolves the new module from this checkout. Evidence is source tests, mocked terminal interaction and installed-source resolution, not a live deployment.
+
+<!-- /FEATURE: FEAT-054 -->
+
+<!-- FEATURE: FEAT-055 reqs=REQ-040,REQ-047 status=ready delivery=verified priority=P1 version=4 -->
+### FEAT-055: Guided telemetry, bucket labels and VPN defaults
+
+#### Requirements Covered
+
+- REQ-040: Target-bound local and remote observability installation.
+- REQ-047: Clear observability, bucket label and VPN wizard defaults.
+
+#### Context Evidence
+
+The field wizard hides optional Terraform defaults as unset. Ordinary observability autoenable currently calls the Grafana installer, while existing routing can select the Nebius agent for all remote signals without local stores. WireGuard Terraform already defaults allocation creation and NAT to true and keepalive to 25; allocation naming derives from the gateway name. Bucket labels are Nebius resource metadata.
+
+#### Design Details
+
+The original two-step telemetry prompt is superseded by FEAT-058: present one named managed/local/disabled choice with managed selected by default. Use existing resolve/save settings and routing app materialization for the remote-only candidate, bypassing Grafana installation. Save enabled true and remote storage for metrics/logs/traces. Disabling collection writes false. Local opt-in delegates to existing Grafana configuration. Preserve saved routing and owners, dedicated Soperator defaults, and explicit grafana install. Track session-owned rows/routing so navigation never removes preexisting configuration. Use the routing owner's canonical activation lookup to snapshot preexisting disabled rows, restoring original identity/state/values during cleanup rather than treating activation as creation. Remap those snapshots when target names change.
+
+Reuse regional endpoint templates and pinned Nebius collector discovery/authentication. Report configured signal destinations and application OTLP ingestion; do not imply that collector installation instruments applications. Keep ingest and Grafana read connections separate. Existing custom destination credential guards remain authoritative. The official Nebius agent and metrics/logs/tracing ingestion documentation establish the supported signal and endpoint contracts.
+
+Use a focused bucket-label editor with default No for an empty map, Keep/Edit/Clear for saved labels, repeated string key/value input, blank key to finish, explicit duplicate replacement and transactional cancellation. Persist inputs.labels only after completion.
+
+Use wizard profile write-default behavior for WireGuard allocation creation true, keepalive 25 and NAT true. Present friendly prompts and guidance. Show the effective derived public-IP name without persisting automatic names; explicit overrides remain authored. Reuse mode requires an allocation ID and hides name creation. Prompt the mode before the conditionally required ID, and clear a conflicting ID only after accepting creation. Existing names offer keep/change/automatic; automatic persists null or absence. Reprompt keepalive until an integer from 0 through 65535 is selected, preserving zero and navigation. Keep Terraform as the authoritative source of defaults. WireGuard's official quickstart recommends 25 seconds for peers needing NAT/firewall keepalive and allows zero to disable it.
+
+#### Selected Option
+
+Extend the existing wizard and routing owners with focused interaction helpers. Keep configuration schemas and Terraform resource semantics unchanged.
+
+#### Alternatives Considered
+
+Setting enabled false would disable collection. Calling Grafana setup for remote-only creation adds an unwanted local UI. Global routing-default changes would alter explicit Grafana installation. Raw YAML labels retain the usability problem; storing automatic names creates rename drift.
+
+#### Implementation Boundaries
+
+cxcli wizard profiles, focused prompt helpers, CLI integration, routing/render tests and user documentation. Preserve existing storage work. Canonical specs use paired owner publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: Default ordinary target selection produces one Nebius collector, all signals enabled, remote routes and no automatic local stores or Grafana.
+- TDD-002: Explicit false/zero and saved values survive navigation; label cancellation is atomic and automatic allocation names follow gateway renaming.
+
+#### Validation Plan
+
+Run focused prompt, creation/component-add, observability routing/rendering and Soperator regressions, scoped lint, architecture/type ratchets, documentation checks and canonical-pair validation. Independently review source changes and negative controls.
+
+#### Test Plan
+
+Cover default/local/off, saved routing, multiple targets, back/quit, ownership-safe cleanup, configured project/region and pinned collector values. Exercise labels empty/add/edit/clear/duplicate/literal strings/cancel and WireGuard blank/false/zero/reuse/name overrides/rename.
+
+#### Evaluation Plan
+
+Local mocked interaction, saved YAML and rendered values establish source behavior. Live cloud ingestion and deployment remain outside this task.
+
+#### Rollout And Rollback
+
+Ship through the existing package with no migration or compatibility layer. Existing authored settings stay authoritative. A source revert affects future wizard interaction only.
+
+#### Done Definition
+
+Approved prompts/defaults, target-safe routing, documentation and focused checks pass; independent review records any residual limitation.
+
+#### Implementation Evidence
+
+Implemented focused wizard_defaults.py prompts and remote candidate construction, wired into the field wizard through explicit new-target scopes from creation and component-add. Remote setup bypasses Grafana, derives destinations through existing routing, and tracks session-created routing/apps for local/remote/off backtracking. Target selection uses exact instance identities; name alignment updates telemetry trackers. Per-signal choices update routing; disabling all signals turns collection off. Existing targets and explicit Grafana/Soperator workflows retain their contracts.
+
+WireGuard uses Terraform-discovered defaults with profile-controlled persistence and a displayed derived allocation name. Guided bucket labels preserve literal string values and commit only completed edits. README, observability guidance, changelog and canonical/profile inventory tests are aligned. Configuration schemas, Terraform modules and dependency versions are unchanged.
+
+#### Verification Evidence
+
+652 distinct selected cases passed: 182 new/existing wizard, introspection and source-profile tests; 336 observability/routing/render/storage/navigation/Soperator/documentation regressions; and 134 create/component-add entrypoint cases. The new suite contains 32 cases covering default remote-only collection, local opt-in, collection and per-signal disable, target isolation, mode-switch cleanup, renaming, atomic label editing, real Terraform WireGuard defaults/reuse, and saved-config/load/Flux rendering. Rendered output contains only the pinned Nebius agent with all three signals enabled in the default scenario. The existing component-add expectation was updated to assert remote-only defaults for the added cluster while preserving the original cluster's apps.
+
+Independent report-only review found no serious production issue and independently reran 31 new cases before the final save/load/render case was added. Scoped Ruff lint/format, diff checks, user-documentation Markdown, architecture and type ratchets pass. CLI definitions remain 1116 against 1191 allowed; mypy remains at 492 preexisting errors against 493 allowed. The two preexisting canonical-spec blank-line warnings remain unchanged. Canonical pair validation passes. Changed-scope security review retains endpoint validation, secret references, collector ownership and existing Terraform public-IP/NAT semantics without IAM or live resource changes. Evidence is local source, prompt, configuration and rendering verification; no cloud deployment or live ingestion was performed.
+
+Alignment found and repaired four P2 interaction gaps: activated disabled collector rows were deleted during cleanup; allocation reuse-to-create retained a contradictory ID; keepalive accepted values outside the Terraform contract; and saved name overrides lacked an automatic reset. Ten focused negative controls failed before repair and pass afterward. The expanded 50-case wizard-default suite covers these repairs and boundary/navigation/persistence cases.
+
+Current alignment validation passed 552 distinct cases: 536 affected wizard/profile/routing/render/storage/navigation/Soperator/docs cases plus 16 CLI-contract and targeted entrypoint cases. Independent final review confirmed all four repairs; the telemetry reviewer independently ran 10 focused preservation/navigation tests. Scoped Ruff lint/format, user-documentation Markdown, diff checks, architecture (1116/1191) and mypy (492/493) ratchets pass. Existing canonical-spec blank-line warnings remain unchanged. Changed-scope security review confirms configuration-only corrections, no IAM/auth/dependency changes, and continued credential/collector ownership safeguards. No live cloud deployment or ingestion evidence is claimed.
+
+<!-- /FEATURE: FEAT-055 -->
+
+<!-- FEATURE: FEAT-056 reqs=REQ-048 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-056: Preserve local wrapper module package boundaries
+
+#### Requirements Covered
+
+- REQ-048: Local Terraform wrapper package integrity.
+
+#### Context Evidence
+
+The four bundled wrappers call ../vm. Terraform 1.17.0 copies absolute local module paths as packages. A provider-free differential fails with the wrapper directory and succeeds with package//modules/wrapper.
+
+#### Design Details
+
+Set the four local catalog entries to ../../platform-infra//modules/ followed by their component name. The existing canonical_local_module_source preserves the package delimiter; metadata resolution continues to return the module directory.
+
+#### Selected Option
+
+Repair the catalog package boundary, containing the VM dependency without copying the entire repository.
+
+#### Alternatives Considered
+
+Global renderer inference would affect unrelated catalogs. Changing sibling references duplicates valid module semantics. Portable Git addresses already preserve package scope.
+
+#### Implementation Boundaries
+
+Catalog, focused tests, README, configuration reference, changelog and canonical specs. No user configuration, generated customer bundle, cloud resource or IAM changes.
+
+#### Test-First Success Criteria
+
+- TDD-001: Each local wrapper source preserves package scope through rendering and metadata selects its own directory.
+- TDD-002: Real Terraform fails for a module-only fixture and passes for the repaired catalog package structure, loading the sibling module.
+
+#### Validation Plan
+
+Focused catalog/render/introspection tests, real backendless initialization, documentation and scoped lint checks, independent review.
+
+#### Test Plan
+
+Exercise all four wrappers, portable sources and provider-free sibling modules from an unrelated working directory.
+
+#### Evaluation Plan
+
+Inspect initialized module inventory and validate the sibling output reference. Full authenticated render and live deployment remain separate.
+
+#### Rollout And Rollback
+
+Fresh editable CLI processes read the repaired catalog. Rerender existing bundles. Revert the four catalog entries to undo the repair; no resource-state migration.
+
+#### Done Definition
+
+All four local wrapper sources retain valid package scope and focused regression checks pass.
+
+#### Implementation Evidence
+
+Updated the four source.local catalog entries to preserve the platform-infra package. Added four renderer/metadata cases and four provider-free real Terraform init/validate cases using catalog addresses from a checkout path with spaces. Updated existing catalog assertions, documentation and canonical-spec inventory checks. Portable sources and runtime implementation are unchanged.
+
+#### Verification Evidence
+
+The new real-Terraform regression failed before repair with the reported package-escape signature and passes afterward for all four wrappers. Terraform 1.17.0 initialized all four real repository wrappers and installed each sibling VM. The installed editable CLI lock-generation helper created a fresh nebius/nebius 0.6.74 lock and cleaned its temporary Terraform workdir. Across the 326-case boundary selection, 324 distinct cases pass after correcting two stale expectations. Two unrelated WireGuard wizard mock failures also reproduce with the pre-change catalog and remain outside this repair. Scoped Ruff, user-documentation Markdown, paired spec validation and diff checks pass; two pre-existing canonical-document duplicate-blank lint warnings remain. Independent read-only review confirmed the corrected assertions and found no further issue. Full authenticated render and live deployment were not performed.
+
+<!-- /FEATURE: FEAT-056 -->
+
+<!-- FEATURE: FEAT-057 reqs=REQ-049 status=ready delivery=verified priority=P1 version=10 -->
+### FEAT-057: Separate managed infrastructure readiness from application handoff
+
+#### Requirements Covered
+
+- REQ-049: Private managed infrastructure deployment without Kubernetes access.
+
+#### Context Evidence
+
+The target executor unconditionally prepares Kubernetes access and reads kube-system UID even with no charts. Required cluster smoke, final application verification and ordinary baseline binding also assume Kubernetes access. This fails after successful Terraform creation of private infrastructure. The recovered baseline prose below describes that previous behavior; this feature supersedes its no-app handoff requirement.
+
+#### Design Details
+
+Use one shared eligibility predicate for managed CPU-only MK8s targets without in-cluster features or known local application bindings. Resolve the cluster ID from authoritative Terraform output. A strict SDK reader verifies identity, endpoint presence, cluster RUNNING, exact node-group inventory and settled desired/ready counts, with bounded pagination, requests and readiness polling. Node-group resource names honor explicit names and Terraform's cluster-name/key default; duplicate desired names cannot collapse inventory. Provider evidence is distinct from application identity and never contains a synthetic Kubernetes UID. The required cluster smoke report names its Nebius API evidence source and scope. It records named executed checks for verified cluster identity, settled state, configured endpoint, exact node-group inventory and each observed group's desired/ready capacity. Provider acceptance consumes the same saved-report aggregation used by the deployment summary before returning success; missing or skipped required evidence cannot produce a successful deployment. Final verification obtains fresh provider evidence; application journal and baseline identities continue to require real Kubernetes UIDs for application targets. Existing application bindings and completed local deployment evidence disqualify infrastructure-only acceptance without serving as current readiness or physical identity authority. A new runner has no cross-runner workload history: report that Kubernetes workloads and Helm ownership were not inspected, never assert their absence or removal. SDK requests do not mutate cloud resources. Source-config quota assessment and generated deployment preflight share the retained-filesystem helper, obtaining a fresh saved Terraform plan after backend initialization. Source assessment requires an existing generated bundle and manifest; absent artifacts retain full configured demand. Bind each eligible filesystem to one enabled instance in the generated runtime snapshot with equal complete inputs and Nebius scope before interpreting the plan. Assess instances independently: new or edited filesystems retain full demand while unchanged siblings retain their own proven credit. Whole-source digests are not the storage authority because unrelated infrastructure edits need not change storage. The plan must still match requested size, identity and resource action. Credit only one exact managed module/resource with a retained ID, matching project/type and resolved before/after size. No-op and same-resource updates credit existing count and size, capped by desired demand; create, replacement, missing, ambiguous or unknown evidence retains full configured demand. Plans remain private temporary runtime files and are removed after assessment. This preflight evidence never substitutes for the independently admitted execution plan. Shared retained-resource planning also credits managed WireGuard/NAT allocations only from matching full component declarations, unique rendered module identities, retained IDs and unchanged resolved address kinds/project. Obtain the fresh plan inside the existing NAT preview owner when required; prepare read-only routing/host inputs, reject unfinished activations, and never set execution authorization outside that owner. Reuse an existing deployment owner without nesting or changing its inputs. Plans and temporary identities remain private and are cleaned. Source validation never activates/restores routes or acquires deployment mutation authority.
+
+#### Selected Option
+
+Separate infrastructure acceptance within the existing deploy workflow, retaining Terraform ownership and all in-cluster safeguards where needed.
+
+#### Alternatives Considered
+
+The current unconditional Kubernetes handoff unnecessarily requires private routing for cloud-only work. Requiring VPN for every deploy is conservative but does not meet the requested infrastructure-only operation. Skipping validation or treating SDK readiness as workload health would weaken acceptance. Automatic tunneling changes host networking and is outside this repair.
+
+#### Implementation Boundaries
+
+A focused infrastructure-target module plus target deployment, final verification, ordinary baseline and validation reporting. Existing Python/Nebius SDK/Terraform stack remains fixed; this is deterministic orchestration with no AI capabilities or stack-selection work. No resource topology or credential changes belong to the source repair.
+
+#### Test-First Success Criteria
+
+- TDD-001: A managed private CPU target with no apps completes without preparing Kubernetes handoff or reading kube-system UID.
+- TDD-002: Missing or unready provider evidence cannot pass; full pagination and immutable identity checks are enforced.
+- TDD-003: Application, external, GPU and previously application-bound targets preserve current Kubernetes checks and omitted-release protection.
+- TDD-004: Source validation accepts an unchanged retained filesystem with less free quota than its total size, charges only proven growth, and rejects insufficient create/replacement/growth demand or missing, failed and stale plan evidence.
+
+- TDD-005: Retained public/private allocations receive exact contributor credit; creates, replacements, edited inputs, ambiguous modules/IDs and unresolved addresses receive none. Real saved-plan wrappers exercise the NAT authorization boundary; preview cannot mutate shared state or restore unfinished activations.
+
+#### Validation Plan
+
+Focused regression and boundary tests, Ruff, documentation alignment, paired-spec validation, independent read-only risk review, then authorized live replay and independent SDK readback when authentication is available.
+
+#### Test Plan
+
+Exercise initial execution, final verification, baseline, multi-target isolation, readiness convergence/deadline, wrong identity/parent, duplicate/missing/extra groups, API denial and report scope.
+
+#### Evaluation Plan
+
+Use official Nebius cluster/node-group status and connection contracts. Cloud status proves infrastructure only. Authentication setup, the normal deploy replay, and independent read-only provider postconditions pass. The infrastructure scope excludes Kubernetes workload inspection, guest filesystem I/O, object data access and VPN handshakes.
+
+#### Rollout And Rollback
+
+Fresh editable CLI processes load the source repair. Retry the original product deploy workflow against its frozen generation; retain required smoke metadata and recovery authority. Revert this scoped repair to restore the prior handoff behavior. Do not change the deployment configuration or public exposure.
+
+#### Done Definition
+
+Offline contract and affected-boundary checks pass, reports accurately identify evidence scope, and the requested live deployment and independent postconditions pass or their exact external blocker remains explicit.
+
+#### Implementation Evidence
+
+Added deployment_infrastructure.py with shared eligibility, Terraform-owned identity resolution, bounded SDK reads and pagination, complete cluster/node-group readiness and scoped required-smoke reports. Target execution, final acceptance and baseline publication use this boundary. Application journals retain real Kubernetes UID identity; known local baseline and completed application evidence disqualify cloud-only execution. CLI result aggregation supports mixed provider/application targets. README, MK8s guide, changelog and spec inventory assertions are aligned. Standalone filesystem admission now uses protected fresh-plan quota credit with conservative replacement and unknown-evidence handling. Source-config assessment now invokes that same helper; generated runtime inputs bind credit per filesystem without coupling it to unrelated source changes. Readiness matches Terraform node-group naming defaults. Agent authentication was restored through its separately authorized setup owner; resource lifecycle ownership remains with Terraform.
+
+#### Verification Evidence
+
+Prior completed repairs: provider-to-summary negative control and 125 focused tests passed; installed CLI deployment completed in 4.7 minutes with Overall PASS (1/1), six named checks, independent private MK8s/node/NAT readback and no active attempt. Source-config SFS correction passed the original validate reproducer, independent retained-size readback and 193 focused quota/CLI/docs/architecture tests. Earlier Kubernetes handoff, storage credit and node-name fixes passed 100 focused tests plus five CLI integration cases. Scoped Ruff, formatting, Markdown, diff, architecture and existing mypy ratchets passed; mypy was not error-free. Provider reads confirmed ready network/subnets/storage, all ten workers attached read/write, active object storage and running gateways. These observations did not prove workload, storage I/O or VPN behavior.
+
+Retained-quota repair verified: allocation and native Terraform guard negative controls failed before the fix. The shared retained_quota module and NAT preview context now serve source/generated preflights; preview rejects pending recovery before route restoration. 381 focused quota, NAT, shared CLI and documentation tests passed, including real saved-plan wrappers and context cleanup. Ruff, formatting, Markdown, diff, architecture and mypy ratchets passed (490 existing type errors; maximum 493). Installed editable CLI validate, force-render, deployment preview and full deployment all passed with quota checks enabled. The clean 5-minute deployment reconciled unchanged infrastructure, ran the native NAT egress probe and recorded Overall PASS with 2 groups/10 ready nodes. Independent provider GETs confirmed configured infrastructure, 2 TiB SFS attached read/write to all ten workers, active unsuspended storage and running gateways. Shared acceptance was ready with no active execution; NAT activation was complete, its lock released, and probe allocation/disk/VM absence was independently confirmed. Authored v2 config remained unchanged and generated v3 contained no deploy section. No manual cloud or journal intervention was used. Workload, guest storage I/O, object-data and VPN behavior remain outside this infrastructure proof.
+
+<!-- /FEATURE: FEAT-057 -->
+
+<!-- FEATURE: FEAT-058 reqs=REQ-047,REQ-050 status=ready delivery=implemented priority=P1 version=4 -->
+### FEAT-058: Unified observability intent, ownership and end-to-end acceptance
+
+#### Requirements Covered
+
+- REQ-047: Refine ordinary telemetry choices while preserving unrelated wizard defaults.
+- REQ-050: Unified ordinary MK8s observability and verified signal delivery.
+
+#### Context Evidence
+
+Before this feature, the wizard supplied remote settings but generic routing fell back to local and unrouted observability could auto-install Grafana. Grafana install shared configure/render/deploy but saved remote owners prevented local transitions. The two OTel entries had distinct Deployment/DaemonSet roles but identical titles. Every PostgreSQL row was Grafana-owned. Ingestion validation checked Kubernetes readiness only, and local datasource checks accepted unscoped recent metrics. This feature supersedes the recovered baseline's unconditional collector-plus-Grafana materialization and readiness-only ingestion acceptance for ordinary MK8s.
+
+#### Design Details
+
+Use one per-target intent resolver over existing enabled/signals/routing fields. Effective ordinary signals intersect authored routing selection with per-signal toggles without erasing authored intent. Explicit managed selection resets only canonical signal destinations and incompatible credentials; separately named query connections remain. Advanced Grafana reruns retain saved routing. Managed is the ordinary default; explicit in-cluster entry uses local storage and Grafana unless explicit overrides request advanced routing, while repeat installations preserve established choices. Keep distinct gateway/node collectors and add a stable target-local trace Service. Derive destination reporting from producer contracts: the pinned Nebius agent uses metadata/IAM with OTLP/HTTP metrics and gRPC logs/traces; VMAgent uses Prometheus remote write. Separate a grafana-postgresql catalog identity and lifecycle from generic PostgreSQL, which requires user-supplied Secret references. Reject old implicit bindings before normalization. Implement generation-bound staged collector handover with verified quiescence and resumable checkpoints, preserving storage. A cluster-local ConfigMap under the existing application lease binds owner, cluster UID, target, desired hash, phase and retained VMAgent selectors; it is a progress receipt rather than a second desired-state authority. Retries observe live workloads and never implicitly roll back collection. Extend normal deployment validation with bounded synthetic Prometheus/stdout/OTLP probes through the advertised ingress and independent backend plus Grafana readback. Match project/target/run/time, keep read/producer identities separate, and fail closed on missing proof. Clear selected prior validation artifacts at attempt entry before fallible preparation; cleanup failures retain an actionable report reason. Advertise the stable trace alias only for ordinary targets and the actual gateway for Soperator. Managed portal checks use explicit human-profile IAM auth and datasource-only APIs, never portal mutations or assumed local org/UIDs.
+
+#### Selected Option
+
+Retain the existing Nebius/Victoria/OpenTelemetry stack and normal deployment engine, with one shared configuration and acceptance pipeline.
+
+#### Alternatives Considered
+
+Renaming options alone leaves inconsistent defaults and false success. Always dual-writing adds unwanted storage and ingress cost. Replacing all collectors introduces unnecessary provider integration risk. Readiness-only checks do not meet delivery acceptance.
+
+#### Implementation Boundaries
+
+Ordinary MK8s observability configuration, catalog, collector render/deploy orchestration, PostgreSQL binding, validation/reporting and corresponding tests/docs. Soperator-native collector/storage defaults remain unchanged. Deterministic Python orchestration; no AI components, new stack selection or live cloud mutations as part of source implementation.
+
+#### Test-First Success Criteria
+
+- TDD-001: Managed and local presets produce identical desired topology across creation, addition and focused Grafana entrypoints.
+- TDD-002: Interrupted collector transitions never authorize competing producers or stale acceptance.
+- TDD-003: Every enabled signal requires exact current-run backend and Grafana evidence; failures/skips cannot pass.
+- TDD-004: Generic PostgreSQL coexists independently with Grafana and retains user configuration and protected credentials.
+
+#### Validation Plan
+
+Focused offline regression tests, pinned Helm rendering, type/lint checks, changed-scope security/code review and align. Live managed/local trials remain a separate evidence lane.
+
+#### Test Plan
+
+Exercise defaults, explicit overrides, reruns, target isolation, navigation, transitional failures, retained storage, scoped query response parsing, token redaction, timeouts, cleanup and reporting. Preserve dedicated Soperator checks.
+
+#### Evaluation Plan
+
+Verify public Nebius and Grafana contracts against official sources and pinned chart artifacts. Product trials must observe collector delivery without direct backend injection; probe writes are declared validation steps.
+
+#### Rollout And Rollback
+
+Fail with explicit migration guidance for old Grafana database bindings; never auto-migrate data or aliases. Preserve retained PVC/Secret identity, existing destination stores and failed-transition checkpoints. Reconcile through the normal frozen generation workflow.
+
+#### Done Definition
+
+Implemented shared workflow and required source checks pass; reports truthfully distinguish source verification from separately obtained live evidence.
+
+#### Implementation Evidence
+
+Implemented shared intent/defaults in observability_intent, observability_routing, wizard_defaults and grafana_install; collector retirement and stable trace Service in observability_collectors and flux_render; staged execution in observability_handover through the existing deployment entrypoint. Generic PostgreSQL and grafana-postgresql now have distinct catalog identities, ownership and Secret contracts. observability_probe and observability_e2e provide bounded Prometheus/stdout/OTLP generation and independent backend/managed-or-local Grafana readback. Frozen configuration and validation-contract digests bind reports, and required missing/skipped/stale evidence fails the shared report aggregator. README, CLI help, configuration and observability guides are aligned. The alignment pass preserves ordinary per-signal opt-outs and routes for re-enablement; keeps storage/query intent independent of collection; resets canonical writes, reserved reads and unavailable local defaults only on explicit managed-mode selection; prints the native Soperator trace gateway; clears selected reports before fallible deployment preparation; and persists sanitized cleanup failures.
+
+#### Verification Evidence
+
+581 focused regression tests pass across observability, staged handover/restart, Soperator ownership, Grafana configuration/target isolation, catalog, wizard, rendering, inventory and deployment reports. A separate 279-test Grafana/runtime/ordinary-app/docs/CLI regression passes. The probe also delivers its OTLP request to a real local gRPC server. Pinned PostgreSQL/Grafana Helm qualification passes; real pinned Nebius agent, OpenTelemetry gateway/node-log and VMAgent charts render inactive collectors correctly. New modules pass mypy; the repository mypy ratchet remains at its existing 493-error maximum. Scoped Ruff, Markdown, CLI/help and specification checks are applied separately.
+
+A subsequent alignment pass establishes failing regressions for each repaired boundary and passes 867 tests across observability, Grafana, Soperator, ordinary apps, render, reports, inventory and docs, plus 13 CLI-contract tests. The final preset-default repair passes the 87-test wizard/Grafana-wizard followup (884 distinct passing tests across these runs). Seven separately provisioned Grafana API/chart integration cases are skipped in that pass; prior pinned-chart qualification above is separate evidence. Scoped Ruff and user-documentation Markdown checks pass. The repository mypy ratchet remains at 493 existing errors, not a clean typecheck. Final nested read-only config/runtime reviews have no remaining confirmed findings. The validation probe still requires an eligible CPU node under its placement policy.
+
+No live managed or in-cluster ingestion, hosted Grafana authentication or production handover trial was performed. Delivery remains implemented rather than live-verified; runtime OK requires the product's current-run queries to succeed.
+
+<!-- /FEATURE: FEAT-058 -->
+
+<!-- FEATURE: FEAT-059 reqs=REQ-051 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-059: Component-owned configuration v2
+
+#### Requirements Covered
+
+- REQ-051: Component-owned configuration.
+
+#### Context Evidence
+
+Config and operations share the old registry.
+
+#### Design Details
+
+Implement REQ-051 with direct owner blocks, infra.external_clusters and identity-bound resolvers. Source v2 rejects deploy before effects. Manifest v3 moves metadata to execution. Preserve source round trips, registration fingerprints, subtree publication and immutable recovery.
+
+#### Selected Option
+
+One canonical owner per setting.
+
+#### Alternatives Considered
+
+Reject duplicate registries, Terraform-owned external clusters and compatibility bridges.
+
+#### Implementation Boundaries
+
+Config, commands, artifacts, tests and docs; no live changes.
+
+#### Test-First Success Criteria
+
+- TDD-001: Reject old inputs; preserve owner round trips and guarded publication.
+
+#### Validation Plan
+
+Focused tests, quality gates and align.
+
+#### Test Plan
+
+Mixed targets, cancellation, recovery and cutover.
+
+#### Evaluation Plan
+
+Compare resource identities.
+
+#### Rollout And Rollback
+
+Finish old attempts; rewrite source, render, deploy, then upgrade. Rollback uses matching CLI/config; retain history.
+
+#### Done Definition
+
+Aligned implementation and passing gates.
+
+#### Implementation Evidence
+
+Implemented strict source v2/manifest v3, actual owner resolvers, all command writers, immutable recovery and documentation. See `src/nebius_cxcli/cluster_config.py`, `runtime_validation.py`, `generated_manifest.py` and `tests/test_component_config_contract.py`.
+
+#### Verification Evidence
+
+2026-10-27 initial full gate: `make ci-quality verify-wheel-cli` passed (9133 tests; 3 skipped, 27 integration deselected; coverage 75.51%; five module floors; 58 public/one hidden CLI surfaces). Follow-up align fixed registry alias collisions and null observability routing: eight red/green regressions and 505 consumer tests passed. Ruff, Markdown and existing mypy ratchet passed (490 errors, cap 493). No live cloud deployment or provider qualification.
+
+<!-- /FEATURE: FEAT-059 -->
+
+<!-- FEATURE: FEAT-060 reqs=REQ-052,REQ-053 status=ready delivery=verified priority=P0 version=14 -->
+### FEAT-060: WireGuard access and private-network reliability
+
+#### Requirements Covered
+
+- REQ-052: Team-owned WireGuard access through SecretStash.
+- REQ-053: Reliable WireGuard private-network access.
+
+#### Context Evidence
+
+Existing lifecycle, guest template and captured MTU forwarding failure.
+
+#### Design Details
+
+Retain REQ-052 access/IAM/journal/rotation guarantees and ESO exclusion. No private
+keys in Terraform/reports. Preserve subnet discovery, overrides and saved routes.
+
+One module-owned guest asset serves boot and pinned-SSH reconciliation. Nullable
+wireguard_mtu defaults to min(1420,uplink MTU-80); validate integer1280..1420 and
+uplink limit, emit effective MTU in server/client files. Own only interface-scoped
+bidirectional TCP SYN MSS clamp rules. Lock before all state reads, quiesce older
+helpers on first upgrade, require existing keys for repair, preserve overrides.
+Stage/verify/atomically install revisions; reconcile without UFW reset or VM restart.
+
+Preserve exact applied cloud-init in immutable bounded backend artifacts, journal
+reference/digest only. Existing owners require state/hash/Compute identity agreement;
+fresh owners freeze an unapplied plan then replan. Nullable runtime-only string
+bootstrap_user_data feeds all plans; readonly paths never publish artifacts.
+Reject unsupported frozen-input edits. Never weaken shared replacement guards.
+
+Add reconcile-network, refresh-client-conf and verify-client CLI modes. Refresh
+requires the same registered client and protected atomic local replacement. Deploy
+reuses reconciliation. Discover clients from original project paths, not execution
+copies. Linux/macOS adapters bind interface/address/route to authenticated peer.
+Bind automatic targets to the same VPC. Freeze and verify the private kubeconfig
+endpoint/CA; preserve current-context, reject TLS/proxy bypass. Require TLS, nonanonymous SelfSubjectReview, complete
+uncompressed discovery >4096 bytes, MTU and fresh peer traffic. Requests15s,
+response4MiB. Pending prerequisites do not fail infrastructure; exercised failures
+return nonzero. Publish separate durable outcomes, never reuse historical PASS.
+
+#### Selected Option
+
+Immutable bootstrap plus mutable networking; verify connected clients automatically.
+
+#### Alternatives Considered
+
+Reject template-triggered replacement, client-only workaround and mandatory laptop
+presence for headless infrastructure deployment.
+
+#### Implementation Boundaries
+
+WG module, rendering, ownership, day-2 commands and reports; preserve NAT/app secrets.
+
+#### Test-First Success Criteria
+
+- TDD-001: Preserve REQ-052 wizard, access, rotation, retention and sync regressions.
+- TDD-002: MTU mismatch fails before correction and passes after, including reapply.
+- TDD-003: Freeze/retry/corruption/concurrency never replace resources or keys.
+- TDD-004: Client discovery, private identity, bounds and reports distinguish outcomes.
+
+#### Validation Plan
+
+Focused Python/Terraform, payload-size, lint/type/architecture and align checks.
+
+#### Test Plan
+
+Mock boundaries plus isolated real Linux WireGuard packet-path regression.
+
+#### Evaluation Plan
+
+Native recovery, client reconnect, authenticated kubectl, repeat deploy and readback.
+
+#### Rollout And Rollback
+
+Preserve VM/keys/peers; stage bounded rollback copies, reconcile uncertain outcomes.
+
+#### Done Definition
+
+Source checks and independent live client/repeat-deploy acceptance pass.
+
+#### Implementation Evidence
+
+MTU/MSS, frozen bootstrap and client verification implemented. First boot persists
+an empty peer registry; repair rejects missing state. CLI/help/docs aligned.
+
+#### Verification Evidence
+
+400 focused checks pass, including fresh empty-registry red/green and CLI modes.
+Ruff/type ratchet pass. Linux negative control stalled; repair restored64KiB TLS.
+Native repair, reconnect, kubectl, second deploy and independent identity/report
+checks passed. MTU1370; no fresh cloud install performed.
+
+<!-- /FEATURE: FEAT-060 -->
 
 <!-- maintain-project-specs:design:end -->
 
@@ -10597,10 +11128,10 @@ Sections:
 - when `wizard.<field>.options` is used, the supported keys are `from`, `prefix`, `depends_on`, `args`, `filter_regex`, `auto_select_single`, `auto_select_first`, and `skip_prompt_if_no_choices`; `filter_regex` is the only regex-capable selector, `prefix` and `depends_on` remain plain string/path helpers that are merged into `args` at catalog-load time, `args` carries provider-specific lookup inputs, `auto_select_single` is the opt-in “one compatible option becomes the default” behavior, `auto_select_first` materializes the first compatible option after provider-side preference ordering, and `skip_prompt_if_no_choices` lets an optional live-backed field disappear cleanly when the lookup succeeds but yields no valid choices
 - provider-backed wizard options resolve through the same normalized metadata path for prompt-time choices, strict provider-value validation, singleton/first-choice auto-defaults, and planned VPC choice merging
 - when `wizard.<field>.sources` is used, the supported bundled source is `source: static` with `values`; each value may be a plain string or a `{value, label}` mapping so the saved config value can stay concise while the wizard shows a richer operator-facing label
-- `wizard.<field>.write_default_to_config: true` is reserved for declared wizard field specs where accepting the displayed default is a real persisted config choice instead of a virtual convenience default; the bundled MK8s profile uses it for the native MysteryBox ESO sync defaults so selecting MysteryBox with MK8s writes `deploy.targets[].secrets.mysterybox.enabled: true`, `deploy.targets[].secrets.mysterybox.allow_all_namespaces: true`, `deploy.targets[].secrets.mysterybox.refresh_interval: 15m`, and `deploy.targets[].secrets.mysterybox.sync_namespaces: [default]`
+- `wizard.<field>.write_default_to_config: true` is reserved for declared wizard field specs where accepting the displayed default is a real persisted config choice instead of a virtual convenience default; the bundled MK8s profile uses it for the native MysteryBox ESO sync defaults so selecting ESO with eligible MysteryBox application secrets on MK8s writes `infra.components[].secrets.mysterybox.enabled: true`, `infra.components[].secrets.mysterybox.allow_all_namespaces: true`, `infra.components[].secrets.mysterybox.refresh_interval: 15m`, and `infra.components[].secrets.mysterybox.sync_namespaces: [default]`
 - During interactive `create`, scalar-named infra targets such as MK8s are aligned to
   the entered resource name before the app wizard section starts.
-- dependency-backed wizard fields are gated by the selected upstream component or context: for example GPU deployment testing waits for MK8s GPU, VM journald log fields wait for the VM observability context, provider-backed choices wait for their declared `depends_on` value, and native MysteryBox ESO sync waits for both MK8s and the Terraform `mysterybox` component
+- dependency-backed wizard fields are gated by the selected upstream component or context: for example GPU deployment testing waits for MK8s GPU, VM journald log fields wait for the VM observability context, provider-backed choices wait for their declared `depends_on` value, and native MysteryBox ESO sync waits for MK8s, eligible application secrets and user-selected ESO on that target
 - the bundled MK8s profile suppresses raw parent prompts for the typed
   `inputs.cluster` and `inputs.node_groups` objects; the wizard asks for the
   cluster name, network, network-filtered subnet, Kubernetes version, endpoint
@@ -10878,21 +11409,21 @@ GPU platforms, suppresses direct recovery-policy prompting, and materializes
 `inputs.recovery_policy: FAIL` when `inputs.preemptible_enabled=true` so the VM module
 can render `preemptible.on_preemption = "STOP"` with a valid recovery policy.
 Deploy-time optional MK8s GPU checks now use the target-facing
-`deploy.targets[].deployment_testing.mk8s_gpu.*` contract, not fake Terraform module
-inputs, one project-global validation block, or the old `deploy.targets[].validations.*`
+`infra.components[].deployment_testing.mk8s_gpu.*` contract, not fake Terraform module
+inputs, one project-global validation block, or the old `validations.*`
 path. The settings catalog owns the defaults in `component_cli_settings.yaml`
 `components.infra.mk8s.cli.gpu.deployment_testing`, and the MK8s wizard exposes those
 optional toggles as deployment testing. The required MK8s node inventory smoke is
 generated into `deploy.validations` for every MK8s target and is not persisted as a
 config toggle. The legacy fake-input path
 `infra.components[].inputs.gpu_validation_overrides` and the old
-`deploy.targets[].validations.*` path are intentionally unsupported and fail fast. When
+`validations.*` path are intentionally unsupported and fail fast. When
 GPU nodes are enabled, operators can toggle operator-readiness and bounded GPU
 visibility checks and tune `gpu_visibility.max_nodes` per target. NCCL settings are
 command-only `acceptance-test benchmark` options, with defaults in
 `components.infra.mk8s.cli.gpu.benchmarks.nccl`; the NCCL bus-bandwidth threshold is no
 longer a deploy config or wizard field.
-`deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled` is a reserved
+`infra.components[].deployment_testing.mk8s_gpu.health_checker.enabled` is a reserved
 app-policy hook, not a built-in validation kind: it can auto-enable a catalog app with
 role `health_checker`, but cxcli does not ship a built-in health-check runner and omits
 that setting from bundled target defaults unless an active catalog actually supplies
@@ -11028,7 +11559,7 @@ Component output and handoff contract:
   SFS filesystems render from `module.<sfs>.filesystems[<key>]`.
 - Cluster handoff for kubeconfig/bootstrap is code-owned, not catalog-declared.
 - Today the bundled `mk8s` component is the only built-in cluster handoff source. It uses Terraform output `cluster_id` and derives endpoint access from `inputs.cluster.public_endpoint`.
-- Multiple enabled instances of that handoff source can be rendered and applied as infra, with each Terraform output namespaced by `instance_id`. Scalar named infra modules prompt for the resource name in wizard mode; `instance_id` is derived from that normalized name and must stay aligned with `inputs.name` or the catalog-declared scalar `status.name_input`. For MK8s, that scalar name input is `inputs.cluster.cluster_name`, so cluster targets stay human-readable (`training-cluster`, `serving-cluster`) and app/deploy target references follow the same derived id. Collection-style identity such as `mysterybox.inputs.secrets` is not treated as a scalar component name. Enabled app rows require at least one enabled cluster target, either a managed MK8s handoff target or an onboarded external MK8s target, and bind to exactly one target by using that target id as `apps.charts[].instance_id`; target-scoped deploy settings bind through `deploy.targets[].instance_id` using the same target id. The full app identity remains `<chart-id>@<target-id>` such as `nvidia-gpu-operator@cluster2`. Render derives target-scoped deploy metadata into the generated manifest with `deploy.targets[].target_ref` equal to `deploy.targets[].instance_id` and writes one flat Flux subtree per target under `generated/flux/targets/<target-id>/`. Generated-bundle commands reject missing or divergent `target_ref` values instead of falling back to old component/chart identities. Plain `deploy <config.yaml>` reconciles every generated target by default; `deploy --target <target-id>` narrows to one target, and `deploy --all-targets` is an explicit spelling of the default. Direct Flux commands that need Kubernetes access, such as `flux apply`, `flux destroy`, or `flux bootstrap`, still select one target with `--target <target-id>` or run every target with `--all-targets`.
+- Multiple enabled instances of that handoff source can be rendered and applied as infra, with each Terraform output namespaced by `instance_id`. Scalar named infra modules prompt for the resource name in wizard mode; `instance_id` is derived from that normalized name and must stay aligned with `inputs.name` or the catalog-declared scalar `status.name_input`. For MK8s, that scalar name input is `inputs.cluster.cluster_name`, so cluster targets stay human-readable (`training-cluster`, `serving-cluster`) and app/deploy target references follow the same derived id. Collection-style identity such as `mysterybox.inputs.secrets` is not treated as a scalar component name. Enabled app rows require at least one enabled cluster target, either a managed MK8s handoff target or an onboarded external MK8s target, and bind to exactly one target by using that target id as `apps.charts[].instance_id`; cluster policy lives on the matching `infra.components[]` or `infra.external_clusters[]` record. The full app identity remains `<chart-id>@<target-id>` such as `nvidia-gpu-operator@cluster2`. Render derives target-scoped deploy metadata into the generated manifest under `execution.targets[]`, with `target_ref` equal to `instance_id` and writes one flat Flux subtree per target under `generated/flux/targets/<target-id>/`. Generated-bundle commands reject missing or divergent `target_ref` values instead of falling back to old component/chart identities. Plain `deploy <config.yaml>` reconciles every generated target by default; `deploy --target <target-id>` narrows to one target, and `deploy --all-targets` is an explicit spelling of the default. Direct Flux commands that need Kubernetes access, such as `flux apply`, `flux destroy`, or `flux bootstrap`, still select one target with `--target <target-id>` or run every target with `--all-targets`.
 
 ### `upgrade <layer>`
 
@@ -11287,7 +11818,7 @@ without hiding the chart type. Internal generated rows may also carry
 Flux controller installation version for local `deploy` is configured in `component_cli_settings.yaml` under `cli.flux.version`.
 Default rendered Helm release timeout is configured in `component_cli_settings.yaml` under `cli.flux.release_timeout`.
 Managed Terraform CLI download version is configured in `component_cli_settings.yaml` under `cli.terraform.version`. That settings value selects the Terraform binary; provider source/version compatibility is declared in generated and module `terraform.required_providers` blocks.
-For app entries, unconditional chart defaults stay at top-level `defaults` in `component_sources.yaml`, while context-sensitive MK8s GPU policy lives in `component_cli_settings.yaml` under `components.apps.<id>.cli.mk8s_gpu_policy.rules`. Each rule can auto-enable the app and/or inject conditional chart defaults when the selected GPU context matches, so the settings catalog keeps one rule list instead of splitting activation and value-default behavior across separate fields. When multiple rules need the same chart-value overlay or post-render patch body, the settings catalog can define that once under `cli.mk8s_gpu_policy.default_sets` or `post_render_patch_sets` and let individual rules reference it with `defaults_from` or `post_render_patches_from`; that keeps the important selectors and CR patch content catalog-owned without duplicating them inline. Post-render patch text can use `{chart_version}` when an operand image tag must track the app chart's `source.portable.version`, such as the Network Operator RDMA shared-device plugin tag. The same `cli` namespace also carries optional app-side observability metadata under `cli.observability.metric_targets` for app-specific metrics endpoints and GPU node-label prerequisites. For the bundled `nvidia-gpu-operator`, both MK8s GPU stack modes now force `values.driver.nvidiaDriverCRD.enabled=false`, because the bundled GPU Operator chart path for Nebius `NVIDIADriver` CRs can fail during Flux install. The Nebius-image rule also disables `values.driver.enabled` and `values.toolkit.enabled` because Nebius-managed GPU images already ship the host GPU driver plus the NVIDIA Container Toolkit runtime, while the `operator_managed` rule keeps those two host-side paths enabled so GPU Operator installs and manages the host stack. cxcli intentionally does not pre-seed `nvidia.com/gpu.deploy.operands=true` or `nvidia.com/gpu.deploy.device-plugin=true` on operator-managed targets; those labels are manual forced-operand controls for preinstalled-driver workflows, not the source of truth for the operator-managed lifecycle. Separate rules suppress GPU Operator's NFD whenever the bundled Network Operator path is selected, explicitly enable Network Operator NFD/NodeFeatureRules for those targets, and add GPU Operator's Nebius GPU-node NFD affinity only when a `nebius_image` target is not on the GPU-cluster path. In multi-target MK8s projects, required GPU app rows are normalized per target and GPU policy defaults plus post-render patches are resolved through each row's target-scoped `instance_id`, so a GPU-cluster / InfiniBand target and an Ethernet-only 1-GPU target can coexist without sharing incompatible operator values. Directly authored enabled app rows that carry explicit chart source metadata stay selected even if the current MK8s GPU policy does not require them; pruning is limited to stale policy-managed rows that no target needs, including auto target-scoped rows that carry catalog source metadata. Native MysteryBox-to-Kubernetes sync is also target-scoped: `deploy.targets[].secrets.mysterybox.enabled=true` auto-enables `external-secrets` for that target and renders ESO-native resources into a generated post-Flux manifest that local deploy/Flux apply submits after the external-secrets HelmRelease is Ready. Selecting the Terraform `mysterybox` backend with any MK8s target also auto-enables the same target-scoped `external-secrets` row during `create` and `component add`, before the component field wizard starts, so the dependency is visible with the other app selections. The source-catalog `release.install_after` field is an app prerequisite list: it auto-selects prerequisite app components and feeds Flux `dependsOn` ordering between Helm releases. MK8s GPU policy-managed chart-value paths are authoritative during `create`, `component add`, direct `config.yaml` normalization, and `render`: cxcli rewrites the currently applicable policy paths from the settings catalog and clears no-longer-applicable policy paths instead of preserving stale older operator values from `config.yaml`.
+For app entries, unconditional chart defaults stay at top-level `defaults` in `component_sources.yaml`, while context-sensitive MK8s GPU policy lives in `component_cli_settings.yaml` under `components.apps.<id>.cli.mk8s_gpu_policy.rules`. Each rule can auto-enable the app and/or inject conditional chart defaults when the selected GPU context matches, so the settings catalog keeps one rule list instead of splitting activation and value-default behavior across separate fields. When multiple rules need the same chart-value overlay or post-render patch body, the settings catalog can define that once under `cli.mk8s_gpu_policy.default_sets` or `post_render_patch_sets` and let individual rules reference it with `defaults_from` or `post_render_patches_from`; that keeps the important selectors and CR patch content catalog-owned without duplicating them inline. Post-render patch text can use `{chart_version}` when an operand image tag must track the app chart's `source.portable.version`, such as the Network Operator RDMA shared-device plugin tag. The same `cli` namespace also carries optional app-side observability metadata under `cli.observability.metric_targets` for app-specific metrics endpoints and GPU node-label prerequisites. For the bundled `nvidia-gpu-operator`, both MK8s GPU stack modes now force `values.driver.nvidiaDriverCRD.enabled=false`, because the bundled GPU Operator chart path for Nebius `NVIDIADriver` CRs can fail during Flux install. The Nebius-image rule also disables `values.driver.enabled` and `values.toolkit.enabled` because Nebius-managed GPU images already ship the host GPU driver plus the NVIDIA Container Toolkit runtime, while the `operator_managed` rule keeps those two host-side paths enabled so GPU Operator installs and manages the host stack. cxcli intentionally does not pre-seed `nvidia.com/gpu.deploy.operands=true` or `nvidia.com/gpu.deploy.device-plugin=true` on operator-managed targets; those labels are manual forced-operand controls for preinstalled-driver workflows, not the source of truth for the operator-managed lifecycle. Separate rules suppress GPU Operator's NFD whenever the bundled Network Operator path is selected, explicitly enable Network Operator NFD/NodeFeatureRules for those targets, and add GPU Operator's Nebius GPU-node NFD affinity only when a `nebius_image` target is not on the GPU-cluster path. In multi-target MK8s projects, required GPU app rows are normalized per target and GPU policy defaults plus post-render patches are resolved through each row's target-scoped `instance_id`, so a GPU-cluster / InfiniBand target and an Ethernet-only 1-GPU target can coexist without sharing incompatible operator values. Directly authored enabled app rows that carry explicit chart source metadata stay selected even if the current MK8s GPU policy does not require them; pruning is limited to stale policy-managed rows that no target needs, including auto target-scoped rows that carry catalog source metadata. Native MysteryBox-to-Kubernetes sync is also target-scoped: `infra.components[].secrets.mysterybox.enabled=true` requires user-selected `external-secrets` for that target and renders ESO-native resources into a generated post-Flux manifest that local deploy/Flux apply submits after the external-secrets HelmRelease is Ready. Selecting ESO with eligible MysteryBox application secrets automatically configures target sync unless explicitly disabled; MysteryBox never selects ESO. Metadata-only WireGuard secrets are excluded. The source-catalog `release.install_after` field is an app prerequisite list: it auto-selects prerequisite app components and feeds Flux `dependsOn` ordering between Helm releases. MK8s GPU policy-managed chart-value paths are authoritative during `create`, `component add`, direct `config.yaml` normalization, and `render`: cxcli rewrites the currently applicable policy paths from the settings catalog and clears no-longer-applicable policy paths instead of preserving stale older operator values from `config.yaml`.
 
 Module outputs consumed by app bindings or built-in handoff behavior must be treated as a versioned interface.
 In practice that means names such as `cluster_id` are not just internal module details once the CLI, generated manifest, app bindings, or deploy/bootstrap flows consume them.
@@ -11398,20 +11929,20 @@ Instance self-containment:
 - `component add` validates `component_sources.yaml` by default, matching `create`; `--no-validate-sources` is the explicit escape hatch.
 - Infra-only `component add` does not re-resolve Helm chart dependencies for already-enabled app rows; app chart dependency resolution runs when the add request includes app components.
 - `component add` prompts for selected infra resource names before live provider checks, then revalidates the existing Nebius tenant/project scope before provider-backed field prompts so dynamic option failures surface clearly. Provider-backed Nebius SDK requests use a bounded timeout, controlled by `NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS` when set and 15 seconds by default.
-- `component remove` deletes selected rows and, when a cluster target is removed, cascades removal to app chart rows plus `deploy.targets[]` settings bound to that target. It still fails when the resulting config would break component bindings or chart dependencies.
+- `component remove` deletes selected rows and, when a cluster target is removed, cascades removal to its app chart rows; infrastructure policy leaves with its owner. It still fails when the resulting config would break component bindings or chart dependencies.
 - `config.yaml` does not embed `component_sources`.
 - Config-based commands resolve sources from the active `component_sources.yaml` resolution path.
 - Canonical project path shape is `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`.
 - `create` still takes `tenant_id` / `project_id` as the project identity inputs. Folder names are resolved from the validated Nebius names only after ID validation succeeds, and runtime identity continues to come from `config.yaml`.
 - App chart defaults (`release.namespace`, `release.name`) can be edited in wizard mode or overridden in non-interactive `create` and `component add` with `--app-namespace` and `--app-releasename`.
 - App chart `release.timeout` is optional catalog metadata for Flux `HelmRelease.spec.timeout`; when omitted, the chart inherits `cli.flux.release_timeout`. That keeps a global default in the catalog while still allowing per-chart overrides without hardcoding chart-specific logic in the deploy loop.
-- `deploy.targets[].observability.*` is the canonical customer-facing MK8s observability contract, and `deploy.observability.vm.*` remains the VM observability contract. cxcli renders those deploy settings into infra labels and app chart values during render/deploy, keeping `config.yaml` organized under `infra`, `apps`, and `deploy`.
+- `infra.components[].observability.*` is the canonical customer-facing MK8s observability contract, and `infra.components[id=vm].observability.vm.*` remains the VM observability contract. cxcli renders those deploy settings into infra labels and app chart values during render/deploy, keeping `config.yaml` organized under `infra`, `apps`, and `deploy`.
 
 Wizard field/option model:
 
 - Infra input fields are discovered from module `variables.tf` (required and optional variables for source-backed modules).
 - Required variables are prioritized during prompts and enforced by strict validation.
-- When an MK8s wizard answer under `deploy.targets[].observability.*` makes the bundled `nebius-observability-agent` required, cxcli auto-enables that target-bound app immediately and announces the adjustment before later infra prompts. The later app-phase prompt only controls whether to customize chart values; skipping it keeps the selected app defaults.
+- When an MK8s wizard answer under `infra.components[].observability.*` makes the bundled `nebius-observability-agent` required, cxcli auto-enables that target-bound app immediately and announces the adjustment before later infra prompts. The later app-phase prompt only controls whether to customize chart values; skipping it keeps the selected app defaults.
 - Runtime-required infra inputs can be promoted above raw Terraform metadata when the CLI needs a stronger contract for a specific component.
 - Prompt labels include Terraform type hints (for example `string`, `number`, `bool`) and `required` markers.
 - `create` validates `tenant_id` and `project_id` via Nebius IAM APIs before optional wizard phases.
@@ -11573,12 +12104,12 @@ part of the observability contract.
    JSON, then opt into `--attach` for deploy-ready `json_file` entries.
 2. Customer intent.
    `create`, `component add`, and direct `config.yaml` edits write only
-   customer intent under `deploy.targets[].observability.*` for MK8s and
-   `deploy.observability.vm.*` for VMs. The MK8s wizard prompts that
+   customer intent under `infra.components[].observability.*` for MK8s and
+   `infra.components[id=vm].observability.vm.*` for VMs. The MK8s wizard prompts that
    target-scoped contract directly. When those answers make the bundled
    `nebius-observability-agent` required, cxcli auto-selects the app immediately
    and emits the adjustment while the operator is still answering
-   `deploy.targets[].observability.*` prompts. The later app prompt only asks whether to
+   `infra.components[].observability.*` prompts. The later app prompt only asks whether to
    customize chart values; answering `n` keeps the app selected with defaults.
 3. Normalization.
    Every config load normalizes the deploy contract before runtime validation.
@@ -11590,7 +12121,7 @@ part of the observability contract.
    `materialize_observability_infra_values`, then
    `strip_observability_generated_app_values`.
    This is why a direct config edit that sets
-   `deploy.targets[].observability.enabled=true` or adds another GPU-enabled MK8s target
+   `infra.components[].observability.enabled=true` or adds another GPU-enabled MK8s target
    still gets the required target-bound app rows and VM/MK8s infra-side
    materialization without a separate day-2 command, while source `config.yaml`
    stays focused on operator intent instead of generated collector scrape rules.
@@ -12108,57 +12639,60 @@ Important catalog choices:
 
 ### Customer Config Contract
 
-`config.yaml` exposes only the deploy-facing observability contract under `deploy`:
+`config.yaml` requires `version: v2`. Each resource owns its policy directly:
 
 ```yaml
-deploy:
-  targets:
-  - instance_id: cluster1
+version: v2
+infra:
+  components:
+  - id: mk8s
+    instance_id: cluster1
+    enabled: true
+    inputs: {}
     observability:
       enabled: false
       kubernetes:
         logs:
           enabled: true
           collect_agent_logs: false
-          excluded_namespaces:
-            - kube-system
+          excluded_namespaces: [kube-system]
         metrics:
           enabled: true
           collect_agent_metrics: false
           collect_k8s_cluster_metrics: true
-          excluded_namespaces:
-            - kube-system
+          excluded_namespaces: [kube-system]
         traces:
           enabled: true
-  observability:
-    vm:
-      logs:
-        enabled: true
-        systemd_units: []
-      collector:
-        enabled: false
-        metrics:
-          enabled: true
+  - id: vm
+    instance_id: worker-vm
+    enabled: true
+    inputs: {}
+    observability:
+      enabled: false
+      vm:
         logs:
           enabled: true
           systemd_units: []
+apps:
+  charts: []
 ```
+
+External clusters carry the same cluster policy on `infra.external_clusters[]`;
+they never become Terraform components. Soperator smoke tests, rollout,
+profiling and registration belong on its `apps.charts[]` row, outside `values`.
 
 Design rules for the customer config:
 
-- `deploy.targets[].instance_id` binds target-scoped deploy settings to an enabled MK8s cluster target.
-- `deploy.targets[].observability.enabled` is the per-cluster switch for cxcli-managed MK8s observability.
-- If an observability-group app row such as `nebius-observability-agent` or `grafana` is already selected for an MK8s target during create/component-add, the wizard defaults that target switch to `true`. `gateway-helm` alone is not treated as observability intent because it is a shared Gateway API dependency.
-- Nebius Monitoring/Logging/Tracing endpoints are project-scoped service surfaces. Deploy observability settings control whether cxcli deploys or configures producers against them; they are not the thing that makes the endpoint URLs exist.
-- Nebius-managed service metrics/logs for enabled resources are represented by catalog bucket metadata, not by customer `deploy.observability.*` toggles. For example, PostgreSQL and Object Storage service metrics can appear in the report even when no cxcli-managed collector is enabled.
-- `deploy.targets[].observability.kubernetes.*` is only for the MK8s Kubernetes-agent path.
-- `deploy.observability.vm.logs.*` is only for the VM Monitoring-agent journald-label path; the wizard presents `logs.enabled` as the "collect journald logs?" decision for standalone VM components.
-- The bundled VM catalog defaults `deploy.observability.vm.logs.enabled` to true, but that branch is active only when `deploy.observability.enabled=true`.
-- `create` and normalization keep the contract scoped to the enabled infra set:
-  - MK8s-only projects keep `deploy.targets[].observability.kubernetes.*`
-  - VM-only projects keep `deploy.observability.vm.logs.*`
-  - mixed projects keep both
-- Unrelated project-scope branches are pruned instead of leaking into the customer config. For example, VM-only configs do not keep MK8s GPU deploy validations.
+- Cluster observability is enabled per owner. Selecting an observability app in
+  create/component-add enables that target by default; Gateway alone does not.
+- Kubernetes collector settings apply only to clusters. VM journald settings
+  apply independently to each VM; their default-on logs branch takes effect only
+  when that VM's observability switch is enabled.
+- Provider service endpoints and catalog service metric/log buckets exist
+  independently of customer collector switches. Managed PostgreSQL or Object
+  Storage signals can therefore appear without a cxcli-managed collector.
+- Normalization materializes policy only on eligible owners. Removing a resource
+  removes its policy; unrelated resources and their settings are preserved.
 
 What cxcli intentionally does not put in `config.yaml`:
 
@@ -12171,11 +12705,11 @@ What cxcli intentionally does not put in `config.yaml`:
 
 The source/settings catalog contract becomes runtime state during normalization and render:
 
-- When `deploy.targets[].observability.enabled=true` for an MK8s component, cxcli ensures the bundled collector and Grafana chart rows exist for that target. The collector materializes target-facing toggles into chart-native `values.config.*`; Grafana materializes datasource provisioning for the selected Metrics, Logs, and Traces read endpoints.
+- When `infra.components[].observability.enabled=true` for an MK8s component, cxcli ensures the bundled collector and Grafana chart rows exist for that target. The collector materializes target-facing toggles into chart-native `values.config.*`; Grafana materializes datasource provisioning for the selected Metrics, Logs, and Traces read endpoints.
 - In multi-target projects, that materialization is target-scoped: each enabled MK8s target gets its own collector and Grafana rows with `instance_id` set to the target id.
 - Grafana admin Secret values, read-token Secret/environment values, datasource values, fallback Explore queries, dashboard signal bindings, org ID, and the idle auth-session timeout are generated from the active settings catalog. Dashboard source values are generated from the active source catalog. Datasource URLs use the same settings endpoint records used by the deploy report. The bearer token comes from a deploy-time Kubernetes Secret exposed as an environment variable for Grafana provisioning. `Nebius Services` points at the service-provider Monitoring read endpoint; `Nebius User Metrics` points at the user-ingested Prometheus read endpoint because that endpoint contains the cxcli-managed Kubernetes agent metrics. Logs and traces use `Nebius Logs` and `Nebius Traces`. Catalog validation fails if any Grafana dashboard source lacks datasource metadata plus either `gnetId` with pinned `revision` and imported `uid` or dashboard JSON with a top-level `uid`, if a dashboard datasource name is not declared under `components.apps.grafana.cli.datasources`, if a dashboard signal binding references a missing dashboard source, or if a datasource read endpoint is not declared under the observability endpoint registry.
 - The built-in VM Monitoring agent remains platform-managed whenever a `vm` component is enabled; cxcli does not install it and does not configure its internal metrics ingest path. Built-in VM metrics and label-enabled journald logs use Nebius-managed ingestion, so this path does not need a customer-created VM service account, public write endpoint configuration, or cxcli-managed token on the VM.
-- When `deploy.observability.enabled=true` and a VM component is enabled, cxcli materializes the supported Compute labels into `infra.components[id=vm].inputs.labels`:
+- When `infra.components[id=vm].observability.enabled=true` and a VM component is enabled, cxcli materializes the supported Compute labels into `infra.components[id=vm].inputs.labels`:
   - `nebius.o11y.systemd-logs-collection.enabled=true`
   - optional `nebius.o11y.systemd-logs-collection.units=<unit1;unit2>`
   - when no units are configured, the units label is omitted so the Nebius VM agent collects all supported systemd units
@@ -12216,7 +12750,7 @@ VM metrics:
 VM journald logs:
 
 - The Monitoring agent can forward journald logs from systemd services when the supported VM labels are enabled.
-- cxcli exposes that through `deploy.observability.vm.logs.*` only on the explicit `vm` component path.
+- cxcli exposes that through `infra.components[id=vm].observability.vm.logs.*` only on the explicit `vm` component path.
 - VM journald logs land in Logging through the platform-managed Compute log path. cxcli's bundled VM Logs dashboard reads them from the `sp_serial` bucket by default and keeps `default` selectable for user-ingested logs.
 - When enabled, those logs also use the platform-managed Logging ingest path, not the public customer log-write endpoints.
 
@@ -12259,7 +12793,7 @@ VM-specific note:
 
 ### Deploy-Time Guardrail
 
-When an MK8s target has `deploy.targets[].observability.enabled=true` and the
+When an MK8s target has `infra.components[].observability.enabled=true` and the
 effective Kubernetes signal contract requires the Nebius Observability Agent,
 cxcli generates one target-scoped deploy validation with kind
 `mk8s_observability_ingestion`.
@@ -12303,7 +12837,7 @@ cxcli generates one target-scoped deploy validation with kind
 - MysteryBox backend creation and Kubernetes secret sync are intentionally separate
   contracts. The `mysterybox` Terraform component creates Nebius MysteryBox secrets and
   keeps the product-native `inputs.secrets` list. Kubernetes sync is target-scoped under
-  `deploy.targets[].secrets.mysterybox.*` and uses External Secrets Operator's native
+  `infra.components[].secrets.mysterybox.*` and uses External Secrets Operator's native
   `nebiusmysterybox` provider, so those prompts are deploy-target settings for the MK8s
   target rather than MysteryBox Terraform module inputs. The MK8s wizard shows those
   sync prompts only when the Terraform `mysterybox` component is also selected and
@@ -12319,7 +12853,7 @@ cxcli generates one target-scoped deploy validation with kind
   objects and their `refreshInterval` are rendered when real MysteryBox IDs are
   available.
 - The `payload_values` module input is runtime-only in cxcli-generated Terraform roots. Render declares a sensitive root variable such as `mysterybox_payload_values`, passes it to the child module, and omits it from generated tfvars and manifests; operators provide values at first Terraform/deploy time as a JSON/YAML two-level map keyed by secret name and payload key. Interactive local `deploy`, `terraform plan`, and `terraform apply` runs prompt with hidden input for missing first-deploy values before Terraform starts. CI and other non-interactive runs set `TF_VAR_mysterybox_payload_values`; non-default MysteryBox instances use their rendered module variable name, for example `TF_VAR_secretstore_alpha_payload_values`. cxcli preflight checks first-deploy Secrets whose `version_id` is empty or `n/a` and reports the exact missing entries before Terraform apply. After cxcli records the created `version_id` in source config, the generated manifest, and generated Terraform tfvars, later plan/apply/destroy runs do not need the original payload values. If Nebius creates the Secret versions but Terraform exits because the provider lost an operation poll, deploy best-effort recovers those `mbsecver-...` IDs from Terraform state and refreshes the generated bundle so the next deploy continues without asking for payload values again. `inputs.payload_values` in source config is rejected so payload cleartext cannot become part of `config.yaml` or generated artifacts.
-- When the Terraform `mysterybox` component and an MK8s target are both enabled, cxcli ensures the target-scoped `external-secrets` app row by default so the ESO controller is present. `create` and `component add` materialize that dependency before their field wizard prompts, so operators can review the app row in the same pass that introduced MysteryBox. Native sync defaults on in that selected-backend wizard path: when it is enabled for an MK8s target, cxcli renders non-built-in workload namespaces, one `ClusterSecretStore`, and generated namespace-scoped key-mapped `ExternalSecret` resources into a generated post-Flux manifest next to the target's Flux files, and does not render the credential Secret into Git-managed output. The external-secrets HelmRelease installs only the ESO controller and CRDs; local deploy/Flux apply submits the post-Flux manifest after that HelmRelease is Ready so Kubernetes can discover the CRDs before `ClusterSecretStore` and `ExternalSecret` resources are created. These cxcli-managed ESO objects are not source-config content: `config.yaml` keeps only `deploy.targets[].secrets.mysterybox.*`, and normalization strips stale cxcli-managed MysteryBox ESO `extraObjects` from the external-secrets app row while preserving operator-authored chart objects. Local deploy/Flux commands treat the configured Kubernetes Subject Credentials Secret as the persisted ESO auth location; when it is missing, invalid, or stale, cxcli ensures the dedicated Nebius service account `mysterybox-sa`, grants only `mysterybox.payload-viewer`, creates an authorized key through the Nebius API, and writes the private key only into that runtime Secret before applying Flux. That IAM-management step suppresses Terraform runtime service-account env vars so target-scoped `flux apply` uses the operator's Nebius auth context, including the Nebius CLI access-token fallback for federation profiles, instead of accidentally using the Terraform automation identity. ESO exchanges it for Nebius IAM access tokens when calling MysteryBox.
+- ESO is independently user-selected per target. With eligible MysteryBox application secrets, sync defaults on unless explicitly disabled. Metadata-only WireGuard secrets are excluded: when it is enabled for an MK8s target, cxcli renders non-built-in workload namespaces, one `ClusterSecretStore`, and generated namespace-scoped key-mapped `ExternalSecret` resources into a generated post-Flux manifest next to the target's Flux files, and does not render the credential Secret into Git-managed output. The external-secrets HelmRelease installs only the ESO controller and CRDs; local deploy/Flux apply submits the post-Flux manifest after that HelmRelease is Ready so Kubernetes can discover the CRDs before `ClusterSecretStore` and `ExternalSecret` resources are created. These cxcli-managed ESO objects are not source-config content: `config.yaml` keeps only `infra.components[].secrets.mysterybox.*`, and normalization strips stale cxcli-managed MysteryBox ESO `extraObjects` from the external-secrets app row while preserving operator-authored chart objects. Local deploy/Flux commands treat the configured Kubernetes Subject Credentials Secret as the persisted ESO auth location; when it is missing, invalid, or stale, cxcli ensures the dedicated Nebius service account `mysterybox-sa`, grants only `mysterybox.payload-viewer`, creates an authorized key through the Nebius API, and writes the private key only into that runtime Secret before applying Flux. That IAM-management step suppresses Terraform runtime service-account env vars so target-scoped `flux apply` uses the operator's Nebius auth context, including the Nebius CLI access-token fallback for federation profiles, instead of accidentally using the Terraform automation identity. ESO exchanges it for Nebius IAM access tokens when calling MysteryBox.
 - The generated `ClusterSecretStore` defaults to `apiDomain: api.nebius.cloud:443` and does not render `caProvider`. ESO connects to the Nebius public API with the controller image's normal public CA trust bundle; cert-manager and trust-manager are only relevant for private CA, TLS-inspecting proxy, self-signed, or custom-domain designs.
 - Before local deploy/Flux commands apply GitOps resources for a MysteryBox-enabled target,
   cxcli runs a temporary in-cluster curl pod from the credentials Secret namespace against
@@ -12343,7 +12877,7 @@ cxcli generates one target-scoped deploy validation with kind
   component rows.
 - The generated store defaults to cluster-wide access: `allow_all_namespaces: true` omits `ClusterSecretStore.conditions`. Restricted access is opt-in with `allow_all_namespaces: false`, which renders `ClusterSecretStore.conditions.namespaces` from the same non-empty `sync_namespaces` list that receives generated ExternalSecrets. In both modes, cxcli renders Namespace objects only for configured sync namespaces that are not built-in Kubernetes namespaces such as `default`; the `ExternalSecret` itself can still target `default`. The namespace condition controls which namespaces may reference the shared store, but the dedicated Nebius service account still defines the actual upstream read boundary, so namespace RBAC and the `mysterybox-sa` `mysterybox.payload-viewer` grant must be designed together.
 - Existing VMs need a stop/start cycle after changing journald labels before the Monitoring agent picks up the new configuration.
-- Public docs say omitted `deploy.observability.vm.logs.systemd_units` means all systemd services. cxcli keeps that default, but explicit units are still the deterministic smoke-test path.
+- Public docs say omitted `infra.components[id=vm].observability.vm.logs.systemd_units` means all systemd services. cxcli keeps that default, but explicit units are still the deterministic smoke-test path.
 - The detailed Kubernetes-agent docs define logs, metrics, and traces. That is the signal contract cxcli follows for MK8s, even though the public agents overview page summarizes the Kubernetes agent more narrowly.
 - Grafana is the only read-side tool cxcli deploys automatically for MK8s observability. Prometheus configs, LogCLI environment variables, and any external Grafana instance remain operator-side concerns; the deploy report keeps the read endpoint URLs visible for those external tools. For bundled Grafana, the catalog still binds Metrics, Logs, and Traces dashboard signals for validation and runtime status, while the deploy report lists the cxcli-owned bundled dashboards directly. If cxcli cannot finish reconciling Grafana's public `root_url`, runtime status keeps the underlying probe error visible while falling back to long Explore links; the deploy report surfaces the same root URL note alongside the Grafana root, credentials, and bundled dashboard links. The bundled catalog pair binds Metrics to a cxcli-owned Kubernetes dashboard that uses `Nebius User Metrics`, current `query_result(...)` variables, cAdvisor/container metrics keyed by `kubernetes_io_hostname`, and standard CPU, memory, pod, container, and network panels; GPU to a cxcli-owned Kubernetes GPU dashboard that uses `Nebius Services`, `mk8s_cluster_id`, and DCGM metrics for only current GPU nodes in the selected cluster; Logs to a cxcli-owned Loki dashboard that queries the `default` bucket and Kubernetes labels such as `k8s_namespace_name` and `k8s_pod_name`; and Traces to a cxcli-owned Tempo dashboard that reads `Nebius Traces` and stays empty until workloads emit OTLP traces. VM Metrics and VM Logs are also cxcli-owned JSON dashboards: VM Metrics binds to `Nebius Services` and uses built-in VM Monitoring-agent labels, while VM Logs binds to `Nebius Logs`, defaults to `sp_serial`, and keeps `default` selectable. The bundled catalog keeps one Nebius service dashboard import as an example under `Nebius Services`; cluster-scoped MK8s dashboards and VM dashboards are cxcli-owned JSON so cxcli can control variable scoping and avoid stale label-index values. The report uses direct bundled-dashboard links, adding the target cluster variable only for Kubernetes dashboards when available, and intentionally omits separate Metrics/Logs/Traces shortcut rows to avoid duplicating that list. Operators can run `validate-dashboards <config.yaml>` after deploy to verify every catalog dashboard source against the live Grafana datasource/read-endpoint chain.
 - cxcli references maintained upstream third-party artifacts from `component_sources.yaml` instead of vendoring them. The bundled observability console uses the maintained Grafana community Helm chart, leaves Grafana image registry/repository/tag on that chart's defaults so the chart version and chart `appVersion` stay the single source of truth, keeps a single Grafana.com service dashboard import as an example, ships cxcli-owned Kubernetes dashboard JSON package assets, and uses Envoy Gateway for Gateway API load-balancer exposure. The catalog-created EnvoyProxy sets the generated public LoadBalancer service to `externalTrafficPolicy: Cluster`, because Nebius Managed Kubernetes load balancers reject Envoy Gateway's default `Local` policy. CPU-only platform/observability charts use hard node affinity with `nebius.com/gpu NotIn ["true"]` so Grafana, Envoy Gateway, cert-manager, ExternalDNS, External Secrets, and n8n do not consume GPU worker capacity by default. The catalog defines this block once as YAML anchor `&nebius_cpu_only_node_affinity` and reuses it with aliases, but rendered HelmRelease values contain ordinary Kubernetes affinity objects rather than YAML anchor semantics. Because it is hard affinity, GPU-only clusters need an operator override or CPU node capacity for these platform pods. Third-party binaries, Helm charts, container images, package repositories, and Grafana.com dashboard imports referenced by the catalog remain governed by their own upstream licenses, support terms, usage terms, and distribution policies. This repository's license covers the cxcli source, bundled cxcli-owned dashboard JSON, and generated automation, not the operator's deployed use of referenced third-party artifacts.
@@ -12360,14 +12894,14 @@ Use this sequence when onboarding observability for any bundled or new service:
    - Put component sources and dashboard JSON/Grafana.com dashboard source entries in `component_sources.yaml`.
    - Put global endpoint templates, default toggles, app metric targets, Grafana datasource and dashboard signal bindings, and source-specific guardrails under `component_cli_settings.yaml`.
 3. Expose only the customer-facing project contract in `config.yaml`.
-   - `deploy.targets[].observability.enabled`
-   - `deploy.targets[].observability.kubernetes.*`
-   - `deploy.observability.vm.logs.*`
+   - `infra.components[].observability.enabled`
+   - `infra.components[].observability.kubernetes.*`
+   - `infra.components[id=vm].observability.vm.logs.*`
 4. Materialize runtime state during normalization and render.
    - MK8s: chart rows plus managed `values.config.*`
    - VM: supported `nebius.o11y.systemd-logs-collection.*` labels
 5. Validate and report the runtime contract.
-   - Fail fast on unsupported `deploy.targets[].observability.*` or `deploy.observability.*` keys or wrong types.
+   - Fail fast on unsupported `infra.components[].observability.*` or `infra.components[id=vm].observability.*` keys or wrong types.
    - Generated reports must say which agent path is active, which signals are enabled, and which endpoints apply.
 6. Prove the live path.
    - MK8s: verify the Helm release, signal collection, and relevant read/write paths.
@@ -12425,7 +12959,7 @@ Commands operate from this dynamic model with infra source metadata resolved fro
 The command boundary is intentional:
 
 - Generator-side commands operate on `config.yaml`.
-- Project-level runtime commands (`deploy`, `destroy`, `email`, `wireguard`, `ssh-jumphost`) also start from `config.yaml` and resolve sibling `generated/`.
+- Project-level runtime commands (`deploy`, `destroy`, `email`, `ssh-jumphost`) start from `config.yaml` and resolve sibling `generated/`. WireGuard day-2 reads source configuration and SecretStash directly (FEAT-060).
 - Bundle-level runtime commands keep artifact-specific boundaries:
   `validate-generated` accepts any path under `generated/`, `terraform *`
   accepts `generated/` or `generated/infra/`, and `flux *` accepts
@@ -12520,7 +13054,7 @@ The command boundary is intentional:
 - Interactive mode confirms the removal before editing `config.yaml`.
 - Non-interactive mode accepts enabled row selectors: `<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`, `<row-id>`, or `<component-id>@<resource-name-or-target-id>`.
 - For scalar named infra, the row id is the normalized resource name; for target-bound app charts, it is the target id. When more than one row matches the same component type, non-interactive remove must target an exact row id or `<component-id>@<resource-name-or-target-id>`.
-- When removing a cluster target, also removes app chart rows and `deploy.targets[]` settings bound to that target.
+- When removing a cluster target, also removes app chart rows bound to that target; cluster settings leave with their infrastructure owner.
 - Fails fast when the resulting config would still break app dependencies or component input bindings.
 - These commands update only `config.yaml`; existing `generated/` artifacts and
   live resources are unchanged until `render` refreshes the generated bundle and
@@ -12533,14 +13067,11 @@ The command boundary is intentional:
 - Generates one new WireGuard client config from an already deployed
   `wireguard-gw` component with
   `nebius-cxcli wireguard --gen-client-conf <config.yaml>`.
-- Before reading Terraform output or SSHing to the VM, the command verifies
-  that the current `config.yaml` and sibling rendered/deployed `generated/`
-  bundle both contain the same selected `wireguard-gw` component
-  instance. If the source component was added, removed, or renamed, operators
-  must run `render` and `deploy` first.
-- Resolves sibling `generated/`, reads Terraform output for the selected VPN
-  gateway public IP, SSHes to the gateway VM, and runs the gateway-local
-  `nebius-wireguard-client add --output-json` command.
+- Reads the selected source row and its authenticated READY SecretStash record,
+  verifies project/component/generation, and fetches the pinned login version.
+- Uses the record's endpoint, username and host pin for isolated SSH, then runs
+  `nebius-wireguard-client add --output-json`. No generated bundle, Terraform,
+  Compute read or original deployer files are required for client issuance.
 - Uses a wg-quick-safe client/config basename: lowercase letters, digits, and
   hyphens, up to 15 characters. When the operator omits `--client-name`, cxcli
   generates a short unique `wg-...` name and passes it to the VM-local helper.
@@ -12595,8 +13126,9 @@ The command boundary is intentional:
   requires exactly one comma-separated `--local-subnet` option; client
   generation may repeat `--local-subnet` for per-client routed CIDRs.
 - All three modes resolve `--ssh-known-hosts-file` or the project-local
-  `generated/ssh_known_hosts` default before remote execution. Missing or
-  unsafe trust files fail before SSH or local client-output mutation.
+  `generated/ssh_known_hosts` default before remote execution. Managed default
+  pins recover through authenticated Compute first; missing, unusable or unsafe
+  trust then fails before SSH or local client-output mutation.
 
 ### `ssh-jumphost` day-2 operations
 
@@ -12893,7 +13425,7 @@ The command boundary is intentional:
 
 `object-storage` is modeled as one bucket per enabled component instance. That keeps `config.yaml`, the field wizard, and the Terraform module contract aligned on scalar inputs like `inputs.name`, `inputs.versioning_policy`, and `inputs.protect_from_destroy` while still allowing multiple buckets in one project through distinct `instance_id` values.
 
-Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh-jumphost.allowed_cidrs`, `wireguard-gw.clients`, or MK8s override objects, should keep those Terraform-native shapes. For SSH jump hosts, `inputs.allowed_cidrs` is the first-boot source CIDR seed; day-2 add/remove/list operations use `nebius-cxcli ssh-jumphost` and VM-local runtime state rather than editing cloud-init. For WireGuard, top-level `inputs.local_subnets` is the default private destination CIDR list for future generated clients, and `inputs.clients` is only an optional first-boot seed list hidden from the normal wizard. Day-2 clients are created by `nebius-cxcli wireguard --gen-client-conf <config.yaml>` and tracked on the VPN gateway VM; day-2 default subnet additions/removals are also gateway-local runtime state. Seed entries use `client_wg_tunnel_address` for an explicit tunnel `/32` and `local_subnets` for client-routed private destination CIDRs; omitting `client_wg_tunnel_address` lets the gateway-local generator allocate the next free address. For MysteryBox, `inputs.secrets` is a list of secret objects where `name` is the stable identity, each secret carries a non-empty `payload` mapping with named `text` or `file` payload entries, and `version_id` records the current primary MysteryBox version ID. Before first deploy `version_id` is empty or `n/a`; after Terraform creates the initial primary version, cxcli updates it from the module output. Later rotations happen in Nebius MysteryBox, and operators update `version_id` to the new primary version ID when they want Terraform metadata and manual ESO pinning to follow that version. The optional `kubernetes_secret_name` and `eso_version_policy` fields are cxcli-only sync metadata: render strips them before passing `secrets` to Terraform and uses them only for generated ESO target Secret naming and version selection. The CLI prompts this one product-specific object through a guided Secret/policy/key loop while still writing the Terraform-native list/map shape; simple `list(string)` prompts use comma-separated input, and other complex module inputs use the generic single-line YAML/JSON prompt. The corresponding `payload_values` remain outside config and generated files; cxcli renders only the root variable pass-through and expects first-deploy runtime `TF_VAR_*` injection keyed by secret name and payload key.
+Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh-jumphost.allowed_cidrs`, `wireguard-gw.clients`, or MK8s override objects, should keep those Terraform-native shapes. For SSH jump hosts, `inputs.allowed_cidrs` is the first-boot source CIDR seed; day-2 add/remove/list operations use `nebius-cxcli ssh-jumphost` and VM-local runtime state rather than editing cloud-init. For WireGuard, top-level `inputs.local_subnets` is the default private destination CIDR list for future generated clients, and `inputs.clients` is only an optional first-boot seed list hidden from the normal wizard. Day-2 clients are created by `nebius-cxcli wireguard --gen-client-conf <config.yaml>` and tracked on the VPN gateway VM; day-2 default subnet additions/removals are also gateway-local runtime state. Seed entries use `client_wg_tunnel_address` for an explicit tunnel `/32` and `local_subnets` for client-routed private destination CIDRs; omitting `client_wg_tunnel_address` lets the gateway-local generator allocate the next free address. For metadata-only WireGuard dependencies, `create_initial_versions=false` forbids payload/version inputs. For ordinary MysteryBox, `inputs.secrets` is a list of secret objects where `name` is the stable identity, application secrets carry a non-empty `payload` mapping with named `text` or `file` payload entries, and `version_id` records the current primary MysteryBox version ID. Before first deploy `version_id` is empty or `n/a`; after Terraform creates the initial primary version, cxcli updates it from the module output. Later rotations happen in Nebius MysteryBox, and operators update `version_id` to the new primary version ID when they want Terraform metadata and manual ESO pinning to follow that version. The optional `kubernetes_secret_name` and `eso_version_policy` fields are cxcli-only sync metadata: render strips them before passing `secrets` to Terraform and uses them only for generated ESO target Secret naming and version selection. The CLI prompts this one product-specific object through a guided Secret/policy/key loop while still writing the Terraform-native list/map shape; simple `list(string)` prompts use comma-separated input, and other complex module inputs use the generic single-line YAML/JSON prompt. The corresponding `payload_values` remain outside config and generated files; cxcli renders only the root variable pass-through and expects first-deploy runtime `TF_VAR_*` injection keyed by secret name and payload key.
 
 ### `bootstrap-ci <config.yaml>`
 

@@ -53,6 +53,8 @@ def validate_backend_bucket(settings: TerraformBackendSettings, bucket: Bucket) 
         if not rule.paths:
             raise RuntimeError("Backend bucket has an indeterminate anonymous policy")
         for pattern in rule.paths:
+            if _overlaps(pattern, "cxcli/wireguard/", prefix=True):
+                raise RuntimeError("Anonymous bucket policy exposes WireGuard lifecycle records")
             if any(_overlaps(pattern, key) for key in keys):
                 raise RuntimeError(
                     "Anonymous bucket policy exposes Terraform/deployment backend objects"
