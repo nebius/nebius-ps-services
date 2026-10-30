@@ -1,6 +1,7 @@
 # Static route selection and standby convergence
 
-Status: partial implementation, not ready for deployment as a complete fix.
+Status: selection and standby-admission correction integrated on
+`codex/fix-vpngw-heartbeat-api-coupling`. Controlled live retest pending.
 
 Branch: `codex/fix-vpngw-static-route-selection`, based on `5b73a95b`.
 
@@ -38,3 +39,23 @@ route-movement cases fail on the original code and pass with the partial fix.
 The no-replacement-path case reaches the forwarding fence. A strict expected
 failure records the remaining standby status/admission defect and reproduces
 `standby-ready-evidence-invalid` when run with `--runxfail`.
+
+
+## Standby admission correction on the heartbeat branch
+
+The October 30 live transfer campaign reproduced the expected failure below.
+The controller can safely defer a stale static route to candidate preparation
+when installed SA and policy evidence proves a usable path for every required
+prefix. Its status now reports this condition explicitly as `repairable`.
+Fresh standby evidence includes a boolean `static_route_repair_ready`, which
+must be true for that condition. Display and planned-transfer validators accept
+the same state while retaining passive mode, exact non-owner attachment,
+current guard, fresh evidence, healthy BGP and services, and no-pending-operation
+requirements.
+
+This does not mark a standby as forwarding-ready or mutate routes in the sampler.
+The existing transfer chain still stops the former owner, verifies allocation
+ownership, repairs the selected local route while fenced, reconciles cloud
+routes, and enables forwarding last. Cold-static tunnel behavior is unchanged.
+The former strict expected failure is now a passing regression that also proves
+route selection during fenced preparation and rejects missing repair evidence.

@@ -6290,9 +6290,11 @@ def test_vm_ha_status_validation_uses_runtime_generation_when_psk_is_unresolved(
         ("blocked", "starting"),
     ),
 )
+@pytest.mark.parametrize("tunnel_state", ("warm", "repairable"))
 def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
     state: str,
     rearm_phase: str,
+    tunnel_state: str,
 ) -> None:
     digests = SimpleNamespace(
         configuration="a" * 64,
@@ -6337,7 +6339,7 @@ def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
         "observed_owner_node_id": "node-b" if is_owner else "node-a",
         "promotion_ready": is_owner,
         "standby_ready": not is_owner,
-        "standby_tunnel_state": "not-standby" if is_owner else "warm",
+        "standby_tunnel_state": "not-standby" if is_owner else tunnel_state,
         "standby_readiness_reasons": [],
         "pending_operation_id": None,
         "rearm_phase": rearm_phase,
@@ -6442,7 +6444,10 @@ def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
         )
 
 
-def test_vm_ha_planned_status_requires_exact_runtime_and_standby_evidence() -> None:
+@pytest.mark.parametrize("tunnel_state", (None, "cold", "warm", "repairable"))
+def test_vm_ha_planned_status_requires_exact_runtime_and_standby_evidence(
+    tunnel_state: str | None,
+) -> None:
     digests = SimpleNamespace(
         configuration="a" * 64,
         static_routes="b" * 64,
@@ -6487,6 +6492,9 @@ def test_vm_ha_planned_status_requires_exact_runtime_and_standby_evidence() -> N
         "standby_ready": True,
         "state": "normal",
     }
+
+    if tunnel_state is not None:
+        payload["standby_tunnel_state"] = tunnel_state
 
     assert (
         _validate_vm_ha_planned_status(

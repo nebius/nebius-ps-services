@@ -79,3 +79,12 @@ Linux packet experiment was not run. Further tests should exercise the real
 reload path, delayed SA establishment, rekey overlap, both tunnels being up,
 neighbor failover while the local member is standby, and packet recovery across
 two independently failing-over HA pairs. The warm-standby defect remains open.
+
+
+## October 30 integration follow-up
+
+On `codex/fix-vpngw-heartbeat-api-coupling`, the standby-admission regression is
+now a normal passing test. It verifies explicit repairable standby evidence,
+rejects a false repair permission, and exercises the existing fenced candidate
+preparation to move the stale route without enabling forwarding. The expected
+failure descriptions above record the earlier extracted branch behavior.

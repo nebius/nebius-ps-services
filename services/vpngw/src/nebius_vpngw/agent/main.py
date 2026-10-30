@@ -1875,7 +1875,19 @@ class VMHAControllerRuntime:
         warm_standby = bool(
             snapshot.data_plane_mode is DataPlaneMode.PASSIVE and snapshot.readiness.promotion_ready
         )
-        standby_tunnel_state = "cold" if cold_standby else "warm" if warm_standby else "not-standby"
+        repairable_standby = bool(
+            snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+            and snapshot.readiness.static_route_repair_ready
+            and snapshot.readiness.transfer_ready
+        )
+        if cold_standby:
+            standby_tunnel_state = "cold"
+        elif warm_standby:
+            standby_tunnel_state = "warm"
+        elif repairable_standby:
+            standby_tunnel_state = "repairable"
+        else:
+            standby_tunnel_state = "not-standby"
         standby_reasons: list[str] = []
         standby_checks = (
             (snapshot.guard_boot_id == snapshot.boot_id, "cold-start-guard-stale"),
@@ -1916,6 +1928,7 @@ class VMHAControllerRuntime:
                     "route_runtime_id": snapshot.route_runtime_id,
                     "service_healthy": True,
                     "static_ready": snapshot.readiness.static_ready,
+                    "static_route_repair_ready": snapshot.readiness.static_route_repair_ready,
                     "bgp_ready": snapshot.readiness.bgp_ready,
                     "xfrm_ready": snapshot.readiness.xfrm_ready,
                     "apply_locked": False,
@@ -3026,6 +3039,12 @@ def _standby_ready_evidence_matches(
         and evidence.get("bgp_ready") is True
         and evidence.get("xfrm_ready") is False
     )
+    repairable_readiness = bool(
+        tunnel_state == "repairable"
+        and evidence.get("static_route_repair_ready") is True
+        and evidence.get("bgp_ready") is True
+        and (evidence.get("static_ready") is False or evidence.get("xfrm_ready") is False)
+    )
     return bool(
         isinstance(evidence, dict)
         and set(evidence)
@@ -3048,6 +3067,7 @@ def _standby_ready_evidence_matches(
             "schema",
             "service_healthy",
             "static_ready",
+            "static_route_repair_ready",
             "xfrm_ready",
         }
         and evidence.get("schema") == "nebius-vpngw/vm-ha-standby-ready-v1"
@@ -3063,7 +3083,8 @@ def _standby_ready_evidence_matches(
         and evidence.get("digests") == status.get("digests")
         and evidence.get("route_runtime_id") == status.get("route_runtime_id")
         and evidence.get("service_healthy") is True
-        and (warm_readiness or cold_readiness)
+        and isinstance(evidence.get("static_route_repair_ready"), bool)
+        and (warm_readiness or cold_readiness or repairable_readiness)
         and evidence.get("apply_locked") is False
         and evidence.get("pending_operation_id") is None
         and isinstance(evidence.get("ready_at"), (int, float))

@@ -3899,7 +3899,7 @@ def _validate_vm_ha_display_status(
         and isinstance(validated["promotion_ready"], bool)
         and isinstance(validated["standby_ready"], bool)
         and isinstance(validated["standby_tunnel_state"], str)
-        and validated["standby_tunnel_state"] in {"cold", "warm", "not-standby"}
+        and validated["standby_tunnel_state"] in {"cold", "warm", "repairable", "not-standby"}
         and (pending is None or isinstance(pending, str) and bool(pending))
         and (apply_operation is None or isinstance(apply_operation, str) and bool(apply_operation))
         and isinstance(validated["rearm_phase"], str)
@@ -4073,7 +4073,7 @@ def _validate_vm_ha_display_status(
         data_plane == "passive"
         and owner is not None
         and owner != local_node
-        and validated["standby_tunnel_state"] in {"cold", "warm"}
+        and validated["standby_tunnel_state"] in {"cold", "warm", "repairable"}
         and standby_reasons == []
     ):
         raise _VMHAAgentStatusPermanent(
@@ -4143,7 +4143,7 @@ def _validate_vm_ha_planned_status(
         and all(
             isinstance(reason, str) and re.fullmatch(r"[a-z0-9-]+", reason) for reason in reasons
         )
-        and standby_tunnel_state in {"cold", "warm", "not-standby"}
+        and standby_tunnel_state in {"cold", "warm", "repairable", "not-standby"}
         and isinstance(standby_reasons, list)
         and all(isinstance(reason, str) and reason for reason in standby_reasons)
         and (pending is None or isinstance(pending, str) and bool(pending))
@@ -4151,7 +4151,7 @@ def _validate_vm_ha_planned_status(
         raise _VMHAAgentStatusPermanent("VM-HA planned status has invalid runtime evidence")
     if validated["standby_ready"] is True and not (
         validated["data_plane_mode"] == "passive"
-        and standby_tunnel_state in {"cold", "warm"}
+        and standby_tunnel_state in {"cold", "warm", "repairable"}
         and standby_reasons == []
         and isinstance(guard_boot_id, str)
         and guard_boot_id

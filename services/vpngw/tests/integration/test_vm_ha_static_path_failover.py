@@ -169,10 +169,6 @@ def test_owner_without_a_replacement_path_reaches_forwarding_fence(tmp_path):
     assert kernel.forwarding == "0"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Repairable mixed standby is transfer-ready but its status evidence is rejected",
-)
 def test_reload_then_backup_sa_can_pass_standby_admission(tmp_path):
     kernel = Kernel()
     installed_route(kernel, "xfrm1")
@@ -224,3 +220,23 @@ def test_reload_then_backup_sa_can_pass_standby_admission(tmp_path):
         state_dir=tmp_path, clock=lambda: 10.0, boot_id=lambda: "boot-a"
     )
     assert status["standby_ready"] is True, status["standby_readiness_reasons"]
+    assert status["standby_tunnel_state"] == "repairable"
+    assert kernel.routes[PREFIX] == "xfrm1"
+    assert kernel.forwarding == "0"
+
+    evidence_path = tmp_path / "standby-ready.json"
+    evidence = json.loads(evidence_path.read_text())
+    assert evidence["static_route_repair_ready"] is True
+    evidence["static_route_repair_ready"] = False
+    evidence_path.write_text(json.dumps(evidence))
+    invalid = agent_main.vm_ha_status(
+        state_dir=tmp_path, clock=lambda: 10.0, boot_id=lambda: "boot-a"
+    )
+    assert invalid["standby_ready"] is False
+    assert "standby-ready-evidence-invalid" in invalid["standby_readiness_reasons"]
+
+    # The existing fenced preparation selects the usable backup before forwarding.
+    data_plane.prepare_candidate(action(ActionKind.PREPARE_CANDIDATE_DATAPLANE))
+    assert kernel.routes[PREFIX] == "xfrm2"
+    assert readiness(data_plane).promotion_ready
+    assert kernel.forwarding == "0"
