@@ -86,7 +86,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=8 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=9 -->
 ### FEAT-002: Shared protected merge automation
 
 #### Requirements Covered
@@ -115,7 +115,7 @@ Image tag builds exclusively own X.Y.Z and X.Y.Z-gSHA; manual builds own sha-SHA
 
 Reviewer routing uses trusted base policy to add configured nonauthor reviewers to same-repository nondraft PRs, preserving manually requested users and teams. No PR checkout or removal effect. Validate local source, template parity and installed payloads separately from GitHub deployment or live publication; this change does not authorize those effects.
 
-The approved github-report retirement keeps `github-report-ci.yml` temporarily under its existing workflow name as a read-only validator. It checks that the project and release workflow are absent and that the candidate policy no longer requires its CI producer. This lets the previous trusted policy validate the retirement commit. After that policy reaches the default branch, a follow-up removes the validator and its focused transition test. The final state contains no github-report project, CI or release workflow; no protection is bypassed. The validator and focused executable regression are implemented. Local proof passes for the retired state and rejects a restored project, restored release workflow or retained policy entry. Live exact-head Required CI and subsequent validator removal remain pending.
+`github-report`, its CI workflow and its release workflow are retired. The CI policy on the default branch excludes that producer. The temporary read-only retirement validator preserved the old Required CI contract until the updated policy reached the default branch; remove it and its transition-only test after that point. The final state contains no retired project or workflow, while branch protection and the maintained CI inventory remain intact.
 
 #### Selected Option
 
@@ -159,6 +159,8 @@ Code, instructions, templates and tests agree; independent review passes. Report
 
 #### Implementation Evidence
 
+Removed the temporary `github-report-ci.yml` validator and its transition-only test after PR #239 deployed the updated required-CI policy to `main`. The retired project and release workflow remain absent.
+
 Current inventory alignment: the CI policy, both workflow listeners and release-test inventory cover the maintained project set. The specifications use that inventory instead of fixed workflow counts.
 
 Implemented workflow rationalization locally: one hourly recovery, targeted PR CI start/completion aggregation, run-scoped completion discovery, early routing receipts and target-isolated blocked diagnostics. Preserved exact-result evidence and effect journals. Retained the then-current workflow boundaries and CI identities, added inventory/filter/listener contracts and add-only reviewer routing. Shared publication helpers enforce original asset hashes, tag-object identity, digest equality and fail-closed retries. Image release/manual aliases are disjoint under one destination queue; manual builds freeze the helper from the workflow revision. An explicit main-only latest request reuses a verified existing manual digest under the same lock, then rechecks every tag; it never rebuilds immutable aliases. Helm retains package/anonymous-pull/digest qualification with structured duplicate-repository observation. Release/image YAML templates have one source owner. Updated docs and installed the five affected skills from source.
@@ -168,6 +170,8 @@ Implemented candidate diagnostic visibility in the deployed completion workflow 
 Implemented universal positive COMMENT review admission and explicit trusted operator dispatch. Deleted dependency metadata admission, its producer/template, policy key and obsolete check exclusion. Removed rollout controls with no replacement or compatibility path. Completion selection and CI checkout require operator-dispatched positive-review intents; immutable receipts, repeated CI/review gates, exact-result checkout, journals and publication ownership remain. Dependabot configuration is unchanged. Updated instructions, reusable assets, evaluations, READMEs and Unreleased changelogs; installed the four changed skill payloads from their verified source owners.
 
 #### Verification Evidence
+
+The policy prerequisite was verified on `main` after [PR #239](https://github.com/nebius/nebius-ps-services/pull/239) merged, with successful exact-result CI and Pages. Five remaining workflow contract tests, scoped lint and canonical spec validation pass locally after validator removal. These local checks do not establish publication of the cleanup.
 
 Current inventory alignment verification: all five workflow contract tests, scoped actionlint, Markdown lint, paired-spec validation and whitespace checks pass. Independent read-only review found no blocking correctness or security issues. These checks establish local source consistency only; deployed GitHub settings and live workflow runs were not exercised.
 

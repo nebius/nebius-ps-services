@@ -19,13 +19,13 @@ GitHub Actions broker uses GITHUB_TOKEN for protected approval and merge.
 Dependabot waits until a local operation is started. Agents run locally;
 Agentic SDLC retains its separate authorization and workflow.
 
-## Retiring the github-report workflow
+## Retired github-report workflows
 
-`github-report` and its release workflow are retired. The existing
-`github-report-ci.yml` name temporarily runs a read-only retirement check so
-the policy on `main` can validate this transition. Once the policy change is
-merged, delete that workflow and `test_github_report_retirement_transition`
-in a follow-up PR. This transition does not change branch protection.
+`github-report` and its CI and release workflows are retired. The temporary
+retirement validator and its transition test were removed after the updated
+CI policy reached `main` in [PR #239](https://github.com/nebius/nebius-ps-services/pull/239).
+Required CI continues to enforce the maintained workflow inventory without
+changing branch protection.
 
 ## Actions event policies
 
