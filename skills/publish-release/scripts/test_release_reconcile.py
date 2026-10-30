@@ -23,12 +23,18 @@ class ReconcileTests(unittest.TestCase):
             "head": {
                 "ref": "feature/demo",
                 "sha": NEW,
-                "repo": {"full_name": SCOPE["repo"]},
+                "repo": {"full_name": SCOPE["repo"], "id": 1},
             },
-            "base": {"ref": "main", "sha": BASE, "repo": {"full_name": SCOPE["repo"]}},
+            "base": {"ref": "main", "sha": BASE, "repo": {"full_name": SCOPE["repo"], "id": 1}},
         }
         self.evidence = {
-            "schema": "skills-review/v1",
+            "schema": "skills-review/v2",
+            "base_repository_id": 1,
+            "head_repository_id": 1,
+            "head_repository": SCOPE["repo"],
+            "head_ref": "feature/demo",
+            "contribution": {"verdict": "passed", "compatibility": "preserved", "evidence": ["Accepted behavior preserved"]},
+            "specs": [{"project": ".", "outcome": "unchanged", "evidence": "Contract unchanged"}],
             "repository": SCOPE["repo"],
             "pr": 12,
             "head": NEW,

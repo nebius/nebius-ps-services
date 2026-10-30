@@ -75,7 +75,6 @@ class WorkflowContracts(unittest.TestCase):
         for name in [
             "vpngw-release.yml",
             "nebius-cxcli-release.yml",
-            "github-report-release.yml",
         ]:
             with self.subTest(workflow=name):
                 value = workflow(name)

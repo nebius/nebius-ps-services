@@ -763,12 +763,18 @@ class CommandFlowTests(unittest.TestCase):
             "head": {
                 "ref": "feature/demo",
                 "sha": commit,
-                "repo": {"full_name": SCOPE["repo"]},
+                "repo": {"full_name": SCOPE["repo"], "id": 1},
             },
-            "base": {"ref": "main", "sha": base, "repo": {"full_name": SCOPE["repo"]}},
+            "base": {"ref": "main", "sha": base, "repo": {"full_name": SCOPE["repo"], "id": 1}},
         }
         evidence = {
-            "schema": "skills-review/v1",
+            "schema": "skills-review/v2",
+            "base_repository_id": 1,
+            "head_repository_id": 1,
+            "head_repository": SCOPE["repo"],
+            "head_ref": "feature/demo",
+            "contribution": {"verdict": "passed", "compatibility": "preserved", "evidence": ["Accepted behavior preserved"]},
+            "specs": [{"project": ".", "outcome": "unchanged", "evidence": "Contract unchanged"}],
             "repository": SCOPE["repo"],
             "pr": 12,
             "head": commit,

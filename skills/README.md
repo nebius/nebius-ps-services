@@ -1,5 +1,13 @@
 # Skills
 
+Ordinary PR review now assesses accepted behavior, safety and existing-user
+compatibility before safe repairs and root-owned canonical spec reconciliation.
+[The review contract](review-pr/references/contribution-assessment.md) covers
+missing specs and justified no-change outcomes. Fork updates retain the original
+PR through [bound publication](create-pr/references/pr-publication.md). The
+[protected protocol](merge-pr/references/actions-protocol.md) documents the
+coordinated schema cutover; source changes do not activate installed workflows.
+
 This folder contains public, reusable Agent Skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
@@ -50,7 +58,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 72 flat skill folders with shared execution instructions,
+The catalog contains 73 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -110,6 +118,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
+| `review-github-issues` | Explicit only | Triage selected GitHub issues, apply justified decisions, and save accepted plans only to project files; never implement work. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -252,6 +261,8 @@ $worktree Create an isolated worktree from my current clean feature branch for t
 $worktree integrate project-fix-trigger-validation-a7c2f9 from the primary checkout; safely commit eligible ordinary child and source dirt before validating the combined result.
 
 $worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
+
+$review-github-issues 123 --repo example-org/example-repo
 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
@@ -1391,6 +1402,18 @@ before reporting the release URL. See its [README](publish-release/README.md).
 dependency workflow for new projects, generated and reviewed `uv.lock`,
 profile-selected dependencies, `src/` layout, Ruff, pytest, and locked CI. It
 preserves an existing package manager unless migration is explicitly requested.
+
+### `review-github-issues`
+
+`review-github-issues` assesses selected GitHub issues against their owning
+project's supported scope, evidence and priorities. It asks for an unknown
+repository and for issue numbers/links when multiple issues remain unselected.
+Explicit invocation applies justified comments and closures; valid low-priority
+issues stay open. Accepted work uses `research` and `design`, saves and verifies
+`<project>/docs/github-issues/<number>-<title-slug>.md`, then posts acceptance.
+Plans never appear in chat or issue comments. The maintainer owns implementation,
+commits, pushes, PRs and merges. Existing plan edits and unrelated work remain
+protected. See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
 

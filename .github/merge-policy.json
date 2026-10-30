@@ -32,14 +32,6 @@
       ]
     },
     {
-      "file": "github-report-ci.yml",
-      "paths": [
-        "misc/github-report/**",
-        ".github/workflows/github-report-ci.yml",
-        ".github/workflows/github-report-release.yml"
-      ]
-    },
-    {
       "file": "skills-project-specs-ci.yml",
       "paths": [
         "skills/**",

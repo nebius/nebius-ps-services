@@ -7,6 +7,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -124,6 +125,13 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
 _load_skill_support("runtime", __file__, "commit/scripts/commit_transaction.py")
 
 from agent_runtime import agent_home  # noqa: E402
+
+_pr_spec = importlib.util.spec_from_file_location(
+    "commit_pr_publication", Path(__file__).with_name("pr_publication.py")
+)
+assert _pr_spec is not None and _pr_spec.loader is not None
+_pr = importlib.util.module_from_spec(_pr_spec)
+_pr_spec.loader.exec_module(_pr)
 
 
 AUTH_SCHEMA = "commit-transaction.authorization.v1"
@@ -1259,8 +1267,8 @@ def _pr_origin_digest(root: Path) -> str:
 
 ROOT_AUTH_SCHEMA = "commit-transaction.root-authorization.v2"
 ROOT_CLAIM_SCHEMA = "commit-transaction.root-claim.v2"
-TASK_SCHEMA = "commit-transaction.task.v2"
-TASK_STATE_SCHEMA = "commit-transaction.task-state.v2"
+TASK_SCHEMA = "commit-transaction.task.v3"
+TASK_STATE_SCHEMA = "commit-transaction.task-state.v3"
 ROOT_OWNERS = {"direct", "create-pr"}
 
 
@@ -1316,6 +1324,7 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
                 "sync",
                 "materialized",
                 "merged_result",
+                "publication",
             }
             or not isinstance(value["head"], str)
             or not OBJECT_RE.fullmatch(value["head"])
@@ -1338,6 +1347,26 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
             raise TransactionError(
                 "task target checkpoint is invalid", "effect_unknown"
             )
+        publication = value["publication"]
+        if (not isinstance(publication, dict)
+                or set(publication) != {"remote_head", "published_head", "pending", "last_rejected", "advanced_head"}
+                or any(publication[k] is not None and not _valid_object(publication[k])
+                       for k in ("remote_head", "published_head", "advanced_head"))):
+            raise TransactionError("invalid publication checkpoint", "effect_unknown")
+        rejected = publication["last_rejected"]
+        if rejected is not None and (
+            not isinstance(rejected, dict) or set(rejected) != {"from_head", "to_head"}
+            or (rejected["from_head"] is not None and not _valid_object(rejected["from_head"]))
+            or not _valid_object(rejected["to_head"])
+        ):
+            raise TransactionError("invalid rejected publication", "effect_unknown")
+        push = publication["pending"]
+        if push is not None and (
+            not isinstance(push, dict) or set(push) != {"from_head", "to_head"}
+            or push["from_head"] != publication["remote_head"]
+            or not _valid_object(push["to_head"]) or push["to_head"] != value["head"]
+        ):
+            raise TransactionError("invalid pending publication", "effect_unknown")
         pending = value["sync"]
         if pending is not None and (
             set(pending)
@@ -1493,6 +1522,7 @@ def _validate_task(
         "validation_ref",
         "recovery_claim_sha256",
         "completion",
+        "pr_targets",
     }
     if (
         set(grant) != keys
@@ -1520,6 +1550,14 @@ def _validate_task(
         ):
             raise TransactionError("task target is invalid", "scope_changed")
     _validate_grant_scope(grant, root)
+    if (not isinstance(grant["pr_targets"], dict)
+            or not set(grant["pr_targets"]) <= set(grant["targets"])
+            or (grant["pr_targets"] and grant["requested_action"] != "create-pr")):
+        raise TransactionError("invalid PR bindings", "scope_changed")
+    for binding in grant["pr_targets"].values():
+        _pr.validate_binding(binding, root, _run_git)
+        if "refs/remotes/origin/" + binding["base_ref"] != grant["base_ref"]:
+            raise TransactionError("PR base binding changed", "scope_changed")
     _validate_completion_scope(grant, root)
     if _task_closed_path(path).exists() or _task_closed_path(path).is_symlink():
         closed = _task_closed_path(path)
@@ -1527,7 +1565,7 @@ def _validate_task(
             raise TransactionError("task closure is unsafe", "scope_changed")
         closure = _load_json(closed, "task closure")
         if (
-            closure.get("schema") != "commit-transaction.task-closure.v2"
+            closure.get("schema") != "commit-transaction.task-closure.v3"
             or closure.get("grant_sha256") != evidence["owner_evidence_sha256"]
             or closure.get("status") not in {"completed", "cancelled", "superseded"}
             or set(closure)
@@ -1687,7 +1725,7 @@ def _retire_recovery_predecessor(root: Path, grant: dict[str, Any]) -> None:
         raise TransactionError("recovery predecessor changed", "effect_unknown")
     closed = _task_closed_path(Path(claim["owner_evidence_path"]))
     result = {
-        "schema": "commit-transaction.task-closure.v2",
+        "schema": "commit-transaction.task-closure.v3",
         "status": "superseded",
         "grant_sha256": claim["owner_evidence_sha256"],
         "successor_sha256": _digest_bytes(_stable_json(grant)),
@@ -1717,9 +1755,17 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
     identity = _identity(root)
     with _repository_lock(Path(identity["common_dir"])):
         identity = _identity(root)
+        selectors = _load_json(Path(arguments.pr_bindings), "PR bindings") if getattr(arguments, "pr_bindings", None) else {}
+        if not isinstance(selectors, dict):
+            raise TransactionError("PR bindings must map local refs to selectors", "scope_changed")
         path = _task_path(root, arguments.session_id, arguments.intent_sha256)
         if path.exists() or path.is_symlink():
             path, grant, _ = _task_from_arguments(arguments, root)
+            if selectors and selectors != {
+                ref: {k: item[k] for k in ("repository", "number")}
+                for ref, item in grant["pr_targets"].items()
+            }:
+                raise TransactionError("PR selection cannot change", "scope_changed")
             selected = set(
                 arguments.target
                 or [ref.removeprefix("refs/heads/") for ref in grant["targets"]]
@@ -1819,6 +1865,7 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
         if action == "create-pr" and base_ref is None:
             raise TransactionError("PR task requires a base", "scope_changed")
         targets = {}
+        pr_targets = {}
         for branch in arguments.target or [identity["branch"]]:
             ref = f"refs/heads/{branch}"
             if (
@@ -1845,7 +1892,22 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                 ("rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"),
                 check=False,
             )
-            if local.returncode == 0:
+            if ref in selectors:
+                if action != "create-pr":
+                    raise TransactionError("PR selection requires create-pr ownership", "scope_changed")
+                binding, head = _pr.intake(root, _run_git, selectors[ref], arguments.pr_base)
+                fork = binding["head_repository_id"] != binding["base_repository_id"]
+                if fork and (not re.fullmatch(
+                        rf"refs/heads/pr/{binding['base_repository_id']}/{binding['number']}/[A-Za-z0-9_-]{{8,64}}", ref
+                ) or local.returncode == 0):
+                    raise TransactionError("fork requires an unused namespaced PR ref", "scope_changed")
+                if not fork and branch != binding["head_ref"]:
+                    raise TransactionError("same-repository target must match PR head ref", "scope_changed")
+                if local.returncode == 0 and local.stdout.decode().strip() != head:
+                    raise TransactionError("local checkout differs from selected PR", "history_changed")
+                pr_targets[ref] = binding
+                targets[ref] = {"head": head, "kind": "local" if local.returncode == 0 else "remote"}
+            elif local.returncode == 0:
                 targets[ref] = {"head": local.stdout.decode().strip(), "kind": "local"}
             elif remote.returncode == 0:
                 targets[ref] = {
@@ -1858,6 +1920,8 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                 targets[ref] = {"head": identity["head"], "kind": "new"}
             else:
                 raise TransactionError("unknown target branch", "scope_changed")
+        if set(selectors) != set(pr_targets):
+            raise TransactionError("PR selectors must match selected targets", "scope_changed")
         recovery = _root_recovery_candidate(root, action, targets)
         dependencies = {ref: [] for ref in targets}
         for edge in arguments.dependency or []:
@@ -1913,6 +1977,7 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
             "initial_ref": identity["ref"],
             "initial_head": identity["head"],
             "targets": targets,
+            "pr_targets": pr_targets,
             "dependencies": dependencies,
             "base_ref": base_ref,
             "base_head": _git_text(root, "rev-parse", f"{base_ref}^{{commit}}")
@@ -1971,6 +2036,13 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                         "sync": None,
                         "materialized": item["kind"] == "local",
                         "merged_result": None,
+                        "publication": {
+                            "remote_head": item["head"] if ref in pr_targets else _local_head(root, ref.replace("refs/heads/", "refs/remotes/origin/", 1)),
+                            "published_head": None,
+                            "last_rejected": None,
+                            "advanced_head": None,
+                            "pending": None,
+                        },
                     }
                     for ref, item in targets.items()
                 },
@@ -2225,7 +2297,9 @@ def _validate_completion(value, grant):
             raise TransactionError("completion effect is invalid", "effect_unknown")
 
 
-def _publication_open(state, ref):
+def _publication_open(state, ref, *, reconcile_push=False):
+    if state["targets"][ref]["publication"]["advanced_head"] is not None:
+        raise TransactionError("contributor advanced published head; cancel and use fresh intake", "history_changed")
     if (
         state["completion"]["phase"] in {"finalizing", "done"}
         or state["completion"]["pending"]
@@ -2235,6 +2309,88 @@ def _publication_open(state, ref):
         )
     if state["targets"][ref]["merged_result"] is not None:
         raise TransactionError("merged target is observation-only", "task_consumed")
+    if state["targets"][ref]["publication"]["pending"] and not reconcile_push:
+        raise TransactionError("reconcile pending publication before more changes", "effect_unknown")
+
+
+def publish_target(arguments):
+    """Publish one reviewed checkpoint under its original task and repository lock."""
+    root = _canonical_repo(arguments.repo_root)
+    with _repository_lock(_common_dir(root)):
+        path, grant, _ = _task_from_arguments(arguments, root)
+        state = _task_state(path, grant)
+        ref = "refs/heads/" + arguments.branch
+        if grant["requested_action"] != "create-pr" or ref not in state["targets"]:
+            raise TransactionError("publication target is outside PR scope", "scope_changed")
+        _publication_open(state, ref, reconcile_push=True)
+        _checkout_identity(root, grant)
+        target = state["targets"][ref]
+        if (not target["materialized"] or _identity(root)["ref"] != ref
+                or _local_head(root, ref) != target["head"] or _status(root)
+                or target["sync"] or _unresolved_claim(root, path, ref)
+                or arguments.reviewed_head != target["head"]
+                or arguments.reviewed_base != state["base_head"]):
+            raise TransactionError("publication needs a clean reviewed checkpoint", "history_changed")
+        binding = grant["pr_targets"].get(ref)
+        destination = binding["push"] if binding else _pr.origin_destination(root, _run_git)
+        remote_ref = "refs/heads/" + binding["head_ref"] if binding else ref
+        publication = target["publication"]
+        expected = publication["remote_head"]
+        observed = _pr.remote_head(root, _run_git, destination, remote_ref)
+        pr_head = _pr.snapshot(binding, root, _run_git) if binding else observed
+        pending = publication["pending"]
+
+        def settled():
+            publication.update(remote_head=target["head"], published_head=target["head"], pending=None)
+            _atomic_json(_task_state_path(path), state)
+            return {"status": "published", "branch": ref, "remote_ref": remote_ref,
+                    "head": target["head"], "reconciled": pending is not None}
+
+        if observed == target["head"] and pr_head == observed:
+            if pending is not None or publication["published_head"] == observed or expected == observed:
+                return settled()
+            raise TransactionError("unrecorded remote publication", "history_changed")
+        if pending and observed and observed == pr_head and observed != expected:
+            # Fetch only the observed object; never move a local branch. If the
+            # intended commit is now an ancestor, publication happened and the
+            # contributor subsequently advanced it. Record that fact, but do not
+            # adopt unreviewed history into this task.
+            fetched = _run_git(root, ("fetch", "--no-tags", "--no-write-fetch-head",
+                                     binding["fetch"] if binding else "origin", observed), check=False)
+            if not fetched.returncode and not _run_git(
+                root, ("merge-base", "--is-ancestor", target["head"], observed), check=False
+            ).returncode:
+                publication["advanced_head"] = observed
+                settled()
+                raise TransactionError("publication confirmed but contributor head advanced; close and review fresh intake", "history_changed")
+        if observed != expected or pr_head != observed:
+            raise TransactionError("remote or PR head changed; refresh review", "history_changed")
+        if expected is not None and _run_git(root, ("merge-base", "--is-ancestor", expected, target["head"]), check=False).returncode:
+            raise TransactionError("publication must preserve contributor history", "history_changed")
+        base_ref = grant["base_ref"].replace("refs/remotes/origin/", "refs/heads/", 1)
+        if (_pr.remote_head(root, _run_git, "origin", base_ref) != state["base_head"]
+                or _run_git(root, ("merge-base", "--is-ancestor", state["base_head"], target["head"]), check=False).returncode):
+            raise TransactionError("reviewed base changed or is not integrated", "history_changed")
+        if binding:
+            _pr.snapshot(binding, root, _run_git, writable=True, expected_base=state["base_head"])
+        # An earlier process cannot retain our repository lock here. Exact old
+        # branch/PR readback permits one retry of a proven unapplied Git update.
+        publication["pending"] = {"from_head": expected, "to_head": target["head"]}
+        _atomic_json(_task_state_path(path), state)
+        try:
+            _pr.push(root, _run_git, destination, remote_ref, expected, target["head"])
+        except _pr.PushRejected:
+            publication["last_rejected"] = publication["pending"]
+            publication["pending"] = None
+            _atomic_json(_task_state_path(path), state)
+            raise TransactionError("push rejected before submission; close and review fresh intake", "history_changed")
+        except (TransactionError, OSError, _pr.PublicationError):
+            pass  # Preserve the journal; authoritative readback decides success.
+        observed = _pr.remote_head(root, _run_git, destination, remote_ref)
+        pr_head = _pr.snapshot(binding, root, _run_git) if binding else observed
+        if observed == target["head"] and pr_head == observed:
+            return settled()
+        raise TransactionError("publication unconfirmed; retain grant and reconcile publish-target", "effect_unknown")
 
 
 def _checkout_identity(root, grant):
@@ -2816,6 +2972,8 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                 raise TransactionError("task closure is unsafe", "scope_changed")
             return _load_json(closed, "task closure")
         state = _task_state(path, grant)
+        if any(item["publication"]["pending"] is not None for item in state["targets"].values()):
+            raise TransactionError("pending publication prevents task closure", "effect_unknown")
         if arguments.outcome == "cancelled":
             # The repository lock also fences surviving Git children. Invalidate
             # unused reservations, while preserving uncertain or actual effects.
@@ -2889,6 +3047,14 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                     "completion requires a clean checkout", "candidate_changed"
                 )
             for ref, target in state["targets"].items():
+                publication = target["publication"]
+                if publication["advanced_head"] is not None:
+                    raise TransactionError("advanced contributor head requires fresh intake", "history_changed")
+                if (grant["requested_action"] == "create-pr" and not target["merged_result"]
+                        and publication["published_head"] != target["head"]
+                        and (publication["remote_head"] != target["head"]
+                             or target["head"] != grant["targets"][ref]["head"])):
+                    raise TransactionError("repaired PR has not been published", "effect_unknown")
                 current = _run_git(root, ("rev-parse", "--verify", ref), check=False)
                 claim_path = expected_claim_path(root).parent / f"{_ref_key(ref)}.json"
                 untouched_remote = (
@@ -2931,7 +3097,7 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                             "target has an unresolved claim", "effect_unknown"
                         )
         result = {
-            "schema": "commit-transaction.task-closure.v2",
+            "schema": "commit-transaction.task-closure.v3",
             "status": arguments.outcome,
             "grant_sha256": _digest_bytes(_stable_json(grant)),
             "heads": {ref: item["head"] for ref, item in state["targets"].items()},
@@ -4026,6 +4192,7 @@ def _parser() -> argparse.ArgumentParser:
         "sync",
         "validate-order",
         "checkout-target",
+        "publish-target",
         "complete-checkout",
     ):
         task_parser = subparsers.add_parser(name)
@@ -4039,6 +4206,10 @@ def _parser() -> argparse.ArgumentParser:
         task_parser.add_argument("--intent-sha256", required=True)
         if name == "checkout-target":
             task_parser.add_argument("--branch", required=True)
+        elif name == "publish-target":
+            task_parser.add_argument("--branch", required=True)
+            task_parser.add_argument("--reviewed-head", required=True)
+            task_parser.add_argument("--reviewed-base", required=True)
         elif name == "complete-checkout":
             task_parser.add_argument(
                 "--mode", required=True, choices=("pause", "record-merge", "finalize")
@@ -4046,6 +4217,7 @@ def _parser() -> argparse.ArgumentParser:
             task_parser.add_argument("--merged-target")
             task_parser.add_argument("--result-sha")
         elif name == "begin":
+            task_parser.add_argument("--pr-bindings", help="Private JSON map of local refs to repository/number selectors")
             task_parser.add_argument(
                 "--checkout-policy", choices=("ordinary", "preserve")
             )
@@ -4076,6 +4248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "begin": begin,
             "finish": finish,
             "checkout-target": checkout_target,
+            "publish-target": publish_target,
             "complete-checkout": complete_checkout,
             "sync": sync,
             "validate-order": validate_order,
@@ -4083,7 +4256,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "execute": execute,
             "review": review,
         }[arguments.action](arguments)
-    except TransactionError as error:
+    except (TransactionError, _pr.PublicationError) as error:
+        if isinstance(error, _pr.PublicationError):
+            error = TransactionError(str(error), "publication_blocked")
         print(
             json.dumps(
                 {

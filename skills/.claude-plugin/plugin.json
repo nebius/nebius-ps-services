@@ -46,6 +46,7 @@
     "./publish-release",
     "./python-project",
     "./research",
+    "./review-github-issues",
     "./review-pr",
     "./scaffold-project",
     "./sdlc-align-specs",

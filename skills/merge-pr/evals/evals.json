@@ -495,6 +495,28 @@
         "Preserves merged and destination verified while reporting CI pending; no merge, CI rerun or publication effects.",
         "Uses only the supplied offline observations and does not perform external writes or real waiting."
       ]
+    },
+    {
+      "id": "fork-contribution-spec-handoff",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $merge-pr for a permitted contributor fork with a safe regression and missing specs.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Delegates once to parent-owned review-pr for contribution assessment, repair and root spec reconciliation.",
+        "Uses bound fork publication then fresh v2 identity/assessment evidence and protected broker.",
+        "Does not duplicate spec writing, replace the PR or directly push/merge."
+      ]
+    },
+    {
+      "id": "deleted-fork-result",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $merge-pr to resume a confirmed merge whose fork was deleted after admission; immutable intent and authoritative base result exist.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Performs result verification without another repair or merge.",
+        "Binds retained head/base identities and result containment through trusted completion.",
+        "Does not require a live fork after confirmed merge or mistake absence before merge for permission."
+      ]
     }
   ]
 }

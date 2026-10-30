@@ -170,6 +170,15 @@ class TransactionFixture(unittest.TestCase):
 
     def finish(self, action="create-pr", outcome="completed"):
         if action == "create-pr" and outcome == "completed":
+            # Lifecycle-only fixtures simulate verified publication. Real transport
+            # and missing-publication completion are covered in test_pr_publication.py.
+            task = Path(self.task_contexts["session-1"]["task"])
+            state_path = task.with_suffix(".state.json")
+            state = json.loads(state_path.read_text())
+            for target in state["targets"].values():
+                target["publication"]["published_head"] = target["head"]
+                target["publication"]["remote_head"] = target["head"]
+            state_path.write_text(json.dumps(state))
             self.run_helper(*self.task_args("complete-checkout"), "--mode", "finalize")
         return self.run_helper(
             "finish",

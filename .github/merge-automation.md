@@ -1,5 +1,14 @@
 # Protected merge setup
 
+Review/intent v2 binds numeric base/head repository identities, head ref,
+contribution/compatibility evidence and per-project spec outcomes. It admits
+eligible forks while retaining trusted default-branch execution and protected
+merge. Before deploying this revision, drain old grants/pushes/intents using
+their old trusted owners, prove old runs quiescent, and coordinate helper,
+workflow and operator installation updates through protected maintainer review
+with independently verified CI. No old-schema compatibility or authority
+translation is provided. See the [cutover contract](../skills/merge-pr/references/actions-protocol.md).
+
 Every ordinary PR and configured Dependabot update, including majors and Docker,
 uses the same operator-initiated review path. Plain create-pr performs complete
 code-review before publication and stops at the reviewed PR. Plain review-pr

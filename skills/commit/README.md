@@ -166,3 +166,14 @@ See [the completion contract](../create-pr/references/checkout-completion.md) fo
 review switch-back, create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
+
+## PR publication ownership
+
+The private create-pr continuation also uses `scripts/pr_publication.py` for
+bound PR intake, safe destination resolution and advertised-head guarding.
+`publish-target` journals one non-force update, verifies remote/PR readback and
+fences uncertain or advanced heads. It is not a public commit action and does
+not change standalone commit-push or SDLC ownership. See the
+[publication contract](../create-pr/references/pr-publication.md) for task v3
+cutover, fork aliases and recovery. Install the complete trusted skill folder;
+do not copy the entrypoint without its sibling module.

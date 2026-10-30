@@ -27,6 +27,8 @@ from merge_gate import (
     operator_ids,
     require,
     trusted_runtime,
+    source_identity,
+    validate_source_identity,
 )
 
 CI_SCHEMA = "merge-result-ci/v1"
@@ -99,6 +101,7 @@ def read_intent(api, run_id, attempt, number, head, policy):
         "Missing or expired merge intent; maintainer reconciliation required",
     )
     value = api.artifact(artifacts[0]["id"], "intent.json")
+    validate_source_identity(value)
     require(
         value["schema"] == INTENT_SCHEMA
         and value["repository"] == api.repo
@@ -128,14 +131,20 @@ def read_intent(api, run_id, attempt, number, head, policy):
 
 
 def merged_result(api, intent):
+    validate_source_identity(intent)
     pr = api.api(f"pulls/{intent['pr']}")
     require(
         pr["head"]["sha"] == intent["head"]
-        and pr["head"]["repo"]["full_name"] == api.repo
+        and pr["head"].get("ref") == intent["head_ref"]
         and pr["base"]["repo"]["full_name"] == api.repo
+        and pr["base"]["repo"].get("id") == intent["base_repository_id"]
         and pr["base"]["ref"] == intent["base"],
         "Merged PR identity drift",
     )
+    if pr["head"].get("repo") is None:
+        require(pr["merged"] is True, "Missing unmerged fork repository")
+    else:
+        require(all(intent.get(k) == v for k, v in source_identity(pr).items()), "Merged source identity drift")
     if not pr["merged"]:
         require(pr["state"] == "open", "PR closed without merging")
         raise Pending("PR has not merged; no completion effects")

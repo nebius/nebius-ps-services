@@ -61,9 +61,8 @@ a public mode flag. Help, report-only and active SDLC limits take precedence.
 
 ## Requirements
 
-- A Git repository with the PR branch available locally, fetchable from
-  `origin`, or available through `gh pr checkout` for same-repository or fork
-  PRs.
+- A Git repository with the selected base origin and PR objects available through
+  the trusted create-pr owner intake, for same-repository or fork PRs.
 - GitHub CLI (`gh`) authenticated for the target repository.
 
 ## Active Agentic SDLC Review Mode
@@ -102,6 +101,10 @@ Route selectively like this:
   base/head diff and affected callers/tests. Reuse analysis only from the same
   root operation at unchanged exact head/base; review-pr always refreshes
   GitHub identity, checks, comments, objections, threads and mergeability.
+- `maintain-project-specs`: root-owned reconciliation for every affected project
+  after contribution assessment and validated repairs. Follow
+  [contribution assessment](references/contribution-assessment.md), including
+  baseline acceptance, missing-spec bootstrap and justified unchanged outcomes.
 - `align`: when the PR spans multiple surfaces and needs end-to-end alignment
   across implementation, tests, docs, help output, CI, or examples.
 - `github-workflows`: when the PR changes `.github/workflows/**`, reusable
@@ -129,6 +132,10 @@ is report-only; review-pr owns repair decisions and final readiness.
 
 ## Workflow
 
+Read [contribution assessment](references/contribution-assessment.md) before
+ordinary review. Review accepted behavior, safety and existing-user compatibility
+first; repair proven defects, then reconcile canonical specs before final review.
+
 1. Freeze the exact host/repository/PR, head/base branches and SHAs, author,
    ownership, draft state and live default. Resolve the actual PR, not an
    unrelated current branch. Active Agentic SDLC uses its read-only mode above.
@@ -139,7 +146,8 @@ is report-only; review-pr owns repair decisions and final readiness.
    the ordinary completion reference from the installed create-pr skill and
    the commit continuation reference from that same skill.
    Read create-pr's checkout-completion reference for the inherited policy.
-   Honor report-only restrictions and externally owned/fork branch limits.
+   Honor report-only restrictions and current GitHub write permissions. Pin
+   trusted helpers before contributor checkout and isolate candidate execution.
 3. Delegate complete frozen base-to-head diff analysis to nested read-only
    code-review (or reuse same-operation exact-head/base analysis). Inspect specs,
    fresh review comments, unresolved threads, checks and conflicts. For dependency
@@ -160,7 +168,10 @@ is report-only; review-pr owns repair decisions and final readiness.
    root receipt. Standalone authorized review repair opens that canonical owner
    transaction before Git effects. It cannot call review-pr or merge-pr again.
    Never use raw commits, rebase, force push or GitHub update-branch here.
-6. Run relevant checks, then re-review the complete final diff and fresh remote
+6. After repair proof, invoke maintain-project-specs at the root for every
+   affected project and publish any required paired update before the owner
+   commits/publishes the final candidate. Record aligned, unchanged, disabled
+   or blocked outcomes with evidence. Run relevant checks, then re-review the complete final diff and fresh remote
    head/base after each repair. No earlier review survives a changed head or base.
    A newly discovered unsafe finding stops the loop and returns a blocker.
 7. For an ordinary completion caller, require no unresolved findings, passing
@@ -169,7 +180,8 @@ is report-only; review-pr owns repair decisions and final readiness.
    structured COMMENT review on the exact head. Record its review ID, head/base
    and validation evidence. This attestation does not approve the author's own PR.
    Standalone review also returns this evidence when writable and eligible;
-   report-only/fork/non-default reviews return findings without merge admission.
+   report-only/non-default reviews return findings without merge admission.
+   Eligible fork reviews use the same bound attestation and protected broker.
 8. Return findings/fixes, validation, final identity and attestation or blocker.
    The review coordinator never issues merge effects. The calling
    create-pr/publication/merge-pr owner continues only
@@ -215,8 +227,9 @@ URLs, customer data, raw logs, or one-off local state.
 - Resolve conflicts automatically only when the correct merge is obvious from
   local context. Stop and explain when conflicts are semantic or risky.
 - Never rewrite the default branch.
-- Do not push to another contributor's branch or fork unless GitHub permits it,
-  the user asked for branch updates, and the update is non-destructive.
+- Ordinary review/merge intent covers scoped, non-destructive repairs to the
+  selected contributor branch when GitHub permits them. Preserve explicit
+  report-only restrictions; permission denial is a blocker, not another PR.
 - Do not create a replacement PR from someone else's branch unless the user
   explicitly asks for that follow-up path.
 - Do not rebase or force-push in the ordinary review repair path.

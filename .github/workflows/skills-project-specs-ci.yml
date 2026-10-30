@@ -335,6 +335,7 @@ jobs:
           set -euo pipefail
           python -B commit/scripts/test-commit-contract.py
           python -B commit/scripts/test-commit-transaction.py
+          python -B commit/scripts/test_pr_publication.py
           python -B implement/scripts/test_implement_contract.py
           python -B sdlc-start/scripts/test_validate_project_specs.py
           python -B sdlc-start/scripts/test_sdlc_start_contract.py

@@ -53,6 +53,10 @@ class API:
             "head": HEAD,
             "base": "main",
             "base_sha": BASE,
+            "base_repository_id": 1,
+            "head_repository_id": 1,
+            "head_repository": REPO,
+            "head_ref": "feature",
             "review_id": 10,
             "method": "squash",
             "run_id": 100,
@@ -64,8 +68,8 @@ class API:
             "merged": True,
             "state": "closed",
             "number": 1,
-            "head": {"sha": HEAD, "repo": {"full_name": REPO}},
-            "base": {"ref": "main", "repo": {"full_name": REPO}},
+            "head": {"sha": HEAD, "ref": "feature", "repo": {"full_name": REPO, "id": 1}},
+            "base": {"ref": "main", "repo": {"full_name": REPO, "id": 1}},
         }
         self.broker = self.run(100, "skills-merge-pr.yml", 123)
         self.consumer = self.run(300, "merge-completion.yml", gate.ACTIONS_BOT_ID)
@@ -184,6 +188,30 @@ class CompletionTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.api = API()
+
+    def test_bound_fork_and_deleted_merged_fork_complete(self):
+        self.api.intent.update(head_repository="contributor/fork", head_repository_id=2)
+        self.api.pr["head"]["repo"] = {"full_name": "contributor/fork", "id": 2}
+        self.assertEqual(completion.merged_result(self.api, self.api.intent), RESULT)
+        self.api.pr["head"]["repo"] = None
+        self.assertEqual(completion.merged_result(self.api, self.api.intent), RESULT)
+
+    def test_deleted_unmerged_fork_and_source_drift_block(self):
+        for change in ("deleted", "id", "ref", "base"):
+            with self.subTest(change=change):
+                self.api = API()
+                if change == "deleted":
+                    self.api.pr["head"]["repo"] = None
+                    self.api.pr["merged"] = False
+                elif change == "id":
+                    self.api.pr["head"]["repo"]["id"] = 9
+                elif change == "ref":
+                    self.api.pr["head"]["ref"] = "other"
+                else:
+                    self.api.pr["base"]["repo"]["id"] = 9
+                with self.assertRaises(gate.Blocked):
+                    completion.merged_result(self.api, self.api.intent)
+                self.assertFalse(self.api.effects)
 
     def inputs(self):
         return {
