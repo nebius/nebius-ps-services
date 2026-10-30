@@ -1,0 +1,21 @@
+{
+  "node": "us-b",
+  "result": {
+    "probes": [
+      {
+        "interface": "xfrm1",
+        "source": "169.254.11.6",
+        "destination": "169.254.11.5",
+        "returncode": 0,
+        "output": "PING 169.254.11.5 (169.254.11.5) from 169.254.11.6 : 56(84) bytes of data.\n64 bytes from 169.254.11.5: icmp_seq=1 ttl=64 time=97.6 ms\n64 bytes from 169.254.11.5: icmp_seq=2 ttl=64 time=97.5 ms\n64 bytes from 169.254.11.5: icmp_seq=3 ttl=64 time=97.5 ms\n\n--- 169.254.11.5 ping statistics ---\n3 packets transmitted, 3 received, 0% packet loss, time 2003ms\nrtt min/avg/max/mdev = 97.499/97.559/97.638/0.058 ms\n"
+      },
+      {
+        "interface": "xfrm2",
+        "source": "169.254.11.14",
+        "destination": "169.254.11.13",
+        "returncode": 1,
+        "output": "PING 169.254.11.13 (169.254.11.13) from 169.254.11.14 : 56(84) bytes of data.\nFrom 169.254.11.14 icmp_seq=1 Destination Host Unreachable\nFrom 169.254.11.14 icmp_seq=2 Destination Host Unreachable\nFrom 169.254.11.14 icmp_seq=3 Destination Host Unreachable\n\n--- 169.254.11.13 ping statistics ---\n3 packets transmitted, 0 received, +3 errors, 100% packet loss, time 2070ms\n\n"
+      }
+    ]
+  }
+}

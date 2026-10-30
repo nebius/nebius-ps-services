@@ -1,10 +1,11 @@
 # Independent heartbeat implementation and live validation
 
-Status at October 30, 2026, 14:00 America/Toronto (18:00 UTC): implementation
-passes local checks. UK deployment and recovery succeeded. UK gateway-a is
-active and promotion-ready, gateway-b is standby-ready, and neither has an
-apply lock. US remains fenced on its previous artifact, so the full rollout
-and end-to-end failover validation remain incomplete.
+Status at October 30, 2026, 15:03 America/Toronto (19:03 UTC): US and UK have
+the new wheel. US recovery and apply succeeded. US gateway-b is active and
+promotion-ready, gateway-a is standby-ready, and both apply locks are absent.
+UK owner forwarding remains healthy. The UK standby recovered automatically
+after its route cleanup timer removed a recurring DHCP route. End-to-end
+client forwarding and fault-injected failover validation remain incomplete.
 
 ## Code and artifact
 
@@ -54,7 +55,8 @@ also create transport worker threads.
 | Wheel inspection | Passed |
 | UK bidirectional v4 heartbeat exchange | Observed after coordinated upgrade |
 | UK cold static standby | Transfer ready true, forwarding ready false |
-| US upgrade | Blocked before package installation |
+| US upgrade and routed-forwarding verification | Supported apply passed after recovery |
+| US BGP | Both pfSense neighbors Established, five prefixes received each |
 | UK owner routed-forwarding verification | Supported apply passed |
 | UK active tunnel inside-address probes | 3/3 replies from US gateway-b |
 | End-to-end client forwarding, takeover, failback, controlled API fault | Not validated |
@@ -110,9 +112,9 @@ publication, not a controlled cloud timeout or successful failover test.
    existing restart failure. These probes originate on the gateway and do not
    prove client transit forwarding.
 
-US gateway-a's old controller repeatedly rejects its existing transfer lineage
-with `VM-HA transfer lineage is invalid or stale`. Neither that record nor its
-interrupted lifecycle transaction has been modified. UK gateway-b retains an
+Before US recovery, gateway-a's old controller repeatedly rejected its existing
+transfer lineage with `VM-HA transfer lineage is invalid or stale`. Its
+interrupted lifecycle transaction was preserved throughout recovery. UK gateway-b retains an
 old ledger record for the now-obsolete route, but has no pending mutation and
 is standby-ready. Only the authoritative owner ledger was repaired.
 
@@ -126,6 +128,78 @@ the previously installed resolved configuration. UK apply used the current
 local file. Recovery must account for the intended configuration before declaring
 the original forwarding behavior restored.
 
+## US recovery and separation from transit
+
+Read-only inspection established that the transaction's recorded desired digest
+`3e24a03f76063a29d5435305c22fbcef192c29ca40909644981b5e4959f2948b`
+matches gateway-a's staged generation
+`9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5`.
+Gateway-b was still using generation `f37271254e3f...`. The independent heartbeat
+branch and original main loader reproduce the recorded digest from the current
+US YAML. The integrated transit loader instead inserts default policy fields,
+changing that digest. A loader normalization fix was tested and committed as
+`78e15fc4`, then explicitly backed out at the user's request by `3205e6ee`.
+Neither fix remains active. No US transit key or connection override was present
+in the raw YAML, so no configuration rewrite was necessary.
+
+Recovery used the independent heartbeat client branch and the same exact tested
+wheel described above. It did not rewrite the transaction digest. The generic
+cloud-operation lookup returned `UNIMPLEMENTED`. A read through the SDK's
+Compute-scoped operation service proved that recorded operation
+`computeoperation-u00af4bbke5q7gawfz` was already successfully complete.
+
+After explicit approval of the exact cleanup, protected on-VM backups were
+created on both nodes at 18:58 UTC. Gateway-a's already-fenced controller was
+stopped. Fresh cloud reads proved gateway-b's exact allocation ownership and
+gateway-a's absent attachment. The old operation was rechecked as successful
+for gateway-a's exact Compute identity. Its journal was compare-and-cleared,
+and older-generation transfer lineage was archived after confirming no pending
+controller, route, or rearm operation. The controller restarted still fenced.
+The cleanup performed no cloud mutation.
+
+Supported apply then resumed the original transaction and completed owner
+routed-forwarding and standby verification. Final inspection confirmed:
+
+- Both nodes use generation `9877f8d5b2b...`, with the independent-heartbeat capability.
+- Gateway-b is active and promotion-ready. Gateway-a is standby-ready.
+- Neither node has an apply lock or pending route mutation.
+- Both nodes' main, runtime, and controller module hashes match the exact wheel.
+- Both pfSense BGP sessions are Established and receive five prefixes. The owner
+  advertises 12 prefixes, while the standby advertises zero.
+- Both nodes have IPsec SAs toward pfSense and UK gateway-a.
+
+The deployment's ICMP checks to the pfSense inside addresses failed even though
+BGP established. This is preserved as a distinct probe result and does not
+establish a BGP failure. Client transit traffic and failover were not exercised.
+US gateway-b's inside-address probe to UK gateway-a passed three out of three
+packets. Its configured path to cold UK gateway-b returned host-unreachable.
+
+## UK normal-operation standby readiness investigation
+
+The user requested a read-only subagent investigation. It found a recurring DHCP
+route hygiene failure rather than lost XFRM interfaces. UK gateway-b's lease
+was acquired at 17:57:55 UTC, with a one-hour renewal time. Transfer readiness
+became false at 18:57:56. At 19:01:24, the five-minute route-cleanup timer removed
+`169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp`. Readiness recovered at
+19:01:26, after approximately 210 seconds. Historical cleanup logs show the same
+DHCP route recurring approximately hourly. The renewal is strongly supported
+as the trigger, although networkd's normal journal does not log that renewal.
+
+The cold static standby intentionally has no SAs. Its missing static/XFRM
+forwarding readiness is normally covered by the cold-standby transfer exception.
+That exception also requires clean routing hygiene. The DHCP route disables
+the exception, exposing all three diagnostic reasons and blocking takeover
+until cleanup. Interfaces remained present and UP. The configured tunnel `/30`
+routes are more specific than the broad `/16`. Post-cleanup route lookups selected
+the expected XFRM interfaces. There is no evidence this event disrupted peer
+routing or UK owner forwarding.
+
+Recommended follow-up is prompt bounded passive hygiene repair through the
+existing routing lock and passive authority, followed by resampling. Keep the
+sampler read-only and preserve the transfer gate if cleanup fails. Separately
+investigate preventing only the unwanted DHCP route without disabling default
+or metadata routes. No UK changes were made during this investigation.
+
 ## Preserved evidence and next step
 
 Sanitized evidence is committed under `evidence/heartbeat-independent-live/`:
@@ -138,9 +212,18 @@ Sanitized evidence is committed under `evidence/heartbeat-independent-live/`:
 - [Recovered UK state and tunnel status](evidence/heartbeat-independent-live/uk-recovered-state.json)
 - [UK tunnel inside-address probes](evidence/heartbeat-independent-live/uk-tunnel-probes.json)
 - [US pre-existing stale transfer-lineage errors](evidence/heartbeat-independent-live/us-stale-transfer-lineage.json)
+- [US approved stale-state recovery receipt](evidence/heartbeat-independent-live/us-recovery-receipt.json)
+- [Recovered US state, tunnels, routes, and BGP](evidence/heartbeat-independent-live/us-recovered-state.json)
+- [US installed artifact verification](evidence/heartbeat-independent-live/us-artifact-verification.json)
+- [US inside-tunnel probes](evidence/heartbeat-independent-live/us-tunnel-probes.json)
+- [UK DHCP and cleanup evidence](evidence/heartbeat-independent-live/uk-standby-dhcp.json)
+- [UK recurring cleanup evidence](evidence/heartbeat-independent-live/uk-standby-recurrence.json)
+- [UK route lookups](evidence/heartbeat-independent-live/uk-standby-routing.json)
 - [Evidence checksums](evidence/heartbeat-independent-live/SHA256SUMS)
 
-Next, resolve the US interrupted transaction and stale transfer lineage without
-bypassing identity or digest checks. Then deploy the exact wheel there and
-validate controlled API delay, client routing, and failover/failback. UK is
-recovered, but these remaining checks are required for the full rollout.
+Next, address recurring UK standby readiness gaps and establish a stable
+baseline. Then validate controlled API delay, client routing, and failover/failback,
+including shared remote-peer failure: tunnel health currently contributes to
+owner readiness without distinguishing a local failure from a remote outage.
+Both deployments have converged, but these remaining checks are required for
+end-to-end validation.

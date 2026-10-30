@@ -1,0 +1,24 @@
+{
+  "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/us-recovery-20261030T185852Z",
+  "terminal_operation": "computeoperation-u00af4bbke5q7gawfz",
+  "operation_successful": true,
+  "retired_lineage_generation": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+  "allocation_owner": "gateway-b",
+  "cloud_mutations": false,
+  "backups": [
+    {
+      "node": "us-b",
+      "result": {
+        "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/us-recovery-20261030T185851Z",
+        "files": 20
+      }
+    },
+    {
+      "node": "us-a",
+      "result": {
+        "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/us-recovery-20261030T185852Z",
+        "files": 22
+      }
+    }
+  ]
+}

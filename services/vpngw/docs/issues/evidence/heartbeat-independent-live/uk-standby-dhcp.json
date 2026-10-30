@@ -1,0 +1,56 @@
+{
+  "node": "uk-b",
+  "result": {
+    "systemd-networkd": [
+      "2026-10-30T17:57:50+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1026: Link UP",
+      "2026-10-30T17:57:50+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1026: Gained carrier",
+      "2026-10-30T17:57:50+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1026: Gained IPv6LL",
+      "2026-10-30T17:57:50+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1026: Link DOWN",
+      "2026-10-30T17:57:50+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1026: Lost carrier",
+      "2026-10-30T17:57:53+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1396: Link UP",
+      "2026-10-30T17:57:53+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1396: Gained carrier",
+      "2026-10-30T17:57:53+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1396: Link DOWN",
+      "2026-10-30T17:57:53+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1396: Lost carrier",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: /run/systemd/network/10-netplan-interface0.network: MTUBytes= in [Link] section and UseMTU= in [DHCP] section are set. Disabling UseMTU=.",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: Reconfiguring with /run/systemd/network/10-netplan-eth0.network.",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: DHCP lease lost",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: DHCPv6 lease lost",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: DHCPv4 address 10.80.0.59/32, gateway 169.254.169.1 acquired from 169.254.169.1",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: Configuring with /run/systemd/network/10-netplan-eth0.network.",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: DHCP lease lost",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: DHCPv6 lease lost",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: eth0: DHCPv4 address 10.80.0.59/32, gateway 169.254.169.1 acquired from 169.254.169.1",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1165: Link UP",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1165: Gained carrier",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1165: Gained IPv6LL",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1165: Link DOWN",
+      "2026-10-30T17:57:55+00:00 computeinstance-e03vy7a1cq04mqceax systemd-networkd[422]: xfrmi-test-1165: Lost carrier"
+    ],
+    "nebius-vpngw-fix-routes": [
+      "2026-10-30T19:01:24+00:00 computeinstance-e03vy7a1cq04mqceax python3[3974310]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)"
+    ],
+    "network_files": {
+      "10-netplan-eth0.network": [
+        "[Match]",
+        "Name=eth0",
+        "[Network]",
+        "DHCP=ipv4",
+        "RouteMetric=100"
+      ],
+      "10-netplan-interface0.network": [
+        "[Match]",
+        "Name=eth0",
+        "[Network]",
+        "DHCP=ipv4",
+        "RouteMetric=100"
+      ]
+    },
+    "lease_2": [
+      "ADDRESS=10.80.0.59",
+      "ROUTER=169.254.169.1",
+      "T1=1h",
+      "T2=1h 45min",
+      "LIFETIME=2h"
+    ]
+  }
+}

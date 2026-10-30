@@ -1,0 +1,32 @@
+{
+  "node": "uk-b",
+  "result": {
+    "nebius-vpngw-fix-routes": [
+      "2026-10-30T00:43:48+00:00 computeinstance-e03vy7a1cq04mqceax python3[585150]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T01:43:54+00:00 computeinstance-e03vy7a1cq04mqceax python3[892458]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T02:44:01+00:00 computeinstance-e03vy7a1cq04mqceax python3[1200610]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T03:44:09+00:00 computeinstance-e03vy7a1cq04mqceax python3[1510061]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "-- Boot be5b60bf52c2463382c9531d4b6518bb --",
+      "2026-10-30T04:54:31+00:00 computeinstance-e03vy7a1cq04mqceax python3[280020]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T05:54:36+00:00 computeinstance-e03vy7a1cq04mqceax python3[556862]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T06:54:45+00:00 computeinstance-e03vy7a1cq04mqceax python3[833565]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T07:54:54+00:00 computeinstance-e03vy7a1cq04mqceax python3[1110345]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T08:55:06+00:00 computeinstance-e03vy7a1cq04mqceax python3[1384171]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T09:55:17+00:00 computeinstance-e03vy7a1cq04mqceax python3[1655513]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T10:55:23+00:00 computeinstance-e03vy7a1cq04mqceax python3[1918269]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T11:55:31+00:00 computeinstance-e03vy7a1cq04mqceax python3[2179145]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T12:55:39+00:00 computeinstance-e03vy7a1cq04mqceax python3[2438315]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T13:55:47+00:00 computeinstance-e03vy7a1cq04mqceax python3[2696217]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T14:55:57+00:00 computeinstance-e03vy7a1cq04mqceax python3[2951928]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T15:56:03+00:00 computeinstance-e03vy7a1cq04mqceax python3[3209048]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T16:56:12+00:00 computeinstance-e03vy7a1cq04mqceax python3[3470241]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T19:01:24+00:00 computeinstance-e03vy7a1cq04mqceax python3[3974310]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)"
+    ],
+    "nebius-vpngw-agent": [
+      "-- Boot be5b60bf52c2463382c9531d4b6518bb --",
+      "2026-10-30T03:54:16+00:00 computeinstance-e03vy7a1cq04mqceax python3[1089]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T17:39:07+00:00 computeinstance-e03vy7a1cq04mqceax python3[3655207]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)",
+      "2026-10-30T17:57:56+00:00 computeinstance-e03vy7a1cq04mqceax python3[3729858]: [RoutingGuard] Removed orphan APIPA route: 169.254.0.0/16 (was: 169.254.0.0/16 via 169.254.169.1 dev eth0 proto dhcp src 10.80.0.59 metric 100)"
+    ]
+  }
+}
