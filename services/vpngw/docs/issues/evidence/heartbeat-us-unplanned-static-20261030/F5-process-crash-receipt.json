@@ -1,0 +1,20 @@
+{
+  "started_at": 1793399042.654222,
+  "label": "F5-process-crash",
+  "node": "us-a",
+  "kind": "crash",
+  "duration": 0,
+  "injection": {
+    "node": "us-a",
+    "result": {
+      "time": 1793399043.2004378,
+      "pid": 1190,
+      "kind": "crash",
+      "duration": 0,
+      "boot": "5d9f6f8c-51cc-4336-acfe-7473844ed9f9",
+      "start_ticks": "1158"
+    }
+  },
+  "finished_at": 1793399226.6189818,
+  "final_owner": "us-b"
+}

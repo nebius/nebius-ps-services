@@ -1,12 +1,14 @@
 # Independent heartbeat implementation and live validation
 
-Latest status after the static-route integration retest on October 30: US
-gateway-a is active and gateway-b passes strict standby verification. UK
-gateway-b is active and gateway-a is standby-ready. Two controlled US round
-trips completed without manual route repairs. The live stale-route preparation
-case passed. One takeover command still exited early while its controller
-subsequently completed the transfer, so the automated test gate is not clean.
-Unplanned fault injection remains unstarted. See the latest retest section below.
+Latest status after the October 30
+[unplanned static-route campaign](heartbeat-us-unplanned-static-validation.md):
+US gateway-a is active and gateway-b passes strict standby verification. UK
+gateway-b is active and gateway-a is standby-ready. Process and heartbeat faults
+recovered through fenced takeover, but API outages still fenced forwarding and
+caused takeover. One case required a backed-up service restart. TCP testing was
+omitted at the user's direction. US–UK BGP failover remains a separate campaign.
+The historical controlled-retest results below also retain an unfixed premature
+CLI failure report.
 
 ## Code and artifact used for the initial campaign
 

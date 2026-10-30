@@ -1,0 +1,6 @@
+{
+  "stopped_probe_pid": 142764,
+  "time": 1793400878.0225945,
+  "final_ping_returncode": 0,
+  "final_ping": "PING 10.80.1.0 (10.80.1.0) 56(84) bytes of data.\n64 bytes from 10.80.1.0: icmp_seq=1 ttl=60 time=99.1 ms\n64 bytes from 10.80.1.0: icmp_seq=2 ttl=60 time=98.7 ms\n64 bytes from 10.80.1.0: icmp_seq=3 ttl=60 time=98.7 ms\n64 bytes from 10.80.1.0: icmp_seq=4 ttl=60 time=98.9 ms\n64 bytes from 10.80.1.0: icmp_seq=5 ttl=60 time=98.7 ms\n64 bytes from 10.80.1.0: icmp_seq=6 ttl=60 time=98.9 ms\n64 bytes from 10.80.1.0: icmp_seq=7 ttl=60 time=98.8 ms\n64 bytes from 10.80.1.0: icmp_seq=8 ttl=60 time=98.6 ms\n64 bytes from 10.80.1.0: icmp_seq=9 ttl=60 time=98.7 ms\n64 bytes from 10.80.1.0: icmp_seq=10 ttl=60 time=98.7 ms\n\n--- 10.80.1.0 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss, time 9014ms\nrtt min/avg/max/mdev = 98.619/98.793/99.139/0.145 ms\n"
+}

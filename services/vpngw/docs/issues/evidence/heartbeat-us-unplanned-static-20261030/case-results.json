@@ -1,0 +1,178 @@
+[
+  {
+    "label": "F1-standby-api",
+    "result": "traffic-and-heartbeat-pass-guard-recovery-fail",
+    "started_at": "2026-10-30T22:07:08.166759+00:00",
+    "observation_completed_at": "2026-10-30T22:08:39.223630+00:00",
+    "guard_gate_verified": false,
+    "initial_owner": "us-a",
+    "final_owner": "us-a",
+    "reply_gaps": [],
+    "operator_assisted_recovery": false,
+    "receipt": "F1-standby-api-receipt.json"
+  },
+  {
+    "label": "F2-owner-api",
+    "result": "no-failover-expectation-fail-assisted-recovery",
+    "started_at": "2026-10-30T22:09:27.676481+00:00",
+    "observation_completed_at": "2026-10-30T22:18:47.312428+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-a",
+    "final_owner": "us-b",
+    "reply_gaps": [
+      {
+        "from": 1793398198.2811368,
+        "to": 1793398538.264881,
+        "seconds": 339.9837441444397,
+        "lost": 331
+      }
+    ],
+    "operator_assisted_recovery": true,
+    "receipt": "F2-owner-api-receipt.json"
+  },
+  {
+    "label": "F3-both-api",
+    "result": "no-failover-expectation-fail-automatic-recovery",
+    "started_at": "2026-10-30T22:19:04.077209+00:00",
+    "observation_completed_at": "2026-10-30T22:23:09.493043+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-b",
+    "final_owner": "us-a",
+    "reply_gaps": [
+      {
+        "from": 1793398775.538458,
+        "to": 1793398873.8167362,
+        "seconds": 98.2782781124115,
+        "lost": 95
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F3-both-api-receipt.json"
+  },
+  {
+    "label": "F4-short-pause",
+    "result": "automatic-recovery-pass",
+    "started_at": "2026-10-30T22:23:18.941522+00:00",
+    "observation_completed_at": "2026-10-30T22:23:54.355678+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-a",
+    "final_owner": "us-a",
+    "reply_gaps": [],
+    "operator_assisted_recovery": false,
+    "receipt": "F4-short-pause-receipt.json"
+  },
+  {
+    "label": "F5-process-crash",
+    "result": "automatic-recovery-pass",
+    "started_at": "2026-10-30T22:24:02.654222+00:00",
+    "observation_completed_at": "2026-10-30T22:27:06.616665+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-a",
+    "final_owner": "us-b",
+    "reply_gaps": [
+      {
+        "from": 1793399043.0394623,
+        "to": 1793399112.6645985,
+        "seconds": 69.62513613700867,
+        "lost": 67
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F5-process-crash-receipt.json"
+  },
+  {
+    "label": "F6-long-freeze",
+    "result": "automatic-recovery-pass",
+    "started_at": "2026-10-30T22:27:15.735245+00:00",
+    "observation_completed_at": "2026-10-30T22:30:06.864076+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-b",
+    "final_owner": "us-a",
+    "reply_gaps": [
+      {
+        "from": 1793399250.866792,
+        "to": 1793399303.0703068,
+        "seconds": 52.20351481437683,
+        "lost": 50
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F6-long-freeze-receipt.json"
+  },
+  {
+    "label": "F7a-oneway-heartbeat",
+    "result": "automatic-recovery-pass",
+    "started_at": "2026-10-30T22:30:16.601063+00:00",
+    "observation_completed_at": "2026-10-30T22:35:00.510778+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-a",
+    "final_owner": "us-b",
+    "reply_gaps": [
+      {
+        "from": 1793399430.2349777,
+        "to": 1793399486.5585332,
+        "seconds": 56.32355546951294,
+        "lost": 54
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F7a-oneway-heartbeat-receipt.json"
+  },
+  {
+    "label": "F7b-both-heartbeats",
+    "result": "automatic-recovery-pass",
+    "started_at": "2026-10-30T22:35:16.824508+00:00",
+    "observation_completed_at": "2026-10-30T22:38:00.606926+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-b",
+    "final_owner": "us-a",
+    "reply_gaps": [
+      {
+        "from": 1793399729.7152023,
+        "to": 1793399788.056758,
+        "seconds": 58.34155559539795,
+        "lost": 56
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F7b-both-heartbeats-receipt.json"
+  },
+  {
+    "label": "F9-remote-endpoint",
+    "result": "automatic-recovery-with-detection-and-convergence-delay",
+    "started_at": "2026-10-30T22:39:41.339681+00:00",
+    "observation_completed_at": "2026-10-30T22:48:01.884037+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-a",
+    "final_owner": "us-b",
+    "reply_gaps": [
+      {
+        "from": 1793399982.3118951,
+        "to": 1793400271.000885,
+        "seconds": 288.6889898777008,
+        "lost": 281
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F9-remote-endpoint-receipt.json"
+  },
+  {
+    "label": "F10-stop-vm",
+    "result": "automatic-recovery-pass",
+    "started_at": "2026-10-30T22:48:17.478890+00:00",
+    "observation_completed_at": "2026-10-30T22:50:45.688821+00:00",
+    "guard_gate_verified": true,
+    "initial_owner": "us-b",
+    "final_owner": "us-a",
+    "reply_gaps": [
+      {
+        "from": 1793400498.3160887,
+        "to": 1793400559.7693763,
+        "seconds": 61.45328760147095,
+        "lost": 59
+      }
+    ],
+    "operator_assisted_recovery": false,
+    "receipt": "F10-stop-vm-receipt.json"
+  }
+]

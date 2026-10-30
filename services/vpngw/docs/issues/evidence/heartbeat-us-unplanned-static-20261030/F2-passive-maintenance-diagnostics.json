@@ -1,0 +1,14 @@
+{
+  "node": "us-b",
+  "result": {
+    "guard": {
+      "data_plane_mode": "blocked",
+      "guard_boot_id": "9f26a9f5-2893-432c-b91a-b5948c29e9ee",
+      "installed_at": 1793398058.7834015,
+      "schema": "nebius-vpngw/vm-ha-status-v1"
+    },
+    "periodic_source": "def enforce_periodic_routing_invariants(cfg: dict[str, Any]) -> None:\n    \"\"\"Run the role-appropriate route repair under the shared routing lock.\"\"\"\n\n    lock_fd = acquire_routing_lock(blocking=False)\n    if lock_fd is None:\n        print(\"[RoutingGuard] Lock held; skipping\")\n        return\n    try:\n        mode = _vm_ha_route_maintenance_mode(cfg)\n        if cfg.get(\"vm_ha\") is None:\n            from ..ordinary_operations import OperationBlocked, require_idle\n\n            try:\n                require_idle()\n            except OperationBlocked:\n                print(\"[RoutingGuard] Ordinary operation pending; skipping repair\")\n                return\n        if mode == \"passive\":\n            enforce_vm_ha_passive_routing_hygiene_locked(cfg)\n            return\n        _enforce_routing_invariants_locked(cfg)\n    finally:\n        try:\n            os.close(lock_fd)\n        except Exception:\n            pass\n",
+    "fix_service": "# /etc/systemd/system/nebius-vpngw-fix-routes.service\n[Unit]\nDescription=Fix Nebius VPN Gateway routing issues\nDocumentation=https://github.com/nebius/nebius-ps-services\nAfter=network-online.target strongswan-starter.service frr.service\nWants=network-online.target strongswan-starter.service frr.service\nConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml\n\n[Service]\nType=oneshot\nEnvironment=\"PYTHONUNBUFFERED=1\"\nExecCondition=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-route-maintenance-ready\nExecStart=/usr/bin/python3 -m nebius_vpngw.agent.fix_routes --config /etc/nebius-vpngw/config-resolved.yaml\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=multi-user.target\n",
+    "fix_journal": "Starting nebius-vpngw-fix-routes.service - Fix Nebius VPN Gateway routing issues...\nnebius-vpngw-fix-routes.service: Deactivated successfully.\nFinished nebius-vpngw-fix-routes.service - Fix Nebius VPN Gateway routing issues.\nStarting nebius-vpngw-fix-routes.service - Fix Nebius VPN Gateway routing issues...\nnebius-vpngw-fix-routes.service: Deactivated successfully.\nFinished nebius-vpngw-fix-routes.service - Fix Nebius VPN Gateway routing issues.\nStarting nebius-vpngw-fix-routes.service - Fix Nebius VPN Gateway routing issues...\nnebius-vpngw-fix-routes.service: Skipped due to 'exec-condition'.\nCondition check resulted in nebius-vpngw-fix-routes.service - Fix Nebius VPN Gateway routing issues being skipped.\n"
+  }
+}

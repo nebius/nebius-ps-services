@@ -1,0 +1,240 @@
+[
+  {
+    "node": "us-a",
+    "result": {
+      "api_heartbeat_chain": {
+        "returncode": 1,
+        "stdout": ""
+      },
+      "endpoint_chain": {
+        "returncode": 1,
+        "stdout": ""
+      },
+      "active_fault_timers": {
+        "returncode": 0,
+        "stdout": ""
+      },
+      "fault_timer_journal": [
+        {
+          "time_us": "1793398168242524",
+          "boot": "19bb7bf25bf54710b81b2a8085311a76",
+          "message": "Started vpngw-fault-cleanup-F2-owner-api.timer - /bin/sh /run/vpngw-fault-cleanup-F2-owner-api.sh."
+        },
+        {
+          "time_us": "1793398209624243",
+          "boot": "19bb7bf25bf54710b81b2a8085311a76",
+          "message": "vpngw-fault-cleanup-F2-owner-api.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793398209624302",
+          "boot": "19bb7bf25bf54710b81b2a8085311a76",
+          "message": "Stopped vpngw-fault-cleanup-F2-owner-api.timer - /bin/sh /run/vpngw-fault-cleanup-F2-owner-api.sh."
+        },
+        {
+          "time_us": "1793398744643123",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "Started vpngw-fault-cleanup-F3-both-api.timer - /bin/sh /run/vpngw-fault-cleanup-F3-both-api.sh."
+        },
+        {
+          "time_us": "1793398805544989",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "Started vpngw-fault-cleanup-F3-both-api.service - /bin/sh /run/vpngw-fault-cleanup-F3-both-api.sh."
+        },
+        {
+          "time_us": "1793398805582185",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "vpngw-fault-cleanup-F3-both-api.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793398805582535",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "vpngw-fault-cleanup-F3-both-api.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793398999508554",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "Started vpngw-fault-resume-F4-short-pause.timer - /usr/bin/python3 -c \"import os,pathlib,signal; p=1190; boot='5d9f6f8c-51cc-4336-acfe-7473844ed9f9\\\\n'; started='1158'; valid=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text()==boot and pathlib.Path('/proc/'+str(p)+'/stat').exists(); valid=valid and pathlib.Path('/proc/'+str(p)+'/stat').read_text().split()[21]==started; os.kill(p,signal.SIGCONT) if valid else None\"."
+        },
+        {
+          "time_us": "1793399002555112",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "Started vpngw-fault-resume-F4-short-pause.service - /usr/bin/python3 -c \"import os,pathlib,signal; p=1190; boot='5d9f6f8c-51cc-4336-acfe-7473844ed9f9\\\\n'; started='1158'; valid=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text()==boot and pathlib.Path('/proc/'+str(p)+'/stat').exists(); valid=valid and pathlib.Path('/proc/'+str(p)+'/stat').read_text().split()[21]==started; os.kill(p,signal.SIGCONT) if valid else None\"."
+        },
+        {
+          "time_us": "1793399002582144",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "vpngw-fault-resume-F4-short-pause.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399002582355",
+          "boot": "5d9f6f8c51cc4336acfe7473844ed9f9",
+          "message": "vpngw-fault-resume-F4-short-pause.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399417155052",
+          "boot": "ba2f4707396a4a5cb6381fc6b6cf4581",
+          "message": "Started vpngw-fault-cleanup-F7a-oneway-heartbeat.timer - /bin/sh /run/vpngw-fault-cleanup-F7a-oneway-heartbeat.sh."
+        },
+        {
+          "time_us": "1793399432486446",
+          "boot": "ba2f4707396a4a5cb6381fc6b6cf4581",
+          "message": "vpngw-fault-cleanup-F7a-oneway-heartbeat.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399432486518",
+          "boot": "ba2f4707396a4a5cb6381fc6b6cf4581",
+          "message": "Stopped vpngw-fault-cleanup-F7a-oneway-heartbeat.timer - /bin/sh /run/vpngw-fault-cleanup-F7a-oneway-heartbeat.sh."
+        },
+        {
+          "time_us": "1793399717384577",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "Started vpngw-fault-cleanup-F7b-both-heartbeats.timer - /bin/sh /run/vpngw-fault-cleanup-F7b-both-heartbeats.sh."
+        },
+        {
+          "time_us": "1793399762853811",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "Started vpngw-fault-cleanup-F7b-both-heartbeats.service - /bin/sh /run/vpngw-fault-cleanup-F7b-both-heartbeats.sh."
+        },
+        {
+          "time_us": "1793399762885201",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "vpngw-fault-cleanup-F7b-both-heartbeats.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399762885419",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "vpngw-fault-cleanup-F7b-both-heartbeats.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399982759366",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "Started vpngw-fault-cleanup-F9.timer - /bin/sh /run/vpngw-fault-cleanup-F9.sh."
+        },
+        {
+          "time_us": "1793400162866741",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "Started vpngw-fault-cleanup-F9.service - /bin/sh /run/vpngw-fault-cleanup-F9.sh."
+        },
+        {
+          "time_us": "1793400162892114",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "vpngw-fault-cleanup-F9.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793400162892313",
+          "boot": "da343cdd121c4162bf71828d162c0b6f",
+          "message": "vpngw-fault-cleanup-F9.timer: Deactivated successfully."
+        }
+      ]
+    }
+  },
+  {
+    "node": "us-b",
+    "result": {
+      "api_heartbeat_chain": {
+        "returncode": 1,
+        "stdout": ""
+      },
+      "endpoint_chain": {
+        "returncode": 1,
+        "stdout": ""
+      },
+      "active_fault_timers": {
+        "returncode": 0,
+        "stdout": ""
+      },
+      "fault_timer_journal": [
+        {
+          "time_us": "1793398028740543",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "Started vpngw-fault-cleanup-F1-standby-api.timer - /bin/sh /run/vpngw-fault-cleanup-F1-standby-api.sh."
+        },
+        {
+          "time_us": "1793398088879168",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "Started vpngw-fault-cleanup-F1-standby-api.service - /bin/sh /run/vpngw-fault-cleanup-F1-standby-api.sh."
+        },
+        {
+          "time_us": "1793398088909840",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "vpngw-fault-cleanup-F1-standby-api.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793398088909935",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "vpngw-fault-cleanup-F1-standby-api.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793398745239588",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "Started vpngw-fault-cleanup-F3-both-api.timer - /bin/sh /run/vpngw-fault-cleanup-F3-both-api.sh."
+        },
+        {
+          "time_us": "1793398805579087",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "Started vpngw-fault-cleanup-F3-both-api.service - /bin/sh /run/vpngw-fault-cleanup-F3-both-api.sh."
+        },
+        {
+          "time_us": "1793398805610136",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "vpngw-fault-cleanup-F3-both-api.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793398805610352",
+          "boot": "9f26a9f52893432cb91ab5948c29e9ee",
+          "message": "vpngw-fault-cleanup-F3-both-api.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399236306352",
+          "boot": "e7390b812bf442718e1f1b8d2e97acb6",
+          "message": "Started vpngw-fault-resume-F6-long-freeze.timer - /usr/bin/python3 -c \"import os,pathlib,signal; p=1220; boot='e7390b81-2bf4-4271-8e1f-1b8d2e97acb6\\\\n'; started='1133'; valid=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text()==boot and pathlib.Path('/proc/'+str(p)+'/stat').exists(); valid=valid and pathlib.Path('/proc/'+str(p)+'/stat').read_text().split()[21]==started; os.kill(p,signal.SIGCONT) if valid else None\"."
+        },
+        {
+          "time_us": "1793399250158112",
+          "boot": "e7390b812bf442718e1f1b8d2e97acb6",
+          "message": "vpngw-fault-resume-F6-long-freeze.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399250158181",
+          "boot": "e7390b812bf442718e1f1b8d2e97acb6",
+          "message": "Stopped vpngw-fault-resume-F6-long-freeze.timer - /usr/bin/python3 -c \"import os,pathlib,signal; p=1220; boot='e7390b81-2bf4-4271-8e1f-1b8d2e97acb6\\\\n'; started='1133'; valid=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text()==boot and pathlib.Path('/proc/'+str(p)+'/stat').exists(); valid=valid and pathlib.Path('/proc/'+str(p)+'/stat').read_text().split()[21]==started; os.kill(p,signal.SIGCONT) if valid else None\"."
+        },
+        {
+          "time_us": "1793399717970999",
+          "boot": "a5d445f5df724c5f844d6eb77060dc77",
+          "message": "Started vpngw-fault-cleanup-F7b-both-heartbeats.timer - /bin/sh /run/vpngw-fault-cleanup-F7b-both-heartbeats.sh."
+        },
+        {
+          "time_us": "1793399733038593",
+          "boot": "a5d445f5df724c5f844d6eb77060dc77",
+          "message": "vpngw-fault-cleanup-F7b-both-heartbeats.timer: Deactivated successfully."
+        },
+        {
+          "time_us": "1793399733038685",
+          "boot": "a5d445f5df724c5f844d6eb77060dc77",
+          "message": "Stopped vpngw-fault-cleanup-F7b-both-heartbeats.timer - /bin/sh /run/vpngw-fault-cleanup-F7b-both-heartbeats.sh."
+        },
+        {
+          "time_us": "1793399983315563",
+          "boot": "d937977292b14d529d38241090051f55",
+          "message": "Started vpngw-fault-cleanup-F9.timer - /bin/sh /run/vpngw-fault-cleanup-F9.sh."
+        },
+        {
+          "time_us": "1793400163427885",
+          "boot": "d937977292b14d529d38241090051f55",
+          "message": "Started vpngw-fault-cleanup-F9.service - /bin/sh /run/vpngw-fault-cleanup-F9.sh."
+        },
+        {
+          "time_us": "1793400163468208",
+          "boot": "d937977292b14d529d38241090051f55",
+          "message": "vpngw-fault-cleanup-F9.service: Deactivated successfully."
+        },
+        {
+          "time_us": "1793400163468401",
+          "boot": "d937977292b14d529d38241090051f55",
+          "message": "vpngw-fault-cleanup-F9.timer: Deactivated successfully."
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "pid": 142764,
+  "time": 1793397917.6985354,
+  "path": "/tmp/vpngw-us-uk-static-faults-20261030.jsonl",
+  "source": "10.81.0.20",
+  "destination": "10.80.1.0",
+  "routing": "static"
+}

@@ -1,0 +1,22 @@
+{
+  "node": "us-b",
+  "result": {
+    "time": 1793398458.0692701,
+    "proof": {
+      "authoritative": true,
+      "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+      "observed_owner_node_id": null,
+      "former_owner_node_id": "gateway-a",
+      "former_owner_compute_state": "stopped",
+      "former_attachment_absent": true,
+      "candidate_attachment_exact": false,
+      "ownership_re_read_exact": false,
+      "ownership_epoch": "25",
+      "former_attachment_exact": false,
+      "candidate_attachment_absent": true
+    },
+    "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/us-api-fault-20261030",
+    "restart_returncode": 0,
+    "stderr": ""
+  }
+}

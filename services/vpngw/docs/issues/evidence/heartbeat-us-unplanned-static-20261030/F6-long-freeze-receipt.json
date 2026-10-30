@@ -1,0 +1,20 @@
+{
+  "started_at": 1793399235.735245,
+  "label": "F6-long-freeze",
+  "node": "us-b",
+  "kind": "pause",
+  "duration": 45,
+  "injection": {
+    "node": "us-b",
+    "result": {
+      "time": 1793399236.3070967,
+      "pid": 1220,
+      "kind": "pause",
+      "duration": 45,
+      "boot": "e7390b81-2bf4-4271-8e1f-1b8d2e97acb6",
+      "start_ticks": "1133"
+    }
+  },
+  "finished_at": 1793399406.865577,
+  "final_owner": "us-a"
+}

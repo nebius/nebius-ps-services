@@ -1,0 +1,37 @@
+{
+  "label": "F7b-both-heartbeats",
+  "started_at": 1793399716.824508,
+  "owner": "us-b",
+  "targets": [
+    "us-a",
+    "us-b"
+  ],
+  "duration": 45,
+  "kind": "heartbeat",
+  "injections": [
+    {
+      "node": "us-a",
+      "result": {
+        "time": 1793399717.390741,
+        "label": "F7b-both-heartbeats",
+        "kind": "heartbeat",
+        "seconds": 45,
+        "rules": "-N VPGFAULT\n-A VPGFAULT -d 10.81.0.12/32 -p tcp -m tcp --dport 9443 -j DROP\n",
+        "cleanup_unit": "vpngw-fault-cleanup-F7b-both-heartbeats.timer"
+      }
+    },
+    {
+      "node": "us-b",
+      "result": {
+        "time": 1793399717.9756737,
+        "label": "F7b-both-heartbeats",
+        "kind": "heartbeat",
+        "seconds": 45,
+        "rules": "-N VPGFAULT\n-A VPGFAULT -d 10.81.0.0/32 -p tcp -m tcp --dport 9443 -j DROP\n",
+        "cleanup_unit": "vpngw-fault-cleanup-F7b-both-heartbeats.timer"
+      }
+    }
+  ],
+  "finished_at": 1793399881.7097201,
+  "final_owner": "us-a"
+}

@@ -1,0 +1,25 @@
+{
+  "label": "F1-standby-api",
+  "started_at": 1793398028.166759,
+  "owner": "us-a",
+  "targets": [
+    "us-b"
+  ],
+  "duration": 60,
+  "kind": "api",
+  "injections": [
+    {
+      "node": "us-b",
+      "result": {
+        "time": 1793398028.7520118,
+        "label": "F1-standby-api",
+        "kind": "api",
+        "seconds": 60,
+        "rules": "-N VPGFAULT\n-A VPGFAULT -p tcp -m cgroup --path \"system.slice/nebius-vpngw-vm-ha.service\" -m tcp --dport 443 -j DROP\n",
+        "cleanup_unit": "vpngw-fault-cleanup-F1-standby-api.timer"
+      }
+    }
+  ],
+  "finished_at": 1793398119.764478,
+  "final_owner": "us-a"
+}

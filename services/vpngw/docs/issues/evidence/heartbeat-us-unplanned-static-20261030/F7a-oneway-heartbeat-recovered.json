@@ -1,0 +1,314 @@
+[
+  {
+    "node": "us-a",
+    "result": {
+      "time": 1793399700.4763322,
+      "status": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "candidate_attachment_absent": true,
+        "candidate_attachment_exact": false,
+        "cluster_id": "us-central1-ha",
+        "configured_role": "active",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": null,
+        "data_plane_mode": "passive",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "former_attachment_absent": false,
+        "former_attachment_exact": true,
+        "former_owner_compute_state": "running",
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "guard_boot_id": "da343cdd-121c-4162-bf71-828d162c0b6f",
+        "mtls": {
+          "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+          "cluster_id": "us-central1-ha",
+          "compute_id": "computeinstance-u00g51p9pxqv82fqzv",
+          "epoch": 1,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-a",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77",
+            "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+            "epoch": 1,
+            "fresh": true,
+            "node_id": "gateway-b",
+            "sequence": 260
+          },
+          "peer_fingerprints": [
+            "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "53037261fa345b519735d0ef0a0a3eaba8af742edcf842a62cd31b2425a31660",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-a",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "39",
+        "ownership_re_read_exact": false,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": null,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": null
+        },
+        "promotion_committed": false,
+        "promotion_ready": false,
+        "rearm_phase": "not-owner",
+        "rearm_reason": null,
+        "reasons": [
+          "authoritative-owner-peer-is-healthy"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": true,
+        "repair": null,
+        "route_reconciliation": null,
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [],
+        "standby_ready": true,
+        "standby_tunnel_state": "warm",
+        "state": "normal",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "boot_id": "da343cdd-121c-4162-bf71-828d162c0b6f",
+      "guard": {
+        "data_plane_mode": "passive",
+        "guard_boot_id": "da343cdd-121c-4162-bf71-828d162c0b6f",
+        "installed_at": 1793399545.7033238,
+        "schema": "nebius-vpngw/vm-ha-status-v1"
+      },
+      "pid": "981",
+      "forwarding": "0",
+      "static_route": "[{\"dst\":\"10.80.1.0/24\",\"dev\":\"xfrm1\",\"scope\":\"link\",\"flags\":[]}]",
+      "pending": {
+        "apply.lock": false,
+        "accepted-cloud-operation.json": false,
+        "route-pending.json": false,
+        "manual-failover.json": false,
+        "manual-failback.json": false
+      },
+      "fault_counters": "",
+      "heartbeats": {
+        "generation-store/peers/gateway-b/accepted-heartbeat.json": {
+          "mtime": 1793399699.632963,
+          "payload": {
+            "payload": {
+              "auto_healing_policy_digest": "2970afe5eb3bed89478febc2cf4c38e585a5d093592eceed8a9df73c741cad81",
+              "auto_healing_policy_state": "enabled",
+              "boot_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77",
+              "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+              "cluster_id": "us-central1-ha",
+              "configured_role": "passive",
+              "data_plane_mode": "active",
+              "digests": {
+                "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+                "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+                "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+              },
+              "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+              "health_sample_age_seconds": 5.269531814785864,
+              "local_forwarding_ready": true,
+              "mtls_epoch": 1,
+              "node_id": "gateway-b",
+              "observed_owner_id": "gateway-b",
+              "ownership_observation_age_seconds": 5.739330216785845,
+              "schema": "nebius-vpngw/vm-ha-heartbeat-v4",
+              "sent_at": "2026-10-30T22:34:59.625072Z",
+              "sequence": 260,
+              "service_healthy": true,
+              "transfer_ready": true
+            },
+            "schema": "nebius-vpngw/vm-ha-envelope-v1",
+            "sha256": "9406f1a4e2b08b1dee3e6ba4a3aed2b842535c6d2c85c50e46c734b988d34027"
+          }
+        }
+      }
+    },
+    "collected_at": 1793399700.510769
+  },
+  {
+    "node": "us-b",
+    "result": {
+      "time": 1793399700.4793959,
+      "status": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "candidate_attachment_absent": false,
+        "candidate_attachment_exact": true,
+        "cluster_id": "us-central1-ha",
+        "configured_role": "passive",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77",
+        "data_plane_mode": "active",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "former_attachment_absent": true,
+        "former_attachment_exact": false,
+        "former_owner_compute_state": "running",
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "guard_boot_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77",
+        "mtls": {
+          "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+          "cluster_id": "us-central1-ha",
+          "compute_id": "computeinstance-u00z7c89ca6d7y485j",
+          "epoch": 1,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-b",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "da343cdd-121c-4162-bf71-828d162c0b6f",
+            "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+            "epoch": 1,
+            "fresh": true,
+            "node_id": "gateway-a",
+            "sequence": 154
+          },
+          "peer_fingerprints": [
+            "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "80d68eb71d8b9db53be169ff47b1d3774d6de06a2e19606c47b67053a6e80bf8",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "34",
+        "ownership_re_read_exact": true,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": 58.790318727493286,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": 30.137893199920654
+        },
+        "promotion_committed": true,
+        "promotion_ready": true,
+        "rearm_phase": "running",
+        "rearm_reason": null,
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": true,
+        "repair": null,
+        "route_reconciliation": {
+          "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+          "digests": {
+            "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+            "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+            "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+          },
+          "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "operation_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77:118:reconcile-routes:gateway-b",
+          "owner_node_id": "gateway-b",
+          "ownership_epoch": "34",
+          "ownership_incarnation": 9,
+          "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031"
+        },
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [
+          "data-plane-not-passive",
+          "local-node-is-not-exact-non-owner",
+          "owner-shared-alias-not-exact",
+          "local-shared-alias-present"
+        ],
+        "standby_ready": false,
+        "standby_tunnel_state": "not-standby",
+        "state": "active",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "boot_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77",
+      "guard": {
+        "data_plane_mode": "active",
+        "guard_boot_id": "a5d445f5-df72-4c5f-844d-6eb77060dc77",
+        "installed_at": 1793399699.465507,
+        "schema": "nebius-vpngw/vm-ha-status-v1"
+      },
+      "pid": "1010",
+      "forwarding": "1",
+      "static_route": "[{\"dst\":\"10.80.1.0/24\",\"dev\":\"xfrm1\",\"scope\":\"link\",\"flags\":[]}]",
+      "pending": {
+        "apply.lock": false,
+        "accepted-cloud-operation.json": false,
+        "route-pending.json": false,
+        "manual-failover.json": false,
+        "manual-failback.json": false
+      },
+      "fault_counters": "",
+      "heartbeats": {
+        "generation-store/peers/gateway-a/accepted-heartbeat.json": {
+          "mtime": 1793399699.7729013,
+          "payload": {
+            "payload": {
+              "auto_healing_policy_digest": "2970afe5eb3bed89478febc2cf4c38e585a5d093592eceed8a9df73c741cad81",
+              "auto_healing_policy_state": "enabled",
+              "boot_id": "da343cdd-121c-4162-bf71-828d162c0b6f",
+              "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+              "cluster_id": "us-central1-ha",
+              "configured_role": "active",
+              "data_plane_mode": "passive",
+              "digests": {
+                "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+                "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+                "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+              },
+              "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+              "health_sample_age_seconds": 5.9387075052412115,
+              "local_forwarding_ready": true,
+              "mtls_epoch": 1,
+              "node_id": "gateway-a",
+              "observed_owner_id": "gateway-b",
+              "ownership_observation_age_seconds": 6.442184729241205,
+              "schema": "nebius-vpngw/vm-ha-heartbeat-v4",
+              "sent_at": "2026-10-30T22:34:59.765186Z",
+              "sequence": 155,
+              "service_healthy": true,
+              "transfer_ready": true
+            },
+            "schema": "nebius-vpngw/vm-ha-envelope-v1",
+            "sha256": "8810677ea3a713b7850e22f1de27e80ac4ad6b3084957d1cdcb22423b9f6bb67"
+          }
+        }
+      }
+    },
+    "collected_at": 1793399700.5107782
+  }
+]

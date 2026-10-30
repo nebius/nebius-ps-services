@@ -1,0 +1,18 @@
+[
+  {
+    "node": "us-a",
+    "result": {
+      "time": 1793400114.099261,
+      "returncode": 0,
+      "counters": "Chain VPGFAULT9 (1 references)\n    pkts      bytes target     prot opt in     out     source               destination         \n     269    43780 DROP       0    --  *      *       0.0.0.0/0            89.124.37.185       \n"
+    }
+  },
+  {
+    "node": "us-b",
+    "result": {
+      "time": 1793400114.6626153,
+      "returncode": 0,
+      "counters": "Chain VPGFAULT9 (1 references)\n    pkts      bytes target     prot opt in     out     source               destination         \n      16     1748 DROP       0    --  *      *       0.0.0.0/0            89.124.37.185       \n"
+    }
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "node": "us-a",
+  "result": {
+    "chain_absent": true,
+    "rules": "",
+    "counters_path": "/run/vpngw-fault-counters-F3-both-api.txt"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "us_activations_audited": 8,
+  "uk_activations_audited": 2,
+  "all_activations_have_stopped_former_owner_attachment_and_route_receipts": true,
+  "us_installed_modules_match_dev31": true,
+  "both_pairs_final_strict_identity_and_redundancy_ready": true,
+  "tcp_exercised": false,
+  "us_uk_routing_mode_exercised": "static",
+  "us_uk_bgp_exercised": false,
+  "raw_evidence_directory": "/private/tmp/vpngw-us-faults-20261030"
+}

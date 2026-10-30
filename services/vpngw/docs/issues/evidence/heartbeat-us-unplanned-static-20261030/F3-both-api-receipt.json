@@ -1,0 +1,37 @@
+{
+  "label": "F3-both-api",
+  "started_at": 1793398744.077209,
+  "owner": "us-b",
+  "targets": [
+    "us-a",
+    "us-b"
+  ],
+  "duration": 60,
+  "kind": "api",
+  "injections": [
+    {
+      "node": "us-a",
+      "result": {
+        "time": 1793398744.6552968,
+        "label": "F3-both-api",
+        "kind": "api",
+        "seconds": 60,
+        "rules": "-N VPGFAULT\n-A VPGFAULT -p tcp -m cgroup --path \"system.slice/nebius-vpngw-vm-ha.service\" -m tcp --dport 443 -j DROP\n",
+        "cleanup_unit": "vpngw-fault-cleanup-F3-both-api.timer"
+      }
+    },
+    {
+      "node": "us-b",
+      "result": {
+        "time": 1793398745.24529,
+        "label": "F3-both-api",
+        "kind": "api",
+        "seconds": 60,
+        "rules": "-N VPGFAULT\n-A VPGFAULT -p tcp -m cgroup --path \"system.slice/nebius-vpngw-vm-ha.service\" -m tcp --dport 443 -j DROP\n",
+        "cleanup_unit": "vpngw-fault-cleanup-F3-both-api.timer"
+      }
+    }
+  ],
+  "finished_at": 1793398990.891737,
+  "final_owner": "us-a"
+}

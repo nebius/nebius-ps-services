@@ -1,0 +1,14 @@
+{
+  "node": "us-a",
+  "result": {
+    "dpd_settings": [
+      "dpd_delay = 5s",
+      "dpd_timeout = 15s",
+      "dpd_delay = 5s",
+      "dpd_timeout = 15s",
+      "dpd_delay = 5s",
+      "dpd_timeout = 15s"
+    ],
+    "installed_documentation": "ket has been received for the configured DPD delay.\n\n.TP\n.BR connections.<conn>.dpd_timeout \" [0s]\"\nCharon by default uses the normal retransmission mechanism and timeouts to check\nthe liveness of a peer, as all messages are used for liveness checking. For\ncompatibility reasons, with IKEv1 a custom interval may be specified; this\noption has no effect on connections using IKE2.\n\n.TP\n.BR connections.<conn>.fragmentation \" [yes]\"\nUse IKE fragmentation (proprietary IKEv1 extension or RFC 7383 IKEv2\nfragmentation).  Acceptable  values  are\n.RI \"\" \"yes\" \"\"\n(the        default),\n.RI \"\" \"accept\" \",\"\n.RI \"\" \"force\" \"\"\nand\n.RI \"\" \"no\" \".\"\nIf set to\n.RI \"\" \"yes\" \",\"\nand the peer     supports it, oversized IKE\nmessages will be sent in fragments. If set to\n.RI \"\" \"accept\" \",\"\nsupport for\nfragmentation is announced to the peer but the daemon does not send its own\nmessages in fragments.  If set to\n.RI \"\" \"force\" \"\"\n(only supported for IKEv1) the initial\nIKE message will already be fragmented if required. Finally, setting the option\nto\n.RI \"\" \"no\" \"\"\nwill disable announcing support for this feature.\n\nNote that fragmented IKE messages sent by a peer are always accepted\nirrespective of the value of this option (even when set to\n.RI \"\" \"no\" \").\"\n\n\n.TP\n.BR connections.<conn>.childless \" [allow]\"\nUse childless IKE_SA initiation (RFC 6023) for IKEv2, with the first CHILD_SA\ncreated with a separate CREATE_CHILD_SA exchange (e.g. to use an independent DH\nexchange for all CHILD_SAs).  Acceptable values are\n.RI \"\" \"allow\" \"\"\n(the default),\n.RI \"\" \"prefer\" \",\"\n.RI \"\" \"force\" \"\"\nand\n.RI \"\" \"never\" \".\"\nIf set to\n.RI \"\" \"allow\" \",\"\nresponders will accept\nchildless IKE_SAs (as indicated via notify in the IKE_SA_INIT response) while\ninitiators continue to create regular IKE_SAs wit"
+  }
+}
