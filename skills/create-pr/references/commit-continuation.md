@@ -19,6 +19,9 @@ merge-pr. Authorized review-pr/merge-pr repairs use the same private preparation
 handoff and active grant; this path cannot recursively review or merge. A checkpoint never replaces authorization; fresh-session commit work
 requires fresh canonical intake after reconciliation of uncertain prior effects.
 
+Read [PR publication](pr-publication.md) for existing PR bindings, fork intake
+and every ordinary target push.
+
 Read [the shared private task lifecycle](../../commit/references/task-lifecycle.md)
 before preparing effects. Active SDLC and delegated local workflows retain their
 own authority and do not use this root-task protocol.
@@ -41,7 +44,7 @@ own authority and do not use this root-task protocol.
    until exact cleanup is proved. Never publish the scratch ref.
 5. After final base synchronization, delegate nested read-only code-review of
    the complete final candidate and affected callers. Renew validation/review
-   after changes. Push only the reviewed target with `origin HEAD:<branch>`, inspect current-head
+   after changes. Publish only the reviewed target through private `publish-target`, inspect current-head
    checks, and continue safe repairs under the same task until complete.
 6. Run outer-owner `complete-checkout --mode finalize` under the inherited policy,
    then call private `finish --outcome completed` only at the selected public

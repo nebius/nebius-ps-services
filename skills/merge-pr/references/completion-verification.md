@@ -50,7 +50,7 @@ separately reconciles retained intent receipts while the laptop is offline.
 
 ## Actions Broker Result Evidence
 
-For a merge carrying a `merge-intent/v1` receipt, use the installed completion
+For a merge carrying a `merge-intent/v2` receipt, use the installed completion
 helper with the trusted deployment policy and original broker run/attempt:
 
 ```text
@@ -222,7 +222,9 @@ Keep deletion out of the initial merge/enqueue command. If explicitly requested,
 the grant, clean up only the PR's exact head branch after merged state and destination
 containment are verified. Re-read its repository/ref and require it still matches
 the guarded head before deleting; never delete the target/default/protected
-branch or another actor's newer work. Already absent means already deleted.
+branch or another actor's newer work. For forks, remote cleanup uses the bound
+head repository/ref and local cleanup uses its operation alias; never substitute
+origin or a same-named base branch. Already absent means already deleted.
 The remote deletion must atomically require the expected head SHA at mutation
 time; a prior read followed by unconditional API deletion is not safe. Git's
 fully specified `--force-with-lease=refs/heads/<head>:<guarded-sha>` with an exact

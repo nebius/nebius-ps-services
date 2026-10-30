@@ -1,0 +1,12 @@
+id,should_trigger,prompt
+explicit-current,true,$review-github-issues
+explicit-numbers,true,$review-github-issues 17 23 --repo example-org/widget
+explicit-url,true,$review-github-issues https://github.com/example-org/widget/issues/17
+explicit-help,true,$review-github-issues --help
+explicit-report,true,"$review-github-issues 17 --repo example-org/widget; report only, do not change files or GitHub."
+pr-review,false,Review GitHub pull request 17 and its patch.
+local-code,false,Review my local changes for correctness bugs.
+create-issue,false,Create a GitHub issue describing this error.
+implement-issue,false,Implement GitHub issue 17 and open a PR.
+not-invoked,false,What are sensible ways to prioritize GitHub issues?
+other-tracker,false,Review the selected Jira tickets and prioritize them.

@@ -107,5 +107,8 @@ and repairs after merge. Completion-only fast-forwards retain their own journal
 and never replace reviewed publication checkpoints. Finish requires the declared
 checkout and every completed or intentionally skipped ref update.
 
-Task/checkpoint/closure v2 is strict: old transactions must complete with their
+[Bound PR publication](../../create-pr/references/pr-publication.md) adds
+immutable PR identities and a journaled non-force push to this same owner.
+
+Task/checkpoint/closure v3 is strict: old transactions must complete with their
 existing owner before installation. Do not migrate authority or reopen closures.

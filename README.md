@@ -72,7 +72,10 @@ requires fresh review. Standalone review never merges, and automatic PR/CI
 and scheduled events only report CI or recover already-authorized completion.
 
 [Protected merge setup](.github/merge-automation.md) documents the operator list,
-required protection, bootstrap and live acceptance. Completion CI can run from
+required protection, bootstrap and live acceptance. Its scoped Actions event
+policies allow privileged PR events only for reviewer routing and the merge
+broker; the same guide records policy ownership, verification and rollback.
+Completion CI can run from
 a newer workflow revision; its exact-result artifact identifies the tested commit.
 Verify skill installation and default-branch workflow deployment separately
 from source tests, CI and live completion.

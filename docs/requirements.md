@@ -69,11 +69,12 @@ Ordinary PRs and all configured Dependabot updates, including Docker, use one lo
 
 - AC-012: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs.
 - AC-013: Completion events inspect only the producer run. Operator-dispatched merge intents and validated early result-CI routing receipts can route recovery, including failed CI. Routing identity never proves CI success. Preserve latest-attempt exact-result evidence. Target-specific malformed receipts block that target while independent valid targets proceed; authentication, permissions and incomplete global listings stop all effects.
-- AC-014: Keep the seven CI workflow identities and five result-dispatch inputs, trusted checkout ordering and success artifacts. Check policy, listener, path-filter and publication contract parity in baseline CI.
+- AC-014: Register CI only for maintained repository projects and shared automation. Preserve the registered workflow identities and five result-dispatch inputs, trusted checkout ordering and success artifacts. Keep policy, listeners, path filters and publication-test inventory synchronized with the maintained projects, and check their parity in baseline CI.
 - AC-015: Existing releases require a trusted immutable pre-publication manifest binding repository, tag object/commit, workflow run/attempt and every asset basename, size and SHA-256. Verify downloaded bytes. Missing evidence, transport/auth failures, partial or conflicting state block reconciliation; never treat errors as absence or overwrite published artifacts.
 - AC-016: Image SemVer tags are tag-triggered only (X.Y.Z and X.Y.Z-gSHA); manual builds use sha-SHA and optional main-only latest, with no release_version input. Serialize the destination image across preflight, push, digest verification and manifest using noncanceling queue:max. Verify all immutable aliases against trusted prior evidence before reuse and every remote digest after publication.
 - AC-017: Preserve service-specific release qualification and Helm catalog, metadata, package, anonymous-pull and digest checks. Share deterministic publication utilities without a privileged generic command workflow. github-workflows is the sole release/image YAML template owner; publisher skills delegate setup to it.
 - AC-018: Reviewer routing adds configured nonauthor reviewers for same-repository nondraft PRs using trusted base policy, and preserves manually requested users and teams. It never executes PR code or removes reviewers.
+- AC-019: Retire github-report and its release workflow while preserving strict Required CI during the trusted-policy transition. Keep the existing CI workflow identity temporarily as a read-only retirement validator; remove that validator in a follow-up PR after the policy no longer requires it on the default branch. Do not restore the retired product or weaken branch protection.
 
 #### Negative Criteria
 
@@ -93,5 +94,57 @@ Use disposable repositories and mocked GitHub APIs for identity, admission, CI, 
 Separate static, installed, native and live evidence. Live acceptance uses a protected bootstrap followed by ordinary and real Dependabot PRs, including Docker when an eligible update exists. Fixtures do not prove live Dependabot results. Verify workflow-file success or the permission handoff separately.
 
 <!-- /REQUIREMENT: REQ-002 -->
+<!-- REQUIREMENT: REQ-003 status=active priority=P1 type=feature -->
+### REQ-003: Restrict privileged PR events to reviewed automation
+
+#### User Story
+
+Repository administrators need explicit, auditable Actions event policies that
+preserve trusted reviewer routing and CI status updates while preventing other
+workflows from starting through `pull_request_target`.
+
+#### Acceptance Criteria
+
+- AC-001: Three active repository policies partition workflow paths. Reviewer
+  routing permits only `pull_request_target`; protected merge permits
+  `pull_request_target`, `workflow_run`, and `workflow_dispatch`; all other
+  paths permit the frozen documented event inventory except `pull_request_target`.
+- AC-002: Exceptions match exact workflow paths and use existing trusted code
+  with least-privilege jobs. Policy permission never authorizes contributor code
+  execution or automatic approval/merge.
+- AC-003: Independently read back policy IDs, path conditions, enforcement and
+  events. Preserve branch protection, token permissions, actor access and fork
+  approval settings byte-for-byte in normalized configuration snapshots.
+- AC-004: Document administrative ownership, exact policy configuration,
+  maintenance, concurrent-change checks and fail-closed rollback. Distinguish
+  local checks, configuration readback and subsequent live-event evidence.
+
+#### Negative Criteria
+
+- NC-001: Do not change workflow code, deploy new credentials, relax inherited
+  restrictions, approve fork runs, or dispatch approval/merge to test policies.
+- NC-002: Do not silently allow new event types or broaden path exceptions.
+  Do not claim live acceptance from historical workflow runs.
+
+#### Validation Method
+
+Compare independently fetched policy definitions and unchanged adjacent settings
+against the frozen intended configuration; validate the canonical spec pair and
+the focused documentation diff.
+
+#### Test Method
+
+Run existing merge-admission and workflow-contract tests, inspect exact checkout
+and job permissions, and exhaustively check the policy partition against the
+frozen event inventory, current paths and hypothetical new paths.
+
+#### Evaluation Method
+
+Observe ordinary and fork PR/CI runs created after activation and their policy
+insights when available. Keep live verification pending until representative
+fresh runs exist; settings readback alone proves configuration only.
+
+<!-- /REQUIREMENT: REQ-003 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -24,6 +24,40 @@ def step(value, name):
 
 
 class WorkflowContracts(unittest.TestCase):
+    def test_github_report_retirement_transition(self):
+        value = workflow("github-report-ci.yml")
+        self.assertEqual(value["name"], "github-report-ci")
+        self.assertEqual(value["permissions"], {"contents": "read"})
+        self.assertEqual(set(value["on"]), {"pull_request", "push"})
+        self.assertEqual(len(value["jobs"]), 1)
+        steps = value["jobs"]["retirement"]["steps"]
+        self.assertEqual(steps[0]["with"]["persist-credentials"], "false")
+        script = step(steps, "Verify project retirement")["run"]
+        policy = json.loads((ROOT / ".github/merge-policy.json").read_text())
+        with tempfile.TemporaryDirectory(prefix="github-report-retirement-") as folder:
+            root = Path(folder)
+            (root / ".github/workflows").mkdir(parents=True)
+            (root / ".github/merge-policy.json").write_text(json.dumps(policy))
+
+            def run():
+                return subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-c", script],
+                    cwd=root, capture_output=True, text=True,
+                )
+
+            self.assertEqual(run().returncode, 0)
+            retired = root / "misc/github-report"
+            retired.mkdir(parents=True)
+            self.assertNotEqual(run().returncode, 0)
+            retired.rmdir()
+            release = root / ".github/workflows/github-report-release.yml"
+            release.write_text("unexpected release workflow\n")
+            self.assertNotEqual(run().returncode, 0)
+            release.unlink()
+            policy["ci_workflows"].append({"file": "github-report-ci.yml", "paths": ["misc/github-report/**"]})
+            (root / ".github/merge-policy.json").write_text(json.dumps(policy))
+            self.assertNotEqual(run().returncode, 0)
+
     def test_policy_listeners_and_ci_filters_agree(self):
         policy = json.loads((ROOT / ".github/merge-policy.json").read_text())
         names = []
@@ -75,7 +109,6 @@ class WorkflowContracts(unittest.TestCase):
         for name in [
             "vpngw-release.yml",
             "nebius-cxcli-release.yml",
-            "github-report-release.yml",
         ]:
             with self.subTest(workflow=name):
                 value = workflow(name)

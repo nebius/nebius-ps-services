@@ -4,6 +4,21 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add explicit-only `review-github-issues` for selected GitHub issue triage,
+  evidence-based disposition and file-only implementation plans. Keep valid
+  low-priority work open, verify saved project plans before acceptance, preserve
+  existing edits, and leave implementation and Git/PR publication to maintainers.
+  Keep nested research/design advisory within the current host mode so their
+  handoff neither blocks the authorized save nor exposes a user-visible plan.
+
+- Review contribution correctness, safety and supported behavior before repairs
+  and root-owned canonical spec reconciliation. Add per-project outcomes,
+  missing-spec bootstrap and exact final-diff assessments to ordinary PR review.
+- Support bound contributor forks through trusted intake, journaled non-force
+  publication and protected merge completion. Version review/intent evidence to
+  v2 and private task state to v3; require a drained, protected bootstrap before
+  live activation.
+
 - Extend ordinary PR readiness, merge settlement and result verification to
   independent fixed 24-hour budgets. Preserve caller checkpoint deadlines,
   protected merge checks and transaction identity across explicit continuation.
@@ -392,6 +407,13 @@ All notable changes to the reusable Agent Skills are tracked here.
   change together without converting old authority; delegated schemas stay intact.
 
 ### Fixed
+
+- Validate synchronized PR publication against the authoritative live base ref,
+  and settle proven successful pushes after concurrent PR closure or merge.
+  Preserve open-PR and write-permission checks before every new push.
+
+- Keep independently completed merge operations settled when retained older
+  intent artifacts fail the current schema, without admitting old authority.
 
 - Let explicitly invoked agent-auth setup complete bounded browser sign-in for
   an expired human session while suppressing authentication diagnostics. Keep

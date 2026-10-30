@@ -74,7 +74,8 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    major updates and Docker, follows the same operator-initiated review and repair
    path. No scheduler starts local review. Freeze host/repository/default/PR identity.
 2. If already merged, skip effects and verify that exact operation's result.
-   Otherwise require same-repository, non-draft, live-default target. Invoke
+   Otherwise require a non-draft, live-default target with separately bound
+   base/head repository identities, including eligible forks. Invoke
    local review-pr as a parent-owned coordinator for **every unmerged PR**, even
    with an existing passing attestation. It must not re-delegate merge-pr.
    Reuse code analysis only within this root operation at unchanged exact
@@ -84,7 +85,9 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    remote-only merges; do not materialize a local PR branch without need.
    Delegate safe repairs to create-pr's private preparation handoff; do not
    mutate branch history here. Unsafe findings and human objections stop.
-3. Wait for applicable current-head CI, synchronize/review again when default
+3. Require review-pr contribution/compatibility and per-project spec assessments.
+   It calls maintain-project-specs after safe repairs; do not create a second
+   spec writer or review loop here. Wait for applicable current-head CI, synchronize/review again when default
    advances, and freeze the exact head/base and COMMENT review ID. CI alone is
    insufficient. The broker authorizes configured numeric operator IDs only.
    PR readiness has a fixed 86,400-second (24-hour) budget. Reuse the publication caller's

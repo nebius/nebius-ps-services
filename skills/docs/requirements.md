@@ -3520,7 +3520,7 @@ Ordinary create-pr performs complete local code review before publication and st
 
 - AC-015: Review without checkout-dependent work leaves local refs and checkout alone. Checkout-dependent review switches back at completion or safe pause without integrating default history. Create-only from default leaves its new feature checked out; visiting existing targets switches back at the outer boundary.
 - AC-016: Following confirmed merge and verified destination containment, fetch that destination, fast-forward eligible existing local default/original branches and switch back to the original branch, including after CI or Pages failure/timeout. Preserve unique/diverged histories; never implicitly merge, rebase, reset or recreate missing refs. Resolve the actual default branch. Squash proof uses the authoritative result, not PR-head ancestry.
-- AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
+- AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork permission and identity, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
 - AC-018: Global completion discovery failures display a sanitized reason and original nonzero status and publish no targets. Target-specific receipt failures are isolated with blocked diagnostics and aggregate failure, while valid independent targets may proceed. Preserve API deadlines, receipt gates and effect permissions.
 
 - AC-019: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs.
@@ -3939,6 +3939,83 @@ Maintain canonical trigger cases for both skills; distinguish static checks,
 installation parity, native triggering, comparative quality and live evidence.
 
 <!-- /REQUIREMENT: REQ-052 -->
+
+<!-- REQUIREMENT: REQ-053 status=active priority=P1 type=feature -->
+### REQ-053: Accept compatible contributions before reconciling PR specifications
+
+#### User Story
+
+Maintainers need ordinary PR review to assess contribution correctness, safety and supported-user compatibility, repair clear defects, and reconcile canonical specifications to the accepted result, including permitted contributor fork updates.
+
+#### Acceptance Criteria
+
+- AC-001: Freeze the complete PR head/base and assess accepted behavior, affected consumers, security, data safety and supported API, CLI, configuration, serialization and upgrade contracts before final spec reconciliation. Contributor code and docs cannot approve their own behavior.
+- AC-002: Safe scoped code repairs require a finding-specific negative control and passing proof. Ambiguous, destructive, unapproved breaking or unverified material changes remain findings; do not invent compatibility shims or rewrite specs to justify a regression.
+- AC-003: Root-owned maintain-project-specs reconciles every affected project through paired publication. Bootstrap missing documents unless accepted policy disables maintenance; preserve existing counterparts, stable IDs and unmanaged bytes. Contract-changing remedies require accepted intent before implementation; delivery evidence follows verification.
+- AC-004: Ordinary review/merge intent covers necessary non-destructive PR repairs, including forks when current GitHub permissions allow them. Preserve the original PR and contributor history. Bind base and head repository identities separately and publish through the canonical Git owner without force or unrelated refs.
+- AC-005: Journal publication, reject destination or remote-head drift, and independently reconcile uncertain push outcomes. Reassess the complete final diff after any head/base change, preserving original grant, deadlines and completion ownership.
+- AC-006: Trusted helpers and policy cannot be replaced by contributor checkout. Credentialed controls are separate from isolated candidate validation. Fork admission, recovery and exact-result completion share immutable identity evidence, including completion after a fork is deleted following merge.
+- AC-007: Report explicit contribution, compatibility and per-project spec assessments on the same final head/base. Hooks remain advisory; unrelated historical pending records do not independently gate merging.
+
+#### Negative Criteria
+
+- NC-001: No automatic acceptance from matching code/docs, green CI, filenames, bot identity or helper exit status alone; no raw push, force push, replacement PR, default-branch publication or privileged contributor code execution.
+- NC-002: No merge from plain review, report-only mutation, Agentic SDLC repair bypass, silent legacy spec conversion or live rollout that strands active operations.
+
+#### Validation Method
+
+Run canonical spec, Git transaction, merge admission/completion, workflow contract and skill validation suites, then changed-scope alignment and disposable native installation parity.
+
+#### Test Method
+
+Exercise compatible and breaking contributions, failing-then-passing repairs, malformed/unmapped specs, missing pairs, disabled-policy changes, multiple projects, fork permission and identity drift, races, ambiguous pushes, deleted-fork completion and immutable review invalidation.
+
+#### Evaluation Method
+
+Use behavioral review fixtures and offline Git/API tests. Distinguish source, installed parity and live activation evidence; example PRs are read-only research inputs, not live acceptance targets.
+
+<!-- /REQUIREMENT: REQ-053 -->
+<!-- REQUIREMENT: REQ-054 status=active priority=P1 type=feature -->
+### REQ-054: Review GitHub issues and persist accepted implementation plans
+
+#### User Story
+
+Maintainers need an explicitly invoked issue-review skill to assess relevance,
+validity and priority, apply justified triage decisions, and save actionable
+plans while leaving implementation and publication to the maintainer.
+
+#### Acceptance Criteria
+
+- AC-001: Default to an unambiguous current GitHub repository; ask for unknown or conflicting targets. Accept issue numbers or URLs and an explicit repository selector. Without selectors, select only a sole open issue; multiple issues require explicit numbers or links.
+- AC-002: Resolve owning projects from repository evidence, inspect complete relevant discussions and accepted contracts, and distinguish claims from reproduced or source-supported findings. Missing implementation or unsuccessful reproduction alone cannot establish irrelevance or invalidity.
+- AC-003: Consider severity, urgency, reach, confidence, workarounds, effort and maintenance burden separately from validity. Valid low-priority work stays open with deferral rationale; rare serious defects are not dismissed merely for rarity.
+- AC-004: Ordinary explicit invocation authorizes selected-issue decision comments and justified closure with the correct reason. Acceptance remains open and occurs only after research, design and independent readback of the saved plan. Revalidate before writes, verify outcomes and reconcile equivalent prior comments or ambiguous effects before retrying.
+- AC-005: Accepted plans are saved only under the owning project's docs/github-issues directory using the issue number and a safe title slug. Preserve existing maintainer edits and bind each plan to the full repository/issue identity. Neither comments nor chat contain implementation-plan content.
+- AC-006: Use research and design for accepted work without implementing it. Respect host read-only limits, sensitive security-reporting boundaries and missing capabilities. Report concise decisions, artifact paths, evidence limits and observed action results.
+
+#### Negative Criteria
+
+- NC-001: No automatic backlog sweep, wrong-repository action, untrusted command execution, duplicate comments on rerun, overwrite of unrelated work, or plan disclosure through output channels.
+- NC-002: No code implementation, canonical specification rewrite during issue review, commit, push, PR creation, merge, label/assignee/milestone changes, authentication repair, or live issue mutation merely to test the skill.
+
+#### Validation Method
+
+Validate source structure, native invocation policy, help, references, plugin
+catalogs, paired specifications, Markdown and disposable installation parity.
+Apply scoped instruction and security review, then changed-scope alignment.
+
+#### Test Method
+
+Use synthetic repository/issue fixtures and mocked GitHub effects for target
+selection, triage decisions, file-only plans, partial failures and reruns.
+
+#### Evaluation Method
+
+Maintain canonical positive/near-miss trigger cases and output assertions.
+Report static, installation, fresh native triggering and comparative quality
+evidence separately; unavailable runners do not count as passes.
+
+<!-- /REQUIREMENT: REQ-054 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

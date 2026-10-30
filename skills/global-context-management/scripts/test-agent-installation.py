@@ -672,7 +672,7 @@ class InstallationTests(unittest.TestCase):
                 command("complete-checkout", "--mode", "record-merge", "--merged-target", "remote-pr", "--result-sha", merged)
                 command("complete-checkout", "--mode", "finalize")
                 closure = command("finish", "--outcome", "completed")
-                self.assertEqual(closure["schema"], "commit-transaction.task-closure.v2")
+                self.assertEqual(closure["schema"], "commit-transaction.task-closure.v3")
                 self.assertEqual(git("branch", "--show-current"), "feature")
                 self.assertEqual(git("rev-parse", "feature"), merged)
                 self.assertEqual(git("rev-parse", "trunk"), merged)

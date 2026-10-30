@@ -2135,7 +2135,7 @@ Private checkout-target materializes a selected target only when checkout-depend
 
 Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
 
-Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
 
 Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
 
@@ -7887,7 +7887,7 @@ Private checkout-target materializes a selected target only when checkout-depend
 
 Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
 
-Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
 
 Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
 
@@ -9617,6 +9617,214 @@ authentication was absent. The current session used the supplied skills and
 live helpers, which is separate from fresh model evaluation.
 
 <!-- /FEATURE: FEAT-051 -->
+
+<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-052: Contribution acceptance and fork-safe specification repair
+
+#### Requirements Covered
+
+- REQ-053: Accept compatible contributions before reconciling PR specifications.
+
+#### Context Evidence
+
+review-pr already coordinates nested code-review and safe create-pr repairs. The spec owner supplies byte-level pair inspection and HEAD/document compare-and-set publication. At design intake, the Git owner assumed origin-bound PR targets and merge admission/completion required same-repository heads. These are the authoritative integration boundaries.
+
+#### Design Details
+
+Use merge-pr to call parent-owned review-pr, which assesses the accepted contract and supported consumers before repairing code and reconciling final specs through maintain-project-specs. Nested code-review remains read-only. Bind both contribution and spec assessments to the complete final head/base. Restore existing contracts without speculative wrappers; accepted contract-changing remedies first publish intent and a ready design, then publish delivery evidence after proof. Missing docs bootstrap through owner templates; disabled policy derives from trusted base plus explicitly reviewed changes.
+
+Extend the canonical Git task with independently frozen PR base/head repository IDs, names, branches and initial head, retaining origin as base identity and an independent local target alias. A private publish-target operation refreshes permission and PR identity, journals from/to SHAs and destination, uses a trusted advertised-head pre-push guard and one non-force explicit-ref push, and independently reads branch/PR state. Unknown outcomes are reconciled before retry. Existing create-only PR publication uses the same owner; standalone commit-push and SDLC remain separate.
+
+Version strict task and review/intent evidence consistently. Merge admission, recovery and CI checkout retain trusted default code and protected exact-head effects while accepting bound forks. Confirmed merged completion can tolerate a deleted head repository only through immutable prior admission plus authoritative result/base evidence. Freeze trusted installed/default helper provenance before checkout and isolate candidate execution from operator credentials. Never let candidate policy suppress its own review.
+
+#### Selected Option
+
+Reuse existing local agent and Python/Git/GitHub Actions owners. Deterministic helpers own validation and publication; the root agent owns semantic acceptance and canonical spec authoring.
+
+#### Alternatives Considered
+
+A merge-level spec writer duplicates ownership. Filename-only checks miss semantic and traceability defects. Report-only repair leaves avoidable maintenance work. Raw fork pushes bypass target and replay safeguards.
+
+#### Implementation Boundaries
+
+Review/code-review/spec guidance and evaluations; create-pr and commit publication helpers; merge admission/completion and workflow templates/consumers; matching README, changelog and tests. No live PR edits, merges, credential changes or production installation are part of this implementation.
+
+#### Test-First Success Criteria
+
+- TDD-001: A code-and-docs-consistent breaking contribution fails semantic acceptance; a contract-restoring fix may preserve both docs.
+- TDD-002: Fork publication modifies only its bound ref, rejects concurrent identity/head/permission changes and reconciles timeout-after-success without duplicate effects.
+- TDD-003: Forged/stale/incomplete review evidence cannot authorize effects; valid fork results complete against base containment even after head repository deletion.
+
+#### Validation Plan
+
+Run focused spec, commit, merge and workflow suites, strict Codex/Claude skill checks, lint/syntax, changed-scope align and disposable installation parity.
+
+#### Test Plan
+
+Use isolated base/fork Git fixtures and mocked GitHub APIs, negative control regressions, report-only and SDLC exclusions, full final-diff review invalidation and spec owner preservation cases.
+
+#### Evaluation Plan
+
+Add behavioral review cases for compatibility, safety, repair proof, missing/malformed specs and fork permissions. Static fixture/schema success is not observed model or live GitHub behavior.
+
+#### Rollout And Rollback
+
+Before activation, quiesce new dispatch and reconcile old pending broker effects and local grants. Deploy producers/consumers together via protected maintainer bootstrap and independently observe result CI. Preserve historical evidence without legacy schema shims. Reconcile new outstanding effects before rollback. Do not activate during this source implementation.
+
+#### Done Definition
+
+Source behavior and all direct consumers align, focused tests pass and evidence distinguishes implemented source from unperformed live activation.
+
+#### Implementation Evidence
+
+Implemented contribution assessment and root-owned spec handoff in review-pr, code-review, maintain-project-specs and merge-pr, with canonical per-project outcomes and behavioral cases. Create-pr now uses private bound intake and publish-target through commit_transaction.py and pr_publication.py. Task/checkpoint/closure v3 binds separate repository identities and journals non-force publication. Trusted pre-push rejection witnesses permit safe cancellation; advanced contributor heads are durably fenced in one atomic checkpoint. Single stable push destinations, exact branch/PR readback and final publication proof prevent wrong-target or incomplete completion. Review/intent v2 admission and completion accept bound forks, including deletion after confirmed merge. Release consumers, SDLC operation guards, installer expectations, CI and guidance use the same contracts.
+
+#### Verification Evidence
+
+Passing source checks: 61 merge-gate tests, 39 merge-completion tests, 16 real disposable publication cases, a targeted interruption-at-settlement regression, 47 release-consumer tests, 6 commit-contract checks and the SDLC direct-helper guard case. Codex/Claude structural validation, standard-field checks, Ruff and Markdown checks pass. Real pinned npx installation validates both hosts, copied resources, repeat installation and isolation. All 90 transaction regression cases pass on the final helper code: 89 passed in the parallel run and one 30-second checkout-completion timeout passed unchanged in an isolated 12.8-second rerun. Two focused native installed-helper/upgrade cases pass on both hosts using a frozen source snapshot whose four product-helper files match the final source. Together the focused suites cover 262 distinct cases. The ten affected skills pass Codex/Claude structure and disposable copied-payload checks. Native comparative quality runs were attempted on both hosts but authentication was unavailable in isolated homes. No live GitHub PR mutation, workflow activation, protected bootstrap, native semantic quality pass or production deployment is claimed.
+
+<!-- /FEATURE: FEAT-052 -->
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-053: Explicit GitHub issue triage with file-only planning
+
+#### Requirements Covered
+
+- REQ-054: Review GitHub issues and persist accepted implementation plans.
+
+#### Context Evidence
+
+The catalog discovers flat SKILL.md folders, requires native invocation metadata
+and trigger evaluations, and enumerates skills in both plugin manifests.
+review-pr's contribution assessment distinguishes accepted project contracts
+from contributor proposals. research supplies due diligence; design supplies
+non-implementing design work. Neither owns issue disposition or this artifact.
+
+#### Design Details
+
+Add the instruction-only review-github-issues skill. Resolve one GitHub
+repository and explicit issue set, map each owning project, read the discussion
+and supported contracts, then assess relevance, validity and priority. Use the
+existing host's bounded agent reasoning for exploration and assessment; existing
+tool authorization and GitHub permissions remain authoritative for effects.
+No new model, application stack, service, hooks or private state machine is
+required. Prefer available GitHub connector capabilities with gh as a disclosed
+fallback; never repair authentication or infer permission from invocation alone.
+
+Keep needs-information and valid low-priority outcomes open. Close only
+evidence-backed rejection, duplication or already-resolved cases with the
+corresponding GitHub reason. Do not auto-close for inactivity. For accepted work,
+invoke research and design, save a complete plan in the owning project's
+`docs/github-issues/<number>-<title-slug>.md` and verify it before publishing
+acceptance. Neither GitHub comments nor chat may contain plan content. Reuse
+matching plans by repository/issue identity, preserve maintainer edits, reread
+live state before writes and reconcile uncertain effects before retrying. Nested
+research/design consultations are read-only advisory computation in the existing
+outer host mode, with an internal handoff instead of a user-visible plan tool.
+The outer skill alone owns artifact saving and concise publication; existing
+host Plan Mode restrictions remain binding.
+
+#### Selected Option
+
+Use a lean skill entrypoint, focused triage and GitHub-operation references,
+a plan asset and synthetic evaluations. The skill owns only issue decisions
+and issue-plan files; maintain-project-specs owns canonical specifications.
+
+#### Alternatives Considered
+
+Report-only triage does not meet the requested automatic decisions. A GitHub
+Action or custom API executor adds deployment and credential maintenance without
+need. Rigid numerical prioritization invents certainty when reach or effort is
+unknown. Posting plans as comments or chat violates the selected artifact boundary.
+
+#### Implementation Boundaries
+
+The new skill folder, both plugin catalogs, source README, changelog and this
+canonical pair. Preserve unrelated dirty work; no changes to PR machinery,
+shared validators, production installations or live issues.
+
+#### Test-First Success Criteria
+
+- TDD-001: Ambiguous repositories, unselected multiple issues and malicious issue instructions cannot cause external effects. Incomplete material evidence blocks acceptance and closure while permitting a safe scoped information-request comment.
+- TDD-002: A valid rare severe defect remains actionable; valid low-priority work stays open; accepted work creates a verified plan file without plan text in comments or chat.
+- TDD-003: Existing edits, title changes, partial writes, comment timeouts and repeated invocation preserve identity, artifacts and nonduplicated decisions.
+
+#### Validation Plan
+
+Run align-skill structure validation for core, Codex and Claude, plugin manifest
+checks, paired-spec validation, scoped Markdown lint, code-review and
+apply-security lanes, disposable npx installation checks and changed-scope align.
+
+#### Test Plan
+
+Define synthetic cases for target and project resolution, complete evidence,
+all decision outcomes, safe filenames, existing plans, report-only limits,
+missing dependencies, security reporting and independent external readback.
+Use mocked effects, never live production issues as test fixtures.
+
+#### Evaluation Plan
+
+Keep trigger CSV and output-quality JSON with observable action/artifact
+assertions. Use a clean native runner when available; comparison requires a
+valid prior-version or no-skill baseline. Static definitions and installation
+parity never substitute for observed routing or comparative quality.
+
+#### Rollout And Rollback
+
+Deliver source and catalog integration first. Validate in disposable native
+homes; real-home installation is a separate action. Remove only task-owned new
+files and exact integration changes if rollback is needed. Do not reverse
+unrelated changes or GitHub decisions blindly.
+
+#### Done Definition
+
+All source surfaces agree on invocation, selection, triage authority, file-only
+plans and maintainer implementation ownership. Focused checks pass and unrun
+native or live evidence is stated explicitly.
+
+#### Implementation Evidence
+
+Created review-github-issues with explicit-only Codex/Claude metadata, standard
+help and learning-loop contracts, focused triage/GitHub/plan references, a
+repository-only plan template, usage documentation, 11 trigger definitions and
+20 behavioral cases. Both plugin manifests, the 73-skill README catalog and
+Unreleased changelog include the skill. No helpers, hooks, shared validator
+changes, live issue mutations or real-home installation were introduced.
+
+#### Verification Evidence
+
+Core, Codex and Claude source structure checks passed, including the optional
+stateful-workflow profile. Standard fields pass with the intentional native
+disable-model-invocation extension. Plugin enumeration, changed Markdown, local
+reference resolution and evaluation-definition checks passed. Independent
+code-review identified a contradictory needs-information criterion and missing
+one-item pagination coverage; both were corrected. Static security review found
+no serious issue. Final independent code-review confirmed both findings resolved
+and no remaining blocker. Disposable pinned npx discovery, both-host copied
+payloads, repeat installation and isolation passed again on the final payload.
+Independent baseline comparison confirmed every unrelated byte in the canonical
+specifications was preserved; shared catalog/doc diffs contain only scoped additions.
+
+Fresh isolated native trigger checks were attempted for Codex and Claude during
+creation; both reported authentication unavailable. At creation, comparative
+quality also lacked a prior-version baseline and the bundled runner requires
+a loaded baseline skill, not a no-skill arm. Behavioral cases remain static
+definitions, not executed model-quality proof. Delivery is implemented rather
+than runtime-verified; no live GitHub behavior is claimed.
+
+A subsequent explicit align pass traced actual research/design, installer and
+CI dependencies. It found RGI-CR-003: default nested design delivery could change
+host mode or expose the plan. The entrypoint, plan reference, README and changelog
+now keep that consultation advisory and internal while honoring existing host
+restrictions. Composition case 20 requires actual sibling instructions and mock
+artifact tools; absent dependencies cannot yield a success claim. Independent
+final code/security reviews confirmed the fix with no remaining blocker. Fresh
+structure, spec, manifest, Markdown, reference and definition checks passed, as
+did disposable pinned npx discovery, copy parity, repeat installation and
+isolation for both hosts. Case 20 remains NOT_RUN: the available isolated
+runner lacks authenticated, dependency-complete execution. No live GitHub
+operation or real-home installation was performed.
+
+<!-- /FEATURE: FEAT-053 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
