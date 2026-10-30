@@ -6,9 +6,8 @@ project folder.
 
 ## [Unreleased]
 
-- Retire github-report and its release workflow. Keep a temporary read-only
-  retirement validator until the updated required-CI policy reaches main,
-  then remove the validator in a follow-up PR.
+- Complete github-report retirement by removing its temporary CI validator
+  and transition test after the updated required-CI policy reached `main`.
 
 - Configure scoped Actions event policies for trusted reviewer routing and
   protected merge automation, with an explicit `pull_request_target` restriction
