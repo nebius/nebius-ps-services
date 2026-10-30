@@ -21,6 +21,12 @@ def run(*args: str, **kwargs):
 
 def main() -> None:
     source = Path("/fixture")
+    # Linux bind mounts preserve the host UID. Stage trusted fixture input as
+    # the container's runtime owner without changing the read-only host mount.
+    known_hosts = Path("/run/probe_known_hosts")
+    known_hosts.write_bytes((source / "known_hosts").read_bytes())
+    known_hosts.chmod(0o600)
+    assert known_hosts.stat().st_uid == 0 and known_hosts.stat().st_mode & 0o777 == 0o600
     data = yaml.safe_load((source / "cloud-init.yaml").read_text())
     schema_input = Path("/run/probe-schema.yaml")
     schema_input.write_text(
@@ -99,7 +105,7 @@ def main() -> None:
         with transport.ProbeSSH(
             {"public_ip": "127.0.0.1"},
             {"ssh_user_name": "gateway", "ssh_public_key": key},
-            known_hosts=source / "known_hosts",
+            known_hosts=known_hosts,
             private_key=source / "client.key",
         ) as access:
             for _ in range(30):

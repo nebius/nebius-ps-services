@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Stage NAT SSH integration-fixture trust data under the container runtime owner
+  so Linux bind-mount ownership does not invalidate strict host-key checks.
+
 - Set an explicit TLS 1.2 minimum for NAT, WireGuard, and Tailscale HTTPS probes
   while preserving certificate and hostname verification.
 

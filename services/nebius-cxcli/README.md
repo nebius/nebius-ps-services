@@ -783,6 +783,8 @@ see the [CLI contract workflow](docs/development.md#quality-gates).
 CI retains its Python 3.12–3.14 matrix and one-build/many-consumer wheel checks.
 Its dedicated NAT probe integration step requires Docker and verifies the private
 SSH collector with two isolated Linux SSH servers, without cloud credentials.
+The fixture stages its known-hosts data in an owner-only container runtime file
+so host bind-mount UIDs do not invalidate strict SSH trust checks.
 Merge-identity and result-evidence jobs also verify authenticated post-merge runs.
 Workflow tests require exactly one setup-uv action pinned to a full commit SHA,
 while preserving uv version, cache inputs, conditions and setup ordering.
