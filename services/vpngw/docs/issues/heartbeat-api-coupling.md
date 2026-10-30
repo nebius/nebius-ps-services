@@ -62,14 +62,18 @@ not require three failed API requests before reacting to an unhealthy/stale peer
 
 ## Evidence and reproduction
 
-Evidence is preserved in [the evidence directory](evidence/heartbeat-api-coupling/):
+Evidence files are committed under `docs/issues/evidence/heartbeat-api-coupling/`
+on this branch. Open the individual files below if your Markdown viewer cannot
+open directory links. They are available in the separate branch worktree, not
+in a checkout of another branch.
 
-- `uk-a-api-and-fencing.jsonl` and `uk-b-api-and-fencing.jsonl` are unchanged,
-  selected journal extracts with deployed module hashes and provider request IDs.
-- `stale-peer-result.jsonl` is the original investigation output.
-- `reproduce_stale_peer.py` is a formatted baseline reproducer and control.
-- `main-reproduction-result.jsonl` records the reproduction on this branch.
-- `SHA256SUMS` records integrity hashes for these evidence files.
+- [UK gateway-a journal extract](evidence/heartbeat-api-coupling/uk-a-api-and-fencing.jsonl)
+  and [UK gateway-b journal extract](evidence/heartbeat-api-coupling/uk-b-api-and-fencing.jsonl)
+  are unchanged selected journal extracts with deployed module hashes and provider request IDs.
+- [Original reproduction output](evidence/heartbeat-api-coupling/stale-peer-result.jsonl).
+- [Baseline reproducer and control](evidence/heartbeat-api-coupling/reproduce_stale_peer.py).
+- [Main-branch reproduction output](evidence/heartbeat-api-coupling/main-reproduction-result.jsonl).
+- [Integrity checksums](evidence/heartbeat-api-coupling/SHA256SUMS).
 
 Run from `services/vpngw` with the project's development dependencies installed:
 
