@@ -21,7 +21,8 @@ def snapshot(root):
 
 class TavilyBridgeTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="tavily-fixture-")
+        # Executable fixtures need trusted ancestry; Linux /tmp is world-writable.
+        self.temp = tempfile.TemporaryDirectory(prefix="tavily-fixture-", dir=Path.home())
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
         self.home = self.base / "native-home"

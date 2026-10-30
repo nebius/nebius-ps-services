@@ -320,7 +320,7 @@ OAuth it also checks the exact device, authorization and key-expiry setting.
 
 `tailscale verify` runs on a connected macOS or Linux client. It checks the expected
 tailnet, the longest-prefix `Peer.PrimaryRoutes` selection, the operating-system
-route, TLS certificate verification, HTTP status and bounded response size. It
+route, TLS 1.2+ with certificate verification, HTTP status and bounded response size. It
 accepts HTTP 200/204/401/403: an authenticated API can legitimately deny an anonymous
 probe. Set `min_bytes: 0` for an empty 204 response. This verifies reachability and
 server identity; it does not prove Kubernetes user authorization. Supply the cluster

@@ -284,6 +284,7 @@ def verify_client(
         path = Path(frozen_env["KUBECONFIG"])
         verify_context_cluster(path, context=name, server=server, ca_pem=ca)
         tls_context = ssl.create_default_context(cadata=ca)
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
         with (
             socket.create_connection((addresses[0], parsed.port or 443), timeout=15) as sock,
             tls_context.wrap_socket(sock, server_hostname=parsed.hostname),

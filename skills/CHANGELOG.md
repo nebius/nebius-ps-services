@@ -10,6 +10,8 @@ All notable changes to the reusable Agent Skills are tracked here.
   Ruff gate, preserving error sanitization, cleanup, and reconciliation identities.
 - Register the Python scaffold's default `e2e` marker so fresh bootstrap succeeds
   with pytest 9.2 while retaining strict marker checks and fast-lane exclusions.
+- Place Tavily bridge executable fixtures under a private temporary home directory
+  so Linux tests honor the same executable-ancestry checks as production.
 
 - Document SDK-first Kubernetes workload identity for Nebius IAM APIs and direct SecretStash access. Add exact OIDC trust and renewable projected-token helpers; separate resource grants, application-secret refresh and optional ESO 2.10.0+ synchronization.
 

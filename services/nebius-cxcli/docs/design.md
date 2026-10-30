@@ -10922,7 +10922,7 @@ Separate source and live proof.
 
 #### Implementation Evidence
 
-Implemented onboarding, lifecycle, credential pins, SDK SecretStash/WIF, wizard/reports and skill examples. Configure JSON emits one result.
+Implemented onboarding, lifecycle, credential pins, SDK SecretStash/WIF, wizard/reports and skill examples. Configure JSON emits one result. Gateway probes require TLS 1.2+.
 
 #### Verification Evidence
 

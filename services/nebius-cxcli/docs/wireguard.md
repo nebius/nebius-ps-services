@@ -346,7 +346,7 @@ Use explicit `--verify-client` for a custom path, with `--target`, `--kubeconfig
 and `--context` when selection is ambiguous. The existing context must match the
 provider's private endpoint and CA, with no TLS or proxy override. Verification
 never changes current-context or creates workloads. It checks the actual local
-route/interface, MTU, gateway peer identity, verified TLS, authenticated identity,
+route/interface, MTU, gateway peer identity, verified TLS 1.2+, authenticated identity,
 an uncompressed discovery response larger than 4 KiB, and fresh bidirectional
 peer transfer. Authentication uses a nonpersistent Kubernetes SelfSubjectReview.
 

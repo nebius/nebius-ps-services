@@ -700,6 +700,7 @@ python3 align-skill/scripts/validate-skill-structure.py global-context-managemen
 python3 config-codex/scripts/check-local-idempotency.py \
   --codex-home "$HOME/.codex"
 python3 config-codex/scripts/test-check-local-idempotency.py
+python3 config-codex/scripts/test_tavily_bridge.py
 python3 global-context-management/scripts/validate-local-templates.py
 markdownlint README.md CHANGELOG.md config-codex/**/*.md
 git diff --check
@@ -709,6 +710,11 @@ Also confirm duplicate hook and custom-agent templates stay aligned between
 `config-codex/assets/` and `global-context-management/assets/`, then run a
 targeted public-file scan for personal paths, names, tokens, private URLs, and
 real customer/project identifiers before publishing.
+
+Tavily unit tests create and clean a private temporary directory under the test
+process's home so synthetic executables have trusted ancestry on Linux and macOS.
+They retain rejection coverage for world-writable executable ancestry and use no
+native configuration or real credentials.
 
 ## Sources
 

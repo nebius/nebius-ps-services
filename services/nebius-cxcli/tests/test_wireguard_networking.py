@@ -339,11 +339,14 @@ def test_full_client_probe_checks_real_boundaries(monkeypatch, failure, expected
 
     monkeypatch.setattr(verification, "selected_context", context)
     monkeypatch.setattr(verification.socket, "create_connection", lambda *a, **k: nullcontext(None))
-    monkeypatch.setattr(
-        verification.ssl,
-        "create_default_context",
-        lambda **k: NS(wrap_socket=lambda *a, **k: nullcontext(None)),
-    )
+    tls_context = NS(minimum_version=verification.ssl.TLSVersion.MINIMUM_SUPPORTED)
+
+    def wrap_socket(*args, **kwargs):
+        assert tls_context.minimum_version == verification.ssl.TLSVersion.TLSv1_2
+        return nullcontext(None)
+
+    tls_context.wrap_socket = wrap_socket
+    monkeypatch.setattr(verification.ssl, "create_default_context", lambda **k: tls_context)
 
     def kubectl(args, env, **kwargs):
         assert "--disable-compression=true" in args and "--context" in args

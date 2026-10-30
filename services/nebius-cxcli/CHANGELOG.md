@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Set an explicit TLS 1.2 minimum for NAT, WireGuard, and Tailscale HTTPS probes
+  while preserving certificate and hostname verification.
+
 - Block direct Terraform apply while Tailscale gateways remain in state, including
   after removing or disabling their configuration. Resolve linked SecretStash
   credentials for policy commands without changing reviewed policy intent.

@@ -43,9 +43,9 @@ def measure(config: dict) -> dict:
             sock.settimeout(15)
             try:
                 sock.connect((config["endpoint_ip"], 443))
-                connection.sock = ssl.create_default_context().wrap_socket(
-                    sock, server_hostname="api.ipify.org"
-                )
+                context = ssl.create_default_context()
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                connection.sock = context.wrap_socket(sock, server_hostname="api.ipify.org")
             except BaseException:
                 sock.close()
                 raise

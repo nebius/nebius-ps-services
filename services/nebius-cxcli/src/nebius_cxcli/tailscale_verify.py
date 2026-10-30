@@ -107,6 +107,7 @@ def probe(target: dict[str, Any], address: str, base: Path, timeout: float) -> d
     if path and not path.is_absolute():
         path = base / path
     context = ssl.create_default_context(cafile=str(path) if path else None)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     connection = http.client.HTTPSConnection(
         url.hostname, url.port or 443, timeout=timeout, context=context
     )

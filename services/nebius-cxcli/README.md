@@ -739,6 +739,9 @@ report and recipient/runtime settings in the generated manifest. See
 
 ## Security and operational essentials
 
+NAT, WireGuard, and Tailscale HTTPS probes require TLS 1.2 or newer and verify
+server certificates and hostnames.
+
 - Keep deployment repositories private. Version `config.yaml` and deployable
   generated artifacts, while respecting generated runtime-file ignores.
 - Keep credentials, raw Kubernetes Secrets, WireGuard private keys, kubeconfigs,

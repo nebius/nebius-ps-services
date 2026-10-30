@@ -144,7 +144,7 @@ complete concrete override maps, avoiding a VPC-to-NAT dependency cycle.
 After activation, cxcli creates one temporary private-only VM in **every selected
 workload subnet**, sequentially. Each boots a standard-library probe with no
 package download, public IP or service account. It makes a new direct IPv4 HTTPS
-request to `api.ipify.org`, pins a resolved public address, validates TLS, disables
+request to `api.ipify.org`, pins a resolved public address, requires verified TLS 1.2+, disables
 proxy/redirect use, and checks the reported source IP against the gateway's public
 IP. An endpoint covered by a retained more-specific route is ineligible. A successful
 test proves this sampled outbound path, not all destinations or workload behavior.
