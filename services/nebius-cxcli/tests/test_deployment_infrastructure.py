@@ -167,6 +167,32 @@ def test_empty_node_group_inventory_still_records_executed_cluster_checks():
     assert all(check["passed"] for check in proof["checks"])
 
 
+def test_infrastructure_readiness_uses_effective_terraform_parent(tmp_path, monkeypatch):
+    payload = config()
+    component = payload["infra"]["components"][0]
+    component["inputs"]["cluster"]["parent_id"] = "project-other"
+    cluster, group = live()
+    cluster.metadata.parent_id = "project-other"
+
+    def ready(**kwargs):
+        return infra._ready_snapshot(
+            cluster,
+            [group],
+            cluster_id=kwargs["cluster_id"],
+            project_id=kwargs["project_id"],
+            component=kwargs["component"],
+            target_ref=kwargs["target_ref"],
+        )
+
+    monkeypatch.setattr(infra, "wait_infrastructure_ready", ready)
+    monkeypatch.setattr(cli, "terraform_output_raw", lambda *a, **kw: "cluster-id")
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda *a: {})
+    proof = infra.verify_infrastructure_target(
+        cli, payload, paths(tmp_path), TARGET, validations=[VALIDATION]
+    )
+    assert proof["passed"]
+
+
 @pytest.mark.parametrize("invalid", ["missing", "empty", "skipped"])
 def test_provider_acceptance_rejects_incomplete_required_report(tmp_path, monkeypatch, invalid):
     cluster, group = live()

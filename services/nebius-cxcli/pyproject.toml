@@ -61,6 +61,10 @@ nebius_cxcli = [
   "compatibility-matrix.yaml",
   "soperator_wizard.yaml",
   "grafana_dashboards/*.json",
+  "hujson_helper/*.go",
+  "hujson_helper/go.mod",
+  "hujson_helper/go.sum",
+  "hujson_helper/*.txt",
 ]
 
 [tool.setuptools_scm]

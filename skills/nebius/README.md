@@ -14,6 +14,7 @@ guidance and integration-only coverage, with official sources and review dates.
 | [Networking](references/networking.md) | VPC pools/subnets, allocations, routes, security groups, DNS, NAT, VPN and Tunnels |
 | [Observability](references/observability.md) | Metrics/logs/traces, agents, dashboards/alerts, delivery checks and Audit Logs concepts |
 | [IAM](references/iam.md) | Projects, service accounts, dedicated groups/permits, credentials, federation, KMS and SecretStash metadata |
+| [Workload identity](references/kubernetes-workload-identity.md) | SDK-first Kubernetes OIDC trust, projected JWT renewal, direct SecretStash and optional ESO |
 | [API/SDK](references/api-sdk.md) | Python-first SDK, CLI, REST/gRPC/S3, auth, complete pagination, deadlines and operation reconciliation |
 
 Soperator, Serverless AI and MLflow have
@@ -141,6 +142,9 @@ PYTHONDONTWRITEBYTECODE=1 <validation-venv>/bin/python -m unittest discover -s t
 ```
 
 The core suite can run with just the standard library:
+
+Standalone inspectors initialize their sibling SDK asset path before importing it;
+the full Ruff gate checks these entry points alongside the assets and tests.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p test_runtime.py -v

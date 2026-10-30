@@ -608,6 +608,54 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "inputs.filesystems",
         ),
     },
+    "tailscale-gw": {
+        **_project_network_and_subnet_fields(),
+        **_compute_platform_and_preset_fields(
+            platform_field="inputs.platform", preset_field="inputs.preset"
+        ),
+        "inputs.platform": {"options": {"from": "compute_platforms", "args": {"cpu_only": True}}},
+        "inputs.preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "depends_on": "inputs.platform",
+                "args": {"cpu_only": True},
+            }
+        },
+        "inputs.management_cidrs": {
+            "default_from": {"from": "operator_public_ip_cidr"},
+            "type_hint": "list(string)",
+            "write_default_to_config": True,
+            "required": True,
+        },
+        "tailscale.stage": {
+            "default": "infrastructure",
+            "write_default_to_config": True,
+            "prompt": False,
+            "type_hint": "string",
+        },
+        "tailscale.tailnet": {"type_hint": "string", "required": True},
+        "tailscale.tags": {"type_hint": "list(string)", "required": True},
+        "tailscale.routes": {"type_hint": "list(string)", "required": True},
+        "tailscale.onboarding.owner": {"type_hint": "string", "required": True},
+        "tailscale.onboarding.purpose": {"type_hint": "string", "required": True},
+        "tailscale.onboarding.environment": {"type_hint": "string"},
+        "tailscale.onboarding.admin_requirements": {"type_hint": "list(string)", "default": []},
+        "tailscale.policy.tag_owners": {"type_hint": "list(string)", "default": []},
+        "tailscale.policy.auto_approve": {"type_hint": "bool", "default": True},
+        "tailscale.policy.rules": {"type_hint": "list(any)", "required": True},
+        "tailscale.auth": {"type_hint": "map(any)", "required": True},
+        "tailscale.approval": {
+            "default": "external",
+            "write_default_to_config": True,
+            **_static_sources("external", "api"),
+        },
+        **_suppressed_prompt_fields(
+            "inputs.ssh_host_keys",
+            "inputs.bootstrap_user_data",
+            "inputs.labels",
+            "inputs.member_overrides",
+        ),
+    },
     "wireguard-gw": {
         **_project_network_and_subnet_fields(),
         "access.admin_group_id": {

@@ -6,6 +6,39 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Block direct Terraform apply while Tailscale gateways remain in state, including
+  after removing or disabling their configuration. Resolve linked SecretStash
+  credentials for policy commands without changing reviewed policy intent.
+- Match managed MK8s project validation and infrastructure readiness to
+  `inputs.cluster.parent_id`, retaining the project default when it is omitted.
+
+- Enforce current Tailscale approval during enrollment recovery and route approval
+  while preserving safe cleanup. Permit retirement after a draft tailnet changes
+  only with durable proof that activation never began. Emit one JSON result from
+  noninteractive onboarding configuration and correct journal-version guidance.
+
+- Add infrastructure-first Tailscale onboarding with an exact administrator request, guided approval fingerprint, metadata-only SecretStash custody and SDK-only credential import/read. Bind unfinished enrollment to its original OAuth version, distinguish infrastructure from gateway readiness, and add explicit renewable Kubernetes workload identity without requiring ESO.
+
+- Make Tailscale enrollment resumable through versioned operations, protected
+  original keys and authenticated guest receipts. Add exact member/operation
+  recovery, fenced unused-key replacement and ambiguous-issuance diagnostics.
+  Retire partially provisioned gateways without capacity checks or enrollment,
+  with independent key, device and cloud-removal confirmation. Reject older
+  journal formats. Live lifecycle/HA qualification remains separate.
+
+- Recheck Tailscale peer health on every VM-replacement retry and permit normal
+  management CIDR rule removal without treating it as gateway retirement. Correct
+  administrator-key check wording, diagnose incompatible source-build Go versions,
+  and align lifecycle test fixtures.
+
+- Add opt-in `tailscale-gw` with two persistent Nebius routers by default and
+  customer-owned tailnet configuration. Integrate protected enrollment, exact
+  ownership, readiness, staged maintenance and retirement into the ordinary
+  lifecycle. Add `tailscale` auth, reviewed policy, route approval, status, doctor,
+  client verification, bounded failover and stopped-writer recovery commands.
+  Keep Tailscale credentials outside Terraform and preserve strict SSH trust.
+  Local qualification is separate from live deployment and failover qualification.
+
 - Fix WireGuard deployment reconciliation for fresh gateways without bootstrap
   clients. Align network-mode CLI help and contract coverage, and resolve type
   checks in the client verification paths.
@@ -85,6 +118,12 @@ All notable changes to this project are tracked here. This changelog follows
   configured pool selection, unrelated changes and replacements protected.
 
 ### Fixed
+
+- Document the minimum Tailscale administrator handoff and the lifecycle steps
+  automated through scoped OAuth, keeping company-specific setup outside cxcli.
+- Bind administrator Tailscale key IDs before delivery, preserve started enrollment
+  after rejected key replacement, and block destroy when any owned gateway is
+  omitted from configuration. Validate recovery bindings before retrying issuance.
 
 - Use the shared source-inspection helper for the Soperator onboarding ordering
   test, preventing stale imported line numbers from truncating the inspected

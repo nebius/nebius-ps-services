@@ -4957,7 +4957,7 @@ def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workd
     monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", _fail_backend_ready)
     monkeypatch.setattr(cli, "terraform_init", _fake_terraform_init)
 
-    assert cli._try_generate_terraform_lock_file("cfg", fake_paths) is True
+    assert cli._try_generate_terraform_lock_file(_empty_runtime_config(), fake_paths) is True
     assert captured == {
         "infra_dir": fake_paths.infra_dir,
         "extra_env": None,
@@ -13900,6 +13900,7 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = {"infra": {"components": []}}
+    fake_paths.config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(
         handle_terraform_event="callback",
@@ -13947,6 +13948,15 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
 
     monkeypatch.setattr(cli, "terraform_destroy", _fake_destroy)
 
+    # This test owns reporter propagation. Tailscale retirement and remote-journal
+    # admission are exercised through the real context manager in its lifecycle suite.
+    from contextlib import nullcontext
+
+    from nebius_cxcli import tailscale_deploy
+
+    monkeypatch.setattr(
+        tailscale_deploy, "retire_for_destroy", lambda _cfg, _paths, env: nullcontext(env)
+    )
     cli._run_terraform_destroy_with_status(config, fake_paths)
 
     assert calls == [
@@ -14810,7 +14820,7 @@ def test_terraform_unlock_command_reports_when_no_lock_is_present(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, force: None,
+        lambda config, paths, *, force, root_name: None,
     )
     monkeypatch.setattr(
         cli,
@@ -14857,7 +14867,7 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     monkeypatch.setattr(
         cli,
         "_unlock_terraform_state_lock",
-        lambda config, paths, *, force: lock_info,
+        lambda config, paths, *, force, root_name: lock_info,
     )
 
     result = runner.invoke(
@@ -15864,7 +15874,7 @@ def test_wizard_selected_value_shows_boolean_secret_controls() -> None:
             ],
             path_label="infra.components[0].inputs.secrets",
         )
-        == "db-uname-pass->app-db-creds (PASSWORD, USERNAME)"
+        == "db-uname-pass (PASSWORD, USERNAME)"
     )
 
 

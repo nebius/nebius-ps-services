@@ -144,6 +144,23 @@ def test_external_and_managed_identity_collision_is_rejected():
         validate_dynamic_payload_structure(payload)
 
 
+@pytest.mark.parametrize("project", ["project-other", "project-test"])
+def test_managed_project_identity_matches_nested_terraform_parent(project):
+    from nebius_cxcli.runtime_validation import _validate_cluster_policies
+
+    payload = source()
+    managed = require_cluster_row(payload, "managed")
+    managed["inputs"] = {"cluster": {"parent_id": "project-other"}}
+    managed["project_id"] = project
+    if project == "project-other":
+        _validate_cluster_policies(payload)
+    else:
+        with pytest.raises(
+            ValueError, match="project_id conflicts with its infrastructure identity"
+        ):
+            _validate_cluster_policies(payload)
+
+
 @pytest.mark.parametrize("field", ["registration", "rollout", "profiling", "deployment_testing"])
 def test_ordinary_apps_protect_soperator_policy(field):
     payload = source()

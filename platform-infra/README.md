@@ -23,6 +23,7 @@ Reusable modules under `modules/`:
 - [`object-storage`](modules/object-storage/README.md): Nebius Object Storage buckets.
 - [`mysterybox`](modules/mysterybox/README.md): SecretStash containers, with optional initial payload versions.
 - [`vm`](modules/vm/README.md): General Nebius Compute virtual machine provisioning.
+- [`tailscale-gw`](modules/tailscale-gw/README.md): two persistent, independently addressed Tailscale subnet-router VMs for customer-owned tailnets.
 - [`wireguard-access`](modules/wireguard-access/README.md): dedicated WireGuard VM identity and narrow SecretStash grants.
 - [`wireguard-gw`](modules/wireguard-gw/README.md): WireGuard VPN gateway VM with authenticated SecretStash bootstrap.
 - [`ssh-jumphost`](modules/ssh-jumphost/README.md): SSH bastion/jump host VM.

@@ -137,7 +137,9 @@ def test_normalize_allowed_cidr_csv_canonicalizes_and_dedupes() -> None:
     )
 
 
-def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper(trusted_gateway_hosts: Path) -> None:
+def test_update_ssh_jumphost_allowed_cidrs_runs_vm_local_helper(
+    trusted_gateway_hosts: Path,
+) -> None:
     component = select_ssh_jumphost_component(_ssh_jumphost_payload())
     calls: list[list[str]] = []
 

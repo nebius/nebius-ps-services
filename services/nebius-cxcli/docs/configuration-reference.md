@@ -44,6 +44,8 @@ Managed and external cluster identities must be unique. Optional managed-cluster
 `project_id` and `region_id` must match the effective Terraform identity; they
 cannot redirect deployment to another project or region. Ordinary chart values
 remain under `values`; Terraform variables remain under `inputs`.
+For MK8s, the effective project is `inputs.cluster.parent_id`, falling back to
+`client_info.nebius.project_id`. Infrastructure readiness verifies that same identity.
 
 Component instance names cannot replace the component list or external-cluster
 registry. An omitted or null `observability` block uses the same defaults;

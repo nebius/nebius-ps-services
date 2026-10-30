@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
@@ -247,19 +246,12 @@ class SecretStashAPI:
         journal.save()
 
     def payload(self, secret_id: str, version_id: str = "") -> tuple[str, dict[str, str]]:
+        from .secretstash import decode_payload
+
         result = self.call(
             self.payloads.get, box.GetPayloadRequest(secret_id=secret_id, version_id=version_id)
         )
-        values: dict[str, str] = {}
-        if not result.version_id or (version_id and version_id != result.version_id):
-            raise RuntimeError("WireGuard SecretStash returned a different version")
-        for entry in result.data:
-            if not entry.key or entry.key in values or not entry.check_presence("string_value"):
-                raise RuntimeError("WireGuard SecretStash payload schema is invalid")
-            values[entry.key] = entry.string_value
-        if len(json.dumps(values)) > 32768:
-            raise RuntimeError("WireGuard SecretStash payload exceeds its size bound")
-        return result.version_id, values
+        return decode_payload(result, version_id)
 
     def _wait(self, operation: Any, journal: Any, intent: dict[str, Any]) -> str:
         intent["operation_id"] = operation.id

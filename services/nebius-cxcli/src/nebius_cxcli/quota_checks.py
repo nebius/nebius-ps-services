@@ -2296,7 +2296,43 @@ def _requirements_for_component(
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
-    if component_id in {"ssh-jumphost", "wireguard-gw"}:
+    if component_id == "tailscale-gw":
+        from .tailscale_config import members
+
+        for member in members(row):
+            member_inputs = {
+                **inputs,
+                **{
+                    k: v
+                    for k, v in inputs.get("member_overrides", {}).get(member, {}).items()
+                    if v is not None
+                },
+            }
+            member_inputs["create_public_ip_allocation"] = True
+            resources = session.preset_resources(
+                project_id=project_id,
+                platform=_mapping_text(member_inputs, "platform"),
+                preset=_mapping_text(member_inputs, "preset"),
+            )
+            if resources is not None and resources.gpu_count:
+                _append_gap(
+                    gaps,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    message="Tailscale gateways require CPU-only presets",
+                )
+                continue
+            _estimate_jump_host_requirements(
+                session=session,
+                project_id=project_id,
+                region=region,
+                component_id=component_id,
+                instance_id=instance_id,
+                inputs=member_inputs,
+                requirements=requirements,
+                gaps=gaps,
+            )
+    elif component_id in {"ssh-jumphost", "wireguard-gw"}:
         _estimate_jump_host_requirements(
             session=session,
             project_id=project_id,

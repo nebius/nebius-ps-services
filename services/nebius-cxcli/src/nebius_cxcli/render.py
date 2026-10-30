@@ -57,6 +57,8 @@ _LIFECYCLE_REPORT_FILENAMES = frozenset(
         "deploy-report.md",
         "wireguard-client-verification.md",
         "wireguard-client-verification.json",
+        "tailscale-report.json",
+        "tailscale-client-verification.json",
         "ordinary-apps-baseline.json",
         "deployment-applications.json",
         # Admission is refreshed by validation during an executing lifecycle.

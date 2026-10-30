@@ -351,6 +351,17 @@ They should not be treated as universally side-effect-free.
 | `terraform apply` | `GENERATED_PATH` | Apply generated Terraform infrastructure |
 | `terraform destroy` | `GENERATED_PATH` | Tear down eligible projects without MK8s |
 | `terraform unlock` | `GENERATED_PATH` | Inspect and, after guarded confirmation, remove an eligible stale lock |
+| `tailscale onboarding request` | `CONFIG_YAML`, optional export directory | Print the exact administrator handoff without credentials |
+| `tailscale onboarding configure` | `CONFIG_YAML` | Guided approval and credential-reference handoff before activation |
+| `tailscale auth configure` | `CONFIG_YAML` | Store credential references |
+| `tailscale auth check` | `CONFIG_YAML` | Check delegated tailnet access |
+| `tailscale policy plan` | `CONFIG_YAML`, output path | Prepare a reviewed HuJSON policy proposal |
+| `tailscale policy apply` | `CONFIG_YAML`, proposal and digest | Conditionally apply the reviewed proposal |
+| `tailscale routes approve` | `CONFIG_YAML` | Approve exact prefixes on owned devices |
+| `tailscale status` | `CONFIG_YAML` | Inspect live readiness |
+| `tailscale doctor` | `CONFIG_YAML` | Diagnose cloud, guest and tailnet prerequisites |
+| `tailscale verify` | `CONFIG_YAML`, optional `--failover` | Prove client HTTPS traffic and optionally bounded failover |
+| `tailscale recover` | `CONFIG_YAML`, exact lock owner or enrollment operation/member | Recover a stopped writer or resume/fence enrollment |
 | `nat status` | `CONFIG_YAML` | Observe gateway, routing and optional trusted-SSH readiness |
 | `nat refresh-routes` | `CONFIG_YAML` | Refresh detached source policy snapshots in configuration |
 | `nat unlock` | `CONFIG_YAML` and exact owner | Release an abandoned shared NAT lock after writers stop |
@@ -374,6 +385,28 @@ verify the cluster and node groups and explicitly leave Kubernetes workloads
 uninspected. Executed provider checks appear in the required validation report;
 deployment succeeds only when that saved report passes. App, GPU, external, and locally app-bound targets still require
 Kubernetes access; see [private-cluster deployment](docs/mk8s.md#private-cluster-deployment).
+
+The opt-in [Tailscale subnet router](docs/tailscale.md) provisions two persistent
+Nebius VMs by default and connects any customer-owned hosted tailnet. Select
+`tailscale-gw` in the standard wizard, then use ordinary validate/render/deploy
+for infrastructure readiness. `tailscale onboarding request` prints the exact
+administrator request; `onboarding configure` records the approved handoff before
+a second render/deploy activates it. OAuth custody can use direct SDK SecretStash
+access, including renewable Kubernetes workload identity, without requiring ESO.
+Interrupted enrollment resumes its original operation/key through authenticated
+guest receipts and requires the current approved intent, as does route approval.
+Independent retirement handles partially provisioned members without
+enrolling them. Tailnet configuration is organization-neutral.
+An administrator provides the [approved tag and scoped credential](docs/tailscale.md#administrator-handoff-manual-prerequisites)
+once; cxcli automates the permitted provisioning, enrollment, route approval,
+verification and retirement steps. Administrator-only policy or signing approvals
+remain explicit prerequisites.
+All tailnet operations are under `nebius-cxcli tailscale`; no parallel installer or
+deployment entry point is introduced. Policy writes and failover tests are explicit.
+Direct Terraform apply remains blocked while Tailscale resources exist in state,
+even after their component is disabled or removed; use ordinary lifecycle retirement.
+Policy commands resolve linked SecretStash containers from infrastructure outputs
+without modifying the reviewed policy intent.
 
 The opt-in [custom NAT gateway](docs/nat-gateway.md) also uses `deploy` for staged
 provisioning, trusted guest readiness, route activation and restoration. Its

@@ -62,6 +62,7 @@ def build_generated_manifest(
             target_item["flux_dir"] = _repo_relative_path(Path(flux_dir), root=paths.repo_root)
         rendered_targets.append(target_item)
 
+    from .tailscale_ssh import freeze_assets as freeze_tailscale_assets
     from .terraform_roots import root_manifest
     from .wireguard_networking import freeze_network_assets
 
@@ -95,6 +96,7 @@ def build_generated_manifest(
             "source_profile": str(source_profile or "").strip(),
             "module_sources": [dict(item) for item in module_sources],
             "wireguard_network": freeze_network_assets(payload, module_sources),
+            "tailscale_guest": freeze_tailscale_assets(module_sources),
             "terraform_tfvars": dict(terraform_tfvars or {}),
             "access_tfvars": dict(access_tfvars or {}),
         },

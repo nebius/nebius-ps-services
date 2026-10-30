@@ -238,13 +238,25 @@ jobs:
           fi
           dirname "${terraform_bin}" >> "${GITHUB_PATH}"
           "${terraform_bin}" version
+      - name: Prepare pinned Tailscale policy helper toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.27.3'
+          cache: false
       - name: Verify service with local make contract
         env:
           RELEASE_REF: ${{ needs.merge-inputs.outputs.checkout_sha }}
           NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
         run: |
           set -euo pipefail
-          make ci-quality verify-wheel-cli
+          CXCLI_BUILD_TAILSCALE_HELPER=1 make ci-quality verify-wheel-cli
+
+      - name: Qualify native Tailscale policy preservation
+        run: uv run --locked --no-sync --no-python-downloads pytest -m integration tests/test_tailscale_policy.py
+
+      - name: Verify Tailscale module without cloud access
+        timeout-minutes: 5
+        run: python3 scripts/verify_tailscale_module.py
 
       - name: Verify NAT SSH protection in isolated Ubuntu systemd
         timeout-minutes: 20

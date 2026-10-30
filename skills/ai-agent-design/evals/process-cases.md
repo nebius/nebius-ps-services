@@ -189,6 +189,24 @@ no nested `ai-stack` handoff, and does not synthesize or reopen component
 selection. The originating `ai-stack` remains the single owner that selects
 components exactly once.
 
+## Quality Cases 9–12: Context, Lifecycle, Trust, And Evidence
+
+Use the matching synthetic prompts and assertions in `evals.json`:
+
+- Case 9: full derivation lineage, revoked uncited inputs, opaque continuation,
+  mandatory-context overflow, artifact bounds, temporal cache eligibility,
+  and repeated compaction against an uncompacted baseline.
+- Case 10: atomic successor admission, receipt replay, generation fencing,
+  late children, ambiguous cancellation, and retained budgets/reservations.
+- Case 11: actual execution credential exposure, final request validation
+  after adapter changes, provisional streaming, and separate telemetry grants.
+- Case 12: telemetry unknown states, independent failure detection, capacity
+  classes, separate evidence gates, and intervened acceptance trials.
+
+Run candidate and captured pre-edit skill in clean contexts with the same
+inputs; grade observable design decisions rather than exact wording. A case
+definition or static validator pass is not runtime or output-quality evidence.
+
 ## Manual Runtime Check
 
 After installation, exercise all positive and negative canonical rows in a

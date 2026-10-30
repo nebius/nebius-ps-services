@@ -42,6 +42,17 @@ def publish_deployment_reports(
     destination.reports_dir.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, str] = {}
     client_verification = None
+    tailscale = None
+    tailscale_path = source.reports_dir / "tailscale-report.json"
+    if tailscale_path.exists():
+        tailscale = json.loads(_read_regular(tailscale_path))
+        if (
+            tailscale.get("schema") != 1
+            or type(tailscale.get("gateway_ready")) is not bool
+            or type(tailscale.get("onboarding_pending")) is not bool
+        ):
+            raise RuntimeError("Invalid Tailscale deployment report")
+        outputs[tailscale_path.name] = json.dumps(tailscale, indent=2) + "\n"
     verification_path = source.reports_dir / "wireguard-client-verification.json"
     if verification_path.exists():
         client_verification = json.loads(_read_regular(verification_path))
@@ -63,6 +74,15 @@ def publish_deployment_reports(
                 + client_verification["status"]
                 + " — [verification report](wireguard-client-verification.md).\n"
             )
+        if tailscale is not None:
+            status = (
+                "Infrastructure ready; administrator handoff pending"
+                if tailscale["onboarding_pending"]
+                else "Gateway ready"
+                if tailscale["gateway_ready"]
+                else "Gateway readiness pending"
+            )
+            content += "\nTailscale: " + status + " — [evidence](tailscale-report.json).\n"
         if failure is not None:
             message = (
                 str(failure)
@@ -81,6 +101,7 @@ def publish_deployment_reports(
                     "status": "failed" if failure is not None else report.overall_status,
                     "infrastructure_status": report.overall_status,
                     "wireguard_client_verification": client_verification,
+                    "tailscale": tailscale,
                     "total": report.total_count,
                     "completed": report.completed_count,
                     "execution_failure": (

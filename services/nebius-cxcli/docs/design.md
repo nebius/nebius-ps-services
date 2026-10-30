@@ -10659,9 +10659,11 @@ Added deployment_infrastructure.py with shared eligibility, Terraform-owned iden
 
 #### Verification Evidence
 
-Prior completed repairs: provider-to-summary negative control and 125 focused tests passed; installed CLI deployment completed in 4.7 minutes with Overall PASS (1/1), six named checks, independent private MK8s/node/NAT readback and no active attempt. Source-config SFS correction passed the original validate reproducer, independent retained-size readback and 193 focused quota/CLI/docs/architecture tests. Earlier Kubernetes handoff, storage credit and node-name fixes passed 100 focused tests plus five CLI integration cases. Scoped Ruff, formatting, Markdown, diff, architecture and existing mypy ratchets passed; mypy was not error-free. Provider reads confirmed ready network/subnets/storage, all ten workers attached read/write, active object storage and running gateways. These observations did not prove workload, storage I/O or VPN behavior.
+Historical provider-to-summary negative control and 125 focused tests passed; installed deployment took 4.7 minutes with Overall PASS (1/1), six checks, independent private MK8s/node/NAT readback and no active attempt. SFS source validation passed its original reproducer, retained-size readback and 193 quota/CLI/docs/architecture tests; earlier handoff, storage-credit and node-name fixes passed 100 tests and five CLI integration cases. Ruff, formatting, Markdown, diff, architecture and existing mypy ratchets passed; mypy was not error-free.
 
-Retained-quota repair verified: allocation and native Terraform guard negative controls failed before the fix. The shared retained_quota module and NAT preview context now serve source/generated preflights; preview rejects pending recovery before route restoration. 381 focused quota, NAT, shared CLI and documentation tests passed, including real saved-plan wrappers and context cleanup. Ruff, formatting, Markdown, diff, architecture and mypy ratchets passed (490 existing type errors; maximum 493). Installed editable CLI validate, force-render, deployment preview and full deployment all passed with quota checks enabled. The clean 5-minute deployment reconciled unchanged infrastructure, ran the native NAT egress probe and recorded Overall PASS with 2 groups/10 ready nodes. Independent provider GETs confirmed configured infrastructure, 2 TiB SFS attached read/write to all ten workers, active unsuspended storage and running gateways. Shared acceptance was ready with no active execution; NAT activation was complete, its lock released, and probe allocation/disk/VM absence was independently confirmed. Authored v2 config remained unchanged and generated v3 contained no deploy section. No manual cloud or journal intervention was used. Workload, guest storage I/O, object-data and VPN behavior remain outside this infrastructure proof.
+Retained-quota allocation and native Terraform guard negative controls failed before repair. Source/generated preflights now share retained_quota; NAT preview rejects pending recovery before restoration. 381 quota/NAT/CLI/docs tests passed, including saved-plan wrappers and context cleanup; mypy recorded 490 existing errors against a 493 cap. Installed validate, force-render, preview and full deployment passed with quotas enabled. The five-minute native deployment recorded Overall PASS, two groups/ten ready nodes and a successful NAT egress probe. Independent GETs confirmed network/subnets, 2 TiB SFS attached read/write to ten workers, active unsuspended object storage, running gateways and absence of probe allocations/disks/VMs. Acceptance had no active execution; NAT activation was complete and unlocked. Source v2 stayed unchanged; generated v3 had no deploy section. No manual cloud/journal intervention occurred. Workloads, guest storage I/O, object-data and VPN remain outside that infrastructure proof.
+
+Review repair: readiness now uses inputs.cluster.parent_id with the root-project default. Its regression failed before repair and passes with strict immutable identity checks preserved. This new fix has local proof only.
 
 <!-- /FEATURE: FEAT-057 -->
 
@@ -10793,6 +10795,8 @@ Implemented strict source v2/manifest v3, actual owner resolvers, all command wr
 
 2026-10-27 initial full gate: `make ci-quality verify-wheel-cli` passed (9133 tests; 3 skipped, 27 integration deselected; coverage 75.51%; five module floors; 58 public/one hidden CLI surfaces). Follow-up align fixed registry alias collisions and null observability routing: eight red/green regressions and 505 consumer tests passed. Ruff, Markdown and existing mypy ratchet passed (490 errors, cap 493). No live cloud deployment or provider qualification.
 
+Review repair validates managed project_id against inputs.cluster.parent_id; both matching and conflicting-parent negative controls now pass.
+
 <!-- /FEATURE: FEAT-059 -->
 
 <!-- FEATURE: FEAT-060 reqs=REQ-052,REQ-053 status=ready delivery=verified priority=P0 version=14 -->
@@ -10805,89 +10809,128 @@ Implemented strict source v2/manifest v3, actual owner resolvers, all command wr
 
 #### Context Evidence
 
-Existing lifecycle, guest template and captured MTU forwarding failure.
+Gateway code and vendor docs.
 
 #### Design Details
 
-Retain REQ-052 access/IAM/journal/rotation guarantees and ESO exclusion. No private
-keys in Terraform/reports. Preserve subnet discovery, overrides and saved routes.
-
-One module-owned guest asset serves boot and pinned-SSH reconciliation. Nullable
-wireguard_mtu defaults to min(1420,uplink MTU-80); validate integer1280..1420 and
-uplink limit, emit effective MTU in server/client files. Own only interface-scoped
-bidirectional TCP SYN MSS clamp rules. Lock before all state reads, quiesce older
-helpers on first upgrade, require existing keys for repair, preserve overrides.
-Stage/verify/atomically install revisions; reconcile without UFW reset or VM restart.
-
-Preserve exact applied cloud-init in immutable bounded backend artifacts, journal
-reference/digest only. Existing owners require state/hash/Compute identity agreement;
-fresh owners freeze an unapplied plan then replan. Nullable runtime-only string
-bootstrap_user_data feeds all plans; readonly paths never publish artifacts.
-Reject unsupported frozen-input edits. Never weaken shared replacement guards.
-
-Add reconcile-network, refresh-client-conf and verify-client CLI modes. Refresh
-requires the same registered client and protected atomic local replacement. Deploy
-reuses reconciliation. Discover clients from original project paths, not execution
-copies. Linux/macOS adapters bind interface/address/route to authenticated peer.
-Bind automatic targets to the same VPC. Freeze and verify the private kubeconfig
-endpoint/CA; preserve current-context, reject TLS/proxy bypass. Require TLS, nonanonymous SelfSubjectReview, complete
-uncompressed discovery >4096 bytes, MTU and fresh peer traffic. Requests15s,
-response4MiB. Pending prerequisites do not fail infrastructure; exercised failures
-return nonzero. Publish separate durable outcomes, never reuse historical PASS.
+REQ-052/053 define the preserved contract: shared guest MTU/MSS, strict SSH, frozen bootstrap, exact access lifecycle and independent client evidence. No implicit VPN or kubecontext change.
 
 #### Selected Option
 
-Immutable bootstrap plus mutable networking; verify connected clients automatically.
+Immutable bootstrap; runtime reconciliation.
 
 #### Alternatives Considered
 
-Reject template-triggered replacement, client-only workaround and mandatory laptop
-presence for headless infrastructure deployment.
+Reject replacement and dual owners.
 
 #### Implementation Boundaries
 
-WG module, rendering, ownership, day-2 commands and reports; preserve NAT/app secrets.
+Gateway lifecycle and CLI.
 
 #### Test-First Success Criteria
 
-- TDD-001: Preserve REQ-052 wizard, access, rotation, retention and sync regressions.
-- TDD-002: MTU mismatch fails before correction and passes after, including reapply.
-- TDD-003: Freeze/retry/corruption/concurrency never replace resources or keys.
-- TDD-004: Client discovery, private identity, bounds and reports distinguish outcomes.
+- TDD-001: Access/rotation/retention/sync regressions and exact ownership remain valid.
+- TDD-002: MTU negative control fails; correction and repeat reconciliation preserve identity and restore traffic.
+- TDD-003: Frozen-input/retry/corruption/concurrency and client-report boundary tests pass.
 
 #### Validation Plan
 
-Focused Python/Terraform, payload-size, lint/type/architecture and align checks.
+Focused native checks.
 
 #### Test Plan
 
-Mock boundaries plus isolated real Linux WireGuard packet-path regression.
+Boundary/failure fixtures.
 
 #### Evaluation Plan
 
-Native recovery, client reconnect, authenticated kubectl, repeat deploy and readback.
+Live install, replay and readback.
 
 #### Rollout And Rollback
 
-Preserve VM/keys/peers; stage bounded rollback copies, reconcile uncertain outcomes.
+Preserve identity; bounded recovery.
 
 #### Done Definition
 
-Source checks and independent live client/repeat-deploy acceptance pass.
+Separate local and live evidence.
 
 #### Implementation Evidence
 
-MTU/MSS, frozen bootstrap and client verification implemented. First boot persists
-an empty peer registry; repair rejects missing state. CLI/help/docs aligned.
+Guest MTU/MSS, immutable bootstrap and client verification implemented. Empty peer registry persists at first boot; repair rejects missing state. CLI/help/docs aligned.
 
 #### Verification Evidence
 
-400 focused checks pass, including fresh empty-registry red/green and CLI modes.
-Ruff/type ratchet pass. Linux negative control stalled; repair restored64KiB TLS.
-Native repair, reconnect, kubectl, second deploy and independent identity/report
-checks passed. MTU1370; no fresh cloud install performed.
+400 focused checks, Ruff/type ratchet pass. Real Linux negative control stalls and repair restores 64KiB TLS. Native repair, reconnect, kubectl, second deploy and independent identity/report checks pass. No fresh cloud install was performed.
 
 <!-- /FEATURE: FEAT-060 -->
+
+<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=7 -->
+### FEAT-061: Tailscale HA gateways
+
+#### Requirements Covered
+
+- REQ-054: Customer-owned Tailscale HA subnet gateways.
+
+#### Context Evidence
+
+Accepted plan, source and vendor docs.
+
+#### Design Details
+
+Journal v3 requires infrastructure|active. Stage one verifies cloud/SSH/package readiness without tailnet API/payload reads. Wizard/request binds intent; configure selects active. Deploy, enrollment recovery and route approval require current accepted intent. Safe cleanup remains available.
+
+SecretStash stores one OAuth pair/version; Terraform owns metadata, SDK owns payloads. Pin original client/version for recovery; enrollment keys remain local. Only proven never-activated cleanup avoids credentials and permits a changed draft tailnet. No shared key recovery or implicit secret deletion.
+
+SDK workload identity binds exact IAM account/projected path with renewal and no fallback. Skill covers trust/grants/consumers. No required Kubernetes/ESO.
+
+#### Selected Option
+
+Two stages; admin policy; direct SecretStash; renewable SDK.
+
+#### Alternatives Considered
+
+Reject blind issuance and implicit activation.
+
+#### Implementation Boundaries
+
+Schema, wizard, SDK, lifecycle, reports and guides.
+
+#### Test-First Success Criteria
+
+- TDD-001: Stage one never enrolls; stale approval blocks.
+- TDD-002: Interrupted key and credential continuity.
+- TDD-003: Token renewal without fallback/disclosure.
+
+#### Validation Plan
+
+Focused checks, contracts, Terraform, align.
+
+#### Test Plan
+
+Stage/auth/recovery and WireGuard regressions.
+
+#### Evaluation Plan
+
+Authorized independent workload/gateway readback.
+
+#### Rollout And Rollback
+
+Reject old journals; no destructive recreation.
+
+#### Done Definition
+
+Separate source and live proof.
+
+#### Implementation Evidence
+
+Implemented onboarding, lifecycle, credential pins, SDK SecretStash/WIF, wizard/reports and skill examples. Configure JSON emits one result.
+
+#### Verification Evidence
+
+Prior: 9591 unit pass/3 skip; Terraform 5/native 2. Align: 450 tests, 52 skill checks; wheel 74 public/1 hidden. Ruff/type/architecture/format ratchets pass. Live qualification pending.
+
+Review repair: direct apply checks retained state; policy credentials resolve without changing intent. Ten command/admission cases pass after six negative controls. Native policy tests and four-platform helper build pass.
+
+<!-- /FEATURE: FEAT-061 -->
 
 <!-- maintain-project-specs:design:end -->
 

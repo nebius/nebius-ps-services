@@ -49,6 +49,7 @@ from .cluster_config import (
     validate_source_contract,
 )
 from .nat_gateway_cli import app as nat_app
+from .tailscale_cli import app as tailscale_app
 
 try:
     import fcntl as _fcntl
@@ -2721,6 +2722,7 @@ app.add_typer(upgrade_app, name="upgrade")
 app.add_typer(migrate_app, name="migrate")
 app.add_typer(grafana_app, name="grafana")
 app.add_typer(nat_app, name="nat")
+app.add_typer(tailscale_app, name="tailscale")
 
 
 def _version_callback(value: bool) -> bool:
@@ -20533,7 +20535,7 @@ def _parse_component_value_overrides(
 
 
 _SUBNET_ATTACHED_INFRA_COMPONENT_IDS = frozenset(
-    {"mk8s", "vm", "nfs", "wireguard-gw", "ssh-jumphost"}
+    {"mk8s", "vm", "nfs", "wireguard-gw", "ssh-jumphost", "tailscale-gw"}
 )
 _NETWORK_ONLY_INFRA_COMPONENT_IDS = frozenset({"managed-postgresql"})
 _NETWORK_ATTACHED_INFRA_COMPONENT_IDS = (
@@ -23073,6 +23075,24 @@ def _remove_skipped_component_add_infra_rows(
             instance_id,
         )
 
+    from .tailscale_dependencies import skipped_new_dependencies as skipped_tailscale_dependencies
+
+    for instance_id in skipped_tailscale_dependencies(
+        payload,
+        {
+            instance
+            for component, instance in skipped_by_label.values()
+            if component == "tailscale-gw"
+        },
+        {
+            component_instance_id(row)
+            for row in payload.get("infra", {}).get("components", [])
+            if component_type_id(row) == "mysterybox"
+            and component_instance_label("mysterybox", component_instance_id(row))
+            in added_label_set
+        },
+    ):
+        skipped_by_label[f"mysterybox@{instance_id}"] = ("mysterybox", instance_id)
     infra_lookup = {entry.id: entry for entry in infra_entries}
     removed_infra_labels: list[str] = []
     removed_cluster_targets: set[str] = set()
@@ -29055,6 +29075,12 @@ def _run_component_field_wizard(
     selected_infra.update(
         materialize_wireguard_dependencies(payload, selected_instances=selected_infra)
     )
+    from .tailscale_dependencies import materialize as materialize_tailscale
+
+    tailscale_created_dependencies = set(
+        materialize_tailscale(payload, selected_instances=selected_infra)
+    )
+    selected_infra.update(tailscale_created_dependencies)
     normalize_mysterybox_eso_project_settings(payload)
 
     infra_lookup = {entry.id: entry for entry in infra_entries}
@@ -29119,6 +29145,12 @@ def _run_component_field_wizard(
                     )
                 else:
                     console.print(f"Soperator '{escape(target)}': standard deployment profile.")
+        tailscale_created_dependencies.update(
+            materialize_tailscale(payload, selected_instances=selected_infra)
+        )
+        from .tailscale_dependencies import prune_unreferenced
+
+        prune_unreferenced(payload, tailscale_created_dependencies)
         return yaml.safe_dump(payload, sort_keys=False)
 
     def _selected_infra_component_ids() -> set[str]:
@@ -32784,6 +32816,41 @@ def _run_component_field_wizard(
                     and full_path_label.endswith(".inputs.labels")
                 ):
                     updated, should_stop = prompt_bucket_labels(current)
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "tailscale-gw"
+                    and full_path_label.endswith((".tailscale.auth", ".tailscale.policy.rules"))
+                ):
+                    from .tailscale_wizard import prompt_auth, prompt_rules
+
+                    component_node = (
+                        _get_payload_value(payload, component_path) if component_path else {}
+                    )
+                    if not isinstance(component_node, dict):
+                        raise ValueError("Tailscale component must be a mapping")
+                    if full_path_label.endswith(".tailscale.auth"):
+                        updated, should_stop = prompt_auth(
+                            current, component_node, payload, full_path_label
+                        )
+                    else:
+                        updated, should_stop = prompt_rules(
+                            current, component_node, full_path_label
+                        )
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "tailscale-gw"
+                    and full_path_label.endswith(".tailscale.routes")
+                ):
+                    from .tailscale_wizard import prompt_routes
+
+                    component_node = (
+                        _get_payload_value(payload, component_path) if component_path else {}
+                    )
+                    updated, should_stop = prompt_routes(
+                        current, component_node, payload, provider_lookup, full_path_label
+                    )
                     write_default_to_config = True
                 elif (
                     entry.scope == "infra"
@@ -50537,6 +50604,9 @@ def _run_terraform_apply_with_status(
     from .wireguard_commands import guard_direct_apply
 
     guard_direct_apply(cli_module, config, paths, runtime_env, initialize=initialize)
+    from .tailscale_deploy import guard_direct_apply as guard_tailscale_apply
+
+    guard_tailscale_apply(cli_module, config, paths, runtime_env, initialize=initialize)
     validation_env = os.environ.copy()
     validation_env.update(runtime_env)
     _validate_mysterybox_runtime_payload_values(config, environ=validation_env)
@@ -50611,9 +50681,11 @@ def _run_terraform_destroy_with_status(
     }
     if status_watchers:
         reporting_kwargs["status_watchers"] = status_watchers
+    from .tailscale_deploy import retire_for_destroy as retire_tailscale
     from .wireguard_commands import retire_for_destroy
 
     with (
+        retire_tailscale(config, paths, runtime_env) as runtime_env,
         retire_for_destroy(config, paths, runtime_env) as runtime_env,
         deployment_status_reporting(config, **reporting_kwargs) as reporter,
     ):
@@ -51747,6 +51819,9 @@ def _selection_change_issues(
 
     try:
         access_dependencies(payload)
+        from .tailscale_dependencies import dependencies as tailscale_dependencies
+
+        tailscale_dependencies(payload)
     except ValueError as error:
         issues.append(str(error))
     issues.extend(_active_infra_resource_identity_issues(payload))
@@ -53226,6 +53301,11 @@ def component_add_command(
         dependencies = materialize_wireguard_dependencies(
             next_payload, selected_instances=set(added_infra_instances)
         )
+        from .tailscale_dependencies import materialize as materialize_tailscale
+
+        dependencies += materialize_tailscale(
+            next_payload, selected_instances=set(added_infra_instances)
+        )
         for dependency in dependencies:
             added_infra_instances.append(dependency)
             added_infra_labels.append(f"mysterybox@{dependency}")
@@ -53251,7 +53331,16 @@ def component_add_command(
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
                 raise RuntimeError("Updated config payload must be a mapping")
+            known_infra = {
+                component_instance_id(r)
+                for r in next_payload.get("infra", {}).get("components", [])
+            }
             next_payload = parsed_override
+            for new_row in next_payload.get("infra", {}).get("components", []):
+                identity = component_instance_id(new_row)
+                if component_type_id(new_row) == "mysterybox" and identity not in known_infra:
+                    added_infra_instances.append(identity)
+                    added_infra_labels.append(f"mysterybox@{identity}")
             wizard_added_eso_labels = _new_enabled_app_instance_labels(
                 next_payload,
                 before_labels=before_wizard_app_labels,
@@ -53328,6 +53417,11 @@ def component_add_command(
         from .wireguard_dependencies import materialize_wireguard_dependencies
 
         dependencies = materialize_wireguard_dependencies(
+            next_payload, selected_instances=set(added_infra_instances)
+        )
+        from .tailscale_dependencies import materialize as materialize_tailscale
+
+        dependencies += materialize_tailscale(
             next_payload, selected_instances=set(added_infra_instances)
         )
         for dependency in dependencies:
@@ -54007,6 +54101,11 @@ def component_remove_command(
         from .wireguard_dependencies import assert_access_removal_allowed
 
         assert_access_removal_allowed(
+            payload, {target.instance_id for target in remove_targets if target.scope == "infra"}
+        )
+        from .tailscale_dependencies import assert_removal_allowed as tailscale_removal_allowed
+
+        tailscale_removal_allowed(
             payload, {target.instance_id for target in remove_targets if target.scope == "infra"}
         )
 

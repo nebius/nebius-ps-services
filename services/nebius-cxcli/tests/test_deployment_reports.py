@@ -8,6 +8,31 @@ from nebius_cxcli.deployment_reports import publish_deployment_reports
 from test_deployment_campaign import paths
 
 
+def test_tailscale_infrastructure_report_does_not_claim_gateway_ready(tmp_path):
+    source, destination = paths(tmp_path / "private"), paths(tmp_path / "workspace")
+    source.reports_dir.mkdir(parents=True)
+    (source.reports_dir / "tailscale-report.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "gateway_ready": False,
+                "onboarding_pending": True,
+                "members": [{"member": "a", "status": "INFRASTRUCTURE_READY"}],
+            }
+        )
+    )
+    (source.reports_dir / "deploy-report.md").write_text("Infrastructure validation complete.\n")
+    report = build_deploy_validation_report([], reports_dir=source.reports_dir)
+    publish_deployment_reports(source, destination, [], report)
+    summary = json.loads((destination.reports_dir / "deploy-report.json").read_text())
+    assert summary["tailscale"]["gateway_ready"] is False
+    assert summary["tailscale"]["onboarding_pending"] is True
+    assert (
+        "administrator handoff pending"
+        in (destination.reports_dir / "deploy-report.md").read_text()
+    )
+
+
 def test_published_failure_summary_survives_private_cache_and_excludes_raw_logs(tmp_path):
     source, destination = paths(tmp_path / "private"), paths(tmp_path / "workspace")
     source.reports_dir.mkdir(parents=True)

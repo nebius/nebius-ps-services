@@ -11,6 +11,9 @@ and audit history separate.
 - Context pipeline
 - Provenance and conflict handling
 - Context lifecycle
+- Derivation lineage and revocation
+- Bounded artifact access
+- Cache eligibility
 - Memory classes
 - Governed memory writes and curation
 - Handoff contracts
@@ -132,6 +135,19 @@ working observations
 reserved response/tool budget
 ```
 
+Classify content as mandatory or optional before trimming. Mandatory content
+includes current scope and restrictions, relevant approval/effect status,
+unresolved failures and contradictions, and protocol-required tool-call/result
+groups. Select optional evidence by value within the remaining budget.
+
+Measure the complete serialized request, including instructions, tool schemas,
+message wrappers, tool results, and reserved output, using a qualified tokenizer
+or conservative estimator for the selected route. Budget for the smallest
+eligible fallback route too, or rebuild and revalidate before fallback.
+Recheck after transformations at the final dispatch boundary. If mandatory
+content cannot fit, stop, request a narrower task, or partition through a
+trusted policy; never silently truncate a restriction to make the call fit.
+
 Prefer compact structured records, bounded evidence excerpts, and references to
 large artifacts. Preserve the data needed for audit or recovery outside the
 prompt; context compaction is not archival storage.
@@ -151,6 +167,70 @@ prompt; context compaction is not archival storage.
   authority.
 - Treat any retrieval, ranking, compaction, or context-layout change as a
   release change and evaluate its effect on behavior, privacy, latency, and cost.
+
+## Derivation Lineage And Revocation
+
+Treat summaries, embeddings, notes, memory candidates, cached answers, and
+opaque provider continuations as derived data. Record the full set of protected
+inputs supplied to their producer, including uncited inputs and earlier
+derivatives. Track this dependency closure outside model-generated citations;
+a model cannot attest which inputs did or did not influence its output.
+
+Before reuse, authorize the current principal, purpose, and destination against
+that closure and current policy. The default audience is no broader than the
+inputs permit. Removing a citation, paraphrasing, hashing an identifier, or
+passing a content filter does not authorize broader disclosure. Any deliberate
+declassification needs a separate, explicit policy and trusted owner.
+
+If access is revoked or lineage is unavailable, invalidate the derivative and
+rebuild from currently eligible sources. If an opaque continuation cannot
+exclude affected history, discard it and restart from a clean authorized view.
+Bound invalidation propagation and define the serving behavior during that
+window; unknown authority must not permit protected output.
+
+A summary remains untrusted derived data. Preserve source trust labels,
+conflicts, restrictions, and reloadable evidence; do not install a model-written
+summary as higher-priority instructions. Validate compaction over repeated
+cycles against an uncompacted baseline, including constraint recall, revoked
+uncited inputs, stale facts, and coherent tool protocol records.
+
+## Bounded Artifact Access
+
+When a tool result is too large, store it under the approved retention policy
+before model delivery and return a small typed descriptor: identity, immutable
+version or digest, classification, lineage, expiry, coverage, and read limits.
+The descriptor is a locator, never an access grant or a credential-bearing URL.
+
+Reauthorize every read, search, or page against current access and derivation
+dependencies. Bound bytes/tokens returned, pages, underlying scan work, time,
+and total task cost. Preserve truncation, omitted ranges, partial coverage, and
+unavailable-source status so a short result cannot imply exhaustive evidence.
+If authorized offload fails, return a typed failure or explicitly partial
+result; do not fall back to exposing the oversized protected payload.
+
+## Cache Eligibility
+
+Treat a cache hit as a candidate result, not an authority decision. Choose keys
+and entry metadata from the workload's correctness dependencies: principal and
+tenant scope, task/purpose, source and corpus generations, policy, transformation
+and release identities, dependency closure, effective time, and expiry.
+
+- Recheck current authorization and validity before materializing protected
+  data, even when the key includes an authorization revision.
+- Invalidate query results when the eligible corpus changes, including a newly
+  eligible record absent from the previous result. Tracking only returned rows
+  cannot establish query freshness.
+- Bound validity by scheduled effective-time changes as well as TTL; a record
+  can become eligible or expire without an invalidation event.
+- Treat lost invalidation, eviction, restore, and cache outage as expected
+  conditions. Reconcile against the authority or rebuild. If that authority is
+  unavailable, block protected serving rather than treating stale entries as
+  a grant. Define separately whether non-sensitive stale data may be served.
+- Never cache a reusable approval, lease, or permission as if it were current
+  authority; canonical stores and current policy own those decisions.
+
+These are conditional correctness requirements, not a requirement to add a
+cache, lineage service, or vector database.
 
 ## Memory Classes
 
@@ -241,6 +321,11 @@ or credentials implicitly.
 - Is context authorized before relevance ranking?
 - Are instructions distinct from untrusted data?
 - Can every decision-changing fact be traced to a source and version?
+- Does derived-data eligibility include uncited and transitive inputs?
+- Can revocation invalidate summaries, caches, and provider continuations?
+- Does the complete request fit without losing mandatory context?
+- Are artifact reads bounded and reauthorized, and cache freshness sensitive
+  to corpus changes and time?
 - Are conflicts surfaced rather than averaged away?
 - Are canonical state, conversation, working state, memory, knowledge, audit,
   and cache owned separately?
@@ -248,6 +333,16 @@ or credentials implicitly.
 - Do handoffs preserve scope, authority, evidence, and cancellation?
 
 ## Primary Sources
+
+The authorization and context principles below are supported by these public
+sources. Complete dependency closure, final-request budgeting, and cache
+eligibility are conservative design rules derived from those principles;
+they are not claims that a framework supplies these controls automatically.
+
+- [Anthropic, Effective context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+  supports deliberate context selection and recall-focused compaction.
+- [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
+  supports deny-by-default access and permission checks on every request.
 
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
 - [OWASP AI Agent Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html)

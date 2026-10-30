@@ -3557,6 +3557,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             "type_hint": "string",
         },
         "inputs.access_bootstrap": {"prompt": False},
+        "inputs.bootstrap_user_data": {"prompt": False},
         "inputs.create_public_ip_allocation": {"write_default_to_config": True},
         "inputs.client_default_persistent_keepalive": {"write_default_to_config": True},
         "inputs.nat_mode": {"write_default_to_config": True},
@@ -3804,7 +3805,9 @@ def test_wireguard_gw_cloud_init_enforces_key_only_admin_access() -> None:
     assert "AuthenticationMethods publickey" in template
     assert "AllowTcpForwarding no" in template
     assert "fail2ban" in template
-    assert 'run(["sshd", "-t"])' in template
+    assert (
+        "ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_config.d/50-wireguard-gw.conf" in template
+    )
 
 
 def test_load_component_sources_explicit_missing_file_raises(tmp_path: Path) -> None:

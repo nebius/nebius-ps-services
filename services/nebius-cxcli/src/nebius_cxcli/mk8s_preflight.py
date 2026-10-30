@@ -538,7 +538,7 @@ def _vpc_networking_refs(payload: Mapping[str, Any]) -> tuple[_VpcNetworkingRef,
                     )
             continue
 
-        if component_id in {"vm", "nfs", "wireguard-gw", "ssh-jumphost"}:
+        if component_id in {"vm", "nfs", "wireguard-gw", "tailscale-gw", "ssh-jumphost"}:
             network_binding = bindings.get(_binding_target(component_id, "network_id"))
             subnet_binding = bindings.get(_binding_target(component_id, "subnet_id"))
             if network_binding is None or subnet_binding is None:

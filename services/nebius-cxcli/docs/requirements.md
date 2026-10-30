@@ -1874,4 +1874,43 @@ Native repair and repeat deploy followed by independent identity and laptop traf
 
 <!-- /REQUIREMENT: REQ-053 -->
 
+<!-- REQUIREMENT: REQ-054 status=active priority=P1 type=functional -->
+### REQ-054: Customer-owned Tailscale HA subnet gateways
+
+#### User Story
+
+Customers advertise private Nebius VPC subnets through their own hosted Tailscale tailnet using the standard cxcli lifecycle.
+
+#### Acceptance Criteria
+
+- AC-001: tailscale-gw is a Terraform module and selectable infrastructure component. Standard create/component-add, validate, render, deploy and destroy own provisioning; no tailscale install/deploy command. Default two persistent VMs with independent public addresses and SSH management restricted to configured sources; explicit single-member mode reports non-HA.
+- AC-002: Support customer-defined tailnet identity, tags, CIDRs, sizing, access policy and credential references. No internal company dependencies or non-Nebius provisioning. Identical routes, default SNAT, persistent state, forwarding and vendor firewall settings; preserve tailnet route-selection policy.
+- AC-003: Scoped OAuth or administrator-issued single-use non-ephemeral keys enroll each member through pinned SSH. Verify expected tailnet before advertising. Tailscale credentials never enter Terraform, cloud-init, logs or reports. Reconcile exact identities after ambiguous outcomes; reject foreign state without reauthentication.
+- AC-004: tailscale auth configure/check, policy plan/apply, routes approve, status, doctor and verify expose consistent selectors and JSON results. Policy edits preserve HuJSON and unrelated fields, validate and conditionally apply a reviewed artifact. Least privilege; missing authority produces actionable pending outcomes.
+- AC-005: Deploy preserves immutable bootstrap and peer-gated rolling changes. Enrollment uses a versioned VM/disk/SSH-bound operation, original single-use key in owner-only runtime storage and authenticated root-only guest receipt. Resume the same operation or verified node after interruption; fence and confirm revocation before replacing an unused key. Ambiguous issuance and uncertain started enrollment block blind retries. Administrator key references include exact per-member key IDs. Reject unsupported journals. Retirement independently reconstructs exact Terraform/cloud bindings, never provisions, checks capacity or enrolls, and persists key/device/cloud removal separately; denied reads are uncertainty, not absence. Reports separate infrastructure, enrollment, approvals, client traffic, failover and cleanup.
+- AC-006: Test fresh install, second deploy, reboot, interrupted enrollment, wrong tailnet, policy conflicts, failed rolling recovery and real client TLS/API traffic. Explicit failover uses destination-specific selected managed routers and bounded restoration surviving CLI interruption. No automatic destructive test during deploy.
+
+- AC-007: Every new gateway completes an infrastructure-only deployment before activation. A guided wizard gathers exact access intent and generates a credential-free administrator handoff with proposed tags, routes, access rules, scopes, secure delivery and conditional approvals. A continuation wizard records approved intent and configures stage active; normal deploy owns activation. Stale handoffs fail before enrollment.
+- AC-008: Shared OAuth credentials may be read directly from SecretStash as one client-ID/secret version, or explicit protected environment/file references. Metadata-only containers have no Kubernetes/ESO dependency. Never put payloads in Terraform, cloud-init or reports. Bind unfinished enrollment and cleanup to the original credential; rotation cannot establish false old-key absence. Shared enrollment-key custody across workstations is excluded.
+- AC-009: Kubernetes consumers may select explicit renewable Nebius workload identity using a projected token and exact IAM service-account ID. Prefer Python SDK operations over the Nebius CLI, reject mixed identity inputs and never fall back after an explicit auth failure. Use resource-scoped grants; gateway bootstrap does not depend on Kubernetes.
+- AC-010: Reports distinguish infrastructure-ready/awaiting-admin, activation, enrollment, route approval and client traffic. Credential-free cleanup requires durable evidence that activation never started. Unsupported journals fail closed without automatic migration or resource recreation.
+
+#### Negative Criteria
+
+- NC-001: No mandatory MysteryBox/ESO, automatic WireGuard migration, exit nodes, Headscale, site-to-site routing, source-IP preservation, blanket access grants or unverified zone-HA claims.
+
+#### Validation Method
+
+Trace catalog, native config, render, lifecycle, strict transport, ownership and reports.
+
+#### Test Method
+
+Unit and integration fixtures, Terraform/provider schema, CLI/wheel contracts and failure injection.
+
+#### Evaluation Method
+
+Authorized disposable Nebius/tailnet install, repeat deploy, reboot and independent client/failover readback; local proof never implies live qualification.
+
+<!-- /REQUIREMENT: REQ-054 -->
+
 <!-- maintain-project-specs:requirements:end -->

@@ -117,6 +117,20 @@
         "Treats stale reserved zero as unresolved, not measured zero.",
         "Keeps CPU physical capacity and project eligibility unverified and performs no cloud calls."
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "A Kubernetes workload on Nebius must read one SecretStash secret without a private IAM key. Use the Python SDK; explain whether ESO is necessary and how token and secret rotation differ. No cloud mutations are authorized.",
+      "expected_output": "SDK-first exact OIDC trust and least privilege workflow with renewable projected token and direct payload access, distinguishing optional ESO.",
+      "files": [],
+      "assertions": [
+        "Binds exact issuer, Kubernetes subject and IAM service account; group membership and resource permit are separate.",
+        "Uses sts.nebius.com audience and a rotating projected path without subPath or copied token.",
+        "Uses FederatedCredentialsBearer, SDK and set_channel, with no CLI or auth fallback.",
+        "Requires mysterybox.payload-viewer on the exact secret, reads credential fields from one version and does not print payloads.",
+        "Distinguishes IAM token renewal from application credential refresh; ESO is optional and requires version 2.10.0 or newer for native workload identity.",
+        "Does not execute mutations or claim live qualification."
+      ]
     }
   ]
 }

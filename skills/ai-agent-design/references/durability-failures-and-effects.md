@@ -9,6 +9,7 @@ multi-agent, externally effectful, or expected to survive process failure.
 - Runtime state machine
 - History and projections
 - Concurrency and delivery
+- Quiescence and successor admission
 - Failure taxonomy
 - Retry and isolation policy
 - Compensation and reconciliation
@@ -89,6 +90,48 @@ commit. Use an outbox or equivalent relay and idempotent consumers.
 - Define deterministic merge, arbitration, or conflict escalation.
 - Treat cancellation as a state transition with effect cleanup and partial
   result policy, not merely a client disconnect.
+
+## Quiescence And Successor Admission
+
+Fence state commits, result acceptance, and effect dispatch by current ownership
+generation when stale workers can survive a timeout or lease loss. Lease
+renewal maintains liveness; it does not create a new generation or make an old
+worker safe. Recheck authority at the effect boundary, not just at dispatch
+from the coordinator.
+
+Cancellation requested, callback returned, timeout elapsed, and process stopped
+are different facts. Define independent evidence that descendants cannot keep
+running or dispatching effects. Keep unresolved operations and their capacity
+or cost reservations accounted for until termination or authoritative
+reconciliation establishes the outcome. A fence prevents accepted stale work;
+it cannot undo an effect already submitted to an external system.
+
+Before a parent settles, enter a nonterminal closing or draining state that
+atomically rejects further child admission. Settle, cancel, or reconcile
+existing descendants, then commit the terminal parent state only when required
+outcomes are resolved. An empty child snapshot alone cannot prove no concurrent
+child can start.
+
+For products that support reopening or restarting a terminal task:
+
+1. Keep predecessor history immutable and require a settled or effectively
+   fenced predecessor, including an explicit disposition for ambiguous effects.
+2. Authenticate and authorize the caller. Resolve an existing matching
+   idempotency receipt before evaluating the original expected-version
+   precondition again; reauthorize disclosure of the receipt. Reject the same
+   key with different intent.
+3. For a new request, validate current version, authority, cumulative budgets,
+   and capacity; atomically admit at most one successor for the predecessor,
+   advance its generation, and persist durable start intent plus the receipt.
+4. Deliver start intent through the normal replay-safe path. Reject old results
+   and stale effects; retries return the admitted successor instead of starting
+   another run. Refresh context and approvals under current policy.
+5. Preserve cumulative spend and outstanding reservations across generations.
+   Reopening is not an implicit budget reset or replay of completed effects.
+
+Use a transaction, uniqueness constraint, or equivalent proven mechanism for
+these invariants. Do not add lifecycle generations to short, independent calls
+that have no restart or concurrency requirement.
 
 ## Delivery and Idempotency
 
@@ -201,6 +244,12 @@ actions and invariants; the model may propose among allowed options.
 
 ## Primary Sources
 
+Atomic successor admission and generation fencing above are design invariants
+to validate in the selected state store and runtime, not framework guarantees.
+
+- [AWS Builders' Library, Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/)
+  supports caller intent identifiers, duplicate outcomes, parameter conflicts,
+  and deliberate late-arrival retention.
+
 - [Temporal retry policies](https://docs.temporal.io/encyclopedia/retry-policies)
-- [AWS, Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/)
 - [AWS saga patterns](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/saga-patterns.html)

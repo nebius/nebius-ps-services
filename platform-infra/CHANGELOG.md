@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+- Persist Tailscale guest enrollment receipts and original temporary keys with
+  root-only permissions; fence interrupted operations before recovery or retirement.
+
+- Add opt-in `tailscale-gw` with two persistent Nebius routers by default and
+  customer-owned tailnet configuration. Integrate protected enrollment, exact
+  ownership, readiness, staged maintenance and retirement into the ordinary
+  lifecycle. Add `tailscale` auth, reviewed policy, route approval, status, doctor,
+  client verification, bounded failover and stopped-writer recovery commands.
+  Keep Tailscale credentials outside Terraform and preserve strict SSH trust.
+  Local qualification is separate from live deployment and failover qualification.
+
 - Persist an empty peer registry during WireGuard initialization so fresh gateways
   without bootstrap clients pass network reconciliation. Keep missing-registry
   checks strict for existing gateways.
@@ -35,17 +46,6 @@ All notable changes to this project are documented in this file.
   tests and document detached upgrades and VM replacement.
 
 - Add NAT gateway subnet create/reuse modes, preserving reused subnet ownership, a 40 GiB boot disk default and identity-preserving resource moves. Require provider >=0.6.74 and test same-deployment VPC reuse without a reverse dependency.
-
-### Fixed
-
-- Read VPC subnet CIDRs from supported private/public status pools instead of
-  deprecated status CIDR fields. Preserve the CIDR-list outputs, require Nebius
-  provider `>= 0.6.74, < 0.7.0` for this module, and refresh its minimal example lockfile.
-
-- Keep MK8s `service_account_ids` keys known during the initial plan by
-  selecting configured accounts instead of filtering their apply-time IDs.
-  Caller-owned IAM grants can use this output in `for_each` without a targeted
-  bootstrap apply.
 
 ### Added
 
@@ -219,6 +219,15 @@ All notable changes to this project are documented in this file.
   validation against Nebius Cloud.
 
 ### Fixed
+
+- Read VPC subnet CIDRs from supported private/public status pools instead of
+  deprecated status CIDR fields. Preserve the CIDR-list outputs, require Nebius
+  provider `>= 0.6.74, < 0.7.0` for this module, and refresh its minimal example lockfile.
+
+- Keep MK8s `service_account_ids` keys known during the initial plan by
+  selecting configured accounts instead of filtering their apply-time IDs.
+  Caller-owned IAM grants can use this output in `for_each` without a targeted
+  bootstrap apply.
 
 - Tightened `modules/vpc`, `modules/ssh-jumphost`, and
   `modules/wireguard-gw` VPC validation so an existing VPC network and

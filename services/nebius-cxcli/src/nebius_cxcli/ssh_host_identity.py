@@ -154,7 +154,7 @@ def fresh_identity(
 ) -> dict[str, str]:
     """Persist only real-deploy keys, outside render bundles and routing journals."""
     root = paths.project_dir / ".nebius-cxcli"
-    if namespace != "nat-host-keys":
+    if namespace not in {"nat-host-keys", "tailscale-host-keys"}:
         raise ValueError("Unknown gateway host identity namespace")
     folder = root / namespace
     name = hashlib.sha256((project + "\0" + component).encode()).hexdigest() + ".key"

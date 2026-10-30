@@ -66,6 +66,7 @@ Read only the matching category and conditional references before decisions:
 | Soperator, Serverless AI or MLflow integration | `references/ai-service-integration.md` |
 | Privileged host inspection, proof pods or synthetic signals | `references/active-diagnostics.md` |
 | Discover service coverage, API versions and maturity | `references/service-catalog.md` |
+| Kubernetes workloads accessing SecretStash or other IAM APIs | `references/kubernetes-workload-identity.md` |
 | Adapt project patterns into reusable automation | `references/adoption-patterns.md` |
 
 ## Design-Only Consultation

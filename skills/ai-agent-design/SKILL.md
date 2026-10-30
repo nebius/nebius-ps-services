@@ -19,6 +19,14 @@ inspect project state, or modify files, private state, Git, or external systems.
 Never expose private helper actions or flags or treat help as workflow
 authorization.
 
+## Public Usage
+
+`$ai-agent-design <design request>` designs or revises a logical agent subsystem;
+the request supplies the outcome, constraints, and undecided boundaries.
+Implicit invocation is allowed for matching design requests.
+`$ai-agent-design --help` and `$ai-agent-design -h` show help only.
+No additional public flags.
+
 ## Agent Compatibility
 
 Use `$ai-agent-design` in Codex, `/ai-agent-design` in Claude Code, or
@@ -179,10 +187,12 @@ Define only the contracts and controls required by the accepted workloads:
   runtime or session layers for simpler behavior classes;
 - tool schema, identity, authorization, action risk, approval, idempotency,
   preview, verification, and audit;
-- context sources, authorization-before-relevance, provenance, freshness,
-  conflict handling, token budgets, and memory classes;
+- context sources, authorization-before-relevance, complete derivation lineage,
+  mandatory context, bounded artifact access, freshness, cache eligibility,
+  compaction, conflict handling, token budgets, and memory classes;
 - canonical business state, execution checkpoints, append-only history,
-  projections, concurrency, event delivery, and artifact ownership;
+  projections, atomic lifecycle admission, execution fencing, event delivery,
+  and artifact ownership;
 - failure taxonomy, retry ownership, deadlines, circuit breakers, bulkheads,
   compensation, reconciliation, cancellation, and safe terminal states;
 - prompt-injection defenses, sandboxing, egress, tenant isolation, secrets,
@@ -245,7 +255,13 @@ Check:
 - when those runtime components are present, control, execution, session state,
   context, memory, policy, tools, and traces communicate through versioned
   interfaces with explicit capability gates;
-- every agent and worker has least-privilege tools and context;
+- every agent and worker has least-privilege tools and context; trusted
+  orchestration and model-controlled execution have explicit credential
+  boundaries, including in-process execution;
+- the final model request enforces authorized context, tool scope, release,
+  ownership, and budgets after adapter transformations;
+- summaries, caches, artifacts, and opaque continuations cannot bypass current
+  access policy or promote untrusted material into instructions;
 - duplicate delivery, stale context, partial success, cancellation, provider
   failure, budget exhaustion, and human timeout reach safe states;
 - evaluation and rollout gates bind the exact prompt, model, tool, policy,
@@ -301,6 +317,11 @@ A design is complete only when:
   explicit;
 - quality, safety, privacy, latency, cost, recovery, rollback, observability,
   incident response, and ownership are covered proportionately;
+- admission, active execution, and model demand are counted separately when
+  they have different lifetimes; missing telemetry is not a measured zero;
+- design/static checks, framework compatibility, runtime behavior, and live
+  qualification have separate evidence states and cannot substitute for one
+  another;
 - volatile claims use current official sources and assumptions cannot close a
   hard gate;
 - implementation and live validation remain separately authorized.

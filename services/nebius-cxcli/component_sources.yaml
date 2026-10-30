@@ -128,6 +128,24 @@ components:
       defaults:
         # Materialize the shared admin SSH username into customer config.yaml.
         inputs.ssh_user_name: shared.admin_ssh.user_name
+    tailscale-gw:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/tailscale-gw?ref=main
+        local: ../../platform-infra//modules/tailscale-gw
+      ui:
+        title: Tailscale subnet gateways (two VMs, HA by default)
+        group: Network
+        enabled: false
+      wizard_profile: tailscale-gw
+      defaults:
+        inputs.replicas: 2
+        inputs.platform: cpu-d3
+        inputs.preset: 4vcpu-16gb
+        inputs.boot_disk_size_gib: 40
+        inputs.boot_disk_type: NETWORK_SSD
+        inputs.source_image_family: ubuntu24.04-driverless
+        inputs.ssh_user_name: shared.admin_ssh.user_name
+        inputs.tailscale_version: 1.104.4
     wireguard-gw:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-gw?ref=main

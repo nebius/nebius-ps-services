@@ -26,7 +26,8 @@ def planned_retained_quota_credit(
 ) -> tuple[QuotaRequirement, ...]:
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping) or not any(
-        row.get("id") in {"sfs", "wireguard-gw", "nat-gateway"} and row.get("enabled", False)
+        row.get("id") in {"sfs", "wireguard-gw", "nat-gateway", "tailscale-gw"}
+        and row.get("enabled", False)
         for row in payload.get("infra", {}).get("components", [])
     ):
         return ()
@@ -77,6 +78,10 @@ def planned_retained_quota_credit(
                     retained_filesystem_quota if kind == "storage" else retained_allocation_quota
                 )
                 credits += assess(credit_config, sources, plan)
+                if kind == "allocations":
+                    from .tailscale_quota import retained_compute
+
+                    credits += retained_compute(credit_config, sources, plan)
         except Exception:
             # Failure in one group cannot erase independently proven credit.
             warn(f"Retained {kind} quota: fresh plan evidence unavailable; checking full demand.")
@@ -142,7 +147,9 @@ def _matching_generated_allocations(
         return []
     eligible = []
     for row in config.get("infra", {}).get("components", []):
-        if row.get("id") not in {"wireguard-gw", "nat-gateway"} or not row.get("enabled", False):
+        if row.get("id") not in {"wireguard-gw", "nat-gateway", "tailscale-gw"} or not row.get(
+            "enabled", False
+        ):
             continue
         matches = [
             previous
@@ -150,8 +157,13 @@ def _matching_generated_allocations(
             if previous.get("id") == row["id"]
             and component_instance_id(previous) == component_instance_id(row)
         ]
-        if len(matches) == 1 and row == matches[0]:
-            eligible.append(row)
+        if len(matches) == 1:
+            current, previous = dict(row), dict(matches[0])
+            if row["id"] == "tailscale-gw":
+                current.pop("tailscale", None)
+                previous.pop("tailscale", None)
+            if current == previous:
+                eligible.append(row)
     return eligible
 
 
@@ -163,7 +175,9 @@ def retained_allocation_quota(
     scope = config.get("client_info", {}).get("nebius", {})
     credits: list[QuotaRequirement] = []
     for row in config.get("infra", {}).get("components", []):
-        if row.get("id") not in {"wireguard-gw", "nat-gateway"} or not row.get("enabled", False):
+        if row.get("id") not in {"wireguard-gw", "nat-gateway", "tailscale-gw"} or not row.get(
+            "enabled", False
+        ):
             continue
         instance = component_instance_id(row)
         sources = [

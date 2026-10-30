@@ -22,7 +22,12 @@ from .cluster_config import cluster_rows
 from .component_instances import component_instance_id
 from .deploy_targets import app_chart_target_ref, deploy_target_is_external_mk8s
 from .deploy_validation_report import build_deploy_validation_report
-from .mk8s_node_groups import cluster_name, cluster_public_endpoint_enabled, iter_node_groups
+from .mk8s_node_groups import (
+    cluster_inputs,
+    cluster_name,
+    cluster_public_endpoint_enabled,
+    iter_node_groups,
+)
 from .runtime_config import to_plain_data
 from .sdk_auth import init_nebius_sdk
 
@@ -345,7 +350,10 @@ def verify_infrastructure_target(
     ).strip()
     if not cluster_id or (expected_cluster_id and cluster_id != expected_cluster_id):
         raise RuntimeError("MK8s infrastructure cluster differs from accepted Terraform identity")
-    project_id = str(to_plain_data(config)["client_info"]["nebius"]["project_id"])
+    project_id = str(
+        cluster_inputs(component.get("inputs")).get("parent_id")
+        or to_plain_data(config)["client_info"]["nebius"]["project_id"]
+    ).strip()
     selected = [v for v in validations if v.get("target_ref") == ref]
     if any(v.get("kind") != "mk8s_cluster_smoke" for v in selected):
         raise RuntimeError("Target requires Kubernetes validation")

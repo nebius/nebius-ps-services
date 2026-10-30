@@ -1072,7 +1072,10 @@ def _build_module_plans(
                     value=None,
                     description=f"{component_label} module runtime-only argument '{argument_name}'",
                     default=None if argument_name == "bootstrap_user_data" else {},
-                    sensitive=argument_name not in {"access_bootstrap", "bootstrap_user_data"},
+                    sensitive=(
+                        argument_name not in {"access_bootstrap", "bootstrap_user_data"}
+                        or component_id == "tailscale-gw"
+                    ),
                     include_in_tfvars=False,
                 )
             )

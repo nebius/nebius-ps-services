@@ -29,6 +29,7 @@ from .components import (
 )
 from .filesystem_mount_tags import validate_filesystem_mount_tags
 from .mk8s_gpu import mk8s_gpu_dependency_issues
+from .mk8s_node_groups import cluster_inputs
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
 from .regions import SUPPORTED_REGION_IDS
@@ -512,7 +513,8 @@ def _validate_cluster_policies(payload: Mapping[str, Any], *, materialized: bool
             if raw_target.get("id") == "mk8s":
                 inputs = raw_target.get("inputs", {})
                 input_key = "parent_id" if field == "project_id" else "region_id"
-                effective = _as_text(inputs.get(input_key)) or _as_text(
+                identity_inputs = cluster_inputs(inputs) if field == "project_id" else inputs
+                effective = _as_text(identity_inputs.get(input_key)) or _as_text(
                     _mapping_path_value(payload, f"client_info.nebius.{field}")
                 )
                 if effective and value.strip() != effective:
@@ -1036,9 +1038,9 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         return
 
     _validate_unknown_keys(
-        infra, allowed_keys={"components", "external_clusters"}, field_label="infra"
+        infra, allowed_keys=frozenset({"components", "external_clusters"}), field_label="infra"
     )
-    _validate_unknown_keys(apps, allowed_keys={"charts"}, field_label="apps")
+    _validate_unknown_keys(apps, allowed_keys=frozenset({"charts"}), field_label="apps")
 
     infra_components = infra.get("components")
     apps_charts = apps.get("charts")
@@ -1075,6 +1077,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 {"id", "instance_id", "enabled", "source", "version", "inputs", "bindings"}
                 | ({"routing"} if raw_component.get("id") == "nat-gateway" else set())
                 | ({"access"} if raw_component.get("id") == "wireguard-gw" else set())
+                | ({"tailscale"} if raw_component.get("id") == "tailscale-gw" else set())
                 | ({"observability"} if raw_component.get("id") in {"mk8s", "vm"} else set())
                 | (
                     {"secrets", "deployment_testing", "project_id", "region_id"}
@@ -1089,6 +1092,10 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             )
 
         component_id = component_type_id(raw_component)
+        if component_id == "tailscale-gw":
+            from .tailscale_config import validate as validate_tailscale
+
+            validate_tailscale(raw_component, complete=bool(raw_component.get("enabled")))
         if component_id == "wireguard-gw":
             from .wireguard_access import validate_access
 
@@ -1527,6 +1534,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
     from .wireguard_dependencies import access_dependencies
 
     access_dependencies(payload)
+    from .tailscale_dependencies import dependencies as tailscale_dependencies
+
+    tailscale_dependencies(payload)
     mysterybox_issues = mysterybox_eso_dependency_issues(payload)
     if mysterybox_issues:
         raise ValueError(mysterybox_issues[0])

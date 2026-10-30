@@ -241,6 +241,11 @@ def _deploy_validated_bundle(
         executor.wireguard_identities = nat_resources.enter_context(
             WireGuardHostIdentities(executor, settings=settings)
         )
+        from .tailscale_deploy import TailscaleDeployment
+
+        executor.tailscale = nat_resources.enter_context(
+            TailscaleDeployment(executor, settings=settings)
+        )
         executor.desired_generation = desired_generation
         executor.source_generation = source_generation
         executor.accepted_evidence = accepted_record.get("evidence", {}) if accepted_record else {}
@@ -544,27 +549,38 @@ def quota_plan_runtime_env(
     from . import cli
     from .nat_gateway import nat_rows
     from .nat_gateway_deploy import CURRENT_NAT, NatDeployment
+    from .tailscale_config import rows as tailscale_rows
+    from .tailscale_deploy import CURRENT_TAILSCALE, TailscaleDeployment
     from .wireguard_host_identity import (
         CURRENT_WIREGUARD_IDENTITIES,
         WireGuardHostIdentities,
         wireguard_rows,
     )
 
+    tailscale = CURRENT_TAILSCALE.get()
+    has_tailscale = bool(tailscale_rows(manifest.get("runtime_config", {})))
     wireguard = CURRENT_WIREGUARD_IDENTITIES.get()
-    if wireguard is not None and wireguard.prepared:
+    if (
+        wireguard is not None
+        and wireguard.prepared
+        and (not has_tailscale or (tailscale is not None and tailscale.prepared))
+    ):
         candidate = SimpleNamespace(
             config=runtime_config_from_manifest(manifest),
             manifest=manifest,
             runtime_env=dict(runtime_env or {}),
         )
         wireguard.apply_runtime_inputs(candidate)
+        if has_tailscale:
+            tailscale.apply_runtime_inputs(candidate)
         yield candidate.runtime_env
         return
     has_wireguard = bool(wireguard_rows(manifest.get("runtime_config", {})))
     has_nat = bool(nat_rows(manifest.get("runtime_config", {})))
-    if (CURRENT_NAT.get() is not None and not has_wireguard) or not (
+    if (CURRENT_NAT.get() is not None and not has_wireguard and not has_tailscale) or not (
         nat_rows(manifest.get("runtime_config", {}))
         or wireguard_rows(manifest.get("runtime_config", {}))
+        or has_tailscale
     ):
         yield dict(runtime_env or {})
         return
@@ -590,6 +606,12 @@ def quota_plan_runtime_env(
         if owner is not None:
             owner.prepare()
         identities.prepare()
+        if has_tailscale:
+            if tailscale is not None and tailscale.prepared:
+                tailscale.apply_runtime_inputs(executor)
+            else:
+                preview_tailscale = owners.enter_context(TailscaleDeployment(executor))
+                preview_tailscale.prepare()
         yield executor.runtime_env
 
 
@@ -612,6 +634,7 @@ class _CliDeploymentExecutor:
         self.plan: DeploymentPlan | None = None
         self.summary: Any = None
         self.runtime_env: dict[str, str] = {}
+        self.tailscale: Any = None
         self._runtime_payload_env: dict[str, str] = {}
         self.identities: dict[str, Any] = {}
         self.settings_drift = False
@@ -662,6 +685,9 @@ class _CliDeploymentExecutor:
     def _prepare_runtime_inputs(self) -> None:
         self.runtime_env = self.cli._terraform_runtime_env(self.config)
         self.runtime_env.update(self._runtime_payload_env)
+        if getattr(self, "tailscale", None) is not None:
+            self.tailscale.prepare()
+            self.tailscale.apply_runtime_inputs(self)
         from .wireguard_host_identity import CURRENT_WIREGUARD_IDENTITIES
 
         wireguard = CURRENT_WIREGUARD_IDENTITIES.get()
@@ -952,6 +978,8 @@ class _CliDeploymentExecutor:
             )
         plan_file.chmod(0o600)
         self.observation_plan = payload
+        if getattr(self, "tailscale", None) is not None:
+            self.tailscale.check_plan(payload)
         if getattr(self, "nat", None) is not None:
             self.nat.check_plan(payload)
         from .wireguard_host_identity import CURRENT_WIREGUARD_IDENTITIES
@@ -1454,6 +1482,8 @@ class _CliDeploymentExecutor:
                 self._prepared_release = prepared_release
 
     def complete_gateway_preparation(self) -> None:
+        if getattr(self, "tailscale", None) is not None:
+            self.tailscale.complete()
         if getattr(self, "nat", None) is not None:
             self.nat.complete()
         if getattr(self, "wireguard_identities", None) is not None:

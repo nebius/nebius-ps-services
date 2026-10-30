@@ -66,9 +66,7 @@ def request_options(timeout: float = 30.0, *, retries: int = 3) -> dict[str, Any
     }
 
 
-def rpc(
-    method: Callable, request: Any, *, timeout: float = 30.0, retries: int = 3
-) -> Any:
+def rpc(method: Callable, request: Any, *, timeout: float = 30.0, retries: int = 3) -> Any:
     """Bound one SDK request, including auth; never expose provider error text."""
     options = request_options(timeout, retries=retries)
     try:
@@ -84,6 +82,7 @@ def init_nebius_sdk(
     config_file: Path | None = None,
     endpoint: str | None = None,
     credentials_file: Path | None = None,
+    workload_identity: dict[str, str] | None = None,
 ):
     """Explicit credentials file OR SDK CLI Config, without shell/token mutation.
 
@@ -93,10 +92,18 @@ def init_nebius_sdk(
     """
     if not parent_id or not parent_id.strip():
         raise ValueError("an explicit parent_id is required")
-    if credentials_file is not None and (
-        profile is not None or config_file is not None
-    ):
+    if credentials_file is not None and (profile is not None or config_file is not None):
         raise ValueError("choose credentials_file or profile/config_file")
+    if workload_identity is not None:
+        if any(v is not None for v in (profile, config_file, credentials_file, endpoint)):
+            raise ValueError(
+                "workload_identity cannot be combined with another authentication selector"
+            )
+        if set(workload_identity) != {"service_account_id", "token_file"}:
+            raise ValueError("workload_identity requires service_account_id and token_file")
+        from sdk.workload_identity import workload_identity_sdk
+
+        return workload_identity_sdk(parent_id=parent_id, **workload_identity)
     from nebius.aio.cli_config import Config
     from nebius.sdk import SDK
 

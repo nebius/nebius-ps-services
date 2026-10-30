@@ -4,7 +4,19 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Align Nebius inspector path initialization with the existing SDK import pattern
+  so the complete skills CI Ruff gate passes without suppressing import-order checks.
+
+- Document SDK-first Kubernetes workload identity for Nebius IAM APIs and direct SecretStash access. Add exact OIDC trust and renewable projected-token helpers; separate resource grants, application-secret refresh and optional ESO 2.10.0+ synchronization.
+
 ### Added
+
+- Extend `ai-agent-design` with provider-neutral rules for derived-context
+  lineage and revocation, mandatory-context budgets, bounded artifact access,
+  cache eligibility, final request enforcement, credential boundaries, fenced
+  execution, atomic successor admission, telemetry semantics, capacity, and
+  acceptance-trial integrity. Add synthetic trigger and quality cases, preserve
+  advisory scope and host invocation, and distinguish static from runtime proof.
 
 - Capacity planning now resolves explicit/conversation/local-doc designs, defaults
   to all regions and automatically checks a selected tenant. Remove its public
@@ -1023,7 +1035,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   workspace; all other mismatches and non-mutating `workspace reuse` remain
   fail-closed.
 
-### Added
+### Added (continued)
 
 - Added `config-claude` for native personal setup, patch-only reconciliation,
   private missing-settings recovery, restricted roles and selected MCP

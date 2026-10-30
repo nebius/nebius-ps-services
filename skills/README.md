@@ -123,7 +123,7 @@ measuring performance.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `ai-agent-design` | Implicit allowed | Classify deterministic, direct-call, workflow, and agent capabilities; separate trusted control, model-directed execution, and durable session state; define governed provider-neutral contracts; and freeze an `ai-stack` handoff only when a model-backed capability remains. |
+| `ai-agent-design` | Implicit allowed | Classify AI behavior and design provider-neutral agent contracts for authorized context, derived-data lineage, tools, execution isolation, durable recovery, and independently verified outcomes; use `ai-stack` only when a model-backed capability remains. |
 | `ai-stack` | Implicit allowed | Consume a frozen four-class AI behavior contract, or mark a stack-only classification provisional, then select bounded model, runtime, durability, interoperability, retrieval, evaluation, safety, and operations components with explicit evidence. |
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
@@ -1839,3 +1839,6 @@ Publication YAML templates and deterministic evidence utilities are owned by
 skills retain their local preparation, protected merge, exact-result tagging
 and verification responsibilities. Existing artifacts require original evidence;
 existence alone is not success.
+
+The Nebius skill includes an [SDK-first Kubernetes workload identity workflow](nebius/references/kubernetes-workload-identity.md)
+for direct SecretStash and other IAM APIs, with optional ESO synchronization.

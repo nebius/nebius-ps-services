@@ -19,6 +19,49 @@ from test_runtime import resource, response
 
 
 class SchemaTests(unittest.TestCase):
+    def test_kubernetes_federation_has_exact_trust(self):
+        from iam.workload_identity import federation_request
+
+        request = federation_request(
+            project_id="project-a",
+            name="client",
+            issuer="https://oidc.example/cluster-a",
+            namespace="apps",
+            service_account="client",
+            iam_service_account_id="sa-a",
+        )
+        self.assertEqual(request.spec.federated_subject_id, "system:serviceaccount:apps:client")
+        self.assertEqual(request.spec.subject_id, "sa-a")
+        self.assertEqual(request.spec.oidc_provider.issuer_url, "https://oidc.example/cluster-a")
+        self.assertIsInstance(request.SerializeToString(), bytes)
+
+    def test_explicit_workload_identity_disables_profile_fallback(self):
+        from sdk.runtime import init_nebius_sdk
+
+        with self.assertRaises(ValueError):
+            init_nebius_sdk(
+                parent_id="project-a",
+                profile="operator",
+                workload_identity={
+                    "service_account_id": "sa-a",
+                    "token_file": "/var/run/nebius/token",
+                },
+            )
+        with (
+            patch(
+                "sdk.workload_identity.workload_identity_sdk",
+                side_effect=RuntimeError("unavailable"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "unavailable"),
+        ):
+            init_nebius_sdk(
+                parent_id="project-a",
+                workload_identity={
+                    "service_account_id": "sa-a",
+                    "token_file": "/var/run/nebius/token",
+                },
+            )
+
     def test_every_inventory_api_and_request_is_real(self):
         for kind in RESOURCES:
             with self.subTest(kind=kind):
