@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -20,13 +22,21 @@ def run(*args: str, **kwargs):
 
 
 def main() -> None:
-    source = Path("/fixture")
+    # Reproduce Linux bind-mount ownership even on Docker Desktop hosts that
+    # remap mounted files to root. Only this disposable container copy changes.
+    source = Path("/run/probe-input")
+    shutil.copytree("/fixture", source)
+    for path in (source, *source.iterdir()):
+        os.chown(path, 65534, 65534)
     # Linux bind mounts preserve the host UID. Stage trusted fixture input as
     # the container's runtime owner without changing the read-only host mount.
-    known_hosts = Path("/run/probe_known_hosts")
-    known_hosts.write_bytes((source / "known_hosts").read_bytes())
-    known_hosts.chmod(0o600)
-    assert known_hosts.stat().st_uid == 0 and known_hosts.stat().st_mode & 0o777 == 0o600
+    runtime = Path("/run/probe-ssh")
+    runtime.mkdir(mode=0o700)
+    for name in ("known_hosts", "client.key", "gateway.key"):
+        path = runtime / name
+        path.write_bytes((source / name).read_bytes())
+        path.chmod(0o600)
+        assert path.stat().st_uid == 0 and path.stat().st_mode & 0o777 == 0o600
     data = yaml.safe_load((source / "cloud-init.yaml").read_text())
     schema_input = Path("/run/probe-schema.yaml")
     schema_input.write_text(
@@ -69,7 +79,8 @@ def main() -> None:
     )
     gateway_config = Path("/etc/ssh/sshd_config")
     gateway_config.write_text(
-        common + "ListenAddress 127.0.0.1\nAllowTcpForwarding yes\nHostKey /fixture/gateway.key\n"
+        common
+        + f"ListenAddress 127.0.0.1\nAllowTcpForwarding yes\nHostKey {runtime / 'gateway.key'}\n"
     )
     probe_config = Path("/etc/ssh/probe_config")
     probe_config.write_text(
@@ -105,8 +116,8 @@ def main() -> None:
         with transport.ProbeSSH(
             {"public_ip": "127.0.0.1"},
             {"ssh_user_name": "gateway", "ssh_public_key": key},
-            known_hosts=known_hosts,
-            private_key=source / "client.key",
+            known_hosts=runtime / "known_hosts",
+            private_key=runtime / "client.key",
         ) as access:
             for _ in range(30):
                 try:
