@@ -332,6 +332,8 @@ All notable changes to this project are tracked here. This changelog follows
   attachments from Terraform state, retain exact rendered module identities,
   and finalize retirement after a no-op retry. Preserve indexed configuration
   errors for malformed component rows.
+- Update the locked certificate bundle to `certifi 2026.10.19` and development
+  tooling to `setuptools 84.1.0`, including their upstream security fixes.
 
 - Align the documentation contract inventory test with the verified profiling
   report destination requirement and feature.
