@@ -19,6 +19,132 @@ GitHub Actions broker uses GITHUB_TOKEN for protected approval and merge.
 Dependabot waits until a local operation is started. Agents run locally;
 Agentic SDLC retains its separate authorization and workflow.
 
+## Retiring the github-report workflow
+
+`github-report` and its release workflow are retired. The existing
+`github-report-ci.yml` name temporarily runs a read-only retirement check so
+the policy on `main` can validate this transition. Once the policy change is
+merged, delete that workflow and `test_github_report_retirement_transition`
+in a follow-up PR. This transition does not change branch protection.
+
+## Actions event policies
+
+Repository administrators own three active Actions event policies in
+`nebius/nebius-ps-services`. They preserve the two reviewed uses of
+`pull_request_target` and explicitly prohibit that event for every other
+workflow path. GitHub's default restriction is scheduled for enforcement on
+December 2, 2026; these explicit policies retain the selected behavior beyond
+that change. See [GitHub's event policy guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target#default-policy-for-pull_request_target).
+
+Each policy has `enforcement: active`, one `restrict_action_events` rule and
+no actor rule. Configure the rule's `parameters.allowed_events` as follows:
+
+| Policy | ID | Allowed events |
+| --- | --- | --- |
+| Other workflow events | `10050` | The frozen inventory below |
+| Reviewer routing events | `10051` | `pull_request_target` |
+| Protected merge events | `10052` | `pull_request_target`, `workflow_run`, `workflow_dispatch` |
+
+The two exceptions use exact `conditions.workflow_path.include` entries:
+
+- Reviewer routing: `.github/workflows/pr-reviewer-trimmer.yml`.
+- Protected merge: `.github/workflows/skills-merge-pr.yml`.
+
+Both exceptions have an empty `exclude` array. Other workflow events uses
+`include: ["~ALL"]` and excludes exactly those two paths. These scopes are
+disjoint and exhaustive, including workflows added later. An exception grants
+permission to start on the listed event; it does not grant token permissions,
+approve a PR, or establish that future code at the same path is safe.
+Inherited organization or enterprise restrictions still apply.
+
+The remaining-workflows policy allows these 35 event types, frozen from the
+official API's 36 supported types on 2026-10-30. Newly introduced event types
+need an intentional policy update; `pull_request_target` remains excluded.
+
+```json
+[
+  "branch_protection_rule", "check_run", "check_suite", "create", "delete",
+  "deployment", "deployment_status", "discussion", "discussion_comment",
+  "fork", "gollum", "image_version", "issue_comment", "issues", "label",
+  "merge_group", "milestone", "page_build", "project", "project_card",
+  "project_column", "public", "pull_request", "pull_request_review",
+  "pull_request_review_comment", "push", "registry_package", "release",
+  "repository_dispatch", "schedule", "status", "watch", "workflow_call",
+  "workflow_dispatch", "workflow_run"
+]
+```
+
+Manage these settings through **Settings → Actions → Policies** or the
+[repository Actions policy API](https://docs.github.com/en/rest/actions/policies#create-a-repository-actions-policy).
+Use API version `2026-03-10` and the recorded IDs for subsequent updates.
+Enumerate effective policies with `has_parents=true` before changing one.
+Capture its complete current body, compare it immediately before the update,
+and stop on concurrent drift. Independently GET the result after every write.
+If a create request has an uncertain outcome, reconcile the returned ID or
+exact intended repository/name/body before another POST; do not create a
+duplicate or delete a policy merely because its name matches.
+
+### Ownership and maintenance
+
+The repository administrators own configuration changes and their readback;
+workflow maintainers review the privileged code and its helpers. Review this
+configuration before the December 2 enforcement date and whenever a workflow
+path, trigger, helper, permission, or applicable organization policy changes.
+Before a rename, review the new exact path and its trusted code. Remove the
+old path from the baseline exclusions and verify that both paths are covered
+by the baseline. Move the exception to the new path and read it back, then
+exclude only the new path from the baseline. Verify all three policies; the
+old path must remain restricted throughout and after the rename.
+
+Keep contributor tests under `pull_request`. Privileged PR metadata automation
+must execute only trusted code, retain minimal job permissions, and never
+execute contributor code. Preserve existing branch protection, token defaults,
+fork approval requirements and the explicit operator-dispatch merge gate.
+Do not replace this trigger with `pull_request` without redesigning and
+validating the broker's checkout and default-ref trust boundary.
+
+### Activation and verification evidence
+
+All three policies were created on 2026-10-30, with activation complete at
+17:03:36 UTC. Independent GET requests matched the intended names, IDs,
+enforcement, path conditions and event lists. Effective-policy enumeration
+returned exactly these three repository policies and no inherited policies.
+Normalized before/after readbacks of branch protection, rulesets, Actions
+permissions, default workflow token/PR permissions and fork-contributor
+approval settings were identical.
+
+Validation used trusted default commit
+`644b5a17515d30786a226a069c68d2eba9e0ee40`. Five focused merge-admission tests
+and two workflow-contract tests passed. Static inspection covered every
+trusted checkout, job permissions, and both reviewer same-repository/draft
+checks. All 16 deployed workflows matched exactly one policy and retained
+every configured trigger. The 684 policy partition cases covered those
+paths plus three hypothetical new paths across all 36 documented events;
+unknown event types were also rejected by the configured allowlists.
+
+Live-event acceptance remains pending: no new workflow run was observed after
+activation during this change. Observe the next ordinary PR and fork PR/CI
+events and record their run IDs, event, source revision, outcome and policy
+insights when available. Reviewer routing should run only for eligible
+same-repository nondraft PRs; CI-status updates must continue for ordinary
+and fork PRs without initiating approval or merge. Historical runs and static
+matching do not prove GitHub's live enforcement. Do not dispatch the merge
+broker merely to test admission or approve a fork run as part of this check.
+
+### Fail-closed rollback
+
+1. Reread the effective policy list and the affected policies by their recorded
+   IDs. Stop if ownership or bodies differ from the expected configuration.
+2. Remove the affected workflow path from policy `10050`'s exclusions, then
+   independently verify that it is now covered by the baseline restriction.
+3. Disable the corresponding exception (`10051` or `10052`) and read it back.
+   Keep the other exception and all unrelated settings unchanged.
+
+The affected workflow's `pull_request_target` runs are intentionally blocked
+after this rollback; other declared triggers remain permitted. Rollback does
+not claim restored PR-event operation. Disabling or deleting an exception
+without first extending baseline coverage is not the rollback procedure.
+
 ## Bootstrap and protection
 
 1. Capture the repository settings and inspect old broker runs and retained

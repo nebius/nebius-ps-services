@@ -153,19 +153,17 @@ def validate_binding(binding, root, git):
                 "Invalid PR transport identity")
 
 
-def snapshot(binding, root, git, *, writable=False, expected_base=None):
+def snapshot(binding, root, git, *, writable=False):
     validate_binding(binding, root, git)
     pr = api(f"repos/{binding['repository']}/pulls/{binding['number']}")
     require(identity(pr) == {k: binding[k] for k in identity(pr)}, "PR identity changed")
-    require(pr.get("state") == "open" and pr.get("merged") is not True, "PR is not open")
-    if expected_base is not None:
-        require(pr["base"].get("sha") == expected_base, "Reviewed PR base changed")
     require(transport(root, git, binding["head_repository"]) == {k: binding[k] for k in ("fetch", "push")},
             "PR transport changed")
     base = api(f"repos/{binding['repository']}")
     require(base.get("id") == binding["base_repository_id"],
             "PR base repository identity changed")
     if writable:
+        require(pr.get("state") == "open" and pr.get("merged") is not True, "PR is not open")
         head = api(f"repos/{binding['head_repository']}")
         require(head.get("id") == binding["head_repository_id"], "PR head repository changed")
         direct = head.get("permissions", {}).get("push") is True
@@ -181,6 +179,7 @@ def intake(root, git, selector, base_ref):
     repository_url(selector["repository"])
     require(type(selector["number"]) is int and selector["number"] > 0, "Invalid PR number")
     pr = api(f"repos/{selector['repository']}/pulls/{selector['number']}")
+    require(pr.get("state") == "open" and pr.get("merged") is not True, "PR is not open")
     binding = identity(pr)
     require(binding["repository"] == selector["repository"] and binding["number"] == selector["number"]
             and binding["base_ref"] == base_ref, "PR selector or base mismatch")

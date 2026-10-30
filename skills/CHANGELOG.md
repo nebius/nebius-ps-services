@@ -408,6 +408,13 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ### Fixed
 
+- Validate synchronized PR publication against the authoritative live base ref,
+  and settle proven successful pushes after concurrent PR closure or merge.
+  Preserve open-PR and write-permission checks before every new push.
+
+- Keep independently completed merge operations settled when retained older
+  intent artifacts fail the current schema, without admitting old authority.
+
 - Let explicitly invoked agent-auth setup complete bounded browser sign-in for
   an expired human session while suppressing authentication diagnostics. Keep
   diagnosis, runtime verification and previews non-browser. Validate managed

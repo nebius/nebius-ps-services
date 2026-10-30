@@ -821,6 +821,36 @@ class CompletionTests(unittest.TestCase):
         self.api.jobs[0]["conclusion"] = "failure"
         self.assertEqual(len(completion.targets(self.api, POLICY, {})), 1)
 
+    def test_terminal_receipt_settles_retained_old_intent_in_either_order(self):
+        self.api.intent["schema"] = "merge-intent/v1"
+        for field in ("base_repository_id", "head_repository_id", "head_repository", "head_ref"):
+            self.api.intent.pop(field)
+        self.api.values[905] = {
+            "schema": "merge-completion/v1",
+            "repository": REPO,
+            "pr": 1,
+            "head": HEAD,
+            "result_sha": RESULT,
+            "run_id": 300,
+            "run_attempt": 1,
+            "source_sha": BASE,
+        }
+        artifacts = [
+            self.api.artifact_meta(905, f"merge-complete-1-{HEAD}-300-1", 300),
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100),
+        ]
+        for ordered in (artifacts, list(reversed(artifacts))):
+            with self.subTest(order=[value["id"] for value in ordered]):
+                self.api.artifacts = ordered
+                self.assertEqual(completion.targets(self.api, POLICY, {}), [])
+        self.api.jobs[0]["conclusion"] = "failure"
+        self.assertTrue(completion.targets(self.api, POLICY, {})[0]["blocked"])
+        self.api.jobs[0]["conclusion"] = "success"
+        self.api.values[905]["result_sha"] = "f" * 40
+        self.assertTrue(completion.targets(self.api, POLICY, {})[0]["blocked"])
+        self.api.artifacts = [artifacts[1]]
+        self.assertTrue(completion.targets(self.api, POLICY, {})[0]["blocked"])
+
 
 class CandidateWorkflowTests(unittest.TestCase):
     @classmethod

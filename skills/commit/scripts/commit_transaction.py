@@ -2372,7 +2372,7 @@ def publish_target(arguments):
                 or _run_git(root, ("merge-base", "--is-ancestor", state["base_head"], target["head"]), check=False).returncode):
             raise TransactionError("reviewed base changed or is not integrated", "history_changed")
         if binding:
-            _pr.snapshot(binding, root, _run_git, writable=True, expected_base=state["base_head"])
+            _pr.snapshot(binding, root, _run_git, writable=True)
         # An earlier process cannot retain our repository lock here. Exact old
         # branch/PR readback permits one retry of a proven unapplied Git update.
         publication["pending"] = {"from_head": expected, "to_head": target["head"]}

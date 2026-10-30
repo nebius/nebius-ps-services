@@ -166,6 +166,63 @@ class PublicationTests(fixture.TransactionFixture):
             self.assertEqual(self.publish(expected=2)['code'], 'history_changed')
             push.assert_not_called()
 
+    def test_synchronized_base_can_publish_while_pr_base_snapshot_lags(self):
+        previous_base = self.base_head
+        advanced = git(self.root, 'commit-tree', f'{previous_base}^{{tree}}',
+                       '-p', previous_base, '-m', 'base advance')
+        git(self.root, 'push', 'origin', f'{advanced}:refs/heads/trunk')
+        git(self.root, 'fetch', 'origin', 'trunk')
+        self.sync_base()
+        self.base_head = advanced
+        self.assertEqual(self.pr['base']['sha'], previous_base)
+        reviewed = git(self.root, 'rev-parse', 'HEAD')
+        self.assertEqual(self.publish()['head'], reviewed)
+        self.assertEqual(git(self.fork, 'rev-parse', 'refs/heads/topic'), reviewed)
+        self.assertEqual(git(self.root, 'rev-parse', 'topic'), self.initial_head)
+
+    def assert_post_push_closure_settles(self, merged):
+        repaired = self.repair()
+        real_push = tx._pr.push
+
+        def close_after_push(*args):
+            result = real_push(*args)
+            self.pr.update(state='closed', merged=merged)
+            return result
+
+        with patch.object(tx._pr, 'push', side_effect=close_after_push) as push:
+            self.assertEqual(self.publish()['head'], repaired)
+            self.assertEqual(push.call_count, 1)
+        with patch.object(tx._pr, 'push', side_effect=AssertionError('duplicate push')):
+            self.assertEqual(self.publish()['head'], repaired)
+        _, state = self.state()
+        self.assertIsNone(state['targets']['refs/heads/' + self.alias]['publication']['pending'])
+        self.run_helper(*self.task_args('complete-checkout'), '--mode', 'pause')
+        self.run_helper(*self.task_args('finish'), '--outcome', 'cancelled')
+
+    def test_closed_after_successful_push_settles_without_another_write(self):
+        self.assert_post_push_closure_settles(merged=False)
+
+    def test_merged_after_successful_push_settles_without_another_write(self):
+        self.assert_post_push_closure_settles(merged=True)
+
+    def test_closed_before_publication_rejects_all_writes(self):
+        self.repair()
+        self.pr.update(state='closed', merged=False)
+        with patch.object(tx._pr, 'push') as push:
+            self.assertEqual(self.publish(expected=2)['code'], 'publication_blocked')
+            push.assert_not_called()
+
+    def test_closed_after_unapplied_push_cannot_retry_write(self):
+        self.repair()
+        with patch.object(tx._pr, 'push', return_value=False):
+            self.assertEqual(self.publish(expected=2)['code'], 'effect_unknown')
+        self.pr.update(state='closed', merged=False)
+        with patch.object(tx._pr, 'push') as push:
+            self.assertEqual(self.publish(expected=2)['code'], 'publication_blocked')
+            push.assert_not_called()
+        _, state = self.state()
+        self.assertIsNotNone(state['targets']['refs/heads/' + self.alias]['publication']['pending'])
+
     def test_transport_rewrite_is_rejected(self):
         self.repair()
         git(self.root, 'config', f'url.{self.origin}.insteadOf', str(self.fork))

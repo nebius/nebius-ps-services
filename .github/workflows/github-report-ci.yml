@@ -1,0 +1,47 @@
+# Temporary retirement validator. Remove after the policy change reaches main.
+name: github-report-ci
+
+on:
+  pull_request:
+    paths:
+      - 'misc/github-report/**'
+      - '.github/workflows/github-report-ci.yml'
+      - '.github/workflows/github-report-release.yml'
+      - '.github/merge-policy.json'
+  push:
+    branches: [main]
+    paths:
+      - 'misc/github-report/**'
+      - '.github/workflows/github-report-ci.yml'
+      - '.github/workflows/github-report-release.yml'
+      - '.github/merge-policy.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-report-retirement-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retirement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify project retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          assert not Path('misc/github-report').exists(), 'Retired project still exists'
+          assert not Path('.github/workflows/github-report-release.yml').exists(), 'Retired release workflow still exists'
+          policy = json.loads(Path('.github/merge-policy.json').read_text())
+          assert all(row['file'] != 'github-report-ci.yml' for row in policy['ci_workflows']), 'Retired CI remains required'
+          print('github-report retirement validated; remove this temporary workflow after policy deployment')
+          PY

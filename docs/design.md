@@ -86,7 +86,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=7 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=8 -->
 ### FEAT-002: Shared protected merge automation
 
 #### Requirements Covered
@@ -114,6 +114,8 @@ Preserve registered CI workflow names, dispatch fields, setup ordering and succe
 Image tag builds exclusively own X.Y.Z and X.Y.Z-gSHA; manual builds own sha-SHA and optional main-only latest. Delete release_version without an alias. One destination image lock uses cancel-in-progress:false and queue:max across preflight, publication, verification and manifest. Inspect all immutable aliases, block partial/conflicting/unverifiable states, and verify every remote digest equals the build digest. Preserve existing remote tags, registry targets/credentials, Helm exact-package/anonymous-pull/digest checks and service-specific release qualification. The github-workflows release template is the sole YAML owner; publish-release delegates setup, and release observation uses the existing 10800-second phase budgets.
 
 Reviewer routing uses trusted base policy to add configured nonauthor reviewers to same-repository nondraft PRs, preserving manually requested users and teams. No PR checkout or removal effect. Validate local source, template parity and installed payloads separately from GitHub deployment or live publication; this change does not authorize those effects.
+
+The approved github-report retirement keeps `github-report-ci.yml` temporarily under its existing workflow name as a read-only validator. It checks that the project and release workflow are absent and that the candidate policy no longer requires its CI producer. This lets the previous trusted policy validate the retirement commit. After that policy reaches the default branch, a follow-up removes the validator and its focused transition test. The final state contains no github-report project, CI or release workflow; no protection is bypassed. The validator and focused executable regression are implemented. Local proof passes for the retired state and rejects a restored project, restored release workflow or retained policy entry. Live exact-head Required CI and subsequent validator removal remain pending.
 
 #### Selected Option
 
@@ -184,5 +186,118 @@ The first ordinary acceptance PR #217 recorded a trusted COMMENT review and immu
 Source, installed, bootstrap CI and live merge evidence are distinct. Real Dependabot acceptance remains unverified because no eligible PR was open; Docker admission is covered offline. The workflow-changing bootstrap used a maintainer; built-in-token workflow-file permission behavior is not established by that result. Native trigger and comparative quality evaluation remain authentication-unavailable. Full delivery remains implemented rather than verified.
 
 <!-- /FEATURE: FEAT-002 -->
+<!-- FEATURE: FEAT-003 reqs=REQ-003 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-003: Scoped Actions event policies
+
+#### Requirements Covered
+
+- REQ-003: Restrict privileged PR events to reviewed automation.
+
+#### Context Evidence
+
+The deployed default branch has two `pull_request_target` workflows:
+`.github/workflows/pr-reviewer-trimmer.yml` and
+`.github/workflows/skills-merge-pr.yml`. Their trusted metadata operations need
+PR-write or status-write permissions; contributor tests run separately.
+GitHub documents path-scoped event restrictions in its Actions policy API.
+
+#### Design Details
+
+Use three active repository policies, each containing one
+`restrict_action_events` rule. Reviewer routing events includes only the exact
+reviewer-routing path and allows `pull_request_target`. Protected merge events
+includes only the exact broker path and allows `pull_request_target`,
+`workflow_run`, and `workflow_dispatch`. Other workflow events includes `~ALL`,
+excludes those two paths and allows the frozen official event inventory except
+`pull_request_target`. The sets do not overlap; add no actor restriction.
+
+Capture existing settings before effects. Create the baseline policy before
+its exceptions, persist returned IDs, then independently GET every policy and
+adjacent settings. Reconcile later changes by ID and exact observed body;
+concurrent drift or an ambiguous write outcome stops further effects.
+
+#### Selected Option
+
+Explicit path-based allowances with an explicit remaining-workflows rule retain
+the current trusted workflow architecture without relying on future defaults.
+
+#### Alternatives Considered
+
+Replacing the event with `pull_request` changes checkout trust and breaks the
+broker's default-ref gate. Broad permission for all workflows expands the
+exception. Relying on an implicit default leaves its interaction with future
+custom policies outside the repository's explicit configuration.
+
+#### Implementation Boundaries
+
+Own repository Actions event policies, root specifications and documentation.
+Keep workflow source, helpers, tokens, secrets, actor restrictions, branch
+protection, contributor approval and application interfaces unchanged. Deliver
+local documentation without committing, pushing or merging.
+
+#### Test-First Success Criteria
+
+- TDD-001: Initial policy readback has no explicit policies; each desired path
+  and event mapping becomes independently observable after creation.
+- TDD-002: Existing automatic-event merge rejection remains green. Static policy
+  checks admit the two exceptions and reject the event for any other path.
+
+#### Validation Plan
+
+Read back all affected and preserved settings independently, validate policy
+partition and current trigger coverage, lint Markdown, validate specs and run
+changed-scope align with nested code and security review.
+
+#### Test Plan
+
+Run the focused merge-admission and workflow-contract cases. Inspect every
+trusted checkout, exact job permissions and reviewer fork/draft conditions
+where existing tests do not provide coverage. Exercise no merge effects.
+
+#### Evaluation Plan
+
+Observe subsequent natural ordinary and fork PR/CI events, with exact workflow
+revision, event and run IDs. Keep missing live evidence explicitly pending.
+Policy matching checks are not proof of live GitHub negative enforcement.
+
+#### Rollout And Rollback
+
+Create the remaining-workflows policy, then the two exceptions, using existing
+administrative authentication. Verify inherited policies before each change.
+To roll back an exception safely, remove its path from the baseline exclusions
+and verify that readback before disabling the exception by ID. This blocks its
+PR event while retaining other declared triggers. Never reset unrelated policy.
+
+#### Done Definition
+
+Exact policy readbacks match the intended configuration, adjacent protections
+are unchanged, local checks pass and operational ownership is documented.
+Full live verification additionally requires representative post-activation
+runs; otherwise delivery remains implemented with live acceptance pending.
+
+#### Implementation Evidence
+
+Created three active repository policies on 2026-10-30: Other workflow events
+(ID 10050), Reviewer routing events (ID 10051) and Protected merge events
+(ID 10052). Exact path scopes and the frozen event inventory match this design.
+Updated the operations guide, root README and Unreleased changelog locally.
+No workflow source, branch, commit, push, merge or fork-approval effect occurred.
+
+#### Verification Evidence
+
+Independent API readbacks matched all three intended policy bodies. Branch
+protection, rulesets, Actions permissions, workflow-token/PR permissions and
+fork-contributor approval configuration matched captured baselines. Seven
+existing focused tests passed against trusted default commit
+`644b5a17515d30786a226a069c68d2eba9e0ee40`; read-only review covered the trusted
+checkout, job permissions and reviewer same-repository/draft boundaries.
+All 16 deployed workflow paths retained their declared triggers. The 684
+path/event partition cases passed, and unknown event types were rejected by
+the allowlists. No fresh post-activation workflow run was available during
+implementation: live-event and GitHub negative-enforcement evidence remain
+pending, so the requirement is active and delivery is implemented, not verified.
+
+<!-- /FEATURE: FEAT-003 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

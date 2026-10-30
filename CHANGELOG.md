@@ -6,6 +6,15 @@ project folder.
 
 ## [Unreleased]
 
+- Retire github-report and its release workflow. Keep a temporary read-only
+  retirement validator until the updated required-CI policy reaches main,
+  then remove the validator in a follow-up PR.
+
+- Configure scoped Actions event policies for trusted reviewer routing and
+  protected merge automation, with an explicit `pull_request_target` restriction
+  for all other workflows. Document policy ownership, readback and fail-closed
+  rollback; preserve branch protection and fork approval requirements.
+
 - Register AI Support Agent boundary checks with scoped CI and protected merge
   completion tracking; keep public builds independent of private deployments.
 

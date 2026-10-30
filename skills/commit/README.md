@@ -169,6 +169,11 @@ are reported independently. No public skill flags are added.
 
 ## PR publication ownership
 
+Publication checks the reviewed base against the live bound base ref, since a
+PR payload can retain an older base snapshot after synchronization. New pushes
+require an open PR and fresh write permission. Exact publication readback can
+settle a successful push after the PR closes or merges, without another write.
+
 The private create-pr continuation also uses `scripts/pr_publication.py` for
 bound PR intake, safe destination resolution and advertised-head guarding.
 `publish-target` journals one non-force update, verifies remote/PR readback and

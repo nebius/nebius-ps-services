@@ -6,6 +6,9 @@ contribution safety/compatibility, repairs defects and reconciles each project's
 canonical specs before final attestation. Review/intent v2 requires those
 assessments; old evidence fails closed. Follow the coordinated cutover in the
 [Actions protocol](references/actions-protocol.md) before live activation.
+Independently verified terminal completion receipts keep finished operations
+settled when older intent artifacts remain after the cutover. Unfinished or
+unverified operations still fail closed.
 
 `merge-pr` verifies and merges a GitHub pull request outside the Agentic SDLC
 workflow. It is the general-purpose merge primitive used by release publishing

@@ -591,7 +591,7 @@ def targets(api, policy, event):
         except (Blocked, KeyError, TypeError, ValueError, zipfile.BadZipFile):
             blocked[key] = {**target, "blocked": True}
     result = [v for k, v in selected.items() if k not in completed and k not in blocked]
-    result.extend(blocked.values())
+    result.extend(v for k, v in blocked.items() if k not in completed)
     require(
         len(result) <= 200,
         "Completion matrix capacity exceeded; reconcile older receipts",
