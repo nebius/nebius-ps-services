@@ -6,6 +6,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 - Align Nebius inspector path initialization with the existing SDK import pattern
   so the complete skills CI Ruff gate passes without suppressing import-order checks.
+- Document the intentional workload-identity exception boundaries for the pinned
+  Ruff gate, preserving error sanitization, cleanup, and reconciliation identities.
+- Register the Python scaffold's default `e2e` marker so fresh bootstrap succeeds
+  with pytest 9.2 while retaining strict marker checks and fast-lane exclusions.
 
 - Document SDK-first Kubernetes workload identity for Nebius IAM APIs and direct SecretStash access. Add exact OIDC trust and renewable projected-token helpers; separate resource grants, application-secret refresh and optional ESO 2.10.0+ synchronization.
 

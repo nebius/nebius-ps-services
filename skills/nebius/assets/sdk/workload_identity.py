@@ -35,7 +35,8 @@ def workload_identity_sdk(
         )
         bearer.set_channel(sdk)
         return sdk
-    except Exception:
+    # Sanitize all SDK initialization failures while closing any allocated channel.
+    except Exception:  # noqa: BLE001
         if sdk is not None:
             from contextlib import suppress
 

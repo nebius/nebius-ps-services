@@ -70,7 +70,8 @@ def ensure_federation(*, sdk, existing_id=None, **settings):
         ):
             raise CloudError("FEDERATION_TRUST_MISMATCH")
         return identity
-    except Exception:
+    # SDK/readback errors must not expose provider details; retain recovery identity.
+    except Exception:  # noqa: BLE001
         raise CloudError(
             "FEDERATION_READBACK_FAILED",
             resource_id=identity,

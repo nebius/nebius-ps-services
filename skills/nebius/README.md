@@ -141,10 +141,13 @@ PYTHONDONTWRITEBYTECODE=1 <validation-venv>/bin/python -m unittest discover -s t
 <validation-venv>/bin/python -m ruff check --no-cache assets scripts tests
 ```
 
-The core suite can run with just the standard library:
-
 Standalone inspectors initialize their sibling SDK asset path before importing it;
 the full Ruff gate checks these entry points alongside the assets and tests.
+Use the pinned validation environment to match CI. The two workload identity SDK
+error handlers deliberately catch `Exception` to sanitize errors, close channels,
+and preserve reconciliation identities without exposing provider details.
+
+The core suite can run with just the standard library:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p test_runtime.py -v
