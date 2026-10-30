@@ -1,9 +1,10 @@
 # Independent heartbeat implementation and live validation
 
-Status at October 30, 2026, 13:50 America/Toronto (17:50 UTC): implementation
-passes local checks. Live deployment is incomplete. All four gateways are
-currently fenced by apply locks. Successful routed forwarding and failover
-have not been demonstrated with the new artifact.
+Status at October 30, 2026, 14:00 America/Toronto (18:00 UTC): implementation
+passes local checks. UK deployment and recovery succeeded. UK gateway-a is
+active and promotion-ready, gateway-b is standby-ready, and neither has an
+apply lock. US remains fenced on its previous artifact, so the full rollout
+and end-to-end failover validation remain incomplete.
 
 ## Code and artifact
 
@@ -54,7 +55,9 @@ also create transport worker threads.
 | UK bidirectional v4 heartbeat exchange | Observed after coordinated upgrade |
 | UK cold static standby | Transfer ready true, forwarding ready false |
 | US upgrade | Blocked before package installation |
-| Live forwarding, takeover, failback, controlled API fault | Not validated |
+| UK owner routed-forwarding verification | Supported apply passed |
+| UK active tunnel inside-address probes | 3/3 replies from US gateway-b |
+| End-to-end client forwarding, takeover, failback, controlled API fault | Not validated |
 
 Skipped tests include disposable systemd and privileged Linux packet fixtures
 unavailable on this macOS host. Unix socket and frozen-build tests passed when
@@ -81,13 +84,37 @@ publication, not a controlled cloud timeout or successful failover test.
    `vpcroute-e03c07qagrnzkqmcbz`, prefix `192.168.0.0/16`. Its pending delete intent
    has no accepted operation. A fresh cloud read proved the route still exists
    and the local ledger entry is missing. The journal must not be cleared as if
-   deletion succeeded. No ledger repair has been performed.
+   deletion succeeded.
 5. Automatic approval review rejected manual UK ledger adoption and controller
    stop/restart because general deployment permission did not cover that exact
-   durable ownership repair. Specific approval was requested and is pending.
+   durable ownership repair. The user subsequently explicitly approved that
+   exact backed-up repair.
 6. The supported US `vm-ha --dry-run` still proposes transaction resumption.
    Its apply path rejects the desired-state mismatch. Digest protections have
    not been bypassed.
+7. At 17:54 UTC, the approved operator repair backed up UK gateway-a state in
+   `/var/lib/nebius-vpngw/vm-ha/operator-backups/heartbeat-ledger-repair-20261030T175404Z`.
+   With the fenced controller stopped, two matching cloud listings and fresh
+   allocation ownership checks proved one missing ledger entry. It was added
+   atomically, increasing the ledger from 12 to 13 entries. The pending journal
+   remained byte-for-byte unchanged. The controller restarted still fenced.
+8. A fresh dry run produced disruption digest
+   `cd9eb6c1af6dad120583bd0d9f1a8e928feffb1a6e562868248e62de1ebf52ec`.
+   Supported apply then completed successfully, including owner routed
+   forwarding verification and standby verification. The owner ledger returned
+   to 12 entries and its pending journal is absent. Both UK apply locks are gone.
+9. Final UK inspection found one established IPsec SA toward US gateway-b.
+   Three ICMP probes from `169.254.11.5` to `169.254.11.6` succeeded, with
+   approximately 98 ms round-trip time. The configured path toward US gateway-a
+   returned host-unreachable, consistent with the absent SA and that node's
+   existing restart failure. These probes originate on the gateway and do not
+   prove client transit forwarding.
+
+US gateway-a's old controller repeatedly rejects its existing transfer lineage
+with `VM-HA transfer lineage is invalid or stale`. Neither that record nor its
+interrupted lifecycle transaction has been modified. UK gateway-b retains an
+old ledger record for the now-obsolete route, but has no pending mutation and
+is standby-ready. Only the authoritative owner ledger was repaired.
 
 The UK route failure is in unchanged route-management code. Inspection suggests
 the planner recognizes management labels for an obsolete route while the writer
@@ -107,9 +134,13 @@ Sanitized evidence is committed under `evidence/heartbeat-independent-live/`:
 - [UK activation heartbeat and route failure events](evidence/heartbeat-independent-live/uk-activation-events.json)
 - [US supported recovery plan](evidence/heartbeat-independent-live/us-recovery-plan.json)
 - [Artifact metadata](evidence/heartbeat-independent-live/artifact.json)
+- [Approved UK ledger repair receipt](evidence/heartbeat-independent-live/uk-ledger-repair.json)
+- [Recovered UK state and tunnel status](evidence/heartbeat-independent-live/uk-recovered-state.json)
+- [UK tunnel inside-address probes](evidence/heartbeat-independent-live/uk-tunnel-probes.json)
+- [US pre-existing stale transfer-lineage errors](evidence/heartbeat-independent-live/us-stale-transfer-lineage.json)
 - [Evidence checksums](evidence/heartbeat-independent-live/SHA256SUMS)
 
-After approved recovery, restore owner forwarding and standby readiness first.
-Then validate the exact wheel under controlled API delay, normal routing, and
-failover/failback. Until those checks pass, this report does not establish a
-successful live rollout.
+Next, resolve the US interrupted transaction and stale transfer lineage without
+bypassing identity or digest checks. Then deploy the exact wheel there and
+validate controlled API delay, client routing, and failover/failback. UK is
+recovered, but these remaining checks are required for the full rollout.

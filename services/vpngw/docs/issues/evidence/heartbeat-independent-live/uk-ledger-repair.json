@@ -1,0 +1,13 @@
+{
+  "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/heartbeat-ledger-repair-20261030T175404Z",
+  "adopted": [
+    {
+      "route_id": "vpcroute-e03c07qagrnzkqmcbz",
+      "prefix": "192.168.0.0/16",
+      "kind": "static"
+    }
+  ],
+  "ledger_entries_before": 12,
+  "ledger_entries_after": 13,
+  "pending_preserved": true
+}

@@ -1,0 +1,380 @@
+[
+  {
+    "node": "uk-a",
+    "result": {
+      "time": 1793383201.7184114,
+      "boot_id": "a7b0d81a-6dce-4b2f-abc7-994f6b50e50d",
+      "status.json": {
+        "state": "active",
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "node_id": "gateway-a",
+        "observed_owner_node_id": "gateway-a",
+        "promotion_ready": true,
+        "standby_ready": false,
+        "pending_operation_id": null,
+        "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ]
+      },
+      "rearm-status.json": {
+        "phase": "running",
+        "reason": null
+      },
+      "apply.lock": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failback.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failover.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "accepted-cloud-operation.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "services": "MainPID=4112820\nExecMainStartTimestamp=Fri 2026-10-30 17:58:18 UTC\nActiveState=active\n",
+      "modules": {
+        "nebius_vpngw.agent.main": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/main.py",
+          "sha256": "1fac966bad067a7020098936408ed759309f1e74e07b4919fe1bff5b40b035aa"
+        },
+        "nebius_vpngw.agent.vm_ha.runtime": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha/runtime.py",
+          "sha256": "cf2fd4de50ce5fc13f6a85f4af3b7b03eccfd708c904ec6fbdc1ef1f58def8c3"
+        },
+        "nebius_vpngw.agent.vm_ha_controller": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha_controller.py",
+          "sha256": "b8fb6379bbca8c281900cdf22fcbe5f1918f622e4235c929735deb1864cce744"
+        }
+      },
+      "route_pending_exists": false,
+      "ledger_count": 12,
+      "obsolete_route_in_ledger": false,
+      "route_receipt_exists": true,
+      "routes": [
+        {
+          "dst": "default",
+          "gateway": "169.254.169.1",
+          "dev": "eth0",
+          "protocol": "dhcp",
+          "prefsrc": "10.80.0.34",
+          "metric": 100,
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.16/28",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.32/27",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.64/26",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.128/25",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.1.0/24",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.2.0/23",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.4.0/22",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.8.0/21",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.16.0/20",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.32.0/19",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.64.0/18",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.128.0/17",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "169.254.11.0/30",
+          "dev": "xfrm0",
+          "protocol": "kernel",
+          "scope": "link",
+          "prefsrc": "169.254.11.1",
+          "flags": []
+        },
+        {
+          "dst": "169.254.11.4/30",
+          "dev": "xfrm1",
+          "protocol": "kernel",
+          "scope": "link",
+          "prefsrc": "169.254.11.5",
+          "flags": []
+        },
+        {
+          "dst": "169.254.169.1",
+          "dev": "eth0",
+          "protocol": "dhcp",
+          "scope": "link",
+          "prefsrc": "10.80.0.34",
+          "metric": 100,
+          "flags": []
+        },
+        {
+          "dst": "169.254.169.2",
+          "gateway": "169.254.169.1",
+          "dev": "eth0",
+          "protocol": "dhcp",
+          "prefsrc": "10.80.0.34",
+          "metric": 100,
+          "flags": []
+        },
+        {
+          "dst": "192.168.0.0/16",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        }
+      ],
+      "ipsec_status": "Security Associations (1 up, 0 connecting):\n     uk-us-2[5]: ESTABLISHED 79 seconds ago, 10.80.0.34[89.124.37.185]...204.12.189.249[204.12.189.249]\n     uk-us-2{2}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: c7a8d4cd_i c78538d1_o\n     uk-us-2{2}:   10.80.1.0/24 169.254.11.4/30 === 0.0.0.0/0\n"
+    }
+  },
+  {
+    "node": "uk-b",
+    "result": {
+      "time": 1793383202.436725,
+      "boot_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb",
+      "status.json": {
+        "state": "normal",
+        "reasons": [
+          "authoritative-owner-peer-is-healthy"
+        ],
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-a",
+        "promotion_ready": false,
+        "standby_ready": true,
+        "pending_operation_id": null,
+        "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ]
+      },
+      "rearm-status.json": {
+        "phase": "blocked",
+        "reason": "promotion-receipt-invalid"
+      },
+      "apply.lock": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failback.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failover.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "accepted-cloud-operation.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "services": "MainPID=3729736\nExecMainStartTimestamp=Fri 2026-10-30 17:57:49 UTC\nActiveState=active\n",
+      "modules": {
+        "nebius_vpngw.agent.main": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/main.py",
+          "sha256": "1fac966bad067a7020098936408ed759309f1e74e07b4919fe1bff5b40b035aa"
+        },
+        "nebius_vpngw.agent.vm_ha.runtime": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha/runtime.py",
+          "sha256": "cf2fd4de50ce5fc13f6a85f4af3b7b03eccfd708c904ec6fbdc1ef1f58def8c3"
+        },
+        "nebius_vpngw.agent.vm_ha_controller": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha_controller.py",
+          "sha256": "b8fb6379bbca8c281900cdf22fcbe5f1918f622e4235c929735deb1864cce744"
+        }
+      },
+      "route_pending_exists": false,
+      "ledger_count": 1,
+      "obsolete_route_in_ledger": true,
+      "route_receipt_exists": true,
+      "routes": [
+        {
+          "dst": "default",
+          "gateway": "169.254.169.1",
+          "dev": "eth0",
+          "protocol": "dhcp",
+          "prefsrc": "10.80.0.59",
+          "metric": 100,
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.16/28",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.32/27",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.64/26",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.0.128/25",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.1.0/24",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.2.0/23",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.4.0/22",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.8.0/21",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.16.0/20",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.32.0/19",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.64.0/18",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "10.81.128.0/17",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        },
+        {
+          "dst": "169.254.11.8/30",
+          "dev": "xfrm0",
+          "protocol": "kernel",
+          "scope": "link",
+          "prefsrc": "169.254.11.9",
+          "flags": []
+        },
+        {
+          "dst": "169.254.11.12/30",
+          "dev": "xfrm1",
+          "protocol": "kernel",
+          "scope": "link",
+          "prefsrc": "169.254.11.13",
+          "flags": []
+        },
+        {
+          "dst": "169.254.169.1",
+          "dev": "eth0",
+          "protocol": "dhcp",
+          "scope": "link",
+          "prefsrc": "10.80.0.59",
+          "metric": 100,
+          "flags": []
+        },
+        {
+          "dst": "169.254.169.2",
+          "gateway": "169.254.169.1",
+          "dev": "eth0",
+          "protocol": "dhcp",
+          "prefsrc": "10.80.0.59",
+          "metric": 100,
+          "flags": []
+        },
+        {
+          "dst": "192.168.0.0/16",
+          "dev": "xfrm0",
+          "scope": "link",
+          "flags": []
+        }
+      ],
+      "ipsec_status": "Security Associations (0 up, 0 connecting):\n  none\n"
+    }
+  }
+]
