@@ -1185,9 +1185,11 @@ class VMHAController:
             heartbeat is not None
             and received_at is not None
             and 0 <= snapshot.now - received_at < self.peer_timeout_seconds
-            and heartbeat.service_healthy
-            and heartbeat.route_ready
-            and heartbeat.promotion_ready
+            and heartbeat.health_sample_age_seconds is not None
+            and heartbeat.health_sample_age_seconds + snapshot.now - received_at < 10.0
+            and heartbeat.service_healthy is True
+            and heartbeat.local_forwarding_ready is True
+            and heartbeat.data_plane_mode == "active"
         )
 
     def _peer_recent(self, snapshot: ControllerSnapshot) -> bool:

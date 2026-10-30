@@ -2759,3 +2759,23 @@ and packaging checks pass; no additional live deployment is claimed.
 <!-- /REQUIREMENT: REQ-019 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->
+
+### VM-HA heartbeat isolation acceptance
+
+Heartbeat publication must continue independently of cloud observations,
+controller effects, and local-health command stalls. The receiver and publisher
+must not grant mutation authority. A candidate uses direct local checks and fresh
+cloud fencing/ownership evidence, never its own outbound heartbeat, for transfer
+and activation. Existing state names, five-second suspicion, repair budget,
+Stopped fencing, route authority, and ordinary non-HA behavior remain unchanged.
+
+The advisory protocol must distinguish transfer readiness from forwarding
+readiness and actual mode, represent unavailable checks explicitly, report
+observation age, and reject unsupported versions. Unknown owner health starts or
+continues suspicion without extending its deadline. Cold static standby must not
+be classified as unready solely because tunnels are intentionally absent.
+
+Validation must cover concurrent blocking calls, aggregate sampling deadlines,
+mutation overlap, delayed receipt persistence, conservative freshness, recovery
+boundaries, worker failure/shutdown, replay protection, cache reset, and guarded
+same-generation protocol upgrade. Existing cloud-error fencing is not changed.

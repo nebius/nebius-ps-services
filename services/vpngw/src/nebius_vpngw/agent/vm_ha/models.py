@@ -7,6 +7,7 @@ never establish cloud allocation ownership or authorize promotion.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -227,9 +228,12 @@ class PeerHeartbeat:
     mtls_epoch: int
     certificate_fingerprint: str
     digests: DigestSet
-    service_healthy: bool
-    route_ready: bool
-    promotion_ready: bool
+    service_healthy: bool | None
+    transfer_ready: bool | None
+    local_forwarding_ready: bool | None
+    data_plane_mode: str | None
+    health_sample_age_seconds: float | None
+    ownership_observation_age_seconds: float | None
     auto_healing_policy_state: str
     auto_healing_policy_digest: str
 
@@ -261,9 +265,24 @@ class PeerHeartbeat:
             raise StateValidationError(
                 "generation_id must equal the canonical configuration digest"
             )
-        _require_bool("service_healthy", self.service_healthy)
-        _require_bool("route_ready", self.route_ready)
-        _require_bool("promotion_ready", self.promotion_ready)
+        for name in ("service_healthy", "transfer_ready", "local_forwarding_ready"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_bool(name, value)
+        if self.data_plane_mode is not None and (
+            not isinstance(self.data_plane_mode, str)
+            or self.data_plane_mode not in {"active", "passive", "blocked"}
+        ):
+            raise StateValidationError("data_plane_mode is invalid")
+        for name in ("health_sample_age_seconds", "ownership_observation_age_seconds"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise StateValidationError(f"{name} must be a finite nonnegative age or null")
         if self.auto_healing_policy_state not in {
             "enabled",
             "disabled",
@@ -286,9 +305,12 @@ class PeerHeartbeat:
             "certificate_fingerprint": self.certificate_fingerprint,
             "node_id": self.node_id,
             "observed_owner_id": self.observed_owner_id,
-            "promotion_ready": self.promotion_ready,
-            "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v3",
+            "local_forwarding_ready": self.local_forwarding_ready,
+            "data_plane_mode": self.data_plane_mode,
+            "health_sample_age_seconds": self.health_sample_age_seconds,
+            "ownership_observation_age_seconds": self.ownership_observation_age_seconds,
+            "transfer_ready": self.transfer_ready,
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v4",
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
@@ -316,12 +338,15 @@ class PeerHeartbeat:
                 "certificate_fingerprint",
                 "digests",
                 "service_healthy",
-                "route_ready",
-                "promotion_ready",
+                "transfer_ready",
+                "local_forwarding_ready",
+                "data_plane_mode",
+                "health_sample_age_seconds",
+                "ownership_observation_age_seconds",
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v3":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v4":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -343,9 +368,12 @@ class PeerHeartbeat:
                 "certificate_fingerprint", value["certificate_fingerprint"]
             ),
             digests=DigestSet.from_mapping(value["digests"]),
-            service_healthy=_require_bool("service_healthy", value["service_healthy"]),
-            route_ready=_require_bool("route_ready", value["route_ready"]),
-            promotion_ready=_require_bool("promotion_ready", value["promotion_ready"]),
+            service_healthy=value["service_healthy"],
+            transfer_ready=value["transfer_ready"],
+            local_forwarding_ready=value["local_forwarding_ready"],
+            data_plane_mode=value["data_plane_mode"],
+            health_sample_age_seconds=value["health_sample_age_seconds"],
+            ownership_observation_age_seconds=value["ownership_observation_age_seconds"],
             auto_healing_policy_state=str(value["auto_healing_policy_state"]),
             auto_healing_policy_digest=_require_sha256(
                 "auto_healing_policy_digest", value["auto_healing_policy_digest"]

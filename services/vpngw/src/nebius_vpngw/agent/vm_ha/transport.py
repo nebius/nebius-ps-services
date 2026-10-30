@@ -327,6 +327,7 @@ class PeerStateExchange:
         max_heartbeat_age_seconds: float | None = None,
         max_clock_skew_seconds: float = 5.0,
         wall_clock: Callable[[], float] = time.time,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not cluster_id or not peer_node_id:
             raise ValueError("cluster_id and peer_node_id must be non-empty")
@@ -344,6 +345,9 @@ class PeerStateExchange:
         self.max_heartbeat_age_seconds = max_heartbeat_age_seconds
         self.max_clock_skew_seconds = max_clock_skew_seconds
         self.wall_clock = wall_clock
+        self.monotonic_clock = monotonic_clock
+        self.last_receipt_monotonic: float | None = None
+        self.last_delivery_age: float = 0.0
 
     def _require_fresh_timestamp(self, heartbeat: PeerHeartbeat) -> None:
         if self.max_heartbeat_age_seconds is None:
@@ -377,6 +381,8 @@ class PeerStateExchange:
                 f"timeout_seconds must be positive and at most {self.max_timeout_seconds}"
             )
         message = self.transport.receive(timeout_seconds=timeout_seconds)
+        received_at = self.monotonic_clock()
+        received_wall = self.wall_clock()
         candidate = PeerReplayGuard(self.replay_guard.state)
         replay_state = candidate.accept(
             message.heartbeat,
@@ -387,6 +393,11 @@ class PeerStateExchange:
             expected_node_id=self.peer_node_id,
         )
         self._require_fresh_timestamp(message.heartbeat)
+        sent_at = datetime.fromisoformat(
+            message.heartbeat.sent_at.removesuffix("Z") + "+00:00"
+        ).timestamp()
+        self.last_delivery_age = max(0.0, received_wall - sent_at + self.max_clock_skew_seconds)
+        self.last_receipt_monotonic = received_at
         self.replay_store.save_replay_state(self.peer_node_id, replay_state)
         self.replay_guard = candidate
         return message.heartbeat, replay_state

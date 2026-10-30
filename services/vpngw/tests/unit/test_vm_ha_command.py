@@ -106,6 +106,7 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
     members = {
         "nebius_vpngw/agent/main.py": (
             b"import argparse\nimport json\n"
+            b"from .vm_ha.heartbeat import HEARTBEAT_CAPABILITY\n"
             b"from .vm_ha.inhibition import LIVE_PEER_REPLACEMENT_CAPABILITY\n"
             b"from .vm_ha.restoration import STANDBY_RESTORATION_CAPABILITY\n"
             b"def main():\n"
@@ -115,12 +116,13 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
             b"    args = parser.parse_args()\n"
             b"    if args.agent_capabilities:\n"
             b"        print(json.dumps({'features': "
-            b"[LIVE_PEER_REPLACEMENT_CAPABILITY, STANDBY_RESTORATION_CAPABILITY], "
+            b"[HEARTBEAT_CAPABILITY, LIVE_PEER_REPLACEMENT_CAPABILITY, STANDBY_RESTORATION_CAPABILITY], "
             b"'schema': 'nebius-vpngw.agent-capabilities.v1'}))\n"
             b"        return\n"
             b"if __name__ == '__main__':\n"
             b"    main()\n"
         ),
+        "nebius_vpngw/agent/vm_ha/heartbeat.py": b'HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v1"\n',
         "nebius_vpngw/agent/vm_ha/restoration.py": (
             b'STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v2"\n'
         ),

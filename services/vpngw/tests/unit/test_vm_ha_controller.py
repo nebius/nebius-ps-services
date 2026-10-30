@@ -48,10 +48,13 @@ def _peer(
         certificate_fingerprint="d" * 64,
         digests=digests,
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=True,
+        transfer_ready=True,
+        local_forwarding_ready=True,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+        data_plane_mode="active" if (configured_role) == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
 
 
@@ -604,8 +607,8 @@ def test_unhealthy_fresh_owner_heartbeat_starts_suspicion_without_skipping_stop(
 ) -> None:
     unhealthy = replace(
         _peer(),
-        route_ready=False,
-        promotion_ready=False,
+        transfer_ready=False,
+        local_forwarding_ready=False,
     )
     first = policy.decide(
         _snapshot(peer_heartbeat=unhealthy, peer_received_at=99.0),
@@ -846,7 +849,7 @@ def test_historical_incarnation_does_not_turn_same_owner_reapply_into_takeover(
         peer_heartbeat=replace(
             _peer(configured_role="passive"),
             observed_owner_id="node-b",
-            promotion_ready=False,
+            local_forwarding_ready=False,
         ),
         cloud=replace(
             _owned_cloud(),
@@ -1135,7 +1138,7 @@ def test_healthy_configured_passive_owner_does_not_trigger_preference_return(
 ) -> None:
     snapshot = _snapshot(
         configured_role=ConfiguredRole.ACTIVE,
-        peer_heartbeat=_peer(configured_role="passive"),
+        peer_heartbeat=replace(_peer(configured_role="passive"), data_plane_mode="active"),
     )
     decision = policy.decide(snapshot, ControllerCheckpoint())
 

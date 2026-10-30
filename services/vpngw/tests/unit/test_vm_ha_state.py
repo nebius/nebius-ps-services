@@ -47,10 +47,13 @@ def _heartbeat(*, boot_id: str = "boot-a", sequence: int = 0) -> PeerHeartbeat:
         certificate_fingerprint="d" * 64,
         digests=_digests("a"),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=False,
+        transfer_ready=True,
+        local_forwarding_ready=False,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
 
 

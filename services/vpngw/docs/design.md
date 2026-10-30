@@ -7194,3 +7194,34 @@ update_req = UpdateSubnetRequest(
 
 **Resolution:**
 **Switching to XFRM interfaces completely eliminated this issue.** XFRM's `if_id` binding mechanism provides clean separation between tunnel interfaces and avoids the packet duplication problem that occurred with VTI mode. The current implementation uses XFRM interfaces exclusively and does not experience packet duplication.
+
+## Independent VM-HA heartbeats
+
+The VM-HA service has four application threads: the authoritative controller,
+peer receiver, read-only local-health sampler, and heartbeat publisher. SDK
+internals may use additional threads. Cloud calls and mutations stay in the
+controller. Sampling targets one second with one aggregate five-second command
+deadline. Publication targets one second with a retained five-second total
+network-send deadline, one attempt per tick, and no queued missed ticks.
+
+Heartbeat v4 separates service health, transfer readiness, local forwarding
+readiness, and observed data-plane mode. Readiness is tri-state. Cold static
+standby can be transfer-ready while local forwarding readiness is false.
+Controller mutations invalidate advisory health through a local revision.
+Unknown owner health starts the existing five-second suspicion interval.
+Healthy evidence cancels suspicion only before transfer starts. The five-second
+repair budget and one-second fencing reserve remain unchanged. Repair completion
+wakes sampling, but recovery delivery before suspicion expires is not guaranteed.
+
+Ownership is advisory last-successful controller evidence with its own age.
+It never authorizes effects. Health and ownership age include elapsed observation
+time, delivery delay, the existing five-second clock-skew allowance, and receiver
+residence. Age >= ten seconds is unknown. This conservative bound assumes clocks
+differ by at most five seconds. Freshness is separate from authenticated-message
+admission. Snapshot construction reads peer/time after all blocking providers.
+
+The v4 wire format is a coordinated guarded upgrade, not a mixed-version rolling
+protocol. Existing generation-bound advisory-cache resets preserve replay state,
+ownership journals, and pending operations. Activation verifies the running
+independent-heartbeat capability and fresh authenticated v4 evidence on both
+nodes. mTLS proof does not require a successful routing-health sample.

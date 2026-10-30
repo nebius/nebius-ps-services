@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nebius_vpngw.agent.vm_ha.heartbeat import HealthSample
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat, ReplayState
 from nebius_vpngw.agent.vm_ha.mtls import MTLSSnapshot, PeerLeaf
 from nebius_vpngw.agent.vm_ha.runtime import (
@@ -96,10 +97,13 @@ def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Pat
         certificate_fingerprint="d" * 64,
         digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=True,
+        transfer_ready=True,
+        local_forwarding_ready=True,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     store.save_replay_state("node-b", ReplayState("boot-b", 7))
     store.save_accepted_peer_heartbeat("node-b", heartbeat)
@@ -108,6 +112,9 @@ def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Pat
     replacement = replace(heartbeat, sequence=9)
 
     class Exchange:
+        last_receipt_monotonic = 10.0
+        last_delivery_age = 0.0
+
         def receive(self, *, timeout_seconds: float) -> tuple[PeerHeartbeat, ReplayState]:
             assert timeout_seconds == 2.0
             replay = ReplayState("boot-b", 9)
@@ -2400,7 +2407,11 @@ def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
     ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
     ports.data_plane.current = DataPlaneMode.ACTIVE  # type: ignore[attr-defined]
 
-    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=4, clock=10.0)
+    ports.observe_cloud()
+    ports.heartbeat_snapshots.publish_health(
+        HealthSample(ports.monotonic_clock(), True, True, True, "active"), 0
+    )
+    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=4, clock=lambda: 10.0)
     ports.install_shutdown_guard(boot_id="boot-a")
 
     assert heartbeat.node_id == "node-a"
@@ -2408,7 +2419,7 @@ def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
     assert heartbeat.observed_owner_id == "node-a"
     assert heartbeat.mtls_epoch == 1
     assert heartbeat.certificate_fingerprint == "d" * 64
-    assert heartbeat.promotion_ready is True
+    assert heartbeat.local_forwarding_ready is True
     assert "credentials" not in heartbeat.to_dict()
     assert ports.data_plane.mode() is DataPlaneMode.BLOCKED
     ports.close()
@@ -2450,10 +2461,20 @@ def test_passive_heartbeat_reports_role_neutral_exact_standby_readiness(
     ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
     ports.data_plane.current = DataPlaneMode.PASSIVE  # type: ignore[attr-defined]
 
-    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=5, clock=11.0)
+    ports.heartbeat_snapshots.publish_health(
+        HealthSample(ports.monotonic_clock(), True, True, True, "passive"), 0
+    )
 
-    assert heartbeat.promotion_ready is promotion_ready
-    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v3"
+    def no_cloud() -> CloudObservation:
+        raise AssertionError("heartbeat must not query cloud ownership")
+
+    ports.cloud.observe = no_cloud
+    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=5, clock=lambda: 11.0)
+
+    assert heartbeat.transfer_ready is True
+    assert heartbeat.local_forwarding_ready is True
+    assert heartbeat.observed_owner_id is None
+    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v4"
     assert heartbeat.auto_healing_policy_state == "blocked"
     ports.close()
 

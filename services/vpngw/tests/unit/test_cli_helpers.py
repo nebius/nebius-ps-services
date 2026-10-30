@@ -4786,6 +4786,8 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
 
     def wait_with_controller_shaped_status(*, predicate, inst_cfg, **_kwargs):
         base = {
+            "controller_capabilities": ["vm-ha-independent-heartbeat-v1"],
+            "mtls": {"peer": {"fresh": True}},
             "observed_owner_node_id": "node-a",
             "ownership_epoch": "7",
             "pending_operation_id": None,

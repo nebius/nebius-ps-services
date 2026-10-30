@@ -709,6 +709,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
             "force-reconcile-v1",
             "vm-ha-authority-bound-force-reconcile-v1",
             "vm-ha-controller-route-reconcile-v1",
+            "vm-ha-independent-heartbeat-v1",
             "vm-ha-mtls-rotation-quiescence-v1",
             "vm-ha-standby-auto-healing-policy-v4",
             "vm-ha-live-peer-replacement-v4",

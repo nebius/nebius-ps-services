@@ -325,10 +325,13 @@ class TwoNodeScenario:
             mtls_epoch=1,
             certificate_fingerprint=("d" if peer_id == "node-a" else "e") * 64,
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=True,
+            transfer_ready=True,
+            local_forwarding_ready=True,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest="e" * 64,
+            data_plane_mode=peer.mode.value,
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         )
 
     def snapshot(self, local: str) -> ControllerSnapshot:
@@ -475,9 +478,7 @@ def test_every_transfer_intent_crash_after_each_effect_replays_exactly_once(
     effect = scenario.effects[local]
     assert len(effect.crashed_operation_ids) == 1
     crash_attempts = [
-        operation_id
-        for kind, operation_id in effect.attempted_operations
-        if kind is crash_after
+        operation_id for kind, operation_id in effect.attempted_operations if kind is crash_after
     ]
     assert crash_attempts == list(effect.crashed_operation_ids)
     assert crash_attempts[0] in effect.applied_operation_ids
@@ -574,9 +575,7 @@ def test_reverse_automatic_takeover_replays_each_effect_exactly_once(
     assert scenario.trace == list(TAKEOVER_EFFECTS)
     effect = scenario.effects["node-a"]
     crash_attempts = [
-        operation_id
-        for kind, operation_id in effect.attempted_operations
-        if kind is crash_after
+        operation_id for kind, operation_id in effect.attempted_operations if kind is crash_after
     ]
     assert crash_attempts == list(effect.crashed_operation_ids)
     assert len(crash_attempts) == 1

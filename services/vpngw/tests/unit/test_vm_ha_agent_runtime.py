@@ -62,6 +62,7 @@ from nebius_vpngw.agent.vm_ha.auto_healing import (
     policy_decision_digest,
     require_auto_healing_writer_quiescent,
 )
+from nebius_vpngw.agent.vm_ha.heartbeat import HeartbeatSnapshots
 from nebius_vpngw.agent.vm_ha.inhibition import (
     STANDBY_REPLACEMENT_INHIBITION_FILENAME,
     STANDBY_REPLACEMENT_INHIBITION_SCHEMA,
@@ -433,6 +434,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
     assert status["state"] == "blocked"
     assert status["reasons"] == ["mtls-rotation-active"]
     assert status["controller_capabilities"] == [
+        "vm-ha-independent-heartbeat-v1",
         "vm-ha-mtls-rotation-quiescence-v1",
         "vm-ha-live-peer-replacement-v4",
         "vm-ha-standby-replacement-inhibition-v2",
@@ -1799,10 +1801,13 @@ def test_first_planned_failback_effect_retires_exact_prior_generation_receipt(
         certificate_fingerprint="d" * 64,
         digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=False,
+        transfer_ready=True,
+        local_forwarding_ready=False,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest=policy.decision_digest,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     certificate = PolicyAgreementStore(tmp_path).capture(
         policy=policy,
@@ -2077,10 +2082,13 @@ def test_promotion_receipt_requires_consumed_request_and_terminal_postconditions
             certificate_fingerprint="d" * 64,
             digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=False,
+            transfer_ready=True,
+            local_forwarding_ready=False,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest=policy.decision_digest,
+            data_plane_mode="active" if ("passive") == "active" else "passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         ),
         captured_at=20.0,
     )
@@ -2206,6 +2214,14 @@ def test_automatic_promotion_runtime_disables_unusable_restoration_across_steps(
             return None
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         local = type(
             "Local",
             (),
@@ -2271,10 +2287,13 @@ def _awaiting_restoration(tmp_path: Path) -> StandbyRestorationStore:
             certificate_fingerprint="d" * 64,
             digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=False,
+            transfer_ready=True,
+            local_forwarding_ready=False,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest=policy.decision_digest,
+            data_plane_mode="active" if ("passive") == "active" else "passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         ),
         captured_at=20.0,
     )
@@ -2384,6 +2403,14 @@ def test_default_runtime_defers_restoration_advance_while_writer_lock_is_held(
             return None
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         peer_runtime = Peer()
 
         def heartbeat(self, **_kwargs: object) -> object:
@@ -2467,10 +2494,13 @@ def test_auto_healing_projection_uses_exact_restoration_phase(
             certificate_fingerprint="d" * 64,
             digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=False,
+            transfer_ready=True,
+            local_forwarding_ready=False,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest=policy.decision_digest,
+            data_plane_mode="active" if ("passive") == "active" else "passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         ),
         captured_at=20.0,
     )
@@ -2588,10 +2618,13 @@ def test_auto_healing_projection_blocks_foreign_restoration_policy(
             certificate_fingerprint="d" * 64,
             digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=False,
+            transfer_ready=True,
+            local_forwarding_ready=False,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest=local_policy.decision_digest,
+            data_plane_mode="active" if ("passive") == "active" else "passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         ),
         captured_at=20.0,
     )
@@ -2657,10 +2690,13 @@ def test_auto_healing_projection_ignores_completed_restoration_after_policy_chan
             certificate_fingerprint="d" * 64,
             digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=False,
+            transfer_ready=True,
+            local_forwarding_ready=False,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest=policy.decision_digest,
+            data_plane_mode="active" if ("passive") == "active" else "passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         ),
         captured_at=20.0,
     )
@@ -4700,10 +4736,13 @@ def test_controller_effect_failure_persists_secret_free_blocked_status(
         certificate_fingerprint="d" * 64,
         digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=True,
+        transfer_ready=True,
+        local_forwarding_ready=True,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     mode = [DataPlaneMode.PASSIVE]
 
@@ -4912,10 +4951,13 @@ def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
         certificate_fingerprint="d" * 64,
         digests=digests,
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=True,
+        transfer_ready=True,
+        local_forwarding_ready=True,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     runtime = build_vm_ha_controller_runtime(
         config_path=config_path,
@@ -5045,10 +5087,13 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
                     certificate_fingerprint="d" * 64,
                     digests=DigestSet(digest, "b" * 64, "c" * 64),
                     service_healthy=True,
-                    route_ready=True,
-                    promotion_ready=True,
+                    transfer_ready=True,
+                    local_forwarding_ready=True,
                     auto_healing_policy_state="enabled",
                     auto_healing_policy_digest="e" * 64,
+                    data_plane_mode="active" if ("active") == "active" else "passive",
+                    health_sample_age_seconds=0.0,
+                    ownership_observation_age_seconds=0.0,
                 ),
                 clock[0] - 100.0,
             )
@@ -5060,6 +5105,14 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
             return None
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         def __init__(self, config: dict[str, object], state_dir: Path) -> None:
             self.binding = VMHARuntimeBinding.model_validate(config["runtime_binding"])
             node = config["node"]
@@ -5153,10 +5206,13 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
                 certificate_fingerprint="d" * 64,
                 digests=DigestSet(digest, "b" * 64, "c" * 64),
                 service_healthy=True,
-                route_ready=True,
-                promotion_ready=False,
+                transfer_ready=True,
+                local_forwarding_ready=False,
                 auto_healing_policy_state="enabled",
                 auto_healing_policy_digest="e" * 64,
+                data_plane_mode="active" if (self.local.role.value) == "active" else "passive",
+                health_sample_age_seconds=0.0,
+                ownership_observation_age_seconds=0.0,
             )
 
         def close(self) -> None:
@@ -5246,6 +5302,14 @@ def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_pat
             calls.append("send")
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         local = type("Local", (), {"role": type("Role", (), {"value": "active"})()})()
         peer_runtime = Peer()
 
@@ -5315,6 +5379,14 @@ def test_default_service_runtime_retries_bounded_peer_send(tmp_path: Path) -> No
             raise PeerTransportError(f"fixture timeout {timeout_seconds}")
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         local = type("Local", (), {"role": type("Role", (), {"value": "passive"})()})()
         peer_runtime = Peer()
 
@@ -5344,8 +5416,8 @@ def test_default_service_runtime_retries_bounded_peer_send(tmp_path: Path) -> No
     runtime.step()
     runtime.close(restore_guard=False)
 
-    assert sends == 3
-    assert sleeps == [0.05, 0.05, 0.05]
+    assert sends == 1
+    assert sleeps == [0.05]
 
 
 @pytest.mark.parametrize(
@@ -5361,6 +5433,14 @@ def test_default_service_runtime_treats_authenticated_invalid_peer_state_as_advi
             raise invalid_state
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         peer_runtime = Peer()
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -5390,6 +5470,14 @@ def test_default_service_runtime_consumes_validated_manual_failback_after_restor
             return None
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         local = type(
             "Local",
             (),
@@ -5441,6 +5529,14 @@ def test_default_service_runtime_consumes_validated_manual_failover_after_promot
             return None
 
     class Ports:
+        heartbeat_snapshots = HeartbeatSnapshots()
+
+        def sample_local_health(self, *, cancelled: object) -> None:
+            return None
+
+        def observe_cloud(self) -> CloudObservation:
+            return self.cloud.observe()
+
         local = type(
             "Local",
             (),

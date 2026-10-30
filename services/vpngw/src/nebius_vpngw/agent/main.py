@@ -50,6 +50,7 @@ from .vm_ha.auto_healing import (
     require_auto_healing_transactions_quiescent,
     require_auto_healing_writer_quiescent,
 )
+from .vm_ha.heartbeat import HEARTBEAT_CAPABILITY
 from .vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -906,7 +907,6 @@ class VMHASnapshotAdapter:
             os.close(descriptor)
 
     def observe(self) -> ControllerSnapshot:
-        peer, peer_received_at = self.providers.peer()
         cloud = self.providers.cloud()
         if cloud.allocation_id != self.allocation_id:
             raise ValueError("VM-HA cloud observation has the wrong allocation identity")
@@ -979,6 +979,10 @@ class VMHASnapshotAdapter:
                     _durably_unlink(lineage_path)
                     transfer_intent = None
                     transfer_effect_started = False
+        readiness = self.providers.readiness()
+        data_plane = self.providers.data_plane()
+        routes = self.providers.routes()
+        peer, peer_received_at = self.providers.peer()
         snapshot = ControllerSnapshot(
             now=self.clock(),
             boot_id=self.boot_id(),
@@ -992,11 +996,11 @@ class VMHASnapshotAdapter:
             peer_received_at=peer_received_at,
             apply_locked=apply_operation_id is not None,
             emergency_active_only=self.providers.emergency_active_only(),
-            readiness=self.providers.readiness(),
+            readiness=readiness,
             cloud=cloud,
             guard_boot_id=str(guard.get("guard_boot_id")) if guard.get("guard_boot_id") else None,
-            data_plane_mode=self.providers.data_plane(),
-            routes_reconciled_context=self.providers.routes(),
+            data_plane_mode=data_plane,
+            routes_reconciled_context=routes,
             route_runtime_id=self.route_runtime_id,
             completed_effect_operation_id=(
                 completed_effect[0] if completed_effect is not None else None
@@ -2033,10 +2037,16 @@ class VMHAControllerRuntime:
         peer_standby_ready = bool(
             peer_fresh
             and peer is not None
+            and snapshot.peer_received_at is not None
             and peer.observed_owner_id == snapshot.local_node_id
-            and peer.service_healthy
-            and peer.route_ready
-            and peer.promotion_ready
+            and peer.service_healthy is True
+            and peer.transfer_ready is True
+            and peer.data_plane_mode == "passive"
+            and peer.health_sample_age_seconds is not None
+            and peer.health_sample_age_seconds + snapshot.now - snapshot.peer_received_at < 10.0
+            and peer.ownership_observation_age_seconds is not None
+            and peer.ownership_observation_age_seconds + snapshot.now - snapshot.peer_received_at
+            < 10.0
         )
         redundancy_ready = bool(
             standby_ready
@@ -2045,6 +2055,7 @@ class VMHAControllerRuntime:
         payload = {
             "schema": _STATUS_SCHEMA,
             "controller_capabilities": [
+                HEARTBEAT_CAPABILITY,
                 _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -2175,6 +2186,10 @@ class VMHAControllerRuntime:
             raise
 
 
+class VMHAWorkerFailure(Exception):
+    """A required independent worker failed and the service must shut down."""
+
+
 class DefaultVMHAControllerRuntime:
     """Service-owned composition with bounded peer I/O and guarded teardown."""
 
@@ -2193,11 +2208,10 @@ class DefaultVMHAControllerRuntime:
         promotion_receipt_path: Path | None = None,
         clock: Callable[[], float] = time.time,
         peer_timeout_seconds: float = 2.0,
-        peer_send_attempts: int = 3,
         peer_retry_seconds: float = 0.05,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
-        if peer_timeout_seconds <= 0 or peer_send_attempts < 1 or peer_retry_seconds < 0:
+        if peer_timeout_seconds <= 0 or peer_retry_seconds < 0:
             raise ValueError("VM-HA peer retry bounds are invalid")
         self.controller = controller
         self.ports = ports
@@ -2211,7 +2225,6 @@ class DefaultVMHAControllerRuntime:
         self.promotion_receipt_path = promotion_receipt_path
         self.clock = clock
         self.peer_timeout_seconds = peer_timeout_seconds
-        self.peer_send_attempts = peer_send_attempts
         self.peer_retry_seconds = peer_retry_seconds
         self.sleeper = sleeper
         self.started_guarded = False
@@ -2220,6 +2233,11 @@ class DefaultVMHAControllerRuntime:
         self.listener_stop = threading.Event()
         self.listener_thread: threading.Thread | None = None
         self.listener_error: BaseException | None = None
+        self.worker_error: BaseException | None = None
+        self.publisher_thread: threading.Thread | None = None
+        self.sampler_thread: threading.Thread | None = None
+        self.first_publication = threading.Event()
+        self.last_published_health: tuple[object, ...] | None = None
 
     def _reserve_heartbeat_sequence(self) -> int:
         sequence = 0
@@ -2280,23 +2298,113 @@ class DefaultVMHAControllerRuntime:
         heartbeat = self.ports.heartbeat(
             boot_id=self.boot_id,
             sequence=self._reserve_heartbeat_sequence(),
-            clock=self.clock(),
+            clock=self.clock,
         )
 
-        for attempt in range(self.peer_send_attempts):
-            try:
-                self.ports.peer_runtime.send(heartbeat)
-                return
-            except PeerTransportError:
-                if attempt + 1 < self.peer_send_attempts:
-                    self.sleeper(self.peer_retry_seconds)
+        sent = True
+        try:
+            self.ports.peer_runtime.send(heartbeat)
+        except PeerTransportError:
+            sent = False
+        if isinstance(heartbeat, PeerHeartbeat):
+            signature = (
+                heartbeat.service_healthy,
+                heartbeat.transfer_ready,
+                heartbeat.local_forwarding_ready,
+                heartbeat.data_plane_mode,
+            )
+            if not sent or signature != self.last_published_health or heartbeat.sequence % 10 == 0:
+                print(
+                    "[VM-HA-HEARTBEAT] "
+                    + json.dumps(
+                        {
+                            "event": "sent" if sent else "send-failed",
+                            "sequence": heartbeat.sequence,
+                            "health_sample_age_seconds": heartbeat.health_sample_age_seconds,
+                            "ownership_observation_age_seconds": heartbeat.ownership_observation_age_seconds,
+                            "service_healthy": heartbeat.service_healthy,
+                            "transfer_ready": heartbeat.transfer_ready,
+                            "local_forwarding_ready": heartbeat.local_forwarding_ready,
+                            "data_plane_mode": heartbeat.data_plane_mode,
+                        },
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
+                self.last_published_health = signature
+
+    def _worker_failed(self, error: BaseException) -> None:
+        self.worker_error = error
+        print(
+            "[VM-HA-HEARTBEAT] "
+            + json.dumps(
+                {
+                    "event": "worker-failed",
+                    "error_type": type(error).__name__,
+                }
+            ),
+            flush=True,
+        )
+        self.listener_stop.set()
+        self.ports.heartbeat_snapshots.resample.set()
+
+    def _sample_local_state(self) -> None:
+        try:
+            next_tick = time.monotonic()
+            while not self.listener_stop.is_set():
+                self.ports.heartbeat_snapshots.resample.clear()
+                self.ports.sample_local_health(cancelled=self.listener_stop.is_set)
+                next_tick += 1.0
+                now = time.monotonic()
+                if next_tick <= now:
+                    next_tick = now
+                self.ports.heartbeat_snapshots.resample.wait(max(0.0, next_tick - now))
+                if self.ports.heartbeat_snapshots.resample.is_set():
+                    next_tick = time.monotonic()
+        except BaseException as error:
+            self._worker_failed(error)
+
+    def _publish_peer_state(self) -> None:
+        try:
+            next_tick = time.monotonic()
+            while not self.listener_stop.is_set():
+                self._exchange_peer_state()
+                self.first_publication.set()
+                next_tick += 1.0
+                now = time.monotonic()
+                if next_tick <= now:
+                    next_tick = now + 1.0
+                self.listener_stop.wait(max(0.0, next_tick - now))
+        except BaseException as error:
+            self._worker_failed(error)
+        finally:
+            self.first_publication.set()
+
+    def _start_heartbeat_workers(self) -> None:
+        if self.publisher_thread is not None:
+            return
+        self.sampler_thread = threading.Thread(
+            target=self._sample_local_state,
+            name="nebius-vpngw-vm-ha-local-health",
+        )
+        self.publisher_thread = threading.Thread(
+            target=self._publish_peer_state,
+            name="nebius-vpngw-vm-ha-publisher",
+        )
+        self.sampler_thread.start()
+        self.publisher_thread.start()
+        # One bounded initial send may complete while the controller starts.
+        # Subsequent publications never wait for controller observations.
+        self.first_publication.wait(5.0)
 
     def step(self) -> dict[str, Any]:
         if not self.started_guarded:
             self.ports.install_shutdown_guard(boot_id=self.boot_id)
             self.started_guarded = True
         self._start_peer_listener()
-        self._exchange_peer_state()
+        self._start_heartbeat_workers()
+        if self.worker_error is not None or self.listener_error is not None:
+            raise VMHAWorkerFailure("required VM-HA heartbeat worker failed")
         if self.config is not None and self.promotion_receipt_path is not None:
             _refresh_standby_restoration_agreement(
                 config=self.config,
@@ -2388,15 +2496,19 @@ class DefaultVMHAControllerRuntime:
         if self.closed:
             return
         self.listener_stop.set()
+        self.ports.heartbeat_snapshots.resample.set()
         try:
             if restore_guard:
                 self.ports.install_shutdown_guard(boot_id=self.boot_id)
         finally:
             try:
-                if self.listener_thread is not None:
-                    self.listener_thread.join(timeout=self.peer_timeout_seconds + 1.0)
-                    if self.listener_thread.is_alive():
-                        raise RuntimeError("VM-HA peer listener did not stop within its bound")
+                deadline = time.monotonic() + 10.0
+                for thread in (self.publisher_thread, self.sampler_thread, self.listener_thread):
+                    if thread is None:
+                        continue
+                    thread.join(timeout=max(0.0, deadline - time.monotonic()))
+                    if thread.is_alive():
+                        raise VMHAWorkerFailure("VM-HA heartbeat worker did not stop")
             finally:
                 self.ports.close()
         self.closed = True
@@ -2477,7 +2589,7 @@ def build_default_vm_ha_controller_runtime(
             providers=VMHASnapshotProviders(
                 peer=ports.peer_runtime.observe,
                 readiness=ports.routes.readiness,
-                cloud=ports.cloud.observe,
+                cloud=ports.observe_cloud,
                 data_plane=ports.data_plane.mode,
                 routes=ports.routes.receipt_context,
                 apply_lock_operation_id=lambda: _vm_ha_apply_lock_operation_id(
@@ -2514,6 +2626,16 @@ def build_default_vm_ha_controller_runtime(
             clock=effective_monotonic_clock,
             boot_id=lambda: current_boot_id,
         )
+        original_guard = controller.guard
+
+        def observed_guard() -> Mapping[str, Any]:
+            ports.heartbeat_snapshots.mutation()
+            try:
+                return original_guard()
+            finally:
+                ports.heartbeat_snapshots.mutation(completed=True)
+
+        controller.guard = observed_guard
         return DefaultVMHAControllerRuntime(
             controller,
             ports,
@@ -2635,6 +2757,7 @@ def _blocked_vm_ha_status(
     return {
         "schema": _STATUS_SCHEMA,
         "controller_capabilities": [
+            HEARTBEAT_CAPABILITY,
             _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
             LIVE_PEER_REPLACEMENT_CAPABILITY,
             STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -5019,6 +5142,7 @@ def main() -> None:
                         "force-reconcile-v1",
                         "vm-ha-authority-bound-force-reconcile-v1",
                         "vm-ha-controller-route-reconcile-v1",
+                        HEARTBEAT_CAPABILITY,
                         _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
                         AUTO_HEALING_CAPABILITY,
                         LIVE_PEER_REPLACEMENT_CAPABILITY,

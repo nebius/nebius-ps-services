@@ -12,9 +12,10 @@ import re
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -27,6 +28,11 @@ from nebius_vpngw.agent.routing_guard import (
 from nebius_vpngw.agent.vm_ha.auto_healing import (
     AutoHealingPolicyStore,
     project_local_policy,
+)
+from nebius_vpngw.agent.vm_ha.heartbeat import (
+    HealthSample,
+    HeartbeatSnapshots,
+    OwnershipSample,
 )
 from nebius_vpngw.agent.vm_ha.inhibition import (
     standby_replacement_inhibition_operation_id,
@@ -1196,7 +1202,224 @@ def _passive_bgp_policy_matches(
     return True
 
 
-class SystemDataPlaneRuntime:
+class LocalDataPlaneObserver:
+    """Read-only observation with one deadline for the entire command sequence."""
+
+    commands: DataPlaneCommandSet
+    runner: CommandRunner
+    command_timeout: float
+    state_path: Path
+    expected_bgp_exports: dict[str, frozenset[str]]
+    bgp_export_observation_required: bool
+    tunnel_cold_passive: bool
+    monotonic_clock: Callable[[], float]
+
+    def __init__(
+        self,
+        source: SystemDataPlaneRuntime,
+        *,
+        deadline: float,
+        cancelled: Callable[[], bool],
+    ) -> None:
+        self.commands = source.commands
+        self.runner = source.runner
+        self.command_timeout = source.command_timeout
+        self.state_path = source.state_path
+        self.expected_bgp_exports = dict(source.expected_bgp_exports)
+        self.bgp_export_observation_required = source.bgp_export_observation_required
+        self.tunnel_cold_passive = source.tunnel_cold_passive
+        self.monotonic_clock = source.monotonic_clock
+        self.deadline = deadline
+        self.cancelled = cancelled
+        self.last_service_health: bool | None = None
+
+    def _run(self, *argv: str) -> CommandResult:
+        remaining = self.deadline - self.monotonic_clock()
+        if remaining <= 0 or self.cancelled():
+            raise RuntimeError("local health observation deadline reached")
+        try:
+            return self.runner(argv, min(self.command_timeout, remaining))
+        except (OSError, subprocess.SubprocessError, TimeoutError):
+            raise RuntimeError("local health observation unavailable") from None
+
+    def _forwarding(self) -> bool:
+        result = self._run(self.commands.sysctl, "-n", "net.ipv4.ip_forward")
+        if result.returncode != 0 or result.stdout.strip() not in {"0", "1"}:
+            raise RuntimeError("local forwarding state is unavailable")
+        return result.stdout.strip() == "1"
+
+    def _observe_bgp_exports(
+        self,
+        *,
+        configured_sessions: Iterable[str] | None = None,
+        established_sessions: Iterable[str] | None = None,
+    ) -> tuple[frozenset[str], dict[str, frozenset[str]]] | None:
+        if not self.expected_bgp_exports and not self.bgp_export_observation_required:
+            return frozenset(), {}
+        configured = (
+            frozenset(configured_sessions) if configured_sessions is not None else frozenset()
+        )
+        established = (
+            frozenset(established_sessions) if established_sessions is not None else frozenset()
+        )
+        if configured_sessions is None or established_sessions is None:
+            summary_result = self._run(
+                self.commands.vtysh,
+                "-c",
+                "show bgp summary json",
+            )
+            if summary_result.returncode != 0:
+                return None
+            try:
+                summary = json.loads(summary_result.stdout)
+            except json.JSONDecodeError:
+                return None
+            configured_summary = _configured_bgp_summary_sessions(summary)
+            if configured_summary is None:
+                return None
+            configured = configured_summary
+            established = frozenset(_established_bgp_sessions(summary)) & configured
+        observed: dict[str, frozenset[str]] = {}
+        for peer in sorted(established):
+            result = self._run(
+                self.commands.vtysh,
+                "-c",
+                f"show bgp ipv4 unicast neighbors {peer} advertised-routes json",
+            )
+            if result.returncode != 0:
+                continue
+            try:
+                prefixes = _advertised_bgp_prefixes(json.loads(result.stdout))
+            except json.JSONDecodeError:
+                prefixes = None
+            if prefixes is not None:
+                observed[peer] = prefixes
+        return configured, observed
+
+    def _expected_exports_for_mode(self, mode: DataPlaneMode) -> dict[str, frozenset[str]]:
+        if mode is DataPlaneMode.ACTIVE:
+            return dict(self.expected_bgp_exports)
+        return {peer: frozenset() for peer in self.expected_bgp_exports}
+
+    def observe(self) -> LocalDataPlaneObservation:
+        strongswan_healthy = any(
+            self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
+            for service in ("strongswan-starter", "strongswan")
+        )
+        services = (
+            strongswan_healthy
+            and self._run(self.commands.systemctl, "is-active", "--quiet", "frr").returncode == 0
+        )
+        self.last_service_health = services
+        summary = _json_object(
+            self._run(self.commands.vtysh, "-c", "show bgp summary json"), "FRR session state"
+        )
+        rib = _json_object(
+            self._run(self.commands.vtysh, "-c", "show bgp ipv4 unicast json"), "FRR RIB"
+        )
+        all_routes = self._run(
+            self.commands.ip,
+            "-j",
+            "-4",
+            "route",
+            "show",
+            "table",
+            "all",
+        )
+        routes = _json_object(all_routes, "routes")
+        rules = self._run(self.commands.ip, "rule", "show")
+        broad_apipa = self._run(self.commands.ip, "route", "show", "169.254.0.0/16")
+        xfrm = _json_or_text(self._run(self.commands.ip, "-j", "xfrm", "state"), "XFRM state")
+        xfrm_policies = _json_or_text(
+            self._run(self.commands.ip, "-j", "xfrm", "policy"), "XFRM policy"
+        )
+        xfrm_links = _json_object(
+            self._run(self.commands.ip, "-d", "-j", "link", "show", "type", "xfrm"),
+            "XFRM interfaces",
+        )
+        running_config = self._run(self.commands.vtysh, "-c", "show running-config")
+        if running_config.returncode != 0:
+            raise RuntimeError("unable to observe current FRR import policy")
+        configured = _configured_bgp_summary_sessions(summary)
+        if configured is None:
+            raise RuntimeError("FRR configured peer state is malformed")
+        established = frozenset(_established_bgp_sessions(summary)) & configured
+        export_evidence = self._observe_bgp_exports(
+            configured_sessions=configured,
+            established_sessions=established,
+        )
+        advertised = {} if export_evidence is None else export_evidence[1]
+        established_ike_sa_count = 0
+        if self.tunnel_cold_passive:
+            listed_sas = self._run(self.commands.swanctl, "--list-sas", "--raw")
+            if listed_sas.returncode != 0:
+                raise RuntimeError("unable to observe local IKE SA state")
+            established_ike_sa_count = len(_ike_sa_ids(listed_sas.stdout))
+        learned = _learned_bgp_prefixes(rib)
+        static_prefixes: set[str] = set()
+        usable_xfrm: set[str] = set()
+        usable_xfrm_devices = _usable_xfrm_devices(xfrm_links, xfrm, xfrm_policies)
+        if isinstance(routes, list):
+            for route in routes:
+                if not isinstance(route, Mapping):
+                    continue
+                prefix = route.get("dst")
+                device = route.get("dev")
+                if isinstance(prefix, str):
+                    static_prefixes.add(prefix)
+                    try:
+                        network = ipaddress.ip_network(prefix, strict=False)
+                    except ValueError:
+                        continue
+                    if (
+                        network.version == 4
+                        and isinstance(device, str)
+                        and device in usable_xfrm_devices
+                    ):
+                        usable_xfrm.add(str(network))
+        return LocalDataPlaneObservation(
+            service_healthy=services,
+            forwarding_enabled=self._forwarding(),
+            static_prefixes=frozenset(static_prefixes),
+            configured_bgp_sessions=configured,
+            established_bgp_sessions=frozenset(established),
+            learned_bgp_prefixes=frozenset(learned),
+            usable_xfrm_prefixes=frozenset(usable_xfrm),
+            observed_bgp_policy_digest=_observed_import_policy_digest(
+                running_config.stdout, configured
+            ),
+            established_ike_sa_count=established_ike_sa_count,
+            bgp_export_state=_bgp_export_state(
+                self._expected_exports_for_mode(self.mode()),
+                advertised,
+                configured_peers=configured,
+            ),
+            routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
+        )
+
+    def mode(self) -> DataPlaneMode:
+        forwarding = self._forwarding()
+        if not self.state_path.exists():
+            if forwarding:
+                raise RuntimeError("forwarding is enabled without durable VM-HA authority")
+            return DataPlaneMode.BLOCKED
+        try:
+            value = json.loads(self.state_path.read_text(encoding="utf-8"))
+            if not isinstance(value, Mapping) or value.get("schema") != (
+                "nebius-vpngw/vm-ha-data-plane-v1"
+            ):
+                raise ValueError
+            mode = DataPlaneMode(str(value.get("mode")))
+            if forwarding != (mode is DataPlaneMode.ACTIVE):
+                raise ValueError
+            return mode
+        except (OSError, ValueError, json.JSONDecodeError):
+            if forwarding:
+                raise RuntimeError("forwarding conflicts with durable VM-HA authority") from None
+            return DataPlaneMode.BLOCKED
+
+
+class SystemDataPlaneRuntime(LocalDataPlaneObserver):
     """Bounded command adapter for local service, FRR, XFRM, and forwarding truth."""
 
     def __init__(
@@ -1311,65 +1534,6 @@ class SystemDataPlaneRuntime:
         except (OSError, subprocess.SubprocessError, TimeoutError):
             raise RuntimeError("bounded local repair command failed") from None
 
-    def _forwarding(self) -> bool:
-        result = self._run(self.commands.sysctl, "-n", "net.ipv4.ip_forward")
-        if result.returncode != 0 or result.stdout.strip() not in {"0", "1"}:
-            raise RuntimeError("local forwarding state is unavailable")
-        return result.stdout.strip() == "1"
-
-    def _observe_bgp_exports(
-        self,
-        *,
-        configured_sessions: Iterable[str] | None = None,
-        established_sessions: Iterable[str] | None = None,
-    ) -> tuple[frozenset[str], dict[str, frozenset[str]]] | None:
-        if not self.expected_bgp_exports and not self.bgp_export_observation_required:
-            return frozenset(), {}
-        configured = (
-            frozenset(configured_sessions) if configured_sessions is not None else frozenset()
-        )
-        established = (
-            frozenset(established_sessions) if established_sessions is not None else frozenset()
-        )
-        if configured_sessions is None or established_sessions is None:
-            summary_result = self._run(
-                self.commands.vtysh,
-                "-c",
-                "show bgp summary json",
-            )
-            if summary_result.returncode != 0:
-                return None
-            try:
-                summary = json.loads(summary_result.stdout)
-            except json.JSONDecodeError:
-                return None
-            configured_summary = _configured_bgp_summary_sessions(summary)
-            if configured_summary is None:
-                return None
-            configured = configured_summary
-            established = frozenset(_established_bgp_sessions(summary)) & configured
-        observed: dict[str, frozenset[str]] = {}
-        for peer in sorted(established):
-            result = self._run(
-                self.commands.vtysh,
-                "-c",
-                f"show bgp ipv4 unicast neighbors {peer} advertised-routes json",
-            )
-            if result.returncode != 0:
-                continue
-            try:
-                prefixes = _advertised_bgp_prefixes(json.loads(result.stdout))
-            except json.JSONDecodeError:
-                prefixes = None
-            if prefixes is not None:
-                observed[peer] = prefixes
-        return configured, observed
-
-    def _expected_exports_for_mode(self, mode: DataPlaneMode) -> dict[str, frozenset[str]]:
-        if mode is DataPlaneMode.ACTIVE:
-            return dict(self.expected_bgp_exports)
-        return {peer: frozenset() for peer in self.expected_bgp_exports}
-
     def _passive_bgp_exports_proven(self) -> bool:
         """Prove zero current exports without requiring every peer to be established."""
 
@@ -1438,101 +1602,6 @@ class SystemDataPlaneRuntime:
         raise RuntimeError(
             f"{mode.value} BGP advertisements are {state.value}; exact evidence is required "
             f"({_bgp_export_diagnostic(expected, evidence)})"
-        )
-
-    def observe(self) -> LocalDataPlaneObservation:
-        strongswan_healthy = any(
-            self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
-            for service in ("strongswan-starter", "strongswan")
-        )
-        services = (
-            strongswan_healthy
-            and self._run(self.commands.systemctl, "is-active", "--quiet", "frr").returncode == 0
-        )
-        summary = _json_object(
-            self._run(self.commands.vtysh, "-c", "show bgp summary json"), "FRR session state"
-        )
-        rib = _json_object(
-            self._run(self.commands.vtysh, "-c", "show bgp ipv4 unicast json"), "FRR RIB"
-        )
-        all_routes = self._run(
-            self.commands.ip,
-            "-j",
-            "-4",
-            "route",
-            "show",
-            "table",
-            "all",
-        )
-        routes = _json_object(all_routes, "routes")
-        rules = self._run(self.commands.ip, "rule", "show")
-        broad_apipa = self._run(self.commands.ip, "route", "show", "169.254.0.0/16")
-        xfrm = _json_or_text(self._run(self.commands.ip, "-j", "xfrm", "state"), "XFRM state")
-        xfrm_policies = _json_or_text(
-            self._run(self.commands.ip, "-j", "xfrm", "policy"), "XFRM policy"
-        )
-        xfrm_links = _json_object(
-            self._run(self.commands.ip, "-d", "-j", "link", "show", "type", "xfrm"),
-            "XFRM interfaces",
-        )
-        running_config = self._run(self.commands.vtysh, "-c", "show running-config")
-        if running_config.returncode != 0:
-            raise RuntimeError("unable to observe current FRR import policy")
-        configured = _configured_bgp_summary_sessions(summary)
-        if configured is None:
-            raise RuntimeError("FRR configured peer state is malformed")
-        established = frozenset(_established_bgp_sessions(summary)) & configured
-        export_evidence = self._observe_bgp_exports(
-            configured_sessions=configured,
-            established_sessions=established,
-        )
-        advertised = {} if export_evidence is None else export_evidence[1]
-        established_ike_sa_count = 0
-        if self.tunnel_cold_passive:
-            listed_sas = self._run(self.commands.swanctl, "--list-sas", "--raw")
-            if listed_sas.returncode != 0:
-                raise RuntimeError("unable to observe local IKE SA state")
-            established_ike_sa_count = len(_ike_sa_ids(listed_sas.stdout))
-        learned = _learned_bgp_prefixes(rib)
-        static_prefixes: set[str] = set()
-        usable_xfrm: set[str] = set()
-        usable_xfrm_devices = _usable_xfrm_devices(xfrm_links, xfrm, xfrm_policies)
-        if isinstance(routes, list):
-            for route in routes:
-                if not isinstance(route, Mapping):
-                    continue
-                prefix = route.get("dst")
-                device = route.get("dev")
-                if isinstance(prefix, str):
-                    static_prefixes.add(prefix)
-                    try:
-                        network = ipaddress.ip_network(prefix, strict=False)
-                    except ValueError:
-                        continue
-                    if (
-                        network.version == 4
-                        and isinstance(device, str)
-                        and device in usable_xfrm_devices
-                    ):
-                        usable_xfrm.add(str(network))
-        return LocalDataPlaneObservation(
-            service_healthy=services,
-            forwarding_enabled=self._forwarding(),
-            static_prefixes=frozenset(static_prefixes),
-            configured_bgp_sessions=configured,
-            established_bgp_sessions=frozenset(established),
-            learned_bgp_prefixes=frozenset(learned),
-            usable_xfrm_prefixes=frozenset(usable_xfrm),
-            observed_bgp_policy_digest=_observed_import_policy_digest(
-                running_config.stdout, configured
-            ),
-            established_ike_sa_count=established_ike_sa_count,
-            bgp_export_state=_bgp_export_state(
-                self._expected_exports_for_mode(self.mode()),
-                advertised,
-                configured_peers=configured,
-            ),
-            routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
         )
 
     def _suspend_cluster_tunnels_locked(self, *, stop_if_unavailable: bool) -> None:
@@ -1876,27 +1945,6 @@ class SystemDataPlaneRuntime:
         )
         if reload_agent.returncode != 0:
             raise RuntimeError("active data-plane reconciliation could not be requested")
-
-    def mode(self) -> DataPlaneMode:
-        forwarding = self._forwarding()
-        if not self.state_path.exists():
-            if forwarding:
-                raise RuntimeError("forwarding is enabled without durable VM-HA authority")
-            return DataPlaneMode.BLOCKED
-        try:
-            value = json.loads(self.state_path.read_text(encoding="utf-8"))
-            if not isinstance(value, Mapping) or value.get("schema") != (
-                "nebius-vpngw/vm-ha-data-plane-v1"
-            ):
-                raise ValueError
-            mode = DataPlaneMode(str(value.get("mode")))
-            if forwarding != (mode is DataPlaneMode.ACTIVE):
-                raise ValueError
-            return mode
-        except (OSError, ValueError, json.JSONDecodeError):
-            if forwarding:
-                raise RuntimeError("forwarding conflicts with durable VM-HA authority") from None
-            return DataPlaneMode.BLOCKED
 
 
 class RouteBackend(Protocol):
@@ -2277,6 +2325,11 @@ class BoundRouteRuntime:
             # and request that materialization.  Promotion remains blocked
             # until a later complete observation proves every readiness bit.
             return LocalReadiness(False, False, False, False)
+        return self.readiness_from_observation(observed, self.data_plane.mode())
+
+    def readiness_from_observation(
+        self, observed: LocalDataPlaneObservation, mode: DataPlaneMode
+    ) -> LocalReadiness:
         bgp = self._bgp(observed)
         static_ready = self.static_manifest.prefixes.issubset(observed.usable_xfrm_prefixes)
         required_xfrm_prefixes = self.static_manifest.prefixes | bgp.required_prefixes
@@ -2290,7 +2343,7 @@ class BoundRouteRuntime:
             BGPExportState.DRIFT: "bgp-export-drift",
             BGPExportState.UNKNOWN: "bgp-export-unavailable",
         }.get(observed.bgp_export_state)
-        passive_mode = self.data_plane.mode() is DataPlaneMode.PASSIVE
+        passive_mode = mode is DataPlaneMode.PASSIVE
         routing_hygiene_ready = observed.routing_hygiene_ready if passive_mode else True
         hygiene_reason = "routing-hygiene-not-ready" if not routing_hygiene_ready else None
         readiness = LocalReadiness(
@@ -2768,6 +2821,7 @@ class BoundPeerRuntime:
         heartbeat_store: AcceptedPeerHeartbeatStore | None = None,
     ) -> None:
         self.exchange = exchange
+        self._observation_lock = threading.Lock()
         self.clock = clock
         self.peer_node_id = peer_node_id
         self.heartbeat_store = heartbeat_store
@@ -2782,17 +2836,34 @@ class BoundPeerRuntime:
 
     def poll(self, *, timeout_seconds: float) -> PeerHeartbeat:
         heartbeat, _replay = self.exchange.receive(timeout_seconds=timeout_seconds)
+        received_at = self.exchange.last_receipt_monotonic
+        delivery_age = self.exchange.last_delivery_age
+        heartbeat = replace(
+            heartbeat,
+            health_sample_age_seconds=(
+                heartbeat.health_sample_age_seconds + delivery_age
+                if heartbeat.health_sample_age_seconds is not None
+                else None
+            ),
+            ownership_observation_age_seconds=(
+                heartbeat.ownership_observation_age_seconds + delivery_age
+                if heartbeat.ownership_observation_age_seconds is not None
+                else None
+            ),
+        )
         if self.heartbeat_store is not None:
             self.heartbeat_store.save_accepted_peer_heartbeat(self.peer_node_id, heartbeat)
-        self.latest_heartbeat = heartbeat
-        self.received_at = self.clock()
+        with self._observation_lock:
+            self.latest_heartbeat = heartbeat
+            self.received_at = received_at
         return heartbeat
 
     def send(self, heartbeat: PeerHeartbeat) -> None:
         self.exchange.send(heartbeat)
 
     def observe(self) -> tuple[PeerHeartbeat | None, float | None]:
-        return self.latest_heartbeat, self.received_at
+        with self._observation_lock:
+            return self.latest_heartbeat, self.received_at
 
 
 @dataclass(frozen=True)
@@ -2811,11 +2882,49 @@ class VMHARuntimePorts:
     mtls_snapshot_provider: Callable[[], MTLSSnapshot]
     auto_healing_policy_provider: Callable[[], tuple[str, str]]
 
+    heartbeat_snapshots: HeartbeatSnapshots = field(default_factory=HeartbeatSnapshots)
+    monotonic_clock: Callable[[], float] = time.monotonic
+
+    def observe_cloud(self) -> CloudObservation:
+        started_at = self.monotonic_clock()
+        observed = self.cloud.observe()
+        self.heartbeat_snapshots.publish_ownership(
+            OwnershipSample(started_at, observed.observed_owner_node_id)
+        )
+        return observed
+
+    def sample_local_health(self, *, cancelled: Callable[[], bool]) -> None:
+        started_at = self.monotonic_clock()
+        revision = self.heartbeat_snapshots.revision()
+        observer = LocalDataPlaneObserver(
+            self.data_plane,  # type: ignore[arg-type]
+            deadline=started_at + 5.0,
+            cancelled=cancelled,
+        )
+        sample = HealthSample(started_at)
+        try:
+            before = observer.mode()
+            observed = observer.observe()
+            after = observer.mode()
+            if before is after:
+                readiness = self.routes.readiness_from_observation(observed, after)
+                sample = HealthSample(
+                    started_at,
+                    readiness.service_healthy,
+                    readiness.transfer_ready,
+                    readiness.promotion_ready,
+                    after.value,
+                )
+        except RuntimeError:
+            failed = False if observer.last_service_health is False else None
+            sample = HealthSample(started_at, observer.last_service_health, failed, failed)
+        self.heartbeat_snapshots.publish_health(sample, revision)
+
     def providers(self) -> dict[str, Callable[..., object]]:
         return {
             "peer": self.peer_runtime.observe,
             "readiness": self.routes.readiness,
-            "cloud": self.cloud.observe,
+            "cloud": self.observe_cloud,
             "data_plane": self.data_plane.mode,
             "routes": self.routes.receipt_context,
         }
@@ -2847,7 +2956,21 @@ class VMHARuntimePorts:
                 if action.kind is not expected_kind or action.target_node_id != expected_target:
                     raise RuntimeError("controller action has the wrong kind or target identity")
                 self._require_action_identity(action)
-                handler(action)
+                local_mutation = action.kind in {
+                    ActionKind.INSTALL_COLD_START_GUARD,
+                    ActionKind.ENTER_PASSIVE,
+                    ActionKind.DISABLE_ACTIVE,
+                    ActionKind.REPAIR_LOCAL_DATAPLANE,
+                    ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+                    ActionKind.ENABLE_ACTIVE,
+                }
+                if local_mutation:
+                    self.heartbeat_snapshots.mutation()
+                try:
+                    handler(action)
+                finally:
+                    if local_mutation:
+                        self.heartbeat_snapshots.mutation(completed=True)
 
             return apply
 
@@ -2952,36 +3075,26 @@ class VMHARuntimePorts:
             ActionKind.ENABLE_ACTIVE: checked(ActionKind.ENABLE_ACTIVE, enable),
         }
 
-    def heartbeat(self, *, boot_id: str, sequence: int, clock: float) -> PeerHeartbeat:
+    def heartbeat(
+        self, *, boot_id: str, sequence: int, clock: Callable[[], float]
+    ) -> PeerHeartbeat:
         """Build one secret-free advisory heartbeat from fresh local truth."""
 
         mtls = self.mtls_snapshot_provider()
         auto_healing_state, auto_healing_digest = self.auto_healing_policy_provider()
-        cloud = self.cloud.observe()
-        readiness = self.routes.readiness()
-        data_plane_mode = self.data_plane.mode()
-        active_ready = bool(
-            data_plane_mode is DataPlaneMode.ACTIVE
-            and cloud.local_attachment_exact(self.local.node_id)
-        )
-        passive_ready = bool(
-            data_plane_mode is DataPlaneMode.PASSIVE
-            and cloud.authoritative
-            and cloud.allocation_id
-            and cloud.ownership_epoch
-            and cloud.observed_owner_node_id == self.peer.node_id
-            and cloud.former_owner_node_id == self.peer.node_id
-            and cloud.former_attachment_exact
-            and cloud.candidate_attachment_absent
-        )
+        health, ownership = self.heartbeat_snapshots.read()
+        now = self.monotonic_clock()
+        sent_at = clock()
         return PeerHeartbeat(
             cluster_id=self.binding.cluster_id,
             node_id=self.local.node_id,
             boot_id=boot_id,
             sequence=sequence,
-            sent_at=datetime.fromtimestamp(clock, timezone.utc).isoformat().replace("+00:00", "Z"),
+            sent_at=datetime.fromtimestamp(sent_at, timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             configured_role=self.local.role.value,
-            observed_owner_id=cloud.observed_owner_node_id,
+            observed_owner_id=ownership.owner_id if ownership else None,
             generation_id=self.binding.generation_id,
             mtls_epoch=mtls.epoch,
             certificate_fingerprint=mtls.certificate_fingerprint,
@@ -2990,11 +3103,13 @@ class VMHARuntimePorts:
                 self.binding.static_routes_digest,
                 self.binding.bgp_policy_digest,
             ),
-            service_healthy=readiness.service_healthy,
-            route_ready=readiness.transfer_ready,
-            promotion_ready=bool(
-                (readiness.promotion_ready if active_ready else readiness.transfer_ready)
-                and (active_ready or passive_ready)
+            service_healthy=health.service_healthy if health else None,
+            transfer_ready=health.transfer_ready if health else None,
+            local_forwarding_ready=health.local_forwarding_ready if health else None,
+            data_plane_mode=health.data_plane_mode if health else None,
+            health_sample_age_seconds=max(0.0, now - health.started_at) if health else None,
+            ownership_observation_age_seconds=(
+                max(0.0, now - ownership.started_at) if ownership else None
             ),
             auto_healing_policy_state=auto_healing_state,
             auto_healing_policy_digest=auto_healing_digest,
@@ -3375,6 +3490,7 @@ def build_runtime_ports(
             replay_store=replay_store,
             max_heartbeat_age_seconds=30.0,
             wall_clock=clock,
+            monotonic_clock=effective_monotonic_clock,
         )
         ports = VMHARuntimePorts(
             binding=binding,
@@ -3392,6 +3508,7 @@ def build_runtime_ports(
             ),
             credential_bundle=credential_bundle,
             mtls_snapshot_provider=snapshot_provider,
+            monotonic_clock=effective_monotonic_clock,
             auto_healing_policy_provider=lambda: project_local_policy(
                 AutoHealingPolicyStore(state_dir),
                 cluster_id=binding.cluster_id,

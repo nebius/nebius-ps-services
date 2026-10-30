@@ -46,6 +46,7 @@ from .agent.vm_ha.auto_healing import (
     encode_policy_request,
     policy_decision_digest,
 )
+from .agent.vm_ha.heartbeat import HEARTBEAT_CAPABILITY
 from .agent.vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -3139,6 +3140,18 @@ def _finalize_vm_ha_managed_mtls(
                 action=action,
                 request={"operation_id": transaction.operation_id},
             )
+
+
+def _vm_ha_independent_heartbeat_matches(payload: dict[str, t.Any]) -> bool:
+    capabilities = payload.get("controller_capabilities")
+    mtls = payload.get("mtls")
+    peer = mtls.get("peer") if isinstance(mtls, dict) else None
+    return bool(
+        isinstance(capabilities, list)
+        and HEARTBEAT_CAPABILITY in capabilities
+        and isinstance(peer, dict)
+        and peer.get("fresh") is True
+    )
 
 
 def _vm_ha_mtls_agent_evidence_matches(
@@ -8756,7 +8769,8 @@ def _apply_impl(
                         owner: bool = owner_replacement_entry,
                     ) -> bool:
                         return bool(
-                            payload.get("data_plane_mode") == ("active" if owner else "passive")
+                            _vm_ha_independent_heartbeat_matches(payload)
+                            and payload.get("data_plane_mode") == ("active" if owner else "passive")
                             and payload.get("promotion_ready") is owner
                             and (
                                 not owner
@@ -8798,7 +8812,8 @@ def _apply_impl(
                     )
                     activated_agent_statuses[current_owner_node_id] = _wait_for_vm_ha_agent_status(
                         predicate=lambda payload: bool(
-                            payload.get("data_plane_mode") == "active"
+                            _vm_ha_independent_heartbeat_matches(payload)
+                            and payload.get("data_plane_mode") == "active"
                             and payload.get("promotion_ready") is True
                             and payload.get("observed_owner_node_id") == current_owner_node_id
                             and payload.get("transfer_inhibition_operation_id") == operation_id
