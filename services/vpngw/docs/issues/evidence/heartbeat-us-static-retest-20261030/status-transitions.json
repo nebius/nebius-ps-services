@@ -1,0 +1,1116 @@
+[
+  {
+    "time": 1793392658.225097,
+    "node": "us-b",
+    "state": "normal",
+    "reasons": [
+      "authoritative-owner-peer-is-healthy"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": true,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793392658.235397,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793392837.977081,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff:90:disable-active:gateway-a",
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793392838.016244,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793392848.7163,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793392859.458337,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793392866.576464,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "repairable",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793392889.888492,
+    "node": "us-a",
+    "state": "normal",
+    "reasons": [
+      "owner-must-materialize-passive-dataplane"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff:92:enter-passive:gateway-a",
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793392893.426663,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793392893.444603,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793392911.3008902,
+    "node": "us-a",
+    "state": "degraded",
+    "reasons": [
+      "static-routes-not-ready",
+      "xfrm-not-ready"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793393035.110177,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793393443.783423,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393447.342944,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393499.058403,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393502.631176,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793393686.225617,
+    "node": "us-b",
+    "state": "normal",
+    "reasons": [
+      "non-owner-must-remain-passive"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245:80:enter-passive:gateway-b",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393689.795773,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393693.3680499,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393718.6243358,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793393725.758931,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "apply-lock-held"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "idle",
+    "rearm_reason": "rearm-status-unavailable",
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793393744.555218,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff",
+    "error": null
+  },
+  {
+    "time": 1793393751.6724842,
+    "node": "us-b",
+    "state": "normal",
+    "reasons": [
+      "authoritative-owner-peer-is-healthy"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": true,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393831.678217,
+    "node": "us-a",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "kex_exchange_identification: read: Connection reset by peer\nConnection reset by 204.12.191.16 port 22"
+  },
+  {
+    "time": 1793393843.0511858,
+    "node": "us-a",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "ssh: connect to host 204.12.191.16 port 22: Operation timed out"
+  },
+  {
+    "time": 1793393857.716688,
+    "node": "us-b",
+    "state": "fencing",
+    "reasons": [
+      "former-owner-must-be-stopped"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245:81:stop-former-owner:gateway-a",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393868.724343,
+    "node": "us-b",
+    "state": "ownership-transfer",
+    "reasons": [
+      "former-allocation-attachment-must-be-absent"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245:82:detach-former-attachment:gateway-a",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393879.819336,
+    "node": "us-b",
+    "state": "promoting",
+    "reasons": [
+      "owner-routes-require-reconciliation"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245:85:reconcile-routes:gateway-b",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393890.949485,
+    "node": "us-b",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "starting",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393924.080617,
+    "node": "us-b",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793393944.052615,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "active-route-reconciliation-context-stale"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "19f5c8aa-5505-4eb3-af18-3180fce7deff:95:disable-active:gateway-a",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793393947.626274,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "bgp-not-ready"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793393954.7623181,
+    "node": "us-a",
+    "state": "normal",
+    "reasons": [
+      "authoritative-owner-peer-is-healthy"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": true,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394017.138007,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "local-ownership-lacks-establishment-proof"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+    "error": null
+  },
+  {
+    "time": 1793394028.190284,
+    "node": "us-b",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "ssh: connect to host 204.12.189.249 port 22: Operation timed out"
+  },
+  {
+    "time": 1793394053.904483,
+    "node": "us-a",
+    "state": "ownership-transfer",
+    "reasons": [
+      "replaying-checkpointed-action"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92:99:detach-former-attachment:gateway-b",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394064.9634922,
+    "node": "us-a",
+    "state": "promoting",
+    "reasons": [
+      "candidate-ownership-re-read-required"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92:101:confirm-candidate-ownership:gateway-a",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394076.015384,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394087.065244,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "starting",
+    "rearm_reason": null,
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394109.1813471,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394119.842431,
+    "node": "us-b",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "ssh: connect to host 204.12.189.249 port 22: Connection refused"
+  },
+  {
+    "time": 1793394128.793348,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "local-ownership-lacks-establishment-proof"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394132.348144,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "bgp-not-ready"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394139.487037,
+    "node": "us-b",
+    "state": "normal",
+    "reasons": [
+      "authoritative-owner-peer-is-healthy"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": true,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394223.78912,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "active-route-reconciliation-context-stale"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92:104:disable-active:gateway-a",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+    "error": null
+  },
+  {
+    "time": 1793394234.8635252,
+    "node": "us-a",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "ssh: connect to host 204.12.191.16 port 22: Operation timed out"
+  },
+  {
+    "time": 1793394249.482434,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "static-routes-not-ready",
+      "xfrm-not-ready"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394293.969708,
+    "node": "us-b",
+    "state": "ownership-transfer",
+    "reasons": [
+      "former-allocation-attachment-must-be-absent"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "repairable",
+    "pending_operation_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153:90:detach-former-attachment:gateway-a",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394304.891188,
+    "node": "us-b",
+    "state": "promoting",
+    "reasons": [
+      "owner-routes-require-reconciliation"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153:94:reconcile-routes:gateway-b",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394316.0746508,
+    "node": "us-b",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "starting",
+    "rearm_reason": null,
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394349.324353,
+    "node": "us-b",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394359.758373,
+    "node": "us-a",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "ssh: connect to host 204.12.191.16 port 22: Connection refused"
+  },
+  {
+    "time": 1793394370.094479,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "active-route-reconciliation-context-stale"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92:104:disable-active:gateway-a",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394373.693384,
+    "node": "us-a",
+    "state": "blocked",
+    "reasons": [
+      "static-routes-not-ready",
+      "bgp-not-ready",
+      "xfrm-not-ready"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394380.845867,
+    "node": "us-a",
+    "state": "normal",
+    "reasons": [
+      "authoritative-owner-peer-is-healthy"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": true,
+    "standby_tunnel_state": "repairable",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394521.870046,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "local-ownership-lacks-establishment-proof"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "35dda8aa-34b5-4fbb-acd8-223b1c3a1153",
+    "error": null
+  },
+  {
+    "time": 1793394532.954453,
+    "node": "us-b",
+    "state": null,
+    "reasons": null,
+    "observed_owner_node_id": null,
+    "data_plane_mode": null,
+    "standby_ready": null,
+    "standby_tunnel_state": null,
+    "pending_operation_id": null,
+    "rearm_phase": null,
+    "rearm_reason": null,
+    "boot_id": null,
+    "error": "ssh: connect to host 204.12.189.249 port 22: Operation timed out"
+  },
+  {
+    "time": 1793394547.635134,
+    "node": "us-a",
+    "state": "fencing",
+    "reasons": [
+      "former-owner-must-be-stopped"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "repairable",
+    "pending_operation_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76:107:stop-former-owner:gateway-b",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394558.700154,
+    "node": "us-a",
+    "state": "ownership-transfer",
+    "reasons": [
+      "former-allocation-attachment-must-be-absent"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "repairable",
+    "pending_operation_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76:108:detach-former-attachment:gateway-b",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394569.767029,
+    "node": "us-a",
+    "state": "promoting",
+    "reasons": [
+      "owner-routes-require-reconciliation"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "warm",
+    "pending_operation_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76:112:reconcile-routes:gateway-a",
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394580.816718,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "starting",
+    "rearm_reason": null,
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394614.078986,
+    "node": "us-a",
+    "state": "active",
+    "reasons": [
+      "authoritative-owner-active"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "active",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "running",
+    "rearm_reason": null,
+    "boot_id": "19bb7bf2-5bf5-4710-b81b-2a8085311a76",
+    "error": null
+  },
+  {
+    "time": 1793394635.9352262,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "local-ownership-lacks-establishment-proof"
+    ],
+    "observed_owner_node_id": "gateway-b",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "blocked",
+    "rearm_reason": "ownership-or-alias-drift",
+    "boot_id": "9f26a9f5-2893-432c-b91a-b5948c29e9ee",
+    "error": null
+  },
+  {
+    "time": 1793394639.46109,
+    "node": "us-b",
+    "state": "normal",
+    "reasons": [
+      "non-owner-must-remain-passive"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "blocked",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": "9f26a9f5-2893-432c-b91a-b5948c29e9ee:97:enter-passive:gateway-b",
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "9f26a9f5-2893-432c-b91a-b5948c29e9ee",
+    "error": null
+  },
+  {
+    "time": 1793394643.039999,
+    "node": "us-b",
+    "state": "blocked",
+    "reasons": [
+      "static-routes-not-ready",
+      "bgp-not-ready",
+      "xfrm-not-ready"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": false,
+    "standby_tunnel_state": "not-standby",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "9f26a9f5-2893-432c-b91a-b5948c29e9ee",
+    "error": null
+  },
+  {
+    "time": 1793394646.639189,
+    "node": "us-b",
+    "state": "normal",
+    "reasons": [
+      "authoritative-owner-peer-is-healthy"
+    ],
+    "observed_owner_node_id": "gateway-a",
+    "data_plane_mode": "passive",
+    "standby_ready": true,
+    "standby_tunnel_state": "repairable",
+    "pending_operation_id": null,
+    "rearm_phase": "not-owner",
+    "rearm_reason": null,
+    "boot_id": "9f26a9f5-2893-432c-b91a-b5948c29e9ee",
+    "error": null
+  }
+]

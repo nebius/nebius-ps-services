@@ -1,0 +1,69 @@
+[
+  {
+    "node": "uk-a",
+    "result": {
+      "time": 1793393551.4114943,
+      "boot_id": "1c086443-4725-4360-89b7-2903713ac96e",
+      "status.json": {
+        "state": "active",
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "node_id": "gateway-a",
+        "observed_owner_node_id": "gateway-a",
+        "promotion_ready": true,
+        "standby_ready": false,
+        "pending_operation_id": null,
+        "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ]
+      },
+      "rearm-status.json": {
+        "phase": "running",
+        "reason": null
+      },
+      "apply.lock": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failback.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failover.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "accepted-cloud-operation.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "services": "MainPID=987\nExecMainStartTimestamp=Fri 2026-10-30 20:50:34 UTC\nActiveState=active\n",
+      "modules": {
+        "nebius_vpngw.agent.main": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/main.py",
+          "sha256": "1fac966bad067a7020098936408ed759309f1e74e07b4919fe1bff5b40b035aa"
+        },
+        "nebius_vpngw.agent.vm_ha.runtime": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha/runtime.py",
+          "sha256": "cf2fd4de50ce5fc13f6a85f4af3b7b03eccfd708c904ec6fbdc1ef1f58def8c3"
+        },
+        "nebius_vpngw.agent.vm_ha_controller": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha_controller.py",
+          "sha256": "b8fb6379bbca8c281900cdf22fcbe5f1918f622e4235c929735deb1864cce744"
+        }
+      },
+      "ipsec_status": "Security Associations (2 up, 0 connecting):\n     uk-us-2[6]: ESTABLISHED 53 seconds ago, 10.80.0.34[89.124.37.185]...204.12.189.249[204.12.189.249]\n     uk-us-2{4}:  INSTALLED, TUNNEL, reqid 2, ESP in UDP SPIs: cafd0176_i c2829ad0_o\n     uk-us-2{4}:   10.80.1.0/24 169.254.11.4/30 === 10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.11.4/30\n     uk-us-1[5]: ESTABLISHED 53 seconds ago, 10.80.0.34[89.124.37.185]...204.12.191.16[204.12.191.16]\n     uk-us-1{3}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: c94bfc6e_i c4c00259_o\n     uk-us-1{3}:   10.80.1.0/24 169.254.11.0/30 === 10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.11.0/30\n"
+    }
+  },
+  {
+    "node": "uk-b",
+    "error": "ssh: connect to host 89.124.37.170 port 22: Operation timed out",
+    "returncode": 255
+  }
+]

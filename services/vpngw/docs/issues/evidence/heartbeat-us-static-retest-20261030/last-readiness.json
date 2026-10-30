@@ -1,0 +1,86 @@
+[
+  {
+    "node": "us-a",
+    "result": {
+      "time": 1793395240.8416026,
+      "node_id": "gateway-a",
+      "state": "active",
+      "reasons": [
+        "authoritative-owner-active"
+      ],
+      "observed_owner_node_id": "gateway-a",
+      "data_plane_mode": "active",
+      "promotion_ready": true,
+      "standby_ready": false,
+      "standby_tunnel_state": "not-standby",
+      "apply_locked": false,
+      "pending_operation_id": null,
+      "rearm_phase": "running",
+      "rearm_reason": null,
+      "redundancy_ready": true
+    }
+  },
+  {
+    "node": "us-b",
+    "result": {
+      "time": 1793395240.8670633,
+      "node_id": "gateway-b",
+      "state": "normal",
+      "reasons": [
+        "authoritative-owner-peer-is-healthy"
+      ],
+      "observed_owner_node_id": "gateway-a",
+      "data_plane_mode": "passive",
+      "promotion_ready": false,
+      "standby_ready": true,
+      "standby_tunnel_state": "repairable",
+      "apply_locked": false,
+      "pending_operation_id": null,
+      "rearm_phase": "not-owner",
+      "rearm_reason": null,
+      "redundancy_ready": true
+    }
+  },
+  {
+    "node": "uk-a",
+    "result": {
+      "time": 1793395241.616585,
+      "node_id": "gateway-a",
+      "state": "normal",
+      "reasons": [
+        "authoritative-owner-peer-is-healthy"
+      ],
+      "observed_owner_node_id": "gateway-b",
+      "data_plane_mode": "passive",
+      "promotion_ready": false,
+      "standby_ready": true,
+      "standby_tunnel_state": "cold",
+      "apply_locked": false,
+      "pending_operation_id": null,
+      "rearm_phase": "not-owner",
+      "rearm_reason": null,
+      "redundancy_ready": true
+    }
+  },
+  {
+    "node": "uk-b",
+    "result": {
+      "time": 1793395241.5909972,
+      "node_id": "gateway-b",
+      "state": "active",
+      "reasons": [
+        "authoritative-owner-active"
+      ],
+      "observed_owner_node_id": "gateway-b",
+      "data_plane_mode": "active",
+      "promotion_ready": true,
+      "standby_ready": false,
+      "standby_tunnel_state": "not-standby",
+      "apply_locked": false,
+      "pending_operation_id": null,
+      "rearm_phase": "running",
+      "rearm_reason": null,
+      "redundancy_ready": true
+    }
+  }
+]

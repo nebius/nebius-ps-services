@@ -1,0 +1,135 @@
+{
+  "target": "10.81.0.20",
+  "probe_interval_seconds": 1,
+  "unique_replies": 1154,
+  "gaps": [
+    {
+      "lost_replies": 903,
+      "reply_gap_seconds": 907.075,
+      "last_reply_at": 1793392836.342026,
+      "recovered_at": 1793393743.416534,
+      "recovered_utc": "2026-10-30T20:55:43.416534+00:00"
+    },
+    {
+      "lost_replies": 57,
+      "reply_gap_seconds": 58.207,
+      "last_reply_at": 1793393828.660817,
+      "recovered_at": 1793393886.867581,
+      "recovered_utc": "2026-10-30T20:58:06.867581+00:00"
+    },
+    {
+      "lost_replies": 59,
+      "reply_gap_seconds": 60.218,
+      "last_reply_at": 1793394014.293198,
+      "recovered_at": 1793394074.510945,
+      "recovered_utc": "2026-10-30T21:01:14.510945+00:00"
+    },
+    {
+      "lost_replies": 90,
+      "reply_gap_seconds": 91.3,
+      "last_reply_at": 1793394221.010988,
+      "recovered_at": 1793394312.311392,
+      "recovered_utc": "2026-10-30T21:05:12.311392+00:00"
+    },
+    {
+      "lost_replies": 54,
+      "reply_gap_seconds": 55.32,
+      "last_reply_at": 1793394519.20301,
+      "recovered_at": 1793394574.5231519,
+      "recovered_utc": "2026-10-30T21:09:34.523152+00:00"
+    },
+    {
+      "lost_replies": 1,
+      "reply_gap_seconds": 1.989,
+      "last_reply_at": 1793394811.084927,
+      "recovered_at": 1793394813.0738811,
+      "recovered_utc": "2026-10-30T21:13:33.073881+00:00"
+    },
+    {
+      "lost_replies": 3,
+      "reply_gap_seconds": 4.068,
+      "last_reply_at": 1793394820.0714188,
+      "recovered_at": 1793394824.139582,
+      "recovered_utc": "2026-10-30T21:13:44.139582+00:00"
+    }
+  ],
+  "controlled_transfers": [
+    {
+      "action": "failover",
+      "label": "01-round1-a-to-b",
+      "started": 1793393817.563272,
+      "started_utc": "2026-10-30T20:56:57.563274+00:00",
+      "finished": 1793393963.508204,
+      "elapsed_seconds": 145.94493293762207,
+      "returncode": 0,
+      "cutover_seconds": 73.1,
+      "traffic_gaps": [
+        {
+          "lost_replies": 57,
+          "reply_gap_seconds": 58.207,
+          "last_reply_at": 1793393828.660817,
+          "recovered_at": 1793393886.867581,
+          "recovered_utc": "2026-10-30T20:58:06.867581+00:00"
+        }
+      ]
+    },
+    {
+      "action": "failback",
+      "label": "02-round1-b-to-a",
+      "started": 1793394004.656427,
+      "started_utc": "2026-10-30T21:00:04.656429+00:00",
+      "finished": 1793394146.4332108,
+      "elapsed_seconds": 141.7767848968506,
+      "returncode": 0,
+      "cutover_seconds": 74.4,
+      "traffic_gaps": [
+        {
+          "lost_replies": 59,
+          "reply_gap_seconds": 60.218,
+          "last_reply_at": 1793394014.293198,
+          "recovered_at": 1793394074.510945,
+          "recovered_utc": "2026-10-30T21:01:14.510945+00:00"
+        }
+      ]
+    },
+    {
+      "action": "failover",
+      "label": "03-round2-a-to-b",
+      "started": 1793394210.718463,
+      "started_utc": "2026-10-30T21:03:30.718465+00:00",
+      "finished": 1793394247.471505,
+      "elapsed_seconds": 36.75305199623108,
+      "returncode": 1,
+      "cutover_seconds": null,
+      "traffic_gaps": [
+        {
+          "lost_replies": 90,
+          "reply_gap_seconds": 91.3,
+          "last_reply_at": 1793394221.010988,
+          "recovered_at": 1793394312.311392,
+          "recovered_utc": "2026-10-30T21:05:12.311392+00:00"
+        }
+      ],
+      "controller_cutover_seconds": 92.64249897003174
+    },
+    {
+      "action": "failback",
+      "label": "04-round2-b-to-a",
+      "started": 1793394509.299506,
+      "started_utc": "2026-10-30T21:08:29.299508+00:00",
+      "finished": 1793394650.4474728,
+      "elapsed_seconds": 141.14796805381775,
+      "returncode": 0,
+      "cutover_seconds": 72.3,
+      "traffic_gaps": [
+        {
+          "lost_replies": 54,
+          "reply_gap_seconds": 55.32,
+          "last_reply_at": 1793394519.20301,
+          "recovered_at": 1793394574.5231519,
+          "recovered_utc": "2026-10-30T21:09:34.523152+00:00"
+        }
+      ]
+    }
+  ]
+}

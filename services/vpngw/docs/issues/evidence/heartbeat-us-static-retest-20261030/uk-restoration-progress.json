@@ -1,0 +1,34 @@
+[
+  {
+    "node": "uk-a",
+    "result": {
+      "state": "active",
+      "reasons": [
+        "authoritative-owner-active"
+      ],
+      "observed_owner_node_id": "gateway-a",
+      "standby_ready": false,
+      "promotion_ready": true,
+      "former_owner_compute_state": "running",
+      "rearm_phase": "running",
+      "rearm_reason": null,
+      "redundancy_ready": true
+    }
+  },
+  {
+    "node": "uk-b",
+    "result": {
+      "state": "normal",
+      "reasons": [
+        "authoritative-owner-peer-is-healthy"
+      ],
+      "observed_owner_node_id": "gateway-a",
+      "standby_ready": true,
+      "promotion_ready": false,
+      "former_owner_compute_state": "running",
+      "rearm_phase": "not-owner",
+      "rearm_reason": null,
+      "redundancy_ready": true
+    }
+  }
+]

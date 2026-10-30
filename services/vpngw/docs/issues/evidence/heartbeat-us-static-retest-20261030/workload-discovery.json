@@ -1,0 +1,26 @@
+{
+  "us_workload_access": {
+    "name": "worker-inst",
+    "usernames": [
+      "jkwong"
+    ]
+  },
+  "uk_workloads": [
+    {
+      "id": "computeinstance-e03raz87yzjbtkah3x",
+      "name": "worker-inst",
+      "addresses": [
+        "10.80.1.0/32"
+      ],
+      "state": "RUNNING"
+    },
+    {
+      "id": "computeinstance-e03jb6a2s0j80jy1f6",
+      "name": "gemma-latency",
+      "addresses": [
+        "10.80.1.8/32"
+      ],
+      "state": "STOPPED"
+    }
+  ]
+}

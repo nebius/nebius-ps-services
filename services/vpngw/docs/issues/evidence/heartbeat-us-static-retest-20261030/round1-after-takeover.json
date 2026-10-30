@@ -1,0 +1,642 @@
+[
+  {
+    "node": "us-a",
+    "result": {
+      "time": 1793393999.727425,
+      "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+      "status.json": {
+        "state": "normal",
+        "reasons": [
+          "authoritative-owner-peer-is-healthy"
+        ],
+        "node_id": "gateway-a",
+        "observed_owner_node_id": "gateway-b",
+        "promotion_ready": false,
+        "standby_ready": true,
+        "pending_operation_id": null,
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ]
+      },
+      "rearm-status.json": {
+        "phase": "blocked",
+        "reason": "ownership-or-alias-drift"
+      },
+      "apply.lock": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failback.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failover.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "accepted-cloud-operation.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "services": "MainPID=947\nExecMainStartTimestamp=Fri 2026-10-30 20:58:56 UTC\nActiveState=active\n",
+      "modules": {
+        "nebius_vpngw.agent.main": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/main.py",
+          "sha256": "22806ffee89bbfbe4fc98872bc391628763ac336c94459357d5adb2350846f9a"
+        },
+        "nebius_vpngw.agent.vm_ha.runtime": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha/runtime.py",
+          "sha256": "cf2fd4de50ce5fc13f6a85f4af3b7b03eccfd708c904ec6fbdc1ef1f58def8c3"
+        },
+        "nebius_vpngw.agent.vm_ha_controller": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha_controller.py",
+          "sha256": "b8fb6379bbca8c281900cdf22fcbe5f1918f622e4235c929735deb1864cce744"
+        }
+      },
+      "full_status": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "candidate_attachment_absent": true,
+        "candidate_attachment_exact": false,
+        "cluster_id": "us-central1-ha",
+        "configured_role": "active",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": null,
+        "data_plane_mode": "passive",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "former_attachment_absent": false,
+        "former_attachment_exact": true,
+        "former_owner_compute_state": "running",
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "guard_boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+        "mtls": {
+          "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+          "cluster_id": "us-central1-ha",
+          "compute_id": "computeinstance-u00g51p9pxqv82fqzv",
+          "epoch": 1,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-a",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+            "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+            "epoch": 1,
+            "fresh": true,
+            "node_id": "gateway-b",
+            "sequence": 2080
+          },
+          "peer_fingerprints": [
+            "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "53037261fa345b519735d0ef0a0a3eaba8af742edcf842a62cd31b2425a31660",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-a",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "23",
+        "ownership_re_read_exact": false,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": null,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": null
+        },
+        "promotion_committed": false,
+        "promotion_ready": false,
+        "rearm_phase": "not-owner",
+        "rearm_reason": null,
+        "reasons": [
+          "authoritative-owner-peer-is-healthy"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": true,
+        "repair": null,
+        "route_reconciliation": null,
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [],
+        "standby_ready": true,
+        "standby_tunnel_state": "warm",
+        "state": "normal",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "operator_status": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "auto_healing": {
+          "accepted_start": false,
+          "peer_agrees": true,
+          "state": "enabled"
+        },
+        "candidate_attachment_absent": true,
+        "candidate_attachment_exact": false,
+        "cluster_id": "us-central1-ha",
+        "configured_role": "active",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": null,
+        "data_plane_mode": "passive",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "former_attachment_absent": false,
+        "former_attachment_exact": true,
+        "former_owner_compute_state": "running",
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "guard_boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+        "mtls": {
+          "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+          "cluster_id": "us-central1-ha",
+          "compute_id": "computeinstance-u00g51p9pxqv82fqzv",
+          "epoch": 1,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-a",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+            "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+            "epoch": 1,
+            "fresh": true,
+            "node_id": "gateway-b",
+            "sequence": 2080
+          },
+          "peer_fingerprints": [
+            "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "53037261fa345b519735d0ef0a0a3eaba8af742edcf842a62cd31b2425a31660",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-a",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "23",
+        "ownership_re_read_exact": false,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": null,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": null
+        },
+        "promotion_committed": false,
+        "promotion_ready": false,
+        "rearm_phase": "not-owner",
+        "rearm_reason": null,
+        "reasons": [
+          "authoritative-owner-peer-is-healthy"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": true,
+        "repair": null,
+        "route_reconciliation": null,
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "runtime_identity": {
+          "reason": "exact-current-boot",
+          "state": "verified"
+        },
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [],
+        "standby_ready": true,
+        "standby_tunnel_state": "warm",
+        "state": "normal",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "forwarding": "0",
+      "bgp_summary": {
+        "routerId": "10.81.0.0",
+        "as": 65011,
+        "vrfId": 0,
+        "vrfName": "default",
+        "tableVersion": 5,
+        "ribCount": 5,
+        "ribMemory": 800,
+        "peerCount": 1,
+        "peerMemory": 30696,
+        "peers": {
+          "169.254.10.2": {
+            "hostname": "pfSense.internal.jkwong.info",
+            "softwareVersion": "n/a",
+            "remoteAs": 64560,
+            "localAs": 65011,
+            "version": 4,
+            "msgRcvd": 32,
+            "msgSent": 26,
+            "tableVersion": 5,
+            "outq": 0,
+            "inq": 0,
+            "peerUptime": "00:00:47",
+            "peerUptimeMsec": 47000,
+            "peerUptimeEstablishedEpoch": 1793393953,
+            "pfxRcd": 5,
+            "pfxSnt": 0,
+            "state": "Established",
+            "peerState": "OK",
+            "connectionsEstablished": 1,
+            "connectionsDropped": 0,
+            "idType": "ipv4"
+          }
+        },
+        "failedPeers": 0,
+        "displayedPeers": 1,
+        "totalPeers": 1,
+        "dynamicPeers": 0,
+        "bestPath": {
+          "multiPathRelax": "false"
+        }
+      },
+      "ipsec_status": "Security Associations (2 up, 0 connecting):\n     uk-us-1[2]: ESTABLISHED 56 seconds ago, 10.81.0.0[204.12.191.16]...89.124.37.185[89.124.37.185]\n     uk-us-1{2}:  INSTALLED, TUNNEL, reqid 2, ESP in UDP SPIs: c2383bfb_i c14e1043_o\n     uk-us-1{2}:   10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.11.0/30 === 10.80.1.0/24 169.254.11.0/30\nhome-pfsense-1[1]: ESTABLISHED 56 seconds ago, 10.81.0.0[204.12.191.16]...142.114.58.54[142.114.58.54]\nhome-pfsense-1{1}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: ce673a04_i c16f1678_o\nhome-pfsense-1{1}:   10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.10.0/30 === 0.0.0.0/0\n",
+      "static_route": [
+        {
+          "dst": "10.80.1.0/24",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        }
+      ],
+      "pending_files": {
+        "accepted-cloud-operation.json": false,
+        "route-pending.json": false,
+        "manual-failover.json": false,
+        "manual-failback.json": false
+      }
+    }
+  },
+  {
+    "node": "us-b",
+    "result": {
+      "time": 1793393999.7723317,
+      "boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+      "status.json": {
+        "state": "active",
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "promotion_ready": true,
+        "standby_ready": false,
+        "pending_operation_id": null,
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ]
+      },
+      "rearm-status.json": {
+        "phase": "running",
+        "reason": null
+      },
+      "apply.lock": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failback.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failover.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "accepted-cloud-operation.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "services": "MainPID=161785\nExecMainStartTimestamp=Fri 2026-10-30 20:54:36 UTC\nActiveState=active\n",
+      "modules": {
+        "nebius_vpngw.agent.main": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/main.py",
+          "sha256": "22806ffee89bbfbe4fc98872bc391628763ac336c94459357d5adb2350846f9a"
+        },
+        "nebius_vpngw.agent.vm_ha.runtime": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha/runtime.py",
+          "sha256": "cf2fd4de50ce5fc13f6a85f4af3b7b03eccfd708c904ec6fbdc1ef1f58def8c3"
+        },
+        "nebius_vpngw.agent.vm_ha_controller": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha_controller.py",
+          "sha256": "b8fb6379bbca8c281900cdf22fcbe5f1918f622e4235c929735deb1864cce744"
+        }
+      },
+      "full_status": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "candidate_attachment_absent": false,
+        "candidate_attachment_exact": true,
+        "cluster_id": "us-central1-ha",
+        "configured_role": "passive",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+        "data_plane_mode": "active",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "former_attachment_absent": true,
+        "former_attachment_exact": false,
+        "former_owner_compute_state": "running",
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "guard_boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+        "mtls": {
+          "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+          "cluster_id": "us-central1-ha",
+          "compute_id": "computeinstance-u00z7c89ca6d7y485j",
+          "epoch": 1,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-b",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+            "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+            "epoch": 1,
+            "fresh": true,
+            "node_id": "gateway-a",
+            "sequence": 61
+          },
+          "peer_fingerprints": [
+            "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "80d68eb71d8b9db53be169ff47b1d3774d6de06a2e19606c47b67053a6e80bf8",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "18",
+        "ownership_re_read_exact": true,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": 59.88712286949158,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": 25.981200218200684
+        },
+        "promotion_committed": true,
+        "promotion_ready": true,
+        "rearm_phase": "running",
+        "rearm_reason": null,
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": true,
+        "repair": null,
+        "route_reconciliation": {
+          "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+          "digests": {
+            "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+            "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+            "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+          },
+          "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "operation_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245:85:reconcile-routes:gateway-b",
+          "owner_node_id": "gateway-b",
+          "ownership_epoch": "18",
+          "ownership_incarnation": 5,
+          "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031"
+        },
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [
+          "data-plane-not-passive",
+          "local-node-is-not-exact-non-owner",
+          "owner-shared-alias-not-exact",
+          "local-shared-alias-present"
+        ],
+        "standby_ready": false,
+        "standby_tunnel_state": "not-standby",
+        "state": "active",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "operator_status": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "auto_healing": {
+          "accepted_start": false,
+          "peer_agrees": true,
+          "state": "enabled"
+        },
+        "candidate_attachment_absent": false,
+        "candidate_attachment_exact": true,
+        "cluster_id": "us-central1-ha",
+        "configured_role": "passive",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+        "data_plane_mode": "active",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "former_attachment_absent": true,
+        "former_attachment_exact": false,
+        "former_owner_compute_state": "running",
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "guard_boot_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245",
+        "mtls": {
+          "certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+          "cluster_id": "us-central1-ha",
+          "compute_id": "computeinstance-u00z7c89ca6d7y485j",
+          "epoch": 1,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-b",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "8b97d4bd-98b3-4e99-ba64-8e361351dc92",
+            "certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+            "epoch": 1,
+            "fresh": true,
+            "node_id": "gateway-a",
+            "sequence": 61
+          },
+          "peer_fingerprints": [
+            "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "80d68eb71d8b9db53be169ff47b1d3774d6de06a2e19606c47b67053a6e80bf8",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "18",
+        "ownership_re_read_exact": true,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": 59.88712286949158,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": 25.981200218200684
+        },
+        "promotion_committed": true,
+        "promotion_ready": true,
+        "rearm_phase": "running",
+        "rearm_reason": null,
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": true,
+        "repair": null,
+        "route_reconciliation": {
+          "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+          "digests": {
+            "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+            "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+            "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+          },
+          "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "operation_id": "0498a88b-fc2e-47c8-8112-b1e8e8069245:85:reconcile-routes:gateway-b",
+          "owner_node_id": "gateway-b",
+          "ownership_epoch": "18",
+          "ownership_incarnation": 5,
+          "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031"
+        },
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "runtime_identity": {
+          "reason": "exact-current-boot",
+          "state": "verified"
+        },
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [
+          "data-plane-not-passive",
+          "local-node-is-not-exact-non-owner",
+          "owner-shared-alias-not-exact",
+          "local-shared-alias-present"
+        ],
+        "standby_ready": false,
+        "standby_tunnel_state": "not-standby",
+        "state": "active",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "forwarding": "1",
+      "bgp_summary": {
+        "routerId": "10.81.0.12",
+        "as": 65011,
+        "vrfId": 0,
+        "vrfName": "default",
+        "tableVersion": 17,
+        "ribCount": 17,
+        "ribMemory": 2720,
+        "peerCount": 1,
+        "peerMemory": 30696,
+        "peers": {
+          "169.254.10.6": {
+            "hostname": "pfSense.internal.jkwong.info",
+            "softwareVersion": "n/a",
+            "remoteAs": 64560,
+            "localAs": 65011,
+            "version": 4,
+            "msgRcvd": 165,
+            "msgSent": 159,
+            "tableVersion": 17,
+            "outq": 0,
+            "inq": 0,
+            "peerUptime": "00:05:09",
+            "peerUptimeMsec": 309000,
+            "peerUptimeEstablishedEpoch": 1793393691,
+            "pfxRcd": 5,
+            "pfxSnt": 12,
+            "state": "Established",
+            "peerState": "OK",
+            "connectionsEstablished": 1,
+            "connectionsDropped": 0,
+            "idType": "ipv4"
+          }
+        },
+        "failedPeers": 0,
+        "displayedPeers": 1,
+        "totalPeers": 1,
+        "dynamicPeers": 0,
+        "bestPath": {
+          "multiPathRelax": "false"
+        }
+      },
+      "ipsec_status": "Security Associations (2 up, 0 connecting):\n     uk-us-2[3]: ESTABLISHED 5 minutes ago, 10.81.0.12[204.12.189.249]...89.124.37.185[89.124.37.185]\n     uk-us-2{2}:  INSTALLED, TUNNEL, reqid 2, ESP in UDP SPIs: c2f7f143_i c2cc8f25_o\n     uk-us-2{2}:   10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.11.4/30 === 10.80.1.0/24 169.254.11.4/30\nhome-pfsense-2[2]: ESTABLISHED 5 minutes ago, 10.81.0.12[204.12.189.249]...142.114.58.54[142.114.58.54]\nhome-pfsense-2{1}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: ce762490_i cd3aa0f5_o\nhome-pfsense-2{1}:   10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.10.4/30 === 0.0.0.0/0\n",
+      "static_route": [
+        {
+          "dst": "10.80.1.0/24",
+          "dev": "xfrm1",
+          "scope": "link",
+          "flags": []
+        }
+      ],
+      "pending_files": {
+        "accepted-cloud-operation.json": false,
+        "route-pending.json": false,
+        "manual-failover.json": false,
+        "manual-failback.json": false
+      }
+    }
+  }
+]
