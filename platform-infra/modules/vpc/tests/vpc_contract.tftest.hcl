@@ -22,6 +22,37 @@ run "accept_explicit_subnet_private_cidr" {
   }
 }
 
+run "export_empty_subnet_status_pools" {
+  command = plan
+
+  variables {
+    subnets = {
+      worker = {
+        ipv4_private_cidrs       = ["172.16.0.0/16"]
+        use_network_public_pools = false
+      }
+    }
+  }
+
+  override_resource {
+    target          = nebius_vpc_v1_subnet.this["worker"]
+    override_during = plan
+    values = {
+      status = {
+        ipv4_private_cidrs = []
+        ipv4_public_cidrs  = []
+        ipv4_private_pools = { cidrs = [] }
+        ipv4_public_pools  = { cidrs = [] }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(output.subnets.worker.ipv4_private_cidrs) == 0 && length(output.subnets.worker.ipv4_public_cidrs) == 0
+    error_message = "Empty status pools must produce empty CIDR lists."
+  }
+}
+
 run "reject_inherited_subnet_private_pool_mode" {
   command = plan
 

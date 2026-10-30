@@ -6,6 +6,9 @@ project folder.
 
 ## [Unreleased]
 
+- Register AI Support Agent boundary checks with scoped CI and protected merge
+  completion tracking; keep public builds independent of private deployments.
+
 - Keep image publication outputs tied to the independently verified registry digest.
 
 - Include the shared viewer-delivery helper in fresh course synchronization and

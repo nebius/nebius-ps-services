@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import kubernetes_process
+from .cluster_config import cluster_rows
 from .grafana_database import OWNER_ANNOTATION, app_owner
 from .grafana_runtime import GRAFANA_TARGET_CLUSTER_ID_ENV, GRAFANA_TARGET_KUBE_CONTEXT_ENV
 from .paths import ProjectPaths
@@ -381,7 +382,7 @@ def discover_grafana_access(
     from . import cli
     from .kubeconfig_target import verify_context_cluster
 
-    targets = to_plain_data(config).get("deploy", {}).get("targets", [])
+    targets = cluster_rows(to_plain_data(config))
     target = dict(
         _one([t for t in targets if t.get("instance_id") == target_ref], "configured target")
     )

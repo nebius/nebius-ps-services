@@ -57,16 +57,20 @@ queries to `$nebius-grafana-query`.
   `nebius iam get-access-token` call. It writes a profile-scoped
   `GRAFANA_TOKEN_FILE`, clears competing Nebius and Grafana authentication
   variables, and never prints the token or user ID.
-- Require an `mcp-grafana` build with
-  `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` support for Nebius-managed Grafana,
-  while accounting for the stdio startup-client retention verified in `v2.0.2`
-  instead of assuming token rotations reload. Setup pre-mints a private startup
-  token; the wrapper reuses it for up to one hour and renews a missing or older
-  token before launching MCP. Foreground renewal may open the pinned profile's
-  browser-authentication flow and is covered by the canonical bounded Codex
-  startup timeout. After ten hours, background renewal stays noninteractive,
-  refreshes the file, and closes MCP with a restart-required result. Update an
-  older binary instead of adding an inline-token compatibility path.
+- Require `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` support. Stdio retains the
+  startup client in source-verified `v2.1.1`; file replacement does not reload
+  that client. Setup retrieves a private startup token. Startup uses a one-hour
+  file-age cache heuristic, then retrieves missing/older state. Mtime does not
+  prove issuance or expiry, and retrieval may return the same token. Foreground
+  identity validation may open browser authentication within the 300-second
+  startup budget. A best-effort ten-hour timer retrieves noninteractively and
+  closes MCP with restart-required status 75, even for unchanged token bytes.
+  Neither the timer nor retrieval guarantees service through token expiry.
+  Update unsupported binaries; keep one canonical token-file path.
+- Keep the local stdio wrapper and protected mode-`0600` token file. Browser
+  authentication belongs to the pinned Nebius CLI profile. `mcp-remote` needs
+  an actual HTTP MCP endpoint with supported authorization; the Grafana web
+  URL is not such an endpoint. Do not add a gateway or Keychain dependency.
 - The Nebius token-refresh wrapper must only run with
   `GRAFANA_URL=https://grafana.nebius.dev/`. Use the generic Grafana
   service-account-token path for external Grafana instances so Nebius IAM tokens
@@ -148,9 +152,9 @@ queries to `$nebius-grafana-query`.
   startup waits up to 210 seconds so one bounded browser login can complete
   within the 300-second MCP startup budget. Refresh recovers dead, PID-reused,
   and incomplete locks and replaces the token atomically.
-- Repeated check/apply on canonical state with a fresh token must preserve the
-  config, identity binding, token, and private-directory metadata. An expired
-  token renews once; subsequent applies reuse it. Recover a stale incomplete
+- Repeated check/apply on canonical state with an acceptable token cache must
+  preserve config, binding, token and private-directory metadata. A cache older
+  than one hour is retrieved once; subsequent applies reuse it. Recover a stale incomplete
   lock containing only an empty, private, unchanged `owner-pid.tmp`; preserve
   populated or ambiguous provisional state for inspection.
 - Require the registered wrapper and every path component from `HOME` to that
@@ -173,9 +177,9 @@ queries to `$nebius-grafana-query`.
    use `--apply` only when the user wants local config changes. Invoke it as a
    standalone command without outer managed-auth assignments or unsets. The
    helper owns sanitizing inherited Nebius auth state for its child CLI calls,
-   validates the human profile, creates the private binding, and derives
-   profile-scoped paths. Check mode stays noninteractive. Apply mode may open
-   browser authentication for the pinned human, pre-mints the token only in
+   checks local registration, private-state safety and binary support before
+   validating the human profile, creating the private binding and retrieving a token. Check mode stays noninteractive. Apply mode may open
+   browser authentication for the pinned human, retrieves the token only in
    the private profile-scoped file, and never embeds the token in Codex
    configuration.
 4. Ensure Codex MCP config contains the wrapper, pinned profile, identity path,
@@ -183,7 +187,7 @@ queries to `$nebius-grafana-query`.
    startup timeout. Add the timeout in place when it is the only drift. If an
    older registration is otherwise mismatched, show the exact migration and use
    `--apply --replace-existing` only after the user explicitly reviews it.
-5. The wrapper validates the private binding on every token mint, requires
+5. The wrapper validates the private binding on every token retrieval, requires
    token-file authentication, renews stale startup state before MCP launch,
    closes stdio after scheduled rotation with an explicit restart-required
    failure, and always starts `mcp-grafana` read-only. Complete a browser login
@@ -193,7 +197,11 @@ queries to `$nebius-grafana-query`.
    Validate locally with
    `mcp-grafana --help`, `codex mcp list`, and
    `codex mcp get <server-name>`.
-6. Validate readiness by listing Grafana datasources. Do not retain the
+6. Validate readiness with successful MCP initialization and a bounded datasource
+   listing. Report local startup failure, HTTP 401, HTTP 403 and network timeout
+   separately. A closed initialize connection alone does not prove token expiry.
+   Use the phase/code table in `references/setup-guide.md`; never echo raw CLI
+   stderr, browser authorization URLs, tokens or user IDs. Do not retain the
    operational query workflow here. After the server is ready, route metrics,
    logs, dashboards, and trace-tool questions to `$nebius-grafana-query`.
 7. Use the external Grafana static-key flow only when the user explicitly asks
@@ -252,10 +260,13 @@ install-grafana-mcp-for-nebius/scripts/ensure-local-config.sh \
   --check --user-profile <human_profile>
 install-grafana-mcp-for-nebius/scripts/test-run-nebius-grafana-mcp.sh
 python3 -B install-grafana-mcp-for-nebius/scripts/test_grafana_skill_contract.py
+python3 -B install-grafana-mcp-for-nebius/scripts/test_stdio_token_lifecycle.py
 codex mcp list
 codex mcp get <server-name>
 ```
 
+The stdio lifecycle qualification needs an installed binary and uses only a
+loopback Grafana fixture with dummy tokens. It performs no Nebius authentication.
 Live setup validation should list Grafana datasources and stop. Run operational
 PromQL, LogQL, dashboard, or trace-tool queries only through
 `$nebius-grafana-query` with an explicitly safe target.

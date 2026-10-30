@@ -44,13 +44,11 @@ def _discover_config_payload(
                     "project_id": project_id,
                     "region_id": "eu-north1",
                 },
-                "notifications": {
-                    "email_enabled": False,
-                    "email": None,
-                },
+                "notifications": {"email_enabled": False, "email": None},
             },
             "infra": {"components": []},
             "apps": {"charts": []},
+            "version": "v2",
         },
         sort_keys=False,
     )

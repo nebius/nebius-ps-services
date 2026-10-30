@@ -30,7 +30,7 @@ def test_pinned_charts_render_generated_binding_and_authenticated_readiness(
     for path, value in grafana_database_values(payload, grafana).items():
         _set_path_value(grafana, path, value)
     for row in payload["apps"]["charts"]:
-        chart = "postgres" if row["id"] == "postgresql" else "grafana"
+        chart = "postgres" if row["id"] == "grafana-postgresql" else "grafana"
         docs = render_chart_template_documents(
             chart_name=str(root / chart),
             chart_repo="",
@@ -48,7 +48,7 @@ def test_pinned_charts_render_generated_binding_and_authenticated_readiness(
                         "apiVersion": "kustomize.config.k8s.io/v1beta1",
                         "kind": "Kustomization",
                         "resources": ["rendered.yaml"],
-                        "patches": [database_readiness_patch("postgresql")],
+                        "patches": [database_readiness_patch("grafana-postgresql")],
                     }
                 )
             )
@@ -88,7 +88,7 @@ def test_pinned_charts_render_generated_binding_and_authenticated_readiness(
             assert variables["POD_IP"]["valueFrom"] == {"fieldRef": {"fieldPath": "status.podIP"}}
             assert (
                 variables["GF_DATABASE_PASSWORD"]["valueFrom"]["secretKeyRef"]["name"]
-                == "postgresql-grafana"
+                == "grafana-postgresql-grafana"
             )
             assert (
                 variables["GF_SECURITY_SECRET_KEY"]["valueFrom"]["secretKeyRef"]["name"]
@@ -111,7 +111,7 @@ def test_pinned_charts_render_generated_binding_and_authenticated_readiness(
                 if doc["kind"] == "ConfigMap" and "grafana.ini" in doc.get("data", {})
             )
             assert "type = postgres" in config["data"]["grafana.ini"]
-            assert "postgresql.observability.svc:5432" in config["data"]["grafana.ini"]
+            assert "grafana-postgresql.observability.svc:5432" in config["data"]["grafana.ini"]
             from nebius_cxcli import grafana_database_runtime as runtime
 
             monkeypatch.setattr(runtime, "_read", lambda *_args, result=config, **_kwargs: result)
@@ -121,7 +121,7 @@ def test_pinned_charts_render_generated_binding_and_authenticated_readiness(
                     row["namespace"],
                     {},
                     config_map_name=grafana_name,
-                    password_secret="postgresql-grafana",
+                    password_secret="grafana-postgresql-grafana",
                     encryption_secret=f"{grafana_name}-encryption",
                 )
                 == row["values"]["grafana.ini"]["database"]

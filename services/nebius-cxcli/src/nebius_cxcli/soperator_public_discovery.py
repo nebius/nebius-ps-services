@@ -100,7 +100,7 @@ class SoperatorPublicDiscoveryRuntime:
         """Bind tenant, project, and MK8s identity and collect provider version facts."""
 
         try:
-            from nebius.api.nebius.iam.v1 import GetProjectRequest, ProjectServiceClient
+            from nebius.api.nebius.iam.v2 import GetProjectRequest, ProjectServiceClient
         except Exception:  # pragma: no cover - import guard
             raise RuntimeError(
                 "Nebius IAM SDK bindings are required for Soperator discovery scope validation."

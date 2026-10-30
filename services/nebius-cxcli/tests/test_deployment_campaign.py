@@ -37,10 +37,15 @@ def paths(root):
 def generation(payload, content="initial"):
     return DeploymentGeneration(
         {
-            "schema": "nebius-cxcli-generated/v2",
-            "execution": {"backend": {}},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
             "runtime_config": payload,
-            "deploy": {"targets": []},
         },
         {"infra/main.tf": base64.b64encode(content.encode()).decode()},
     )
@@ -116,7 +121,7 @@ def test_stage_publication_exports_only_source_rows_from_runtime(tmp_path):
     )
     hooks._publish("retire", config_store=_Store(), assert_authority=lambda: None)
     written = yaml.safe_load(hooks.executor.paths.config_path.read_text())
-    expected = {"version": "v1", "deploy": {}, **admitted.stage.config}
+    expected = {"version": "v2", **admitted.stage.config}
     assert written == expected
     assert "target_ref" not in written["apps"]["charts"][0]
     assert set(written["apps"]) == {"charts"}

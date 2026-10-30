@@ -76,6 +76,14 @@ def test_ssh_trust_options_are_strict_and_project_local(tmp_path: Path) -> None:
         f"UserKnownHostsFile={known_hosts.resolve()}",
         "-o",
         "GlobalKnownHostsFile=/dev/null",
+        "-o",
+        "KnownHostsCommand=none",
+        "-o",
+        "VerifyHostKeyDNS=no",
+        "-o",
+        "UpdateHostKeys=no",
+        "-o",
+        "ControlPath=none",
     ]
     assert "accept-new" not in " ".join(options)
 

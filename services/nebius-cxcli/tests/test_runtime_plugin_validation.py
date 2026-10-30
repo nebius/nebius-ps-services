@@ -682,6 +682,50 @@ def test_runtime_validation_plugins_allow_mk8s_autoscaling_node_groups(
     )
 
 
+@pytest.mark.parametrize(
+    "placement",
+    [
+        {"node_labels": {"scheduling.example.com/pool": 7}},
+        {"node_labels": {"kubernetes.io/role": "core"}},
+        {"taints": [{"key": "pool", "value": "task", "effect": "NoSchedule"}]},
+    ],
+)
+def test_runtime_validation_rejects_invalid_authored_node_placement(monkeypatch, placement):
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "tasks": {
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "node_count": 4,
+                                **placement,
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    }
+    with pytest.raises(ValueError, match=r"node_groups\.tasks\.(node_labels|taints)"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
 def test_runtime_validation_plugins_reject_mk8s_node_count_with_autoscaling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1020,21 +1064,6 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_deployment_testing_o
     )
     payload = {
         "__shared_admin_ssh_user_name__": "ubuntu",
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "mk8s",
-                    "deployment_testing": {
-                        "mk8s_gpu": {
-                            "gpu_visibility": {
-                                "enabled": True,
-                                "max_nodes": 0,
-                            }
-                        }
-                    },
-                }
-            ]
-        },
         "infra": {
             "mk8s": {
                 "node_groups": {
@@ -1044,15 +1073,30 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_deployment_testing_o
                         "platform": "gpu-h100-sxm",
                         "preset": "8gpu-128vcpu-1600gb",
                     }
-                },
-            }
+                }
+            },
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {},
+                    "deployment_testing": {
+                        "mk8s_gpu": {"gpu_visibility": {"enabled": True, "max_nodes": 0}}
+                    },
+                }
+            ],
         },
+        "apps": {"charts": []},
+        "version": "v2",
     }
+
+    payload["infra"]["components"][0]["inputs"] = payload["infra"]["mk8s"]
 
     with pytest.raises(
         ValueError,
         match=(
-            "deploy\\.targets\\[0\\]\\.deployment_testing\\.mk8s_gpu"
+            "cluster settings\\[0\\]\\.deployment_testing\\.mk8s_gpu"
             "\\.gpu_visibility\\.max_nodes must be > 0"
         ),
     ):

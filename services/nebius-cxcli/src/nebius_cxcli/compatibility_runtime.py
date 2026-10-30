@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .compatibility_matrix import assess, digest, load_matrix, require_admitted, validate_selection
 from .compatibility_schema import kubernetes_minor, required_adapters
 from .component_instances import component_instance_id
@@ -29,8 +30,8 @@ def selected_inventory(config: Any, *, matrix: Mapping | None = None) -> list[di
         for row in infra
         if row.get("enabled") and row.get("id") == "mk8s"
     }
-    for target in payload.get("deploy", {}).get("targets", []):
-        version = target.get("soperator_desired_platform", {}).get("kubernetes_version")
+    for target in cluster_rows(payload):
+        version = target.get("desired_platform", {}).get("kubernetes_version")
         if version:
             kubernetes[str(target.get("instance_id") or target.get("id"))] = str(version)
     inventory: list[dict[str, Any]] = []

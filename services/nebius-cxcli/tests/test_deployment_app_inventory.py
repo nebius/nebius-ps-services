@@ -64,7 +64,7 @@ def test_selected_target_with_no_apps_still_admits_live_inventory(tmp_path, monk
     from nebius_cxcli.deployment_target import deploy_application_target
     from test_deployment_campaign import paths
 
-    config = {"infra": {"components": []}, "apps": {"charts": []}}
+    config = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     target = {"target_ref": "cluster", "ownership": "external"}
     env = {
         cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "cluster-id",

@@ -72,6 +72,65 @@
         "Preserves Terraform, Helm and cxcli ownership instead of recommending bypass through SDK writes.",
         "Does not reopen fixed AI/application decisions, request authentication setup or perform live discovery or mutation."
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use $nebius for documentation-only advice on VM disk prerequisites. The nebiusDocs search and retrieval tools are available. Find current public documentation and cite the relevant pages; do not inspect any live project.",
+      "expected_output": "MCP-first public documentation research with source citations and no setup or cloud effects.",
+      "files": [],
+      "assertions": [
+        "Uses available nebiusDocs search and retrieves relevant discovered pages when context is needed.",
+        "Cites relevant public documentation pages and separates documented support from unknown project state.",
+        "Does not install MCP, request tenant credentials, run cloud inspection or submit feedback."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use $nebius to check documented Kubernetes storage integration constraints. nebiusDocs is listed in configuration but its tools are unavailable in this session. Tavily Search and Extract are available. No live project or agent configuration changes are authorized.",
+      "expected_output": "Tavily official-documentation fallback with citations and explicit gaps.",
+      "files": [],
+      "assertions": [
+        "Uses Tavily Search restricted to docs.nebius.com or Extract for known official URLs and states the vendor-MCP fallback; does not treat configuration as tool availability.",
+        "Cites supporting pages and marks unresolved claims rather than treating absent results as feature absence.",
+        "Does not configure MCP, request credentials, submit feedback or infer quota/capacity from documentation."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use $nebius for a small public documentation question about VM disks. Both nebiusDocs and Tavily tools are unavailable in this session. Built-in web retrieval is available. No setup or authentication changes are authorized.",
+      "expected_output": "Disclosed built-in official-documentation fallback without setup or invented claims.",
+      "files": [],
+      "assertions": [
+        "Discloses missing vendor and Tavily tools and uses built-in retrieval or search against docs.nebius.com.",
+        "Cites original official pages and labels unresolved claims.",
+        "Does not install MCP, repair authentication, use Context7 or send confidential information to public search."
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Explain how to collect Nebius tenant GPU capacity advice using the bundled Python SDK inspector. Two on-demand presets report 4 and 2 VMs on one fabric, while reserved advice is stale zero. No live access is authorized.",
+      "expected_output": "Explicit tenant SDK collection with non-additive timestamped advice and unknown stale values.",
+      "files": [],
+      "assertions": [
+        "Uses inspect_capacity.py with an explicit tenant and omitted region filter for all regions, without CLI subprocess or raw HTTP cloud adapters.",
+        "Retains separate preset/allocation rows and does not report six available VMs.",
+        "Treats stale reserved zero as unresolved, not measured zero.",
+        "Keeps CPU physical capacity and project eligibility unverified and performs no cloud calls."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "A Kubernetes workload on Nebius must read one SecretStash secret without a private IAM key. Use the Python SDK; explain whether ESO is necessary and how token and secret rotation differ. No cloud mutations are authorized.",
+      "expected_output": "SDK-first exact OIDC trust and least privilege workflow with renewable projected token and direct payload access, distinguishing optional ESO.",
+      "files": [],
+      "assertions": [
+        "Binds exact issuer, Kubernetes subject and IAM service account; group membership and resource permit are separate.",
+        "Uses sts.nebius.com audience and a rotating projected path without subPath or copied token.",
+        "Uses FederatedCredentialsBearer, SDK and set_channel, with no CLI or auth fallback.",
+        "Requires mysterybox.payload-viewer on the exact secret, reads credential fields from one version and does not print payloads.",
+        "Distinguishes IAM token renewal from application credential refresh; ESO is optional and requires version 2.10.0 or newer for native workload identity.",
+        "Does not execute mutations or claim live qualification."
+      ]
     }
   ]
 }

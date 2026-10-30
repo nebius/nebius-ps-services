@@ -117,7 +117,7 @@ def observe_application_targets(
                 }
             observations[ref] = observation
             if resolved:
-                for item in manifest.get("deploy", {}).get("targets", []):
+                for item in manifest.get("execution", {}).get("targets", []):
                     if item["target_ref"] == ref and resolved.get("cluster_id"):
                         item["cluster_id"] = resolved["cluster_id"]
     return observations

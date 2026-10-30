@@ -38,6 +38,14 @@ beyond `-h, --help`; bundled inspection commands have their own help.
 
 ## Required Reads
 
+For Nebius documentation lookup, use `nebiusDocs` search and retrieval tools
+already available in the current session first. If absent, failing or
+insufficient, use Tavily Search/Extract against official <https://docs.nebius.com>
+pages. If Tavily cannot help, disclose the limitation and use official-web
+search/retrieval. Preserve higher-priority host rules and cite relevant pages. Read `references/documentation.md` for tool selection, setup
+ownership and evidence boundaries. Public documentation requires no tenant
+credentials and does not establish live project state.
+
 Read only the matching category and conditional references before decisions:
 
 | Task | Read |
@@ -58,6 +66,7 @@ Read only the matching category and conditional references before decisions:
 | Soperator, Serverless AI or MLflow integration | `references/ai-service-integration.md` |
 | Privileged host inspection, proof pods or synthetic signals | `references/active-diagnostics.md` |
 | Discover service coverage, API versions and maturity | `references/service-catalog.md` |
+| Kubernetes workloads accessing SecretStash or other IAM APIs | `references/kubernetes-workload-identity.md` |
 | Adapt project patterns into reusable automation | `references/adoption-patterns.md` |
 
 ## Design-Only Consultation
@@ -102,7 +111,9 @@ implicit requirement or authority for mutations, auth setup or diagnostics.
    that script/operation and applicable environment rules allow it.
 5. For authorized read-only discovery, run the matching `scripts/inspect_*.py`
    command. Treat exit 1 or `complete: false` as incomplete evidence. Do not
-   infer absence, sufficiency or permission from missing data.
+   infer absence, sufficiency or permission from missing data. Tenant GPU advice
+   uses `scripts/inspect_capacity.py`; read quota/capacity guidance for its
+   non-additive counts, data states and measurement timestamps.
 6. For authorized writes, submit once, retain operation/resource IDs, wait
    for terminal success and independently verify identity, desired settings
    and readiness. Reconcile ambiguous outcomes before another write; do not

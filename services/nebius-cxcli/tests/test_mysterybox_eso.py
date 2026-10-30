@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
 import yaml
 
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.components import component_entries, soperator_install_entry
 from nebius_cxcli.config_loader import validate_config
 from nebius_cxcli.config_template import starter_config_yaml
@@ -14,6 +17,7 @@ from nebius_cxcli.mysterybox_eso import (
     mysterybox_eso_dependency_issues,
     mysterybox_eso_extra_objects_for_target,
     mysterybox_eso_manages_kubernetes_secret,
+    mysterybox_eso_selected_target_refs,
     mysterybox_eso_terraform_output_specs,
     mysterybox_eso_validation_specs,
 )
@@ -23,7 +27,7 @@ def _starter_payload(
     selected_infra: set[str] | None = None,
     selected_apps: set[str] | None = None,
 ) -> dict:
-    requested_apps = selected_apps or set()
+    requested_apps = {"external-secrets"} if selected_apps is None else selected_apps
     app_entries = component_entries("apps")
     if "soperator" in requested_apps:
         app_entries = (
@@ -90,7 +94,7 @@ def _enable_mysterybox_eso(
     allow_all_namespaces: bool = True,
     sync_namespaces: list[str] | None = None,
 ) -> None:
-    payload["deploy"]["targets"][0]["secrets"] = {
+    cluster_rows(payload)[0]["secrets"] = {
         "mysterybox": {
             "enabled": True,
             "allow_all_namespaces": allow_all_namespaces,
@@ -122,21 +126,89 @@ def _extra_objects(config: dict, component_output_values: dict | None = None) ->
     )
 
 
-def test_mysterybox_backend_with_mk8s_auto_enables_external_secrets_controller() -> None:
-    payload = _starter_payload(selected_infra={"mk8s", "mysterybox"})
+@pytest.mark.parametrize("selected_eso", [False, True])
+@pytest.mark.parametrize("sync_enabled", [None, False, True])
+def test_sync_selection_before_first_secret_is_read_only(selected_eso, sync_enabled) -> None:
+    payload = _starter_payload(selected_apps={"external-secrets"} if selected_eso else set())
+    _mysterybox_component(payload)["inputs"] = {}
+    target = cluster_rows(payload)[0]
+    target.pop("secrets", None)
+    if sync_enabled is not None:
+        target["secrets"] = {"mysterybox": {"enabled": sync_enabled}}
+    original = copy.deepcopy(payload)
+
+    assert mysterybox_eso_selected_target_refs(payload) == (
+        ("mk8s",) if selected_eso and sync_enabled is not False else ()
+    )
+    assert payload == original
+
+
+def test_sync_selection_requires_eso_on_the_same_active_target() -> None:
+    payload = _starter_payload()
+    target = cluster_rows(payload)[0]
+    target["secrets"] = {"mysterybox": {"enabled": False}}
+    other = copy.deepcopy(target)
+    other.update(instance_id="other", secrets={"mysterybox": {"enabled": True}})
+    payload["infra"]["components"].append(other)
+    assert mysterybox_eso_selected_target_refs(payload) == ()
+    chart = copy.deepcopy(_external_secrets_app(payload))
+    chart["instance_id"] = "other"
+    payload["apps"]["charts"].append(chart)
+    assert mysterybox_eso_selected_target_refs(payload) == ("other",)
+    other["enabled"] = False
+    assert mysterybox_eso_selected_target_refs(payload) == ()
+    other["enabled"] = True
+    chart["enabled"] = False
+    assert mysterybox_eso_selected_target_refs(payload) == ()
+
+
+def test_mysterybox_backend_does_not_select_external_secrets() -> None:
+    payload = _starter_payload(selected_apps=set())
     _set_mysterybox_inputs(payload)
-
     config = validate_config(payload)
-    external_secret_rows = [
-        item for item in config["apps"]["charts"] if item["id"] == "external-secrets"
-    ]
-    external_secrets = next(item for item in external_secret_rows if item["enabled"])
+    assert not any(
+        row["id"] == "external-secrets" and row["enabled"] for row in config["apps"]["charts"]
+    )
+    assert not mysterybox_eso_app_target_refs(config)
 
-    assert len(external_secret_rows) == 1
-    assert external_secrets["instance_id"] == "mk8s"
-    assert external_secrets["target_ref"] == "mk8s"
-    assert "target_ref" not in payload["apps"]["charts"][0]
-    assert "extraObjects" not in external_secrets["values"]
+
+def test_user_selected_eso_automatically_configures_application_secret_sync() -> None:
+    payload = _starter_payload(selected_apps={"external-secrets"})
+    _set_mysterybox_inputs(payload)
+    config = validate_config(payload)
+    settings = cluster_rows(config)[0]["secrets"]["mysterybox"]
+    assert settings["enabled"] is True
+    assert settings["sync_namespaces"] == ["default"]
+    assert {obj["kind"] for obj in _extra_objects(config)} == {
+        "ClusterSecretStore",
+        "ExternalSecret",
+    }
+    assert validate_config(payload) == config
+
+
+def test_user_sync_opt_out_is_preserved() -> None:
+    payload = _starter_payload(selected_apps={"external-secrets"})
+    _set_mysterybox_inputs(payload)
+    cluster_rows(payload)[0]["secrets"] = {"mysterybox": {"enabled": False}}
+    config = validate_config(payload)
+    assert cluster_rows(config)[0]["secrets"]["mysterybox"]["enabled"] is False
+    assert not _extra_objects(config)
+
+
+def test_explicit_sync_requires_user_selected_eso() -> None:
+    payload = _starter_payload(selected_apps=set())
+    _set_mysterybox_inputs(payload)
+    _enable_mysterybox_eso(payload)
+    with pytest.raises(ValueError, match="user to select apps:external-secrets"):
+        validate_config(payload)
+
+
+def test_selected_eso_is_independent_of_mysterybox() -> None:
+    config = validate_config(
+        _starter_payload(selected_infra={"mk8s"}, selected_apps={"external-secrets"})
+    )
+    assert _external_secrets_app(config)["enabled"]
+    assert not mysterybox_eso_app_target_refs(config)
 
 
 def test_mysterybox_eso_source_config_strips_managed_extra_objects() -> None:
@@ -183,7 +255,7 @@ def test_native_mysterybox_eso_defaults_to_primary_version_key_mapping() -> None
     _enable_mysterybox_eso(payload)
 
     config = validate_config(payload)
-    mysterybox_sync = payload["deploy"]["targets"][0]["secrets"]["mysterybox"]
+    mysterybox_sync = cluster_rows(payload)[0]["secrets"]["mysterybox"]
 
     assert mysterybox_sync["sync_namespaces"] == ["default"]
     assert "external_secrets" not in mysterybox_sync
@@ -302,7 +374,9 @@ def test_native_mysterybox_eso_reports_managed_kubernetes_secret_key() -> None:
 
 
 def test_soperator_notifier_existing_mysterybox_secret_uses_primary_version() -> None:
-    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator"})
+    payload = _starter_payload(
+        selected_infra={"mk8s"}, selected_apps={"soperator", "external-secrets"}
+    )
     soperator = next(item for item in payload["apps"]["charts"] if item["id"] == "soperator")
     soperator["values"] = {
         "soperator-notifier": {
@@ -322,7 +396,7 @@ def test_soperator_notifier_existing_mysterybox_secret_uses_primary_version() ->
 
     config = validate_config(payload)
 
-    mysterybox_sync = config["deploy"]["targets"][0]["secrets"]["mysterybox"]
+    mysterybox_sync = cluster_rows(config)[0]["secrets"]["mysterybox"]
     assert mysterybox_sync["enabled"] is True
     assert "soperator" in mysterybox_sync["sync_namespaces"]
     assert _external_secrets_app(config)["enabled"] is True
@@ -369,12 +443,12 @@ def test_soperator_notifier_mysterybox_source_requires_external_secrets_target()
         app_entries=component_entries("apps"),
     ) == [
         "apps:soperator notifier webhookSource=mysterybox on target "
-        "'mk8s' requires apps:external-secrets to be enabled for the same target"
+        "'mk8s' requires the user to select apps:external-secrets for the same target"
     ]
 
 
 def test_soperator_notifier_direct_secret_renders_when_native_secret_name_collides() -> None:
-    payload = _starter_payload(selected_apps={"soperator"})
+    payload = _starter_payload(selected_apps={"soperator", "external-secrets"})
     _set_mysterybox_inputs(
         payload,
         secrets=[
@@ -426,7 +500,7 @@ def test_soperator_notifier_direct_secret_renders_when_native_secret_name_collid
 
 
 def test_soperator_notifier_direct_secret_replaces_native_secret_key_collision() -> None:
-    payload = _starter_payload(selected_apps={"soperator"})
+    payload = _starter_payload(selected_apps={"soperator", "external-secrets"})
     _set_mysterybox_inputs(
         payload,
         secrets=[
@@ -631,7 +705,7 @@ def test_native_mysterybox_eso_accepts_refresh_interval_units(
         ],
     )
     _enable_mysterybox_eso(payload)
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["refresh_interval"] = refresh_interval
+    cluster_rows(payload)[0]["secrets"]["mysterybox"]["refresh_interval"] = refresh_interval
 
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
@@ -681,7 +755,7 @@ def test_native_mysterybox_eso_api_domains_follow_target_config() -> None:
     payload = _starter_payload()
     _set_mysterybox_inputs(payload)
     _enable_mysterybox_eso(payload)
-    mysterybox = payload["deploy"]["targets"][0]["secrets"]["mysterybox"]
+    mysterybox = cluster_rows(payload)[0]["secrets"]["mysterybox"]
     mysterybox["api_domain"] = "https://api.eu-north1.nebius.cloud:443/"
 
     config = validate_config(payload)
@@ -700,7 +774,7 @@ def test_native_mysterybox_eso_rejects_old_namespace_and_raw_sync_fields(
     payload = _starter_payload()
     _set_mysterybox_inputs(payload)
     _enable_mysterybox_eso(payload)
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"][stale_field] = []
+    cluster_rows(payload)[0]["secrets"]["mysterybox"][stale_field] = []
 
     with pytest.raises(ValueError, match=f"unsupported field\\(s\\): {stale_field}"):
         validate_config(payload)
@@ -710,7 +784,7 @@ def test_native_mysterybox_eso_requires_sync_namespaces() -> None:
     payload = _starter_payload()
     _set_mysterybox_inputs(payload)
     _enable_mysterybox_eso(payload)
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"].pop("sync_namespaces")
+    cluster_rows(payload)[0]["secrets"]["mysterybox"].pop("sync_namespaces")
 
     with pytest.raises(ValueError, match="sync_namespaces must be a non-empty list"):
         validate_config(payload)
@@ -743,7 +817,7 @@ def test_native_mysterybox_eso_rejects_invalid_refresh_interval(
     payload = _starter_payload()
     _set_mysterybox_inputs(payload)
     _enable_mysterybox_eso(payload)
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["refresh_interval"] = refresh_interval
+    cluster_rows(payload)[0]["secrets"]["mysterybox"]["refresh_interval"] = refresh_interval
 
     with pytest.raises(ValueError, match="refresh_interval must use s, m, or h units"):
         validate_config(payload)
@@ -873,3 +947,31 @@ def test_native_mysterybox_eso_validation_specs_are_required_and_target_scoped()
             "report_file": "mysterybox-eso-connectivity-report-mk8s.json",
         }
     ]
+
+
+@pytest.mark.parametrize("ordinary", [False, True])
+def test_metadata_only_wireguard_secrets_never_enter_eso(ordinary):
+    payload = _starter_payload(selected_apps={"external-secrets"})
+    _set_mysterybox_inputs(payload)
+    metadata = {
+        "id": "mysterybox",
+        "instance_id": "vpn-access",
+        "enabled": True,
+        "inputs": {
+            "parent_id": "project-456",
+            "create_initial_versions": False,
+            "secrets": [{"name": "vpn-access-" + role} for role in ("login", "host", "connection")],
+        },
+    }
+    if not ordinary:
+        _mysterybox_component(payload)["enabled"] = False
+    payload["infra"]["components"].append(metadata)
+    config = validate_config(payload)
+    objects = _extra_objects(config)
+    external = [obj for obj in objects if obj["kind"] == "ExternalSecret"]
+    assert bool(external) is ordinary
+    assert "vpn-access" not in yaml.safe_dump(objects)
+    assert all(
+        spec["instance_id"] != "vpn-access"
+        for spec in mysterybox_eso_terraform_output_specs(config)
+    )

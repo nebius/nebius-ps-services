@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .app_mutation import app_mutation_scope, current_app_mutation_authority
+from .cluster_config import cluster_rows
 from .grafana_api import GrafanaClient, GrafanaError, basic_auth
 from .grafana_dashboards import content_digest, read_dashboard
 from .grafana_import import execute_imports, prepare_imports, require_complete
@@ -266,11 +267,7 @@ def cluster_session(
         ):
             raise GrafanaError("Rendered Grafana release belongs to a different project or target")
         selected = next(
-            (
-                dict(item)
-                for item in payload.get("deploy", {}).get("targets", [])
-                if item.get("instance_id") == target
-            ),
+            (dict(item) for item in cluster_rows(payload) if item.get("instance_id") == target),
             None,
         )
         if selected is None:

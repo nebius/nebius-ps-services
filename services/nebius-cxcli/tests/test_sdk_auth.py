@@ -658,6 +658,7 @@ def test_cli_token_fallback_refreshes_the_active_profile_interactively(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    monkeypatch.delenv("NEBIUS_PROFILE", raising=False)
     monkeypatch.setattr(sdk_auth, "_interactive_cli_auth_available", lambda: True)
     calls: list[tuple[list[str], int]] = []
 

@@ -124,8 +124,13 @@ Rules:
 
 - Prefer official docs, API references, release notes, and official GitHub
   repos from the vendor.
-- Use vendor-specific MCP/doc tools when available, such as OpenAI docs,
-  Microsoft Learn, Context7, Terraform Registry, or provider docs.
+- Use relevant vendor-specific documentation MCP tools already available in
+  the current session, such as OpenAI docs, Microsoft Learn or Terraform Registry.
+  A configured endpoint alone does not prove availability. If tools are absent,
+  fail or leave a material gap, use Tavily Search/Extract against official
+  version-appropriate sources. If Tavily cannot help, disclose the limitation
+  and use official-web search/retrieval. Preserve higher-priority host rules;
+  never install an integration or repair auth just to answer a lookup.
 - Use web search only when a suitable doc connector is unavailable or
   insufficient, and prefer official domains.
 - Mark behavior as unverified when official docs do not confirm it.

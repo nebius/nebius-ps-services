@@ -56,7 +56,9 @@ _PROVIDER_VAR_AUTH_PUBLIC_KEY_ID = "nebius_auth_public_key_id"
 _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
 _NO_VARIABLE_DEFAULT = object()
-_RUNTIME_ONLY_MODULE_ARGUMENTS = frozenset({"payload_values"})
+_RUNTIME_ONLY_MODULE_ARGUMENTS = frozenset(
+    {"payload_values", "ssh_host_keys", "access_bootstrap", "bootstrap_user_data"}
+)
 _MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS = frozenset({"eso_version_policy", "kubernetes_secret_name"})
 
 
@@ -96,6 +98,7 @@ class RenderedModuleSource:
     instance_id: str
     module_name: str
     source: str
+    root: str = "infra"
 
 
 def _declared_wizard_input_root_keys(entry: ComponentEntry) -> set[str]:
@@ -757,6 +760,10 @@ def _build_module_plans(
         inputs = resolved_item.get("inputs", {})
         if not isinstance(inputs, dict):
             inputs = {}
+        if component_id == "nat-gateway":
+            from .nat_gateway import nat_module_inputs
+
+            inputs = nat_module_inputs(resolved_item)
         source = _effective_component_source(row=resolved_item, entry=entry)
         version = _effective_component_version(row=resolved_item, entry=entry) or None
 
@@ -968,6 +975,22 @@ def _build_module_plans(
                 ),
             )
 
+        if component_id == "vpc":
+            from .nat_gateway import ROUTE_OVERRIDES, nat_rows, target_key
+
+            for nat in nat_rows(payload):
+                for target in nat["routing"]["targets"]:
+                    if target["owner"] != "terraform" or target["vpc_instance"] != instance_id:
+                        continue
+                    key = target["subnet_key"]
+                    # Concrete route IDs are supplied by the staged deployment owner.
+                    # A NAT output reference here creates a cycle when NAT reuses a VPC subnet.
+                    fallback = _hcl_value(
+                        module_inputs["subnets"][key].get("route_table_id") or None
+                    )
+                    expression = f"lookup(var.{ROUTE_OVERRIDES}, {json.dumps(target_key(target))}, {fallback})"
+                    module_inputs["subnets"][key]["route_table_id"] = _HclExpression(expression)
+
         if component_id == "vm" and cxcli_sfs_attachments is not None:
             if "filesystems" in module_inputs:
                 raise ValueError(
@@ -1037,8 +1060,10 @@ def _build_module_plans(
             )
             type_expr = _variable_type_expr(
                 type_hint=type_hints.get(argument_name),
-                value={},
+                value=None if argument_name == "bootstrap_user_data" else {},
             )
+            if argument_name == "bootstrap_user_data":
+                type_expr = "string"
             bindings.append(
                 _VariableBinding(
                     argument_name=argument_name,
@@ -1046,8 +1071,11 @@ def _build_module_plans(
                     type_expr=type_expr,
                     value=None,
                     description=f"{component_label} module runtime-only argument '{argument_name}'",
-                    default={},
-                    sensitive=True,
+                    default=None if argument_name == "bootstrap_user_data" else {},
+                    sensitive=(
+                        argument_name not in {"access_bootstrap", "bootstrap_user_data"}
+                        or component_id == "tailscale-gw"
+                    ),
                     include_in_tfvars=False,
                 )
             )
@@ -1187,14 +1215,29 @@ def rendered_module_sources(
     *,
     source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> tuple[RenderedModuleSource, ...]:
-    return tuple(
+    from .wireguard_dependencies import access_dependencies
+
+    access_instances = {component_instance_id(row) for row in access_dependencies(config).values()}
+    sources = tuple(
         RenderedModuleSource(
             component_id=plan.component_id,
             instance_id=plan.instance_id,
             module_name=plan.module_name,
             source=plan.module_source,
+            root="infra-access" if plan.instance_id in access_instances else "infra",
         )
         for plan in _build_module_plans(config, source_profile=source_profile)
+    )
+    return sources + tuple(
+        RenderedModuleSource(
+            component_id="wireguard-access",
+            instance_id=source.instance_id,
+            module_name=source.module_name + "_iam",
+            source=_access_iam_source(source.source),
+            root="infra-access",
+        )
+        for source in sources
+        if source.root == "infra-access"
     )
 
 
@@ -1374,6 +1417,21 @@ def render_terraform_artifacts(
 
     backend_settings = backend_settings_from_config(config)
     module_plans = _build_module_plans(config, source_profile=source_profile)
+    from .wireguard_dependencies import access_dependencies
+
+    dependencies = access_dependencies(config)
+    access_instances = {component_instance_id(row) for row in dependencies.values()}
+    access_plans = tuple(plan for plan in module_plans if plan.instance_id in access_instances)
+    module_plans = tuple(plan for plan in module_plans if plan.instance_id not in access_instances)
+    if access_plans:
+        written.extend(_render_access_artifacts(config, paths, access_plans, backend_settings))
+    for plan in module_plans:
+        if any(
+            f"module.{access.module_name}." in _render_module_block(plan) for access in access_plans
+        ):
+            raise ValueError(
+                "Access-root outputs are lifecycle-owned; cross-root Terraform bindings are unsupported"
+            )
     module_blocks = tuple(_render_module_block(plan) for plan in module_plans)
     resource_blocks = _render_soperator_observability_iam_blocks(config, module_plans)
     tfvars_payload = {
@@ -1394,7 +1452,27 @@ def render_terraform_artifacts(
     written.append(providers_tf_path)
 
     variables_tf_path = paths.infra_dir / "variables.tf"
-    _write_text(variables_tf_path, _render_variables_tf(module_plans))
+    from .nat_gateway import ROUTE_OVERRIDES, nat_rows
+
+    routing_variables = ""
+    if nat_rows(to_plain_data(config)):
+        routing_variables = f'\nvariable "{ROUTE_OVERRIDES}" {{\n  type = map(string)\n  default = {{}}\n  description = "Internal staged NAT attachment preimages; managed by deploy."\n}}\n'
+        routing_variables += """
+variable "cxcli_nat_execution_authorized" {
+  type = bool
+  default = false
+  description = "Set only by the cxcli NAT lifecycle after acquiring shared authority."
+}
+resource "terraform_data" "cxcli_nat_authority" {
+  lifecycle {
+    precondition {
+      condition = var.cxcli_nat_execution_authorized
+      error_message = "Use nebius-cxcli deploy (or deploy --dry-run) for NAT readiness, quota and routing admission."
+    }
+  }
+}
+"""
+    _write_text(variables_tf_path, _render_variables_tf(module_plans) + routing_variables)
     written.append(variables_tf_path)
 
     main_tf_path = paths.infra_dir / "main.tf"
@@ -1416,3 +1494,65 @@ def render_terraform_artifacts(
     written.append(tfvars_path)
 
     return written
+
+
+def _access_iam_source(module_source: str) -> str:
+    source, separator, query = module_source.partition("?")
+    if not source.rstrip("/").endswith("/mysterybox"):
+        raise ValueError("WireGuard access requires the bundled MysteryBox module package")
+    return (
+        source.rstrip("/").removesuffix("/mysterybox")
+        + "/wireguard-access"
+        + (separator + query if separator else "")
+    )
+
+
+def _render_access_artifacts(
+    config: Any, paths: ProjectPaths, plans: tuple[_ModulePlan, ...], backend: Any
+) -> list[Path]:
+    from .terraform_roots import access_backend
+    from .wireguard_dependencies import access_owner_rows, dependency_instance, secret_names
+
+    blocks = [_render_module_block(plan) for plan in plans]
+    outputs = [_render_outputs_tf(plans)]
+    lookup = {plan.instance_id: plan for plan in plans}
+    for owner in access_owner_rows(config):
+        instance = dependency_instance(owner)
+        plan = lookup[instance]
+        source = _access_iam_source(plan.module_source)
+        name = plan.module_name + "_iam"
+        args = [
+            f'module "{name}" {{',
+            f"  source = {_hcl_literal_string(source)}",
+            f"  parent_id = var.{_PROVIDER_VAR_PARENT_ID}",
+            f"  name = {_hcl_literal_string(instance)}",
+            f"  admin_group_id = {_hcl_literal_string(owner['access']['admin_group_id'])}",
+            "  secret_ids = {",
+        ]
+        args.extend(
+            f"    {role} = module.{plan.module_name}.secret_ids[{_hcl_literal_string(secret)}]"
+            for role, secret in secret_names(instance).items()
+        )
+        args.extend(["  }", "}"])
+        blocks.append("\n".join(args))
+        output = component_output_root_name(component_instance_id(owner), "access_resources")
+        outputs.append(
+            f'output "{output}" {{\n  description = "Public WireGuard access resource identities"\n  value = module.{name}.access_resources\n}}\n'
+        )
+    files = {
+        "backend.tf": render_backend_tf(access_backend(backend)),
+        "versions.tf": _terraform_versions_block().replace(">= 1.10.0", ">= 1.11.0"),
+        "providers.tf": _terraform_providers_block(),
+        "variables.tf": _render_variables_tf(plans),
+        "main.tf": "\n\n".join(blocks) + "\n",
+        "outputs.tf": "\n".join(outputs),
+        "terraform.auto.tfvars.json": json.dumps(
+            {**_provider_static_tfvars(config), **_render_tfvars_json(plans)},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    }
+    for name, content in files.items():
+        _write_text(paths.access_infra_dir / name, content)
+    return [paths.access_infra_dir / name for name in files]

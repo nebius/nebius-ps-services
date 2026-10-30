@@ -550,12 +550,22 @@ def run_observability_validations(
     written_reports: list[Path] = []
     total = len(validations)
     for index, spec in enumerate(validations, start=1):
+        _report_path(spec, reports_dir=reports_dir).unlink(missing_ok=True)
         kind = _as_text(spec.get("kind"))
         name = _as_text(spec.get("name")) or kind or f"validation-{index}"
         if emit:
             emit(f"Starting validation {index}/{total}: {name}.")
         try:
             if kind == OBSERVABILITY_INGESTION_VALIDATION_KIND:
+                if spec.get("e2e"):
+                    from .observability_e2e import run_validation
+
+                    written_reports.append(
+                        run_validation(
+                            spec, reports_dir=reports_dir, extra_env=extra_env, emit=emit
+                        )
+                    )
+                    continue
                 written_reports.append(
                     _run_observability_ingestion_validation(
                         spec,
@@ -564,6 +574,8 @@ def run_observability_validations(
                         emit=emit,
                     )
                 )
+            else:
+                raise RuntimeError(f"Unsupported observability validation kind: {kind}")
         except Exception as exc:
             _validation_error_report(spec=spec, reports_dir=reports_dir, error=exc)
             raise

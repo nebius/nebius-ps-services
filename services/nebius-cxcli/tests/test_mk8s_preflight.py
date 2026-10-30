@@ -106,7 +106,7 @@ def _gpu_stack_config(*, stack_preset: str, os_value: str | None = "ubuntu24.04"
     if os_value is not None:
         inputs["node_groups"]["worker"]["os"] = os_value
     return {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -377,7 +377,7 @@ def test_validate_vpc_networking_preflight_rejects_single_pool_conflict(
     )
 
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -441,7 +441,7 @@ def test_validate_vpc_networking_preflight_accepts_string_pool_cidrs(
         _FakeSubnetServiceClient,
     )
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -504,7 +504,7 @@ def test_validate_vpc_networking_preflight_uses_status_cidr_for_prefix_allocated
         _FakeSubnetServiceClient,
     )
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -567,7 +567,7 @@ def test_validate_vpc_networking_preflight_uses_status_cidr_for_explicit_subnet_
         _FakeSubnetServiceClient,
     )
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -630,7 +630,7 @@ def test_validate_vpc_networking_preflight_rejects_malformed_pool_cidr(
         _FakeSubnetServiceClient,
     )
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -699,7 +699,7 @@ def test_validate_mk8s_resource_name_preflight_rejects_existing_gpu_cluster(
     )
 
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -768,7 +768,7 @@ def test_validate_mk8s_resource_name_preflight_skips_state_managed_gpu_cluster(
     )
 
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -847,7 +847,7 @@ def test_validate_mk8s_resource_name_preflight_accepts_nebius_not_found_request_
     )
 
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -911,7 +911,7 @@ def test_validate_mk8s_resource_name_preflight_rejects_untyped_not_found_text(
     )
 
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -990,7 +990,7 @@ def test_validate_vpc_networking_preflight_falls_back_to_client_project_id(
     inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
     inputs["cluster"].pop("parent_id")
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1025,7 +1025,7 @@ def test_validate_vpc_networking_preflight_rejects_vm_subnet_network_mismatch(
         subnet_network_ids={"vpcsubnet-123": "vpcnetwork-other"},
     )
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1068,7 +1068,7 @@ def test_validate_vpc_networking_preflight_rejects_mk8s_node_group_subnet_mismat
     inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
     inputs["node_groups"]["cpu"]["subnet_id"] = "vpcsubnet-node"
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1101,7 +1101,7 @@ def test_validate_vpc_networking_preflight_requires_explicit_network_interface_s
     inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
     inputs["node_groups"]["cpu"]["network_interfaces"] = [{}]
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1134,7 +1134,7 @@ def test_validate_vpc_networking_preflight_rejects_live_network_planned_subnet_m
     inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
     inputs["cluster"].pop("subnet_id")
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1191,7 +1191,7 @@ def test_validate_vpc_networking_preflight_rejects_subnet_without_node_capacity(
     inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
     inputs["node_groups"]["cpu"]["node_count"] = 1000
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1239,7 +1239,7 @@ def test_validate_vpc_networking_preflight_uses_autoscaling_max_for_node_capacit
         "max_node_count": 256,
     }
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1276,7 +1276,7 @@ def test_validate_vpc_networking_preflight_uses_planned_subnet_cidr_for_node_cap
     inputs["cluster"].pop("network_id")
     inputs["cluster"].pop("subnet_id")
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1350,7 +1350,7 @@ def test_validate_vpc_networking_preflight_uses_planned_node_group_subnet_bindin
     inputs["cluster"].pop("network_id")
     inputs["cluster"].pop("subnet_id")
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1431,7 +1431,7 @@ def test_validate_vpc_networking_preflight_uses_planned_node_group_subnet_bindin
 def test_validate_vpc_networking_preflight_rejects_planned_node_group_subnet_mismatch() -> None:
     inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1545,7 +1545,7 @@ def test_validate_mk8s_resource_name_preflight_checks_only_referenced_gpu_cluste
         "infiniband_fabric": "fabric-2",
     }
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1619,7 +1619,7 @@ def test_validate_mk8s_resource_name_preflight_checks_referenced_gpu_cluster_wit
     inputs = _gpu_mk8s_inputs()
     inputs["gpu_clusters"]["workers"].pop("infiniband_fabric")
     config = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "nebius": {
                 "project_id": "project-123",

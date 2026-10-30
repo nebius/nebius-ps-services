@@ -440,6 +440,50 @@ class InstallationTests(unittest.TestCase):
                 self.assertEqual(value["customPreference"], "preserve")
                 self.assertEqual(len(value["hooks"]["Stop"]), 1)
 
+    def test_shared_runtime_reporting_and_restart_across_install_modes(self):
+        modes = {
+            "combined": [],
+            "all-hooks": ["--install-all-hooks"],
+            "one-hook": ["--install-hooks", "commit/assets/hooks"],
+            "no-hooks": [str(ROOT / "worktree")],
+        }
+        for agent in ("codex", "claude"):
+            for mode, args in modes.items():
+                with self.subTest(agent=agent, mode=mode):
+                    base = self.base / f"support-{agent}-{mode}"
+                    home = base / agent
+                    env = {**self.env, "HOME": str(base / "home"),
+                           "CODEX_HOME": str(base / "codex"),
+                           "CLAUDE_CONFIG_DIR": str(base / "claude")}
+                    command = ["--agent", agent, *args]
+                    first = self.install(*command, env=env)
+                    self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                    self.assertNotIn("  - trusted_runtime.py", first.stdout)
+                    self.assertNotIn("  - task_state_permissions.py", first.stdout)
+                    runtime = home / "hooks/trusted_runtime.py"
+                    expected = runtime.read_bytes()
+                    drifted = expected + b"\n# fixture drift\n"
+                    runtime.write_bytes(drifted)
+                    extra = home / "hooks/tests/fixtures/operator.json"
+                    extra.parent.mkdir(parents=True)
+                    extra.write_text('{"keep": true}\n')
+                    repaired = self.install(*command, env=env)
+                    self.assertEqual(repaired.returncode, 0, repaired.stdout + repaired.stderr)
+                    self.assertEqual(runtime.read_bytes(), expected)
+                    self.assertIn("Summary: files updated 1,", repaired.stdout)
+                    self.assertIn(f"Restart {agent}", repaired.stderr)
+                    self.assertEqual(extra.read_text(), '{"keep": true}\n')
+                    backups = home / ".install-hooks-state/backups"
+                    self.assertTrue(any(p.read_bytes() == drifted for p in backups.rglob("*") if p.is_file()))
+                    snapshot = {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()}
+                    rerun = self.install(*command, env=env)
+                    self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
+                    self.assertIn("Summary: files updated 0,", rerun.stdout)
+                    self.assertNotIn(f"Restart {agent}", rerun.stderr)
+                    self.assertNotIn("  - trusted_runtime.py", rerun.stdout)
+                    self.assertNotIn("  - task_state_permissions.py", rerun.stdout)
+                    self.assertEqual(snapshot, {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()})
+
     def test_operator_delegation_policy_survives_reinstall_on_both_hosts(self):
         for agent in ("codex", "claude"):
             with self.subTest(agent=agent):

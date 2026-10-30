@@ -21,6 +21,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-delegation", action="store_true")
     parser.add_argument("--require-implement-state", action="store_true")
     parser.add_argument("--require-mcp", action="append", choices=MCP_NAMES, default=[])
+    parser.add_argument("--require-tavily-bridge", action="store_true",
+                        help="Check selected Tavily bridge wiring, private state and timeouts without authentication.")
     parser.add_argument("--mcp-config", type=Path, help="Exact native application JSON for requested user-scope MCP checks; never printed.")
     args = parser.parse_args(argv)
     try:
@@ -28,7 +30,8 @@ def main(argv: list[str] | None = None) -> int:
                          route=args.hook_route, native_only=args.native_only,
                          trusted=args.require_trusted_local, delegation=args.require_delegation,
                          workspace=args.require_implement_state,
-                         mcp_names=tuple(args.require_mcp), mcp_config=args.mcp_config)
+                         mcp_names=tuple(args.require_mcp), mcp_config=args.mcp_config,
+                         tavily_bridge=args.require_tavily_bridge)
     except (OSError, ValueError):
         print('{"status":"NOT_ALIGNED","reason":"unsafe or invalid target"}')
         return 1

@@ -37,9 +37,11 @@ and GitHub steps.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
 
 Ordinary completion gives PR readiness, merge settlement and post-merge
-verification independent, fixed 10,800-second budgets. Gate changes, repairs and
-reruns retain their deadlines. Release callers persist them in their checkpoint;
-only explicit release resume renews them. Timeout preserves progress and leaves
+verification independent, fixed 86,400-second (24-hour) budgets. Gate changes,
+repairs and reruns retain their deadlines. An explicit user continuation can start
+a new ordinary observation attempt while preserving the original transaction.
+Caller-supplied checkpoint deadlines remain authoritative; release callers retain
+their own phase budgets and explicit resume rules. Timeout preserves progress and leaves
 GitHub work running, with the exact resume command in the completion report.
 
 ## Commit Continuation

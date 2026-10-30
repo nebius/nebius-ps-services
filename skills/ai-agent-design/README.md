@@ -30,6 +30,20 @@ and agents distinct, and reports every class even when it is empty. It also
 treats model autonomy, graph topology, durable execution, and remote deployment
 as independent decisions.
 
+## Production Design Checks
+
+The references cover complete lineage for derived context, mandatory context
+budgets and safe compaction, bounded artifact reads, current authorization on
+cache hits, final model-request enforcement, orchestration/execution credential
+separation, stale-worker fencing, atomic reopen admission, telemetry unknown
+states, and independent runtime evidence.
+
+Apply these checks only where the workload needs the corresponding capability.
+They do not mandate new services, caches, memory, or workflow infrastructure.
+Public primary sources support the underlying principles; stronger safeguards
+are explicitly identified as design rules requiring system-specific proof.
+No private project contracts or deployment values are needed to use the skill.
+
 ## Boundaries
 
 - `ai-agent-design` owns agent patterns, policies, contracts, and subsystem
@@ -53,16 +67,19 @@ as independent decisions.
   and single-/multi-agent pattern selection.
 - `references/runtime-architecture-and-sessions.md`: trusted control,
   execution, and durable-state separation; provider-neutral interfaces;
-  sessions; bounded loops; and operator controls.
+  final request enforcement; sessions; bounded loops; and operator controls.
 - `references/contracts-context-and-memory.md`: task, agent, context,
-  provenance, and memory contracts.
+  provenance, derivation lineage, budgets, artifact access, cache eligibility,
+  and memory contracts.
 - `references/tools-authority-and-security.md`: tools, action risk, approvals,
   MCP boundaries, and layered security.
 - `references/durability-failures-and-effects.md`: state, concurrency,
-  idempotency, retries, compensation, and reconciliation.
+  idempotency, fencing, atomic successor admission, retries, compensation,
+  and reconciliation.
 - `references/evaluation-observability-and-governance.md`: evaluation, traces,
   independent outcome verification, privacy, release identity, rollout,
-  incidents, and readiness.
+  telemetry semantics, capacity accounting, trial integrity, incidents,
+  and readiness.
 - `evals/trigger-prompts.csv`: canonical routing cases.
 - `evals/process-cases.md`: workflow and manual runtime assertions.
 - `evals/evals.json`: representative output-quality cases.

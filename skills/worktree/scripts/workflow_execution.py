@@ -646,19 +646,35 @@ def normalized_repo_path(value: str) -> str:
     return str(pure)
 
 
-def _field(section: str, label: str, task_id: str) -> str:
-    match = re.search(rf"(?m)^- {re.escape(label)}:\s*(.+?)\s*$", section)
-    if match is None or not match.group(1).strip():
+def _plan_fields(section: str, task_id: str) -> dict[str, str]:
+    """Keep complete field bodies without borrowing the next field or section."""
+    heading = re.search(r"(?m)^#{1,6}[ \t]+", section)
+    if heading is not None:
+        section = section[:heading.start()]
+    matches = list(re.finditer(r"(?m)^- ([^:\r\n]+):[ \t]*", section))
+    fields: dict[str, str] = {}
+    for position, match in enumerate(matches):
+        label = match.group(1)
+        if label in fields:
+            raise ExecutionError("PLAN_INVALID", f"{task_id} has duplicate {label}")
+        end = matches[position + 1].start() if position + 1 < len(matches) else len(section)
+        value = section[match.end():end].strip()
+        if not value:
+            raise ExecutionError("PLAN_INVALID", f"{task_id} has empty {label}")
+        fields[label] = value
+    return fields
+
+
+def _field(fields: dict[str, str], label: str, task_id: str) -> str:
+    value = fields.get(label)
+    if value is None:
         raise ExecutionError("PLAN_INVALID", f"{task_id} is missing {label}")
-    return match.group(1).strip()
+    return value
 
 
-def _optional_field(section: str, label: str) -> str | None:
-    match = re.search(rf"(?m)^- {re.escape(label)}:\s*(.+?)\s*$", section)
-    if match is None:
-        return None
-    value = match.group(1).strip()
-    if not value or value.lower() in {"none", "n/a", "na"}:
+def _optional_field(fields: dict[str, str], label: str) -> str | None:
+    value = fields.get(label)
+    if value is None or value.lower() in {"none", "n/a", "na"}:
         return None
     return value
 
@@ -672,7 +688,12 @@ def _split_values(value: str) -> tuple[str, ...]:
 
 
 def parse_locked_plan(text: str) -> list[TaskPlan]:
-    matches = list(re.finditer(r"(?m)^### (TASK-[0-9]{3,})\s*$", text))
+    text = text.replace("\r\n", "\n")
+    task_heading = r"### (TASK-[0-9]{3,})[ \t]*"
+    for heading in re.finditer(r"(?m)^#{1,6}[ \t]+TASK-[^\r\n]*", text):
+        if re.fullmatch(task_heading, heading.group()) is None:
+            raise ExecutionError("PLAN_INVALID", "task headings must use ### TASK-NNN")
+    matches = list(re.finditer(rf"(?m)^{task_heading}$", text))
     if not matches:
         raise ExecutionError("PLAN_INVALID", "locked plan has no TASK-* records")
     tasks: list[TaskPlan] = []
@@ -691,16 +712,16 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
         end = (
             matches[position + 1].start() if position + 1 < len(matches) else len(text)
         )
-        section = text[match.end() : end]
-        dependencies = _split_values(_field(section, "Depends on", task_id))
-        requirements = _split_values(_field(section, "Requirements", task_id))
+        fields = _plan_fields(text[match.end() : end], task_id)
+        dependencies = _split_values(_field(fields, "Depends on", task_id))
+        requirements = _split_values(_field(fields, "Requirements", task_id))
         if any(
             REQUIREMENT_ID_RE.fullmatch(item) is None for item in requirements
         ):
             raise ExecutionError(
                 "PLAN_INVALID", f"{task_id} has malformed requirement IDs"
             )
-        claim_values = _split_values(_field(section, "Write claims", task_id))
+        claim_values = _split_values(_field(fields, "Write claims", task_id))
         claims: list[WriteClaim] = []
         ownership_complete = True
         for item in claim_values:
@@ -717,7 +738,7 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                     claim_match.group(1), normalized_repo_path(claim_match.group(2))
                 )
             )
-        domains = _split_values(_field(section, "Conflict domains", task_id))
+        domains = _split_values(_field(fields, "Conflict domains", task_id))
         for domain in domains:
             if domain.lower() == "unknown":
                 ownership_complete = False
@@ -727,8 +748,8 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 )
         if not claims:
             ownership_complete = False
-        diagnosis_id = _optional_field(section, "Diagnosis")
-        regression_oracle = _optional_field(section, "Regression oracle")
+        diagnosis_id = _optional_field(fields, "Diagnosis")
+        regression_oracle = _optional_field(fields, "Regression oracle")
         if (diagnosis_id is None) != (regression_oracle is None):
             raise ExecutionError(
                 "PLAN_INVALID",
@@ -746,13 +767,13 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 task_id=task_id,
                 position=position,
                 requirements=requirements,
-                goal=_field(section, "Goal", task_id),
+                goal=_field(fields, "Goal", task_id),
                 dependencies=dependencies,
                 write_claims=tuple(claims),
                 conflict_domains=domains,
-                validation=_field(section, "Validation", task_id),
-                done_criteria=_field(section, "Done criteria", task_id),
-                rollback=_field(section, "Rollback or stop conditions", task_id),
+                validation=_field(fields, "Validation", task_id),
+                done_criteria=_field(fields, "Done criteria", task_id),
+                rollback=_field(fields, "Rollback or stop conditions", task_id),
                 diagnosis_id=diagnosis_id,
                 regression_oracle=regression_oracle,
                 ownership_complete=ownership_complete,

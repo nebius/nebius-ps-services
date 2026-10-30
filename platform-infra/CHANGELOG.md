@@ -4,14 +4,55 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+- Persist Tailscale guest enrollment receipts and original temporary keys with
+  root-only permissions; fence interrupted operations before recovery or retirement.
 
-- Keep MK8s `service_account_ids` keys known during the initial plan by
-  selecting configured accounts instead of filtering their apply-time IDs.
-  Caller-owned IAM grants can use this output in `for_each` without a targeted
-  bootstrap apply.
+- Add opt-in `tailscale-gw` with two persistent Nebius routers by default and
+  customer-owned tailnet configuration. Integrate protected enrollment, exact
+  ownership, readiness, staged maintenance and retirement into the ordinary
+  lifecycle. Add `tailscale` auth, reviewed policy, route approval, status, doctor,
+  client verification, bounded failover and stopped-writer recovery commands.
+  Keep Tailscale credentials outside Terraform and preserve strict SSH trust.
+  Local qualification is separate from live deployment and failover qualification.
+
+- Persist an empty peer registry during WireGuard initialization so fresh gateways
+  without bootstrap clients pass network reconciliation. Keep missing-registry
+  checks strict for existing gateways.
+
+- Keep WireGuard server and client MTUs within the detected uplink limit and
+  persist scoped TCP MSS clamps. Reconcile guest networking without replacing
+  the VM, boot disk, address, keys or peers; freeze the original bootstrap payload
+  in the owned backend. Add explicit client MTU refresh and private Kubernetes
+  verification, including automatic connected-client checks after deployment.
+
+- Add metadata-only SecretStash container support with `create_initial_versions=false`
+  and external primary-version ownership. Add `wireguard-access` for the dedicated
+  VM identity, group and three narrow permits. cxcli composes these in a separate
+  retained Terraform access root and supplies only public bootstrap references to
+  `wireguard-gw`; private SSH keys stay outside Terraform and cloud-init.
+
+- Update VM journald documentation for cxcli v2 per-component observability settings.
+
+### NAT gateway refactor
+
+- Add a sensitive runtime-only `ssh_host_keys` map for pre-pinned Ed25519 first-boot
+  identity. Empty input preserves prior cloud-init bytes; existing gateways are
+  not replaced merely by upgrading this input contract.
+
+- Remove `admin_cidrs`; protect any-source IPv4 SSH with explicit non-root
+  key-only policy and fail2ban. Isolate dynamic bans from owned NAT rules,
+  verify effective security before route activation, and bind installed program
+  hashes into the readiness digest. Add real isolated Ubuntu service/socket
+  tests and document detached upgrades and VM replacement.
+
+- Add NAT gateway subnet create/reuse modes, preserving reused subnet ownership, a 40 GiB boot disk default and identity-preserving resource moves. Require provider >=0.6.74 and test same-deployment VPC reuse without a reverse dependency.
 
 ### Added
+
+- Add `modules/nat-gateway`, composing a regular CPU VM, dedicated explicit
+  subnet, stable private/public allocations and policy-preserving route tables.
+  Persistent guest forwarding and restrictive administration rules include a
+  read-only readiness verifier. Consumer attachment remains with the caller.
 
 - Added `modules/vpc`, a reusable Nebius VPC module that can create a new
   VPC network with optional subnets or create declared subnets under an
@@ -178,6 +219,15 @@ All notable changes to this project are documented in this file.
   validation against Nebius Cloud.
 
 ### Fixed
+
+- Read VPC subnet CIDRs from supported private/public status pools instead of
+  deprecated status CIDR fields. Preserve the CIDR-list outputs, require Nebius
+  provider `>= 0.6.74, < 0.7.0` for this module, and refresh its minimal example lockfile.
+
+- Keep MK8s `service_account_ids` keys known during the initial plan by
+  selecting configured accounts instead of filtering their apply-time IDs.
+  Caller-owned IAM grants can use this output in `for_each` without a targeted
+  bootstrap apply.
 
 - Tightened `modules/vpc`, `modules/ssh-jumphost`, and
   `modules/wireguard-gw` VPC validation so an existing VPC network and

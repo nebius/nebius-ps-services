@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from .cluster_config import cluster_rows, require_cluster_row
 from .component_sources import load_component_sources
 from .deploy_targets import enabled_cluster_target_refs
 from .runtime_config import to_plain_data
@@ -78,9 +79,9 @@ READ_KEYS = {
 
 def target_settings(payload: Any, target: str) -> dict[str, Any]:
     data = to_plain_data(payload)
-    for row in data.get("deploy", {}).get("targets", []):
+    for row in cluster_rows(data):
         if row.get("instance_id") == target:
-            return copy.deepcopy(row.get("observability", {}).get("routing", {}))
+            return copy.deepcopy((row.get("observability") or {}).get("routing", {}))
     return {}
 
 
@@ -88,8 +89,26 @@ def routed_targets(payload: Any) -> tuple[str, ...]:
     data = to_plain_data(payload)
     return tuple(
         row["instance_id"]
-        for row in data.get("deploy", {}).get("targets", [])
-        if row.get("observability", {}).get("routing")
+        for row in cluster_rows(data)
+        if (row.get("observability") or {}).get("routing")
+    )
+
+
+def collection_enabled(payload: Any, target: str) -> bool:
+    from .observability import soperator_target_refs
+
+    if target in soperator_target_refs(to_plain_data(payload)):
+        return True  # The optional Nebius-agent switch does not disable native collection.
+    return (
+        next(
+            (
+                (row.get("observability") or {}).get("enabled", True)
+                for row in cluster_rows(to_plain_data(payload))
+                if row.get("instance_id") == target
+            ),
+            True,
+        )
+        is not False
     )
 
 
@@ -101,9 +120,7 @@ def validate_observability_target_refs(
         unknown = target_refs - set(enabled_cluster_target_refs(payload))
         if unknown:
             target = sorted(unknown)[0]
-            raise ValueError(
-                f"Target {target!r} is not an enabled managed MK8s target in this config"
-            )
+            raise ValueError(f"Target {target!r} is not a declared cluster in this config")
 
 
 def describe_target(payload: Mapping[str, Any], target: str) -> None:
@@ -118,8 +135,10 @@ def describe_target(payload: Mapping[str, Any], target: str) -> None:
             "Its metrics and logs collectors will be reused."
         )
     else:
+        owner = require_cluster_row(payload, target)
+        description = "managed MK8s" if owner.get("id") == "mk8s" else "external MK8s"
         scope.emit(
-            f"Target {target}: managed MK8s. "
+            f"Target {target}: {description}. "
             "Telemetry backends will be configured for your storage choices."
         )
     scope.announced_targets.add(target)
@@ -241,13 +260,10 @@ def resolve_settings(
     require_read_connections: bool = True,
 ) -> dict[str, Any]:
     """Explicit values win over saved values; defaults only fill unset fields."""
-    managed_targets = {
-        row.get("instance_id")
-        for row in payload.get("infra", {}).get("components", [])
-        if row.get("id") == "mk8s" and row.get("enabled") is True
-    }
-    if target not in managed_targets:
-        raise ValueError(f"Target {target!r} is not an enabled managed MK8s target in this config")
+    if target not in enabled_cluster_target_refs(payload):
+        raise ValueError(f"Target {target!r} is not a declared cluster in this config")
+    from .observability import soperator_target_refs
+
     saved = target_settings(payload, target)
     _validate_saved_settings(saved)
     result = copy.deepcopy(saved)
@@ -263,7 +279,10 @@ def resolve_settings(
     defaults = endpoint_defaults(payload)
     for signal in SIGNALS:
         settings = result.setdefault(signal, {})
-        settings["storage"] = flags.get(f"{signal}_storage") or settings.get("storage", "local")
+        default_storage = "local" if target in soperator_target_refs(payload) else "remote"
+        settings["storage"] = flags.get(f"{signal}_storage") or settings.get(
+            "storage", default_storage
+        )
         if settings["storage"] not in STORAGE_MODES:
             raise ValueError(f"{signal}.storage must be local, remote or both")
         remote = settings.setdefault("remote", {})
@@ -379,14 +398,16 @@ def resolve_settings(
     return result
 
 
-def save_settings(payload: dict[str, Any], target: str, settings: Mapping[str, Any]) -> None:
-    rows = payload.setdefault("deploy", {}).setdefault("targets", [])
-    row = next((item for item in rows if item.get("instance_id") == target), None)
-    if row is None:
-        row = {"instance_id": target}
-        rows.append(row)
-    row.setdefault("observability", {})["routing"] = copy.deepcopy(dict(settings))
-    row["observability"]["enabled"] = True
+def save_settings(
+    payload: dict[str, Any], target: str, settings: Mapping[str, Any], *, enabled: bool = True
+) -> None:
+    row = require_cluster_row(payload, target)
+    observability = row.get("observability")
+    if observability is None:
+        observability = {}
+        row["observability"] = observability
+    observability["routing"] = copy.deepcopy(dict(settings))
+    observability["enabled"] = enabled
 
 
 def app_row(payload: Mapping[str, Any], target: str, component: str) -> dict[str, Any] | None:
@@ -553,14 +574,29 @@ def connections(payload: Any, target: str) -> list[dict[str, Any]]:
     return list(by_name.values())
 
 
+def effective_signals(payload: Mapping[str, Any], target: str) -> list[str]:
+    """Honor signal opt-outs without erasing the authored routing selection."""
+    from .observability import _effective_kubernetes_observability_config, soperator_target_refs
+
+    if not collection_enabled(payload, target):
+        return []
+    selected = target_settings(payload, target).get("signals", list(SIGNALS))
+    if target in soperator_target_refs(payload):
+        return list(selected)
+    flags = _effective_kubernetes_observability_config(dict(payload), target_ref=target)
+    return [signal for signal in selected if getattr(flags, signal + "_enabled")]
+
+
 def collector_owners(payload: Mapping[str, Any], target: str) -> dict[str, str]:
+    if not collection_enabled(payload, target):
+        return {}
     # Scoped loading leaves other targets' authored routing unmaterialized.
     # Policy inspection still needs validated defaults, without persisting them.
     routing = resolve_settings(payload, target)
     native = bool(app_row(payload, target, "soperator"))
     defaults = endpoint_defaults(payload)
     owners = {}
-    for signal in routing.get("signals", SIGNALS):
+    for signal in effective_signals(payload, target):
         previous = routing.get("collectors", {}).get(signal)
         if native and signal in {"metrics", "logs"} and previous not in {None, "soperator"}:
             raise ValueError(
@@ -602,9 +638,10 @@ def required_apps(payload: Mapping[str, Any], target: str) -> set[str]:
     routing = resolve_settings(payload, target)
     owners = collector_owners(payload, target)
     result = {owner for owner in owners.values() if owner != "soperator"}
+    # Storage/query intent is independent of whether its producer is enabled.
     for signal in routing.get("signals", SIGNALS):
         if routing[signal]["storage"] != "remote" and not (
-            owners[signal] == "soperator" and signal in {"metrics", "logs"}
+            owners.get(signal) == "soperator" and signal in {"metrics", "logs"}
         ):
             result.add(STORE_APPS[signal])
     if owners.get("logs") == "opentelemetry-collector":
@@ -622,6 +659,9 @@ def ensure_routing_apps(
     validate_observability_target_refs(payload, observability_target_refs)
     before = copy.deepcopy(payload)
     entries = {entry.id: entry for entry in component_entries("apps")}
+    from .observability import soperator_target_refs
+
+    native_targets = soperator_target_refs(payload)
     # Standalone backend Apps opt into their signal pipeline without adding Grafana.
     for target in enabled_cluster_target_refs(payload):
         if observability_target_refs is not None and target not in observability_target_refs:
@@ -634,26 +674,32 @@ def ensure_routing_apps(
             if app_row(payload, target, component)
         ]
         pushgateway = app_row(payload, target, "prometheus-pushgateway") is not None
+        if not signals and not pushgateway and target not in native_targets:
+            row: Mapping[str, Any] = next(
+                (row for row in cluster_rows(payload) if row.get("instance_id") == target),
+                {},
+            )
+            if (row.get("observability") or {}).get("enabled"):
+                settings = resolve_settings(payload, target)
+                save_settings(payload, target, settings)
+                continue
         if pushgateway and "metrics" not in signals:
             signals.insert(0, "metrics")
         if signals:
-            settings = resolve_settings(payload, target)
+            settings = resolve_settings(
+                payload, target, overrides={f"{signal}_storage": "local" for signal in signals}
+            )
             settings.update(signals=signals, pushgateway=pushgateway)
-            save_settings(payload, target, settings)
+            save_settings(payload, target, settings, enabled=collection_enabled(payload, target))
     for target in routed_targets(payload):
         if observability_target_refs is not None and target not in observability_target_refs:
+            continue
+        if not collection_enabled(payload, target):
             continue
         settings = resolve_settings(payload, target)
         bind_native_backends(payload, target, settings)
         save_settings(payload, target, settings)
         settings["collectors"] = collector_owners(payload, target)
-        if (
-            app_row(payload, target, "opentelemetry-logs")
-            and settings["collectors"].get("logs") != "opentelemetry-collector"
-        ):
-            raise ValueError(
-                "Existing node log collector requires explicit cutover before changing its owner"
-            )
         save_settings(payload, target, settings)
         for component in sorted(required_apps(payload, target)):
             if app_row(payload, target, component) is None:
@@ -663,28 +709,35 @@ def ensure_routing_apps(
     return payload != before
 
 
+def app_row_for_activation(
+    payload: Mapping[str, Any], target: str, component: str
+) -> dict[str, Any] | None:
+    """Find the exact existing row that activation will update, including templates."""
+    return next(
+        (
+            row
+            for row in payload.get("apps", {}).get("charts", [])
+            if row.get("id") == component
+            and (
+                (row.get("target_ref") or row.get("instance_id")) == target
+                or (
+                    not row.get("enabled")
+                    and not row.get("target_ref")
+                    and row.get("instance_id") in {None, component}
+                )
+            )
+        ),
+        None,
+    )
+
+
 def enable_app(payload: dict[str, Any], target: str, entry: Any) -> dict[str, Any]:
     """Enable an existing disabled row instead of creating a duplicate identity."""
     from .observability import _new_observability_app_row
     from .observability_backends import _merge
 
     rows = payload.setdefault("apps", {}).setdefault("charts", [])
-    row = next(
-        (
-            row
-            for row in rows
-            if row.get("id") == entry.id
-            and (
-                (row.get("target_ref") or row.get("instance_id")) == target
-                or (
-                    not row.get("enabled")
-                    and not row.get("target_ref")
-                    and row.get("instance_id") in {None, entry.id}
-                )
-            )
-        ),
-        None,
-    )
+    row = app_row_for_activation(payload, target, entry.id)
     defaults = _new_observability_app_row(entry)
     if row is None:
         row = defaults

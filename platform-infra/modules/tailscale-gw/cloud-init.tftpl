@@ -1,0 +1,66 @@
+#cloud-config
+# cxcli-managed-host-identity-v1
+users:
+  - name: ${ssh_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${jsonencode(ssh_key)}
+ssh_pwauth: false
+disable_root: true
+%{ if length(host_keys) > 0 ~}
+ssh_keys:
+  ed25519_private: ${jsonencode(host_keys["ed25519_private"])}
+  ed25519_public: ${jsonencode(host_keys["ed25519_public"])}
+%{ endif ~}
+package_update: true
+packages: [ca-certificates, curl, python3, iptables, ethtool]
+write_files:
+  - path: /usr/local/sbin/cxcli-tailscale
+    owner: root:root
+    permissions: '0700'
+    encoding: gz+b64
+    content: ${helper}
+  - path: /etc/nebius-tailscale/member.json
+    owner: root:root
+    permissions: '0600'
+    content: ${jsonencode(member_config)}
+  - path: /etc/sysctl.d/90-cxcli-tailscale.conf
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv6.conf.all.forwarding=1
+  - path: /etc/ssh/sshd_config.d/40-cxcli-tailscale.conf
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      KbdInteractiveAuthentication no
+      AllowUsers ${ssh_user}
+      HostKey /etc/ssh/ssh_host_ed25519_key
+  - path: /etc/systemd/system/tailscaled.service.d/20-cxcli-forwarding.conf
+    content: |
+      [Service]
+      ExecStartPre=/usr/sbin/iptables -P FORWARD DROP
+      ExecStartPre=/usr/sbin/ip6tables -P FORWARD DROP
+  - path: /usr/local/sbin/cxcli-tailscale-install
+    permissions: '0700'
+    content: |
+      #!/bin/sh
+      set -eu
+      . /etc/os-release
+      test "$ID" = ubuntu && test "$VERSION_CODENAME" = noble
+      curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-time 60 https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+      echo '3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39  /usr/share/keyrings/tailscale-archive-keyring.gpg' | sha256sum -c -
+      echo 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main' > /etc/apt/sources.list.d/tailscale.list
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale=${version}
+      apt-mark hold tailscale
+      iptables -P FORWARD DROP
+      sysctl --system
+      systemctl daemon-reload
+      systemctl enable --now tailscaled
+      sshd -t
+      systemctl restart ssh
+runcmd:
+  - [/usr/local/sbin/cxcli-tailscale-install]

@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from .cluster_config import cluster_rows, validate_source_contract
 from .component_defaults import (
     component_path_has_material_value,
     read_component_path,
@@ -26,13 +27,9 @@ from .components import (
     component_lookup,
     parse_dependency_ref,
 )
-from .deploy_targets import (
-    EXTERNAL_MK8S_TARGET_KIND,
-    EXTERNAL_TARGET_OWNERSHIP,
-    deploy_target_is_external_mk8s,
-)
 from .filesystem_mount_tags import validate_filesystem_mount_tags
 from .mk8s_gpu import mk8s_gpu_dependency_issues
+from .mk8s_node_groups import cluster_inputs
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
 from .regions import SUPPORTED_REGION_IDS
@@ -53,7 +50,7 @@ from .soperator_values import (
 )
 from .soperator_worker_defaults import WORKER_DEFAULTS_FIELD, validate_worker_defaults
 
-_ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps", "compatibility"})
+_ROOT_KEYS = frozenset({"version", "client_info", "infra", "apps", "compatibility"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SECTION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -503,192 +500,119 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
         raise ValueError("client_info.notifications.email must be a string or null")
 
 
-def _validate_deploy(payload: Mapping[str, Any]) -> None:
-    deploy = payload.get("deploy")
-    if deploy is None:
-        return
-    if not isinstance(deploy, Mapping):
-        raise ValueError("deploy must be a mapping")
-
-    supported_deploy_keys = {"observability", "targets"}
-    unknown_deploy_keys = sorted(
-        str(key) for key in deploy if str(key) not in supported_deploy_keys
-    )
-    if unknown_deploy_keys:
-        raise ValueError("deploy has unsupported field(s): " + ", ".join(unknown_deploy_keys))
-
-    _validate_observability(
-        deploy.get("observability"),
-        field_label="deploy.observability",
-        allow_kubernetes=False,
-    )
-
-    targets = deploy.get("targets")
-    if targets is not None:
-        if not isinstance(targets, list):
-            raise ValueError("deploy.targets must be a list")
-        seen_target_refs: set[str] = set()
-        for index, raw_target in enumerate(targets):
-            if not isinstance(raw_target, Mapping):
-                raise ValueError(f"deploy.targets[{index}] must be a mapping")
-            kind = _as_text(raw_target.get("kind")).lower()
-            base_target_keys = {
-                INSTANCE_ID_FIELD,
-                "deployment_testing",
-                "soperator_rollout",
-                "profiling",
-                "observability",
-                "project_id",
-                "region_id",
-                "secrets",
-                "validations",
-            }
-            external_target_keys = {
-                "access",
-                "cluster_id",
-                "inventory",
-                "kind",
-                "kube_context",
-                "ownership",
-                "soperator_registration",
-                "soperator_desired_platform",
-            }
-            supported_target_keys = (
-                base_target_keys | external_target_keys
-                if kind == EXTERNAL_MK8S_TARGET_KIND
-                else base_target_keys | {"kind"}
-            )
-            unknown_target_keys = sorted(
-                str(key) for key in raw_target if str(key) not in supported_target_keys
-            )
-            if unknown_target_keys:
-                raise ValueError(
-                    f"deploy.targets[{index}] has unsupported field(s): "
-                    + ", ".join(unknown_target_keys)
+def _validate_cluster_policies(payload: Mapping[str, Any], *, materialized: bool = False) -> None:
+    for index, raw_target in enumerate(cluster_rows(payload, enabled_only=False)):
+        label = f"cluster[{raw_target.get('instance_id', index)}]"
+        owner_active = raw_target.get("id") != "mk8s" or raw_target.get("enabled") is True
+        for field in ("project_id", "region_id"):
+            if field not in raw_target:
+                continue
+            value = raw_target[field]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{label}.{field} must be a non-empty string")
+            if raw_target.get("id") == "mk8s":
+                inputs = raw_target.get("inputs", {})
+                input_key = "parent_id" if field == "project_id" else "region_id"
+                identity_inputs = cluster_inputs(inputs) if field == "project_id" else inputs
+                effective = _as_text(identity_inputs.get(input_key)) or _as_text(
+                    _mapping_path_value(payload, f"client_info.nebius.{field}")
                 )
-            target_ref = _as_text(raw_target.get(INSTANCE_ID_FIELD)).lower()
-            if not target_ref:
-                raise ValueError(f"deploy.targets[{index}].{INSTANCE_ID_FIELD} is required")
-            if not INSTANCE_ID_PATTERN.fullmatch(target_ref):
+                if effective and value.strip() != effective:
+                    raise ValueError(f"{label}.{field} conflicts with its infrastructure identity")
+        if raw_target.get("id") != "mk8s":
+            kube_context = _as_text(raw_target.get("kube_context"))
+            cluster_id = _as_text(raw_target.get("cluster_id"))
+            if not kube_context and not cluster_id:
                 raise ValueError(
-                    f"deploy.targets[{index}].{INSTANCE_ID_FIELD} must use lowercase letters, digits, and hyphens"
+                    f"infra.external_clusters[{index}] external MK8s target requires "
+                    "kube_context or cluster_id"
                 )
-            if target_ref in seen_target_refs:
+            access = _as_text(raw_target.get("access")).lower()
+            if access and access not in {"external", "internal", "public", "private"}:
                 raise ValueError(
-                    f"deploy.targets[{index}].{INSTANCE_ID_FIELD} '{target_ref}' is duplicated"
+                    f"infra.external_clusters[{index}].access must be external/internal/public/private"
                 )
-            seen_target_refs.add(target_ref)
-            if kind and kind != EXTERNAL_MK8S_TARGET_KIND:
-                raise ValueError(
-                    f"deploy.targets[{index}].kind must be '{EXTERNAL_MK8S_TARGET_KIND}' when set"
-                )
-            ownership = _as_text(raw_target.get("ownership")).lower()
-            if ownership and ownership != EXTERNAL_TARGET_OWNERSHIP:
-                raise ValueError(
-                    f"deploy.targets[{index}].ownership must be '{EXTERNAL_TARGET_OWNERSHIP}' when set"
-                )
-            rollout = raw_target.get("soperator_rollout")
-            if rollout is not None:
-                if not isinstance(rollout, Mapping) or set(rollout) != {
-                    "strategy",
-                    "max_surge_count",
-                    "drain_timeout",
+            inventory = raw_target.get("inventory")
+            if inventory is not None and not isinstance(inventory, Mapping):
+                raise ValueError(f"infra.external_clusters[{index}].inventory must be a mapping")
+            desired_platform = raw_target.get("desired_platform")
+            if desired_platform is not None:
+                if not isinstance(desired_platform, Mapping) or set(desired_platform) != {
+                    "kubernetes_version",
+                    "node_groups",
                 }:
-                    raise ValueError(
-                        "soperator_rollout requires strategy, max_surge_count and drain_timeout"
-                    )
-                if rollout["strategy"] not in {"zero-surge", "safe-surge", "force-delete"}:
-                    raise ValueError("soperator_rollout has an unsupported strategy")
-                count = rollout["max_surge_count"]
-                if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-                    raise ValueError(
-                        "soperator_rollout max_surge_count must be a nonnegative integer"
-                    )
-                if not isinstance(rollout["drain_timeout"], str) or not rollout["drain_timeout"]:
-                    raise ValueError("soperator_rollout drain_timeout must be explicit")
-            if deploy_target_is_external_mk8s(raw_target):
-                kube_context = _as_text(raw_target.get("kube_context"))
-                cluster_id = _as_text(raw_target.get("cluster_id"))
-                if not kube_context and not cluster_id:
-                    raise ValueError(
-                        f"deploy.targets[{index}] external MK8s target requires "
-                        "kube_context or cluster_id"
-                    )
-                access = _as_text(raw_target.get("access")).lower()
-                if access and access not in {"external", "internal", "public", "private"}:
-                    raise ValueError(
-                        f"deploy.targets[{index}].access must be external/internal/public/private"
-                    )
-                inventory = raw_target.get("inventory")
-                if inventory is not None and not isinstance(inventory, Mapping):
-                    raise ValueError(f"deploy.targets[{index}].inventory must be a mapping")
-                desired_platform = raw_target.get("soperator_desired_platform")
-                if desired_platform is not None:
-                    if not isinstance(desired_platform, Mapping) or set(desired_platform) != {
-                        "kubernetes_version",
-                        "node_groups",
-                    }:
-                        raise ValueError(
-                            "soperator_desired_platform requires kubernetes_version and node_groups"
-                        )
-                    if not re.fullmatch(
-                        r"[0-9]+\.[0-9]+", str(desired_platform["kubernetes_version"])
-                    ):
-                        raise ValueError(
-                            "soperator_desired_platform requires an exact Kubernetes minor version"
-                        )
-                    groups = desired_platform["node_groups"]
-                    if not isinstance(groups, Mapping) or any(
-                        not isinstance(row, Mapping)
-                        or set(row) != {"os", "gpu_stack_preset"}
-                        or not isinstance(row["os"], str)
-                        or not row["os"]
-                        or not isinstance(row["gpu_stack_preset"], str)
-                        for row in groups.values()
-                    ):
-                        raise ValueError(
-                            "soperator_desired_platform requires exact per-group templates"
-                        )
-                registration = raw_target.get("soperator_registration")
-                if registration is not None and not isinstance(registration, Mapping):
-                    raise ValueError(
-                        f"deploy.targets[{index}].soperator_registration must be a mapping"
-                    )
-                if isinstance(registration, Mapping):
-                    _validate_soperator_registration(
-                        registration,
-                        f"deploy.targets[{index}].soperator_registration",
-                    )
-            _validate_observability(
-                raw_target.get("observability"),
-                field_label=f"deploy.targets[{index}].observability",
-                allow_vm=False,
-                allow_routing=True,
-            )
-            if "routing" in (raw_target.get("observability") or {}):
-                from .observability_routing import resolve_settings
+                    raise ValueError("desired_platform requires kubernetes_version and node_groups")
+                if not re.fullmatch(r"[0-9]+\.[0-9]+", str(desired_platform["kubernetes_version"])):
+                    raise ValueError("desired_platform requires an exact Kubernetes minor version")
+                groups = desired_platform["node_groups"]
+                if not isinstance(groups, Mapping) or any(
+                    not isinstance(row, Mapping)
+                    or set(row) != {"os", "gpu_stack_preset"}
+                    or not isinstance(row["os"], str)
+                    or not row["os"]
+                    or not isinstance(row["gpu_stack_preset"], str)
+                    for row in groups.values()
+                ):
+                    raise ValueError("desired_platform requires exact per-group templates")
+        _validate_observability(
+            raw_target.get("observability"),
+            field_label=f"{label}.observability",
+            allow_vm=False,
+            allow_routing=True,
+        )
+        if "routing" in (raw_target.get("observability") or {}):
+            from .observability_routing import _validate_saved_settings, resolve_settings
 
+            _validate_saved_settings(raw_target["observability"]["routing"])
+            if owner_active:
                 resolve_settings(payload, str(raw_target.get(INSTANCE_ID_FIELD, "")))
-            from .nsight_profiling import validate_settings
-
-            validate_settings(raw_target.get("profiling"))
-            _validate_deploy_target_secrets(
-                raw_target.get("secrets"),
-                field_label=f"deploy.targets[{index}].secrets",
+        _validate_cluster_secrets(
+            raw_target.get("secrets"),
+            field_label=f"{label}.secrets",
+            materialized=materialized and owner_active,
+        )
+        testing = raw_target.get("deployment_testing")
+        if isinstance(testing, Mapping) and set(testing) - {"mk8s_gpu"}:
+            raise ValueError(
+                f"{label}.deployment_testing supports only mk8s_gpu; Soperator checks belong on its app"
             )
-            if "validations" in raw_target:
-                raise ValueError(
-                    f"deploy.targets[{index}].validations is no longer supported; "
-                    "use deploy.targets[].deployment_testing for deploy-time checks and "
-                    "acceptance-test commands for heavy validation/benchmarking"
-                )
-            _validate_deployment_testing(
-                raw_target.get("deployment_testing"),
-                field_label=f"deploy.targets[{index}].deployment_testing",
+        _validate_deployment_testing(testing, field_label=f"{label}.deployment_testing")
+    for row in payload.get("infra", {}).get("components", []):
+        if row.get("id") == "vm":
+            _validate_observability(
+                row.get("observability"),
+                field_label=f"vm[{row.get('instance_id')}].observability",
+                allow_kubernetes=False,
             )
 
 
-def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
+def _validate_soperator_policy(row: Mapping[str, Any], label: str) -> None:
+    rollout = row.get("rollout")
+    if rollout is not None:
+        if not isinstance(rollout, Mapping) or set(rollout) != {
+            "strategy",
+            "max_surge_count",
+            "drain_timeout",
+        }:
+            raise ValueError("rollout requires strategy, max_surge_count and drain_timeout")
+        if rollout["strategy"] not in {"zero-surge", "safe-surge", "force-delete"}:
+            raise ValueError("rollout has an unsupported strategy")
+        count = rollout["max_surge_count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("rollout max_surge_count must be a nonnegative integer")
+        if not isinstance(rollout["drain_timeout"], str) or not rollout["drain_timeout"]:
+            raise ValueError("rollout drain_timeout must be explicit")
+    from .nsight_profiling import validate_settings
+
+    validate_settings(row.get("profiling"))
+    if "registration" in row:
+        if not isinstance(row["registration"], Mapping):
+            raise ValueError(f"{label}.registration must be a mapping")
+        _validate_soperator_registration(row["registration"], f"{label}.registration")
+    _validate_deployment_testing({"soperator": row.get("deployment_testing")}, field_label=label)
+
+
+def _validate_cluster_secrets(secrets: Any, *, field_label: str, materialized: bool = True) -> None:
     if secrets is None:
         return
     if not isinstance(secrets, Mapping):
@@ -729,6 +653,8 @@ def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
         raise ValueError(f"{field_label}.mysterybox.allow_all_namespaces must be true or false")
 
     for key in ("store_name", "api_domain"):
+        if not materialized and key not in mysterybox:
+            continue
         value = _as_text(mysterybox.get(key))
         if not value:
             raise ValueError(f"{field_label}.mysterybox.{key} is required when enabled")
@@ -740,11 +666,14 @@ def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
             "(for example 30s, 15m, or 1h)"
         )
 
-    _validate_mysterybox_credentials_secret(
-        mysterybox.get("credentials_secret"),
-        field_label=f"{field_label}.mysterybox.credentials_secret",
-    )
+    if materialized or "credentials_secret" in mysterybox:
+        _validate_mysterybox_credentials_secret(
+            mysterybox.get("credentials_secret"),
+            field_label=f"{field_label}.mysterybox.credentials_secret",
+        )
 
+    if not materialized and "sync_namespaces" not in mysterybox:
+        return
     sync_namespaces = mysterybox.get("sync_namespaces")
     if not isinstance(sync_namespaces, list) or not sync_namespaces:
         raise ValueError(
@@ -1102,10 +1031,16 @@ def _validate_materialized_shared_defaults(payload: Mapping[str, Any]) -> None:
 
 def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
     """Validate dynamic model sections (`infra.components[]`, `apps.charts[]`)."""
+    validate_source_contract(payload)
     infra = payload.get("infra")
     apps = payload.get("apps")
     if not isinstance(infra, Mapping) or not isinstance(apps, Mapping):
         return
+
+    _validate_unknown_keys(
+        infra, allowed_keys=frozenset({"components", "external_clusters"}), field_label="infra"
+    )
+    _validate_unknown_keys(apps, allowed_keys=frozenset({"charts"}), field_label="apps")
 
     infra_components = infra.get("components")
     apps_charts = apps.get("charts")
@@ -1117,12 +1052,13 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
     if not isinstance(apps_charts, list):
         raise ValueError("apps.charts must be a list in dynamic config mode")
 
+    from .nat_gateway import validate_nat_config
+
     app_lookup = component_lookup("apps")
     infra_lookup = component_lookup("infra")
     seen_infra_instance_ids: set[str] = set()
     seen_infra_resource_names: dict[tuple[str, str], int] = {}
     cluster_target_refs: set[str] = set()
-    enabled_vm_instance_ids: set[str] = set()
     enabled_infra_rows_by_selector: dict[tuple[str, str], Mapping[str, Any]] = {}
     enabled_infra_instances_by_id: dict[str, list[str]] = {}
     row_bindings_to_validate: list[tuple[int, str, str, Any]] = []
@@ -1137,7 +1073,18 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             str(key)
             for key in raw_component
             if str(key)
-            not in {"id", "instance_id", "enabled", "source", "version", "inputs", "bindings"}
+            not in (
+                {"id", "instance_id", "enabled", "source", "version", "inputs", "bindings"}
+                | ({"routing"} if raw_component.get("id") == "nat-gateway" else set())
+                | ({"access"} if raw_component.get("id") == "wireguard-gw" else set())
+                | ({"tailscale"} if raw_component.get("id") == "tailscale-gw" else set())
+                | ({"observability"} if raw_component.get("id") in {"mk8s", "vm"} else set())
+                | (
+                    {"secrets", "deployment_testing", "project_id", "region_id"}
+                    if raw_component.get("id") == "mk8s"
+                    else set()
+                )
+            )
         )
         if unknown_keys:
             raise ValueError(
@@ -1145,6 +1092,14 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             )
 
         component_id = component_type_id(raw_component)
+        if component_id == "tailscale-gw":
+            from .tailscale_config import validate as validate_tailscale
+
+            validate_tailscale(raw_component, complete=bool(raw_component.get("enabled")))
+        if component_id == "wireguard-gw":
+            from .wireguard_access import validate_access
+
+            validate_access(raw_component)
         if not component_id:
             raise ValueError(f"infra.components[{index}].id is required")
         if not _ID_PATTERN.fullmatch(component_id):
@@ -1182,7 +1137,8 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             field_label=f"infra.components[{index}]",
         )
         for binding in row_bindings:
-            row_bindings_to_validate.append((index, component_id, instance_id, binding))
+            if raw_component.get("access", {}).get("lifecycle") != "retained":
+                row_bindings_to_validate.append((index, component_id, instance_id, binding))
             existing_value = read_component_path(raw_component, binding.target_path)
             if component_path_has_material_value(existing_value):
                 raise ValueError(
@@ -1197,7 +1153,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         if component_id == "mk8s" and "gpu_validation_overrides" in inputs:
             raise ValueError(
                 "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
-                "use deploy.targets[].deployment_testing.mk8s_gpu.*"
+                "use cluster settings[].deployment_testing.mk8s_gpu.*"
             )
         if component_id == "sfs" and bool(raw_component.get("enabled", False)):
             validate_filesystem_mount_tags(inputs, label=f"infra.components[{index}].inputs")
@@ -1246,9 +1202,8 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             and bool(raw_component.get("enabled", False))
         ):
             cluster_target_refs.add(instance_id)
-        if component_id == "vm" and bool(raw_component.get("enabled", False)):
-            enabled_vm_instance_ids.add(instance_id)
 
+    validate_nat_config(payload)
     for cidr_entries in existing_network_private_cidrs.values():
         _validate_vpc_private_cidr_entries_do_not_overlap(cidr_entries)
 
@@ -1296,32 +1251,48 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                     "bindings must use attribute 'id'"
                 )
 
-    deploy = payload.get("deploy")
-    deploy_targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
     external_cluster_target_refs: set[str] = set()
-    if isinstance(deploy_targets, list):
-        for index, raw_target in enumerate(deploy_targets):
-            if not isinstance(raw_target, Mapping):
-                continue
-            target_ref = _as_text(raw_target.get(INSTANCE_ID_FIELD)).lower()
-            if deploy_target_is_external_mk8s(raw_target) and target_ref:
-                cluster_target_refs.add(target_ref)
-                external_cluster_target_refs.add(target_ref)
-            if target_ref and cluster_target_refs and target_ref not in cluster_target_refs:
-                available = ", ".join(sorted(cluster_target_refs)) or "(none)"
-                raise ValueError(
-                    f"deploy.targets[{index}].{INSTANCE_ID_FIELD} must reference one of the enabled cluster targets: {available}"
-                )
-        if deploy_targets and not cluster_target_refs:
+    external = infra.get("external_clusters", [])
+    if not isinstance(external, list):
+        raise ValueError("infra.external_clusters must be a list")
+    seen_provider_ids: set[str] = set()
+    for index, row in enumerate(external):
+        label = f"infra.external_clusters[{index}]"
+        if not isinstance(row, Mapping):
+            raise ValueError(f"{label} must be a mapping")
+        allowed = {
+            "instance_id",
+            "cluster_id",
+            "kube_context",
+            "access",
+            "inventory",
+            "project_id",
+            "region_id",
+            "observability",
+            "secrets",
+            "deployment_testing",
+            "desired_platform",
+        }
+        if set(row) - allowed:
             raise ValueError(
-                "deploy.targets requires at least one enabled cluster target or external MK8s target"
+                f"{label} has unsupported fields: {', '.join(sorted(set(row) - allowed))}"
             )
-    root_observability = deploy.get("observability") if isinstance(deploy, Mapping) else None
-    if root_observability is not None and not enabled_vm_instance_ids:
-        raise ValueError(
-            "deploy.observability is only supported for enabled infra:vm components; "
-            "use deploy.targets[].observability for MK8s targets"
-        )
+        ref = row.get("instance_id")
+        if not isinstance(ref, str) or not INSTANCE_ID_PATTERN.fullmatch(ref):
+            raise ValueError(f"{label}.instance_id must be a canonical cluster identity")
+        if ref in seen_infra_instance_ids or ref in external_cluster_target_refs:
+            raise ValueError(f"Cluster identity {ref!r} is duplicated")
+        for field in ("cluster_id", "kube_context", "access", "project_id", "region_id"):
+            if field in row and (not isinstance(row[field], str) or not row[field].strip()):
+                raise ValueError(f"{label}.{field} must be a non-empty string")
+        provider_id = row.get("cluster_id")
+        if provider_id and provider_id in seen_provider_ids:
+            raise ValueError(f"{label}.cluster_id is duplicated")
+        if provider_id:
+            seen_provider_ids.add(provider_id)
+        external_cluster_target_refs.add(ref)
+        cluster_target_refs.add(ref)
+    _validate_cluster_policies(payload)
 
     has_enabled_app_charts = any(
         isinstance(raw_chart, Mapping) and bool(raw_chart.get("enabled", False))
@@ -1357,6 +1328,10 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "dashboard_imports",
                 EXPLICIT_VALUES_FIELD,
                 WORKER_DEFAULTS_FIELD,
+                "deployment_testing",
+                "rollout",
+                "profiling",
+                "registration",
             }
         )
         if unknown_keys:
@@ -1365,6 +1340,13 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             )
 
         chart_id = component_type_id(raw_chart)
+        policy_fields = {"deployment_testing", "rollout", "profiling", "registration"} & set(
+            raw_chart
+        )
+        if policy_fields:
+            if chart_id != "soperator":
+                raise ValueError("Application lifecycle policy is reserved for Soperator")
+            _validate_soperator_policy(raw_chart, f"apps.charts[{index}]")
         if "dashboard_imports" in raw_chart:
             from .grafana_dashboards import validate_import_declarations
             from .observability import _grafana_app_id
@@ -1499,11 +1481,13 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
     if unknown_root:
         raise ValueError(f"unknown field(s) at root: {', '.join(unknown_root)}")
 
-    if _as_text(payload.get("version")) not in {"", "v1"}:
-        raise ValueError("version must be 'v1'")
+    validate_source_contract(payload)
 
     _validate_client_info(payload)
-    _validate_deploy(payload)
+    _validate_cluster_policies(payload, materialized=True)
+    for index, row in enumerate(payload.get("apps", {}).get("charts", [])):
+        if isinstance(row, Mapping) and row.get("id") == "soperator":
+            _validate_soperator_policy(row, f"apps.charts[{index}]")
     from .compatibility_matrix import validate_selection
 
     validate_selection(payload)
@@ -1515,7 +1499,7 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
             raise ValueError(
                 "infra.ssh_user_name and infra.ssh_public_key are no longer root infra fields. "
                 "Set ssh_user_name/ssh_public_key on the selected jump-host component inputs instead "
-                "(for example infra.components[id=wireguard-gw].inputs.ssh_public_key). "
+                "(for example infra.components[id=ssh-jumphost].inputs.ssh_public_key). "
                 "component_sources.yaml shared.admin_ssh.user_name remains available as a "
                 "catalog-level seed that create/component add materialize into jump-host "
                 "component inputs."
@@ -1547,6 +1531,12 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
     observability_issues = observability_dependency_issues(payload)
     if observability_issues:
         raise ValueError(observability_issues[0])
+    from .wireguard_dependencies import access_dependencies
+
+    access_dependencies(payload)
+    from .tailscale_dependencies import dependencies as tailscale_dependencies
+
+    tailscale_dependencies(payload)
     mysterybox_issues = mysterybox_eso_dependency_issues(payload)
     if mysterybox_issues:
         raise ValueError(mysterybox_issues[0])

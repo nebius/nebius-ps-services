@@ -8,6 +8,7 @@ import yaml
 from typer.testing import CliRunner
 
 from nebius_cxcli import cli, grafana_install
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.observability import materialize_observability_app_values
 from nebius_cxcli.observability_backends import metrics_destinations
 from nebius_cxcli.observability_routing import (
@@ -29,7 +30,7 @@ def payload():
             "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
         },
         "apps": {"charts": []},
-        "deploy": {"targets": [{"instance_id": "cluster"}]},
+        "version": "v2",
     }
 
 
@@ -89,7 +90,7 @@ def test_full_config_save_load_render_keeps_routes_and_unique_apps(tmp_path, mod
 )
 def test_invalid_saved_routing_fails_as_configuration_error(routing):
     data = payload()
-    data["deploy"]["targets"][0]["observability"] = {"routing": routing}
+    cluster_rows(data)[0]["observability"] = {"routing": routing}
     with pytest.raises(ValueError):
         resolve_settings(data, "cluster")
 
@@ -375,7 +376,7 @@ def test_cancel_leaves_payload_unchanged(monkeypatch):
 
 def test_custom_read_cannot_inherit_nebius_auth():
     data = grafana_install.configure(payload(), "cluster")
-    data["deploy"]["targets"][0]["observability"]["routing"]["datasources"] = [
+    cluster_rows(data)[0]["observability"]["routing"]["datasources"] = [
         {
             "name": "metrics-remote",
             "type": "prometheus",
@@ -415,10 +416,11 @@ def test_credentials_and_non_http_urls_rejected(url):
         resolve_settings(payload(), "cluster", overrides={"metrics_remote": url})
 
 
-def test_local_to_remote_retains_vmagent_and_updates_implicit_default():
+def test_local_to_remote_selects_managed_collector_and_retains_store():
     data = grafana_install.configure(payload(), "cluster")
     remote = grafana_install.configure(data, "cluster", overrides={"metrics_storage": "remote"})
-    assert collector_owners(remote, "cluster")["metrics"] == "victoria-metrics-k8s-stack"
+    assert collector_owners(remote, "cluster")["metrics"] == "nebius-observability-agent"
+    assert app_row(remote, "cluster", "victoria-metrics-k8s-stack")
     assert target_settings(remote, "cluster")["default_datasource"] == "metrics-remote"
     assert len(metrics_destinations(remote, "cluster")) == 1
     assert "write.monitoring" in metrics_destinations(remote, "cluster")[0]["url"]

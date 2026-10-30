@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from .cluster_config import require_soperator_row
 from .nsight import soperator_report_binding
 from .nsight_runtime import NsightKubernetes, prepare_nsight_viewers
 
@@ -17,9 +18,7 @@ def reconcile_report_destination(*, env, config, target_ref, generation, identit
     bindings = prepare_nsight_viewers(config, extra_env=env, target_ref=target_ref)
     if len(bindings) != 2 or bindings[0] != bindings[1]:
         raise RuntimeError("Nsight viewers must share one independently verified report binding")
-    settings = next(
-        row["profiling"] for row in config["deploy"]["targets"] if row["instance_id"] == target_ref
-    )
+    settings = next(row["profiling"] for row in [require_soperator_row(config, target_ref)])
     binding = soperator_report_binding(
         jail_values(config, target_ref),
         namespace="soperator",

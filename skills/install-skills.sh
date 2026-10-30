@@ -42,6 +42,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
 export SKILLS_INSTALL_PROJECTOR="${SCRIPT_DIR}/global-context-management/scripts"
+HOOK_SUPPORT_FILES=(agent_runtime.py hook_runtime.py trusted_runtime.py task_state_permissions.py)
+readonly HOOK_SUPPORT_FILES
 
 # Color/style output (auto-disabled for non-interactive terminals or NO_COLOR).
 S_RESET=""
@@ -175,6 +177,7 @@ show_usage() {
   printf '%b\n' "  - A valid skill is a directory containing ${S_CYAN}SKILL.md${S_RESET}."
   printf '%b\n' "  - Existing unmanaged or other-source-owned destination folders are skipped,"
   printf '%b\n' "    never overwritten."
+  printf '%b\n' "    Unmanaged means ${S_CYAN}.install-source-id${S_RESET} is missing or empty; copy installers can discard it."
   printf '%b\n' "  - Local single-skill and catalog sources share ownership only when they"
   printf '%b\n' "    resolve to the same physical skill directory."
   printf '%b\n' "  - Source-owned skills missing from the selected source are removed, so"
@@ -202,6 +205,7 @@ show_usage() {
   printf '%b\n' "    selected source entries."
   printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET}"
   printf '%b\n' "    entries not present in the selected source."
+  printf '%b\n' "    Shared runtime helpers are expected files and contribute to update/restart status."
   printf '%b\n' "  - After installing new or changed hooks, restart the selected agent; in Codex review/trust"
   printf '%b\n' "    the hook entries in ${S_CYAN}/hooks${S_RESET}."
   printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension"
@@ -836,7 +840,7 @@ write_source_hook_files_manifest() {
     done < <(find "${hook_src}" -type f -print0)
   done
   if [[ -n "${HOOK_SUPPORT_ROOT:-}" ]]; then
-    printf '%s\n' agent_runtime.py hook_runtime.py >> "${output_file}"
+    printf '%s\n' "${HOOK_SUPPORT_FILES[@]}" >> "${output_file}"
   fi
   sort -u "${output_file}" -o "${output_file}"
 }
@@ -2091,10 +2095,10 @@ install_hooks() {
     preflight_register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}"
   fi
 
-  sync_hook_support "${codex_home}"
   file_status_file="$(mktemp)"
   registration_status_file="$(mktemp)"
   HOOK_FILE_STATUS_FILE="${file_status_file}"
+  sync_hook_support "${codex_home}"
   sync_hook_files "${hook_src}" "${codex_home}"
   HOOK_FILE_STATUS_FILE=""
   if [[ "${register_hooks}" -eq 1 ]]; then
@@ -2229,10 +2233,10 @@ install_all_hooks() {
     preflight_register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${refresh_hook_registrations}" "${hook_dirs[@]}"
   fi
 
-  sync_hook_support "${codex_home}"
   file_status_file="$(mktemp)"
   registration_status_file="$(mktemp)"
   HOOK_FILE_STATUS_FILE="${file_status_file}"
+  sync_hook_support "${codex_home}"
   for hook_src in "${hook_dirs[@]}"; do
     sync_hook_files "${hook_src}" "${codex_home}"
   done
@@ -2323,11 +2327,18 @@ PY_CHECK
 
 
 configure_hook_support() {
-  local source="$1" required="${2:-0}" candidate=""
+  local source="$1" required="${2:-0}" candidate="" name="" complete=0
   HOOK_SUPPORT_ROOT=""
   export SKILLS_INSTALL_SUPPORT=""
   for candidate in "${source}" "${source}/.." "${source}/../../.."; do
-    if [[ -f "${candidate}/global-context-management/scripts/agent_runtime.py" && -f "${candidate}/global-context-management/scripts/hook_runtime.py" && -f "${candidate}/global-context-management/scripts/trusted_runtime.py" && -f "${candidate}/global-context-management/scripts/task_state_permissions.py" ]]; then
+    complete=1
+    for name in "${HOOK_SUPPORT_FILES[@]}"; do
+      if [[ ! -f "${candidate}/global-context-management/scripts/${name}" ]]; then
+        complete=0
+        break
+      fi
+    done
+    if [[ "${complete}" -eq 1 ]]; then
       HOOK_SUPPORT_ROOT="$(cd "${candidate}/global-context-management/scripts" && pwd -P)"
       export SKILLS_INSTALL_SUPPORT="${HOOK_SUPPORT_ROOT}"
       return 0
@@ -2356,7 +2367,8 @@ sync_hook_support() {
   local support_root="${HOOK_SUPPORT_ROOT:-}"
   [[ -n "${support_root}" ]] || return 0
   local name="" src="" dest="" digest=""
-  for name in agent_runtime.py hook_runtime.py trusted_runtime.py task_state_permissions.py; do
+  local updated=0 unchanged=0
+  for name in "${HOOK_SUPPORT_FILES[@]}"; do
     src="${support_root}/${name}"
     [[ -f "${src}" ]] || { log_error "Missing shared hook dependency: ${name}"; return 1; }
     dest="${agent_home}/hooks/${name}"
@@ -2366,10 +2378,16 @@ sync_hook_support() {
     fi
     if [[ ! -f "${dest}" ]] || ! cmp -s "${src}" "${dest}"; then
       install -m 0644 "${src}" "${dest}"
+      updated=$((updated + 1))
+    else
+      unchanged=$((unchanged + 1))
     fi
     digest="$(hash_file "${src}")"
     write_hook_file_provenance "${agent_home}" "${name}" "$(hook_source_id "${support_root}")" "${name}" "${digest}" "${digest}"
   done
+  if [[ -n "${HOOK_FILE_STATUS_FILE}" ]]; then
+    printf 'FILE\tshared runtime\t%s\t%s\n' "${updated}" "${unchanged}" >> "${HOOK_FILE_STATUS_FILE}"
+  fi
 }
 
 init_output_style
@@ -2839,7 +2857,17 @@ print_extra_destination_skills "${DEST_DIR}" "${TMP_SOURCE_SKILLS}"
 if [[ "${#combined_hook_dirs[@]}" -gt 0 ]]; then
   install_all_hooks "${SRC_DIR}" "${AGENT_HOME_DIR}" 1 0 1
 else
+  file_status_file="$(mktemp)"
+  HOOK_FILE_STATUS_FILE="${file_status_file}"
   sync_hook_support "${AGENT_HOME_DIR}"
+  HOOK_FILE_STATUS_FILE=""
+  if [[ -s "${file_status_file}" ]]; then
+    print_combined_hook_status "${AGENT_HOME_DIR}" "${file_status_file}" "" 0
+    if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
+      log_action_required "Action required: hook files or registrations changed. Restart ${AGENT} and review/trust entries in /hooks."
+    fi
+  fi
+  rm -f "${file_status_file}"
   log_note "No reviewed hook bundles in the selected source."
 fi
 

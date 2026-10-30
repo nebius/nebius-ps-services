@@ -2,6 +2,8 @@
 set -euo pipefail
 
 umask 077
+diagnostic_phase="config"
+diagnostic_code="CONFIG_INVALID"
 
 usage() {
   cat <<'EOF'
@@ -31,8 +33,12 @@ Options:
 EOF
 }
 
+diagnostic() {
+  printf '[grafana-mcp phase=%s code=%s] %s\n' "$1" "$2" "$3" >&2
+}
+
 die() {
-  printf 'error: %s\n' "$*" >&2
+  diagnostic "$diagnostic_phase" "$diagnostic_code" "$*"
   exit 1
 }
 
@@ -41,12 +47,12 @@ info() {
 }
 
 warn() {
-  printf 'warning: %s\n' "$*" >&2
+  diagnostic "$diagnostic_phase" "$diagnostic_code" "$*"
 }
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    printf 'error: required command not found on PATH: %s\n' "$1" >&2
+    diagnostic "$diagnostic_phase" COMMAND_MISSING "required command not found on PATH: $1"
     exit 127
   fi
 }
@@ -191,14 +197,9 @@ run_nebius_clean() {
     nebius "$@"
 }
 
-sanitize_browser_auth_stderr() {
-  sed -E \
-    's#https://auth[.]nebius[.]com/[^[:space:]]+#<browser-auth-url-redacted>#g'
-}
-
 run_nebius_browser_auth() {
-  run_nebius_clean "$@" \
-    2> >(sanitize_browser_auth_stderr >&2)
+  diagnostic identity AUTH_FOREGROUND "validating the pinned human; complete browser sign-in if opened (120-second auth budget)"
+  run_nebius_clean "$@" 2>/dev/null
 }
 
 resolve_active_profile() {
@@ -207,6 +208,8 @@ resolve_active_profile() {
 }
 
 resolve_profile_user_id() {
+  local diagnostic_phase="identity"
+  local diagnostic_code="AUTH_REQUIRED"
   local -a auth_args=(
     --no-browser
     --auth-timeout 10s
@@ -239,6 +242,7 @@ resolve_profile_user_id() {
     die "Nebius profile '$user_profile' could not be validated non-interactively"
   fi
 
+  diagnostic_code="IDENTITY_INVALID"
   if ! user_id="$(
     printf '%s' "$identity_json" \
       | python3 -c '
@@ -431,7 +435,44 @@ write_identity_binding() {
   validate_private_file "$identity_file"
 }
 
+inspect_private_state() {
+  local diagnostic_phase="private-state"
+  local diagnostic_code="PRIVATE_STATE_INVALID"
+  local stored_user_id=""
+
+  # Offline validation only: do not create or tighten files before the local
+  # registration and binary checks have passed and the identity is known.
+  case "$state_dir" in
+    "${HOME}/"*) ;;
+    *) die "private state must be an absolute path below HOME" ;;
+  esac
+  validate_existing_state_prefix "$state_dir" \
+    || die "private state has an unsafe existing path component"
+  if [ -e "$state_dir" ] && [ "$mode" = "check" ]; then
+    validate_private_state_dir "$state_dir" \
+      || die "private state path is unsafe; require a mode-0700 leaf"
+  fi
+  if [ -e "$identity_file" ] || [ -L "$identity_file" ]; then
+    validate_private_file "$identity_file"
+    [ "$(awk 'END { print NR }' "$identity_file")" = "3" ] \
+      && [ "$(read_binding_field version)" = "1" ] \
+      && [ "$(read_binding_field profile)" = "$user_profile" ] \
+      || die "identity binding has an unsupported format or profile"
+    stored_user_id="$(read_binding_field user_id)"
+    [[ "$stored_user_id" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$ ]] \
+      || die "identity binding contains an invalid user ID"
+  fi
+  if [ -e "$token_file" ] || [ -L "$token_file" ]; then
+    [ ! -L "$token_file" ] && [ -f "$token_file" ] \
+      && [ "$(file_uid "$token_file")" = "$(id -u)" ] \
+      && [ "$(file_mode "$token_file")" = "600" ] \
+      || die "token must be a user-owned regular mode-0600 file"
+  fi
+}
+
 ensure_identity_binding() {
+  local diagnostic_phase="private-state"
+  local diagnostic_code="PRIVATE_STATE_INVALID"
   if ! prepare_private_state_dir; then
     return
   fi
@@ -439,6 +480,8 @@ ensure_identity_binding() {
   if [ -e "$identity_file" ] || [ -L "$identity_file" ]; then
     validate_private_file "$identity_file"
     if ! binding_matches; then
+      diagnostic_phase="identity"
+      diagnostic_code="IDENTITY_MISMATCH"
       die "the pinned profile no longer matches its private identity binding; create a distinct human profile and rerun setup"
     fi
     info "identity: validated pinned human profile binding"
@@ -456,6 +499,8 @@ ensure_identity_binding() {
 }
 
 check_binary() {
+  local diagnostic_phase="child-startup"
+  local diagnostic_code="CHILD_STARTUP_FAILED"
   if command -v mcp-grafana >/dev/null 2>&1; then
     info "binary: mcp-grafana found at $(command -v mcp-grafana)"
   else
@@ -478,7 +523,8 @@ check_binary() {
   fi
 }
 
-token_file_is_fresh() {
+token_cache_age_is_acceptable() {
+  # File age is a retrieval-cache heuristic, not token issuance or expiry.
   [ -f "$token_file" ] \
     && [ ! -L "$token_file" ] \
     && [ "$(file_uid "$token_file")" = "$(id -u)" ] \
@@ -504,12 +550,14 @@ PY
 }
 
 ensure_startup_token() {
-  if token_file_is_fresh; then
-    info "token: reusable pinned-human startup token is fresh"
+  local diagnostic_phase="token"
+  local diagnostic_code="TOKEN_RETRIEVAL_FAILED"
+  if token_cache_age_is_acceptable; then
+    info "token: pinned-human startup cache meets the one-hour file-age heuristic; expiry is unverified"
     return
   fi
   if [ "$mode" = "check" ]; then
-    info "token: fresh profile-scoped startup token is missing; --apply would mint it"
+    info "token: acceptable profile-scoped startup cache is missing; --apply would retrieve it"
     drift_found="true"
     return
   fi
@@ -519,9 +567,9 @@ ensure_startup_token() {
     NEBIUS_GRAFANA_IDENTITY_FILE="$identity_file" \
     NEBIUS_GRAFANA_USER_PROFILE="$user_profile" \
     "$wrapper_path" --refresh-token-only >/dev/null
-  token_file_is_fresh \
-    || die "wrapper did not produce a valid fresh profile-scoped startup token"
-  info "token: minted fresh pinned-human startup token"
+  token_cache_age_is_acceptable \
+    || die "wrapper did not produce an acceptable profile-scoped startup cache"
+  info "token: retrieved pinned-human startup token; new issuance and expiry extension are unverified"
 }
 
 trusted_wrapper_path() {
@@ -1183,7 +1231,6 @@ fi
 [ -n "$user_profile" ] \
   || die "no active Nebius CLI profile was found; pass --user-profile with a human profile"
 validate_profile_name
-profile_user_id="$(resolve_profile_user_id)"
 
 state_dir="${state_root}/${mcp_server_name}/${user_profile}"
 identity_file="${state_dir}/identity"
@@ -1207,8 +1254,15 @@ if [ "$skip_codex" = "false" ]; then
   inspect_codex_mcp
 fi
 
-ensure_identity_binding
+inspect_private_state
 check_binary
+# Report offline defects before contacting Nebius. Check mode never repairs
+# them; apply rejects unapproved registration drift in inspect_codex_mcp.
+if [ "$drift_found" = "true" ]; then
+  exit 1
+fi
+profile_user_id="$(resolve_profile_user_id)"
+ensure_identity_binding
 ensure_startup_token
 
 if [ "$skip_codex" = "false" ]; then

@@ -7,8 +7,8 @@ and uv to keep the checkout environment consistent with `uv.lock`.
 
 ## Environment
 
-Required tools are Python 3.12–3.14, Git, Make, and uv `0.12.9` or a compatible
-`0.12.x` release. A native toolchain may be needed when Python wheels are
+Required tools are Python 3.12–3.14, Git, Make, and uv `0.13.5` or a compatible
+`0.13.x` release. A native toolchain may be needed when Python wheels are
 unavailable. Install uv through its
 [official guide](https://docs.astral.sh/uv/getting-started/installation/).
 Command-specific tools remain listed in the [README](../README.md#credentials-and-tools).
@@ -89,6 +89,17 @@ separate tests check version and callback reachability. Regenerate
 `tests/fixtures/cli_contract.json` only for intentional CLI metadata changes.
 `scripts/generate_cli_contract.py` writes that fixture and has no check-only
 mode; documentation-only reorganization keeps it unchanged.
+
+After reviewing an intentional CLI change, refresh the fixture in the locked
+environment and review its diff before running `make all`:
+
+```bash
+uv run --locked --no-sync --no-python-downloads python scripts/generate_cli_contract.py --output tests/fixtures/cli_contract.json
+git diff -- tests/fixtures/cli_contract.json
+```
+
+Help text participates in the command hashes, so a help-only CLI edit also needs
+this review. Do not regenerate the fixture to accept an unexplained mismatch.
 
 README tests derive command-index completeness from the registered tree and
 parse examples across operator guides without executing product callbacks.

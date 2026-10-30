@@ -7,8 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-ASSET_DIR = Path(__file__).resolve().parents[1] / "assets"
-sys.path.insert(0, str(ASSET_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "assets"))
 
 from sdk.inspection import Report
 from sdk.runtime import (

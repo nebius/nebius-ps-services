@@ -150,7 +150,16 @@ if args[:2] == ["iam", "get-access-token"]:
         state["agent_token_calls"] += 1
     else:
         state["human_token_calls"] += 1
+        state["human_token_args"] = args
     save()
+    if not profile.startswith("codex-agent-") and state.get("human_login_expired"):
+        print("https://auth.example.invalid/authorize?state=fixture-private", file=sys.stderr)
+        if "--no-browser" in args or state.get("human_login_rejected"):
+            print("fixture-sensitive-auth-diagnostic", file=sys.stderr)
+            raise SystemExit(2)
+        state["human_login_expired"] = False
+        state["browser_login_completed"] = True
+        save()
     credential_blocks_agent = state["credential_broken"] and profile.startswith(
         "codex-agent-"
     )
@@ -244,7 +253,7 @@ if args[:3] == ["iam", "service-account", "get"]:
     )
     raise SystemExit(0)
 
-if args[:3] == ["iam", "project", "get"]:
+if args[:4] == ["iam", "v2", "project", "get"]:
     project_id = option_value("--id") or (args[3] if len(args) > 3 else "")
     project_name = state["project_names"].get(project_id, project_id)
     if not project_id or project_id not in state["project_ids"]:
@@ -262,7 +271,7 @@ if args[:3] == ["iam", "project", "get"]:
     )
     raise SystemExit(0)
 
-if args[:3] == ["iam", "project", "get-by-name"]:
+if args[:4] == ["iam", "v2", "project", "get-by-name"]:
     require_human()
     project_name = option_value("--name")
     for project_id, candidate_name in state["project_names"].items():
@@ -349,6 +358,8 @@ if args[:3] == ["iam", "access-permit", "list"]:
 
 if args[:3] == ["iam", "access-permit", "create"]:
     require_human()
+    if state.get("membership_changes_during_permit_create"):
+        state["membership_extra_ids"] = ["serviceaccount-extra"]
     role = option_value("--role")
     parent_id = option_value("--parent-id")
     resource_id = option_value("--resource-id")
@@ -1089,7 +1100,83 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must contain only one membership", result.stderr)
+
         self.assertEqual(self.read_state()["membership_list_calls"], 2)
+
+    def test_unsafe_members_cannot_receive_missing_permits(self) -> None:
+        for extras in (["serviceaccount-extra"], [SERVICE_ACCOUNT_ID]):
+            with self.subTest(extras=extras):
+                self.write_state(access_permit_roles=[])
+                self.write_credential()
+                state = self.read_state()
+                state["membership_extra_ids"] = extras
+                self.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+                result = self.run_setup()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must contain only one membership", result.stderr)
+                state = self.read_state()
+                self.assertEqual(state["access_permit_create_roles"], [])
+                self.assertEqual(state["membership_create_calls"], 0)
+                self.assertEqual(state["auth_public_key_generate_calls"], 0)
+
+    def test_expired_human_login_completes_in_live_ensure(self) -> None:
+        self.write_state()
+        state = self.read_state()
+        state["human_login_expired"] = True
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = self.assert_setup_succeeds()
+
+        state = self.read_state()
+        self.assertTrue(state["browser_login_completed"])
+        self.assertEqual(state["human_token_calls"], 1)
+        self.assertIn("3m", state["human_token_args"])
+        for private in ("fake-token", "fixture-private", "fixture-sensitive"):
+            self.assertNotIn(private, result.stdout + result.stderr)
+
+    def test_membership_change_during_permit_write_is_rejected(self) -> None:
+        self.write_state(access_permit_roles=[])
+        state = self.read_state()
+        state["membership_changes_during_permit_create"] = True
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must contain only one membership", result.stderr)
+        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 0)
+
+    def test_rejected_human_login_stops_before_iam_without_raw_diagnostics(self) -> None:
+        self.write_state()
+        state = self.read_state()
+        state.update(human_login_expired=True, human_login_rejected=True)
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = self.run_setup()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("blocked-admin-auth", result.stderr)
+        self.assertEqual(self.read_state()["project_get_calls"], 0)
+        self.assertEqual(self.read_state()["auth_public_key_generate_calls"], 0)
+        self.assertNotIn("fixture-private", result.stdout + result.stderr)
+        self.assertNotIn("fixture-sensitive", result.stdout + result.stderr)
+
+    def test_dry_run_keeps_expired_human_login_non_browser(self) -> None:
+        self.write_state()
+        state = self.read_state()
+        state["human_login_expired"] = True
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = self.run_setup(extra_args=("--dry-run",))
+
+        self.assertNotEqual(result.returncode, 0)
+        state = self.read_state()
+        self.assertIn("--no-browser", state["human_token_args"])
+        self.assertNotIn("browser_login_completed", state)
+        self.assertEqual(state["project_get_calls"], 0)
+        self.assertNotIn("fixture-private", result.stdout + result.stderr)
 
     def test_setup_adds_fixed_tenant_viewer_permit_for_quota_reads(self) -> None:
         self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
@@ -2348,7 +2435,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(state["active"], AGENT_PROFILE)
         self.assertEqual(state["group_get_by_name_calls"], 1)
         self.assertEqual(state["access_permit_list_calls"], 1)
-        self.assertEqual(state["membership_list_calls"], 1)
+        self.assertEqual(state["membership_list_calls"], 2)
         self.assertEqual(state["agent_token_calls"], 1)
         self.assertEqual(state["agent_whoami_calls"], 1)
         self.assertEqual(state["agent_iam_attempts"], 0)

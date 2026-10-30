@@ -45,6 +45,7 @@ def config():
                 }
             ]
         },
+        "version": "v2",
     }
 
 

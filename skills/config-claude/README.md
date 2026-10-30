@@ -1,5 +1,15 @@
 # Config Claude
 
+Optional Tavily setup uses a pinned OAuth bridge and preserves unrelated configuration.
+Its strict checks validate executable paths and native wiring; the macOS OAuth
+fixture is a manual qualification step documented in [the bridge guide](references/tavily-bridge.md).
+Global documentation routing prefers vendor tools available in the current
+session, then Tavily against official sources, then disclosed official-web
+fallback. Small documentation lookups follow the same route. Search,
+Extract, Map, Crawl and Research are purpose-specific choices, not a required
+pipeline. See [research routing and OAuth setup](references/research-routing.md)
+for setup commands, private per-host file storage and separate verification lanes.
+
 An explicit setup skill for Claude Code, usable from Codex or Claude. It
 preserves personal settings while reconciling native instructions, three
 read-only roles, shared hooks and private task-state storage. The source folder
@@ -9,6 +19,13 @@ Invoke `$config-claude` from Codex, `/config-claude` for a direct Claude skill,
 or `/skills:config-claude` from the repository's Claude plugin. Describe whether
 you want inspection, setup, reconciliation or missing-settings recovery. Help
 performs no inspection. Installing the skill does not configure the machine.
+
+`nebiusDocs` is available in the optional MCP catalog at
+<https://docs.nebius.com/mcp>. Selected setup uses native user scope; global
+`CLAUDE.md` guidance prefers available documentation tools, then Tavily reads
+of official pages, then disclosed official-web fallback. It does not install an
+unselected integration. See
+[Nebius MCP setup](references/mcp.md#nebius-documentation).
 
 The global instruction template reuses task authorization for necessary new
 credentials and secrets, permits only secure operational storage of values,
@@ -83,3 +100,14 @@ on close; this does not connect to a personal Chrome profile. Existing config
 is patch-only and requires an explicit request to change its values. Restart
 the client/MCP session after applying a config change. Agent exploration through
 MCP is separate from required Playwright Test acceptance and its evidence.
+
+### Adaptive research routing
+
+Global guidance preserves vendor documentation tools first and built-in search
+for unrelated quick facts. Substantial work uses adaptive evidence checkpoints,
+not fixed query/page quotas. Tavily Research receives public briefs, uses only
+exposed controls, avoids duplicate jobs after uncertain completion, and requires
+verification of decisive claims in original sources. A job count is not an
+enforced cost or service-internal work limit. See
+[research routing](references/research-routing.md) for selected-scope refresh
+and separate static, native and quality evidence.

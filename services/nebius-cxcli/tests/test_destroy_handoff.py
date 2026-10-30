@@ -37,13 +37,14 @@ def project(tmp_path, monkeypatch):
         path_tenant_folder="tenant",
         path_project_folder="project",
     )
-    paths.config_path.write_text("version: original\n")
+    paths.config_path.write_text("version: v2\ncompatibility: {fixture: original}\n")
     for directory in [paths.infra_dir, paths.flux_dir, paths.reports_dir]:
         directory.mkdir(parents=True, exist_ok=True)
     source = {
         "client_info": {"nebius": {"project_id": "project-a"}},
         "apps": {"charts": [{"id": "soperator", "instance_id": "cluster-a"}]},
         "infra": {"components": [{"id": "mk8s", "instance_id": "cluster-a", "enabled": True}]},
+        "version": "v2",
     }
     config = SimpleNamespace()
     store = Store()
@@ -74,7 +75,7 @@ def project(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "read_soperator_operation_status", lambda **kw: None)
     monkeypatch.setattr(cli, "_load_source_payload", lambda _: copy.deepcopy(source))
     manifest = {
-        "deploy": {
+        "execution": {
             "targets": [
                 {
                     "target_ref": "cluster-a",
@@ -86,8 +87,14 @@ def project(tmp_path, monkeypatch):
                     "access": "external",
                     "flux_dir": "flux/targets/cluster-a",
                 }
-            ]
-        }
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     monkeypatch.setattr(cli, "_load_deploy_context_readonly", lambda _: (config, paths, manifest))
     monkeypatch.setattr(cli, "_deploy_report_target_contexts", lambda _: {})
@@ -162,10 +169,28 @@ def project(tmp_path, monkeypatch):
         from nebius_cxcli.generated_manifest import manifest_path_for_generated_dir
 
         manifest_path_for_generated_dir(staged.generated_dir).write_text(
-            json.dumps({"deploy": {"targets": []}})
+            json.dumps(
+                {
+                    "schema": "nebius-cxcli-generated/v3",
+                    "runtime_config": {
+                        "version": "v2",
+                        "infra": {"components": []},
+                        "apps": {"charts": []},
+                    },
+                    "execution": {
+                        "backend": {},
+                        "targets": [],
+                        "required_component_outputs": [],
+                        "status_watchers": [],
+                        "validations": [],
+                    },
+                }
+            )
         )
         return SimpleNamespace(
-            staged_paths=staged, proposed_config_text="version: cleaned\n", cleanup=lambda: None
+            staged_paths=staged,
+            proposed_config_text="version: v2\ncompatibility: {fixture: cleaned}\n",
+            cleanup=lambda: None,
         )
 
     monkeypatch.setattr(cli, "_render_soperator_upgrade_admission", stage)
@@ -275,7 +300,9 @@ def test_cli_deletes_gpu_and_applies_pvc_flag_through_publication(project, prese
         "gpu_cluster",
         *([] if preserve else ["disk", "disk"]),
     ]
-    assert project.paths.config_path.read_text() == "version: cleaned\n"
+    assert (
+        project.paths.config_path.read_text() == "version: v2\ncompatibility: {fixture: cleaned}\n"
+    )
     value = load_destroy_receipt(owner.destroy_receipt_path(project.paths, "mk8scluster-a"))
     assert value.status == "complete" and value.approved["preserve_pvc_disks"] == preserve
 
@@ -404,11 +431,15 @@ def test_dry_run_is_local_and_next_execution_rebuilds_preview(project):
     result = invoke(project, "--dry-run")
     assert result.exit_code == 0, result.output
     assert not project.store.writes and not project.cloud.calls
-    assert project.paths.config_path.read_text() == "version: original\n"
+    assert (
+        project.paths.config_path.read_text() == "version: v2\ncompatibility: {fixture: original}\n"
+    )
     result = invoke(project)
     assert result.exit_code == 0, result.output
     assert len(project.cloud.calls) == 1
-    assert project.paths.config_path.read_text() == "version: cleaned\n"
+    assert (
+        project.paths.config_path.read_text() == "version: v2\ncompatibility: {fixture: cleaned}\n"
+    )
     assert (
         load_destroy_receipt(owner.destroy_receipt_path(project.paths, "mk8scluster-a")).status
         == "complete"
@@ -468,12 +499,10 @@ def test_destroy_terraform_failures_do_not_disclose_provider_values(project, mon
 def test_explicit_delete_sfs_phrase_and_same_cluster_sdk_path(project, monkeypatch, onboarded):
     if onboarded:
         project.source["infra"]["components"] = []
-        project.source["deploy"] = {
-            "targets": [
-                {"instance_id": "cluster-a", "kind": "external-mk8s", "cluster_id": "mk8scluster-a"}
-            ]
-        }
-        project.manifest["deploy"]["targets"][0].update(
+        project.source["infra"].setdefault("external_clusters", []).append(
+            {"instance_id": "cluster-a", "cluster_id": "mk8scluster-a"}
+        )
+        project.manifest["execution"]["targets"][0].update(
             kind="external-mk8s", ownership="external", cluster_id="mk8scluster-a"
         )
         monkeypatch.setattr(cli, "_generated_bundle_module_sources", lambda _: [])
@@ -625,14 +654,16 @@ def test_publication_checkpoint_reestablishes_final_generation_before_completion
     result = invoke(project)
     assert result.exit_code == 1 and "baseline interrupted" in result.output
     if restore_original:
-        project.paths.config_path.write_text("version: original\n")
+        project.paths.config_path.write_text("version: v2\ncompatibility: {fixture: original}\n")
     for path in project.paths.generated_dir.rglob("*"):
         if path.is_file():
             path.unlink()
     monkeypatch.setattr(DeploymentState, "clear_accepted", original)
     result = invoke(project, phrase="")
     assert result.exit_code == 0, result.output
-    assert project.paths.config_path.read_text() == "version: cleaned\n"
+    assert (
+        project.paths.config_path.read_text() == "version: v2\ncompatibility: {fixture: cleaned}\n"
+    )
     assert (project.paths.infra_dir / "main.tf").read_text() == "# final generation\n"
     assert len(project.cloud.calls) == 1
 
@@ -645,12 +676,10 @@ def test_yes_deletes_managed_and_onboarded_without_tty(project, monkeypatch, ord
         monkeypatch.setattr(owner, "soperator_registration_app_row", lambda *a, **k: None)
     if onboarded:
         project.source["infra"]["components"] = []
-        project.source["deploy"] = {
-            "targets": [
-                {"instance_id": "cluster-a", "kind": "external-mk8s", "cluster_id": "mk8scluster-a"}
-            ]
-        }
-        project.manifest["deploy"]["targets"][0].update(
+        project.source["infra"].setdefault("external_clusters", []).append(
+            {"instance_id": "cluster-a", "cluster_id": "mk8scluster-a"}
+        )
+        project.manifest["execution"]["targets"][0].update(
             kind="external-mk8s", ownership="external", cluster_id="mk8scluster-a"
         )
         monkeypatch.setattr(cli, "_generated_bundle_module_sources", lambda _: [])
@@ -667,7 +696,9 @@ def test_yes_dry_run_never_approves_or_deletes(project, monkeypatch):
     result = invoke(project, "--yes", "--dry-run", phrase="")
     assert result.exit_code == 0, result.output
     assert not project.cloud.calls and not project.store.writes
-    assert project.paths.config_path.read_text() == "version: original\n"
+    assert (
+        project.paths.config_path.read_text() == "version: v2\ncompatibility: {fixture: original}\n"
+    )
 
 
 def test_yes_terminal_retry_is_explicit_and_keeps_inventory(project, monkeypatch):
@@ -701,7 +732,9 @@ def test_completed_receipt_replay_never_resolves_removed_target(project, monkeyp
     result = invoke(project, "--yes")
     assert result.exit_code == 0, result.output
     assert len(project.cloud.calls) == 1
-    project.paths.config_path.write_text("version: replacement-cluster\n")
+    project.paths.config_path.write_text(
+        "version: v2\ncompatibility: {fixture: replacement-cluster}\n"
+    )
     result = invoke(project, "--yes")
     assert result.exit_code == 1 and "Completed destroy config differs" in result.output
     assert len(project.cloud.calls) == 1

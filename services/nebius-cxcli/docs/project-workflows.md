@@ -154,7 +154,9 @@ retry once.
 ## Terraform and Flux operations
 
 `terraform plan/apply` uses generated inputs and runtime/backend setup.
-Dedicated Terraform mutations reject protected Soperator scope; use deploy.
+Dedicated Terraform apply rejects protected Soperator and WireGuard scope; use
+deploy so each component's lifecycle runs. Keep WireGuard's component configuration
+until explicit destroy retires its connection record before deleting the gateway.
 `flux apply` reconciles apps directly and waits for current-generation readiness.
 Local deploy installs missing Flux controllers without requiring the Flux CLI.
 
@@ -191,11 +193,11 @@ Day-2 commands require matching configured/deployed components. After changing
 selection, render and deploy first. `--component` selects an instance ID before
 a component type; a type is accepted only when one enabled instance matches.
 
-Before privileged helpers run, put independently verified host keys in
+For SSH jump-host helpers, put independently verified host keys in
 `generated/ssh_known_hosts` or use `--ssh-known-hosts-file` for a persistent
 alternative. cxcli does not fetch first-seen keys or use machine-global trust.
-Render replaces the default file; restore it afterward or keep it outside
-`generated/`.
+Rendering preserves existing managed trust. WireGuard gets its expected host key
+from the authenticated SecretStash connection record.
 
 ### SSH jump host
 
@@ -218,10 +220,15 @@ dedicated jump host for ProxyJump.
 
 ### WireGuard
 
+New installations use an existing IAM administrator group selected live through
+the Nebius SDK. Deployment provisions SecretStash references and the VM's own
+service account automatically. Run day-2 commands with your human Nebius profile;
+no generated bundle or personal SSH key is required. See
+[WireGuard access](wireguard.md) for the full IAM, rotation and recovery contract.
+
 ```bash
 nebius-cxcli wireguard --gen-client-conf "$CONFIG" \
-  --component wireguard-gw@vpn --client-name laptop \
-  --ssh-known-hosts-file ./known_hosts
+  --component wireguard-gw@vpn --client-name laptop
 ```
 
 The gateway allocates a free tunnel address and returns a file under the
@@ -235,8 +242,7 @@ comma-separated value:
 
 ```bash
 nebius-cxcli wireguard --add-local-subnets "$CONFIG" \
-  --component wireguard-gw@vpn --local-subnet 10.20.0.0/16,10.30.0.0/16 \
-  --ssh-known-hosts-file ./known_hosts
+  --component wireguard-gw@vpn --local-subnet 10.20.0.0/16,10.30.0.0/16
 ```
 
 Removal uses `--remove-local-subnets`. Changes affect future files, not already

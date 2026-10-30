@@ -366,9 +366,11 @@ order, branch selection and base synchronization before the process below.
    blocked by external state.
    When GitHub checks are expected and available, watch or poll them until
    they reach a terminal pass, fail, skip, or cancel state within the fixed
-   10,800-second PR-readiness budget before reporting the PR as ready. Ordinary
+   86,400-second (24-hour) PR-readiness budget before reporting the PR as ready. Ordinary
    completion preserves the same deadline through repairs and reruns; use the
-   publication caller's checkpoint when present. Only explicit release resume
+   publication caller's checkpoint when present, even when shorter. An explicit
+   user continuation may start a new ordinary observation attempt with the same
+   transaction. Only explicit release resume
    renews release budgets. If checks remain pending because external CI is delayed or
    unavailable, report the PR as pending instead of ready and include the last
    observed check state.

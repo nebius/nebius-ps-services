@@ -65,16 +65,19 @@ def test_soperator_cluster_key_rejects_dot_path_components(unsafe_value: str) ->
 
 def test_soperator_cluster_identity_from_payload_uses_target_cluster_id() -> None:
     payload = {
-        "deploy": {
-            "targets": [
+        "infra": {
+            "components": [],
+            "external_clusters": [
                 {
                     "instance_id": "external-soperator",
                     "cluster_id": "mk8scluster-e00sy1jv52q5vrqrxy",
                     "cluster_name": "External Prod",
                     "kube_context": "ctx",
                 }
-            ]
-        }
+            ],
+        },
+        "apps": {"charts": []},
+        "version": "v2",
     }
 
     identity = soperator_cluster_artifact_identity_from_payload(

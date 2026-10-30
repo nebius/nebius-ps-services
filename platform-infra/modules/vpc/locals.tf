@@ -122,12 +122,16 @@ locals {
 
   subnet_output = {
     for key, subnet in nebius_vpc_v1_subnet.this : key => {
-      id                 = subnet.id
-      name               = try(subnet.name, local.subnets[key].name)
-      network_id         = subnet.network_id
-      parent_id          = subnet.parent_id
-      ipv4_private_cidrs = try(subnet.status.ipv4_private_cidrs, [])
-      ipv4_public_cidrs  = try(subnet.status.ipv4_public_cidrs, [])
+      id         = subnet.id
+      name       = try(subnet.name, local.subnets[key].name)
+      network_id = subnet.network_id
+      parent_id  = subnet.parent_id
+      ipv4_private_cidrs = try(flatten([
+        for pool in subnet.status.ipv4_private_pools : coalesce(pool.cidrs, [])
+      ]), [])
+      ipv4_public_cidrs = try(flatten([
+        for pool in subnet.status.ipv4_public_pools : coalesce(pool.cidrs, [])
+      ]), [])
       route_table = {
         id      = try(subnet.status.route_table.id, null)
         default = try(subnet.status.route_table.default, null)

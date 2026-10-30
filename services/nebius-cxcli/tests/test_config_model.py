@@ -141,11 +141,13 @@ def test_to_dynamic_payload_generates_components_and_charts() -> None:
 
 def test_to_runtime_payload_round_trip_keeps_enabled_flags() -> None:
     runtime = _starter_runtime_payload()
-    runtime["deploy"] = {"observability": {"enabled": False}}
+    runtime["infra"]["external_clusters"] = [
+        {"instance_id": "external", "kube_context": "external", "observability": {"enabled": False}}
+    ]
     dynamic = to_dynamic_payload(runtime)
     back = to_runtime_payload(dynamic)
 
-    assert back["deploy"]["observability"]["enabled"] is False
+    assert back["infra"]["external_clusters"][0]["observability"]["enabled"] is False
     assert back["infra"]["mk8s"]["enabled"] is True
     assert back["infra"]["object_storage"]["enabled"] is False
     assert back["apps"]["workloads"]["n8n"]["enabled"] is False
@@ -208,7 +210,7 @@ def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) ->
 
 def test_load_config_prunes_inactive_mk8s_node_group_defaults(tmp_path: Path) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -273,23 +275,12 @@ def test_normalize_runtime_config_prunes_cpu_soperator_gpu_node_group_defaults()
                     "enabled": True,
                     "inputs": {
                         "node_group_defaults": {
-                            "cpu": {
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                            },
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                            },
+                            "cpu": {"platform": "cpu-d3", "preset": "32vcpu-128gb"},
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "8gpu-128vcpu-1600gb"},
                         }
                     },
                 },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
+                {"id": "sfs", "instance_id": "sfs", "enabled": True, "inputs": {}},
             ]
         },
         "apps": {
@@ -303,6 +294,7 @@ def test_normalize_runtime_config_prunes_cpu_soperator_gpu_node_group_defaults()
                 }
             ]
         },
+        "version": "v2",
     }
 
     assert normalize_runtime_config_payload(payload) is True

@@ -41,7 +41,17 @@ def restored_bundle():
     }
     documents = [outer, graph, value_map]
     frozen = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}]}},
+        {
+            "execution": {
+                "targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/cluster/kustomization.yaml": base64.b64encode(
                 b"resources: [bundle.yaml]"

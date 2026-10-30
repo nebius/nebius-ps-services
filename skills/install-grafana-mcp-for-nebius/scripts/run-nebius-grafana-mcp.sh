@@ -16,13 +16,15 @@ worker_timer_pid=""
 refresh_worker_stop_status=""
 refresh_worker_stopped_mcp="false"
 refresh_reason_file=""
+diagnostic_phase="config"
+diagnostic_code="CONFIG_INVALID"
 
 usage() {
   cat <<'USAGE'
 Run Grafana MCP for Nebius-managed Grafana with a pinned human Nebius profile.
 
 The profile and identity binding must be created by ensure-local-config.sh.
-Every token mint revalidates that the pinned profile still resolves to the
+Every token retrieval revalidates that the pinned profile still resolves to the
 expected human user. Ambient agent credentials and competing Grafana
 credentials are ignored.
 
@@ -38,8 +40,8 @@ Optional environment:
   GRAFANA_URL
       Defaults to https://grafana.nebius.dev/.
   NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS
-      Token-file refresh interval. Defaults to 36000 seconds and must not
-      exceed 36000.
+      Best-effort retrieval/restart interval. Defaults to 36000 seconds and
+      must not exceed 36000. This is not an expiry guarantee.
   NEBIUS_GRAFANA_TOKEN_REFRESH_RETRY_SECONDS
       Three retry delays. Defaults to "60 300 900".
   NEBIUS_GRAFANA_LOCK_WAIT_SECONDS
@@ -55,14 +57,18 @@ Usage:
 USAGE
 }
 
+diagnostic() {
+  printf '[grafana-mcp phase=%s code=%s] %s\n' "$1" "$2" "$3" >&2
+}
+
 die() {
-  printf 'error: %s\n' "$*" >&2
+  diagnostic "$diagnostic_phase" "$diagnostic_code" "$*"
   exit 1
 }
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    printf 'error: required command not found on PATH: %s\n' "$1" >&2
+    diagnostic "$diagnostic_phase" "COMMAND_MISSING" "required command not found on PATH: $1"
     exit 127
   fi
 }
@@ -205,7 +211,7 @@ cleanup_refresh_worker() {
     && [ "$status" -ne 130 ] \
     && [ "$status" -ne 143 ] \
     && [ "$refresh_worker_stopped_mcp" != "true" ]; then
-    printf 'error: token refresh worker failed unexpectedly; stopping MCP before credential expiry\n' >&2
+    diagnostic restart REFRESH_WORKER_FAILED "token retrieval worker failed unexpectedly; stopping MCP; restart required"
     write_refresh_exit_reason "refresh-worker-failed" || true
   fi
   return "$status"
@@ -401,12 +407,12 @@ PY
 validate_private_file() {
   local path="$1"
 
-  [ -L "$path" ] && die "private state file must not be a symlink: $path"
-  [ -f "$path" ] || die "private state file is missing or not regular: $path"
+  [ -L "$path" ] && die "private state file must not be a symlink"
+  [ -f "$path" ] || die "private state file is missing or not regular"
   [ "$(file_uid "$path")" = "$(id -u)" ] \
-    || die "private state file is not owned by the current user: $path"
+    || die "private state file is not owned by the current user"
   [ "$(file_mode "$path")" = "600" ] \
-    || die "private state file must have mode 0600: $path"
+    || die "private state file must have mode 0600"
 }
 
 validate_state_paths() {
@@ -468,17 +474,16 @@ run_nebius_clean() {
     nebius "$@"
 }
 
-sanitize_browser_auth_stderr() {
-  sed -E \
-    's#https://auth[.]nebius[.]com/[^[:space:]]+#<browser-auth-url-redacted>#g'
-}
-
 run_nebius_browser_auth() {
-  run_nebius_clean "$@" \
-    2> >(sanitize_browser_auth_stderr >&2)
+  diagnostic identity AUTH_FOREGROUND "validating the pinned human; complete browser sign-in if opened (120-second auth budget)"
+  # CLI stderr may contain authorization URLs, tokens or identity data. The
+  # CLI opens the browser itself; never forward its raw diagnostics to MCP.
+  run_nebius_clean "$@" 2>/dev/null
 }
 
 resolve_profile_user_id() {
+  local diagnostic_phase="identity"
+  local diagnostic_code="IDENTITY_INVALID"
   local auth_mode="${1:-noninteractive}"
   local -a auth_args=(
     --no-browser
@@ -510,7 +515,7 @@ resolve_profile_user_id() {
         --format json \
         "${auth_args[@]}" </dev/null
     )"; then
-      printf 'error: pinned Nebius profile could not be validated after browser authentication\n' >&2
+      diagnostic identity AUTH_REQUIRED "pinned Nebius profile could not be validated after browser authentication"
       return 1
     fi
   elif ! identity_json="$(
@@ -519,7 +524,7 @@ resolve_profile_user_id() {
       --format json \
       "${auth_args[@]}" </dev/null 2>/dev/null
   )"; then
-    printf 'error: pinned Nebius profile could not be validated non-interactively\n' >&2
+    diagnostic identity AUTH_REQUIRED "pinned Nebius profile could not be validated non-interactively; use foreground setup to sign in"
     return 1
   fi
 
@@ -545,7 +550,7 @@ if not isinstance(user_id, str) or not user_id:
 print(user_id)
 '
   )"; then
-    printf 'error: pinned Nebius profile is not a validated human user profile\n' >&2
+    diagnostic identity IDENTITY_INVALID "pinned Nebius profile is not a validated human user profile"
     return 1
   fi
 
@@ -558,7 +563,7 @@ validate_identity_binding() {
 
   actual_user_id="$(resolve_profile_user_id "$auth_mode")" || return 1
   if [ "$actual_user_id" != "$binding_user_id" ]; then
-    printf 'error: pinned Nebius profile identity changed; create a distinct human profile and rerun setup\n' >&2
+    diagnostic identity IDENTITY_MISMATCH "pinned Nebius profile identity changed; create a distinct human profile and rerun setup"
     return 1
   fi
 }
@@ -575,7 +580,8 @@ if len(lines) != 1 or not lines[0].strip() or b"\x00" in lines[0]:
 PY
 }
 
-token_file_is_fresh() {
+token_cache_age_is_acceptable() {
+  # File age is a retrieval-cache heuristic, not token issuance or expiry.
   [ -f "$GRAFANA_TOKEN_FILE" ] \
     && [ ! -L "$GRAFANA_TOKEN_FILE" ] \
     && [ "$(file_uid "$GRAFANA_TOKEN_FILE")" = "$(id -u)" ] \
@@ -646,6 +652,8 @@ PY
 }
 
 refresh_token() {
+  local diagnostic_phase="lock"
+  local diagnostic_code="LOCK_FAILED"
   local auth_mode="${1:-noninteractive}"
   local -a auth_args=(
     --no-browser
@@ -702,7 +710,7 @@ refresh_token() {
     fi
     if [ -L "$lock_dir" ]; then
       [ -L "$lock_dir" ] || continue
-      printf 'error: profile-scoped token refresh lock path is unsafe\n' >&2
+      diagnostic lock LOCK_UNSAFE "profile-scoped token refresh lock path is unsafe"
       return 1
     fi
     lock_inode="$(file_inode "$lock_dir" 2>/dev/null || true)"
@@ -714,7 +722,7 @@ refresh_token() {
       || [ "$lock_mode" != "700" ]; then
       [ "$(file_inode "$lock_dir" 2>/dev/null || true)" = "$lock_inode" ] \
         || continue
-      printf 'error: profile-scoped token refresh lock path is unsafe\n' >&2
+      diagnostic lock LOCK_UNSAFE "profile-scoped token refresh lock path is unsafe"
       return 1
     fi
     [ "$(file_inode "$lock_dir" 2>/dev/null || true)" = "$lock_inode" ] \
@@ -723,7 +731,7 @@ refresh_token() {
     if [ -e "$lock_owner_file" ] || [ -L "$lock_owner_file" ]; then
       if [ -L "$lock_owner_file" ]; then
         [ -L "$lock_owner_file" ] || continue
-        printf 'error: profile-scoped token refresh lock metadata is unsafe\n' >&2
+        diagnostic lock LOCK_UNSAFE "profile-scoped token refresh lock metadata is unsafe"
         return 1
       fi
       owner_file_inode="$(file_inode "$lock_owner_file" 2>/dev/null || true)"
@@ -735,7 +743,7 @@ refresh_token() {
         || [ "$owner_file_mode" != "600" ]; then
         [ "$(file_inode "$lock_owner_file" 2>/dev/null || true)" = "$owner_file_inode" ] \
           || continue
-        printf 'error: profile-scoped token refresh lock metadata is unsafe\n' >&2
+        diagnostic lock LOCK_UNSAFE "profile-scoped token refresh lock metadata is unsafe"
         return 1
       fi
       [ "$(file_inode "$lock_owner_file" 2>/dev/null || true)" = "$owner_file_inode" ] \
@@ -788,7 +796,7 @@ refresh_token() {
           && [ "$(file_inode "$lock_owner_file" 2>/dev/null || true)" = "$owner_file_inode" ]; then
           rm -f -- "$lock_owner_file"
           if rmdir -- "$lock_dir" 2>/dev/null; then
-            printf 'warning: recovered a stale profile-scoped token refresh lock\n' >&2
+            diagnostic lock LOCK_RECOVERED "recovered a stale profile-scoped token refresh lock"
             continue
           fi
         fi
@@ -822,13 +830,13 @@ refresh_token() {
         fi
         if [ "$(file_inode "$lock_dir" 2>/dev/null || true)" = "$lock_inode" ] \
           && rmdir -- "$lock_dir" 2>/dev/null; then
-          printf 'warning: recovered an incomplete profile-scoped token refresh lock\n' >&2
+          diagnostic lock LOCK_RECOVERED "recovered an incomplete profile-scoped token refresh lock"
           continue
         fi
       fi
     fi
     if [ "$waited" -ge "$lock_wait_seconds" ]; then
-      printf 'error: timed out waiting for the profile-scoped token refresh lock\n' >&2
+      diagnostic lock LOCK_TIMEOUT "timed out waiting for the profile-scoped token refresh lock"
       return 1
     fi
     sleep 1
@@ -846,7 +854,7 @@ refresh_token() {
       if [ "$(file_inode "$lock_dir" 2>/dev/null || true)" = "$lock_inode" ]; then
         cleanup_refresh_artifacts
         if [ ! -e "$lock_dir" ] && [ ! -L "$lock_dir" ]; then
-          printf 'warning: reused the fresh profile-scoped token produced by the prior refresh owner\n' >&2
+          diagnostic token TOKEN_CACHE_REUSED "reused the profile-scoped token retrieved by the prior refresh owner"
           return 0
         fi
       fi
@@ -855,7 +863,7 @@ refresh_token() {
   fi
   if [ "$waited" -gt 0 ] && [ "$auth_mode" = "interactive" ]; then
     cleanup_refresh_artifacts
-    printf 'error: prior foreground token refresh ended without producing a fresh token\n' >&2
+    diagnostic token TOKEN_RETRIEVAL_FAILED "prior foreground retrieval ended without an acceptable token cache"
     return 1
   fi
   owner_pid_file="${lock_dir}/owner-pid.tmp"
@@ -882,9 +890,11 @@ refresh_token() {
     || die "unable to protect token refresh lock metadata"
   exit_if_refresh_worker_stop_requested
 
+  diagnostic_phase="token"
+  diagnostic_code="TOKEN_RETRIEVAL_FAILED"
   active_tmp_file="$(mktemp "${GRAFANA_TOKEN_FILE}.tmp.XXXXXX")"
   if ! chmod 600 "$active_tmp_file"; then
-    printf 'error: unable to enforce mode 0600 on the temporary token file\n' >&2
+    diagnostic private-state PRIVATE_STATE_INVALID "unable to enforce mode 0600 on the temporary token file"
     cleanup_refresh_artifacts
     return 1
   fi
@@ -897,8 +907,8 @@ refresh_token() {
   exit_if_refresh_worker_stop_requested
   if ! run_nebius_clean iam get-access-token \
     --profile "$NEBIUS_GRAFANA_USER_PROFILE" \
-    "${auth_args[@]}" </dev/null >"$active_tmp_file"; then
-    printf 'error: Nebius CLI could not mint a token for the pinned human profile\n' >&2
+    "${auth_args[@]}" </dev/null >"$active_tmp_file" 2>/dev/null; then
+    diagnostic token TOKEN_RETRIEVAL_FAILED "Nebius CLI could not retrieve a token for the pinned human profile"
     cleanup_refresh_artifacts
     return 1
   fi
@@ -909,19 +919,19 @@ refresh_token() {
   fi
   exit_if_refresh_worker_stop_requested
   if ! validate_token_contents "$active_tmp_file"; then
-    printf 'error: Nebius CLI returned an invalid access token payload\n' >&2
+    diagnostic token TOKEN_PAYLOAD_INVALID "Nebius CLI returned an invalid access token payload"
     cleanup_refresh_artifacts
     return 1
   fi
 
   if ! mv -f -- "$active_tmp_file" "$GRAFANA_TOKEN_FILE"; then
-    printf 'error: unable to atomically replace the profile-scoped token file\n' >&2
+    diagnostic private-state PRIVATE_STATE_INVALID "unable to atomically replace the profile-scoped token file"
     cleanup_refresh_artifacts
     return 1
   fi
   active_tmp_file=""
   if ! chmod 600 "$GRAFANA_TOKEN_FILE"; then
-    printf 'error: unable to enforce mode 0600 on the token file\n' >&2
+    diagnostic private-state PRIVATE_STATE_INVALID "unable to enforce mode 0600 on the token file"
     cleanup_refresh_artifacts
     return 1
   fi
@@ -965,6 +975,32 @@ configure_token_environment() {
   export GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE="$GRAFANA_TOKEN_FILE"
 }
 
+sanitize_child_stderr() {
+  local line=""
+  local code=""
+  local seen=" "
+
+  # Emit categories only, once each. Child logs may include request headers,
+  # URLs or response bodies. MCP stdout is forwarded unchanged.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      *401*) code="UPSTREAM_401" ;;
+      *403*) code="UPSTREAM_403" ;;
+      *[Tt]imeout* | *[Tt]imed\ out* | *[Dd]eadline\ exceeded*) code="UPSTREAM_TIMEOUT" ;;
+      *) code="CHILD_DIAGNOSTIC" ;;
+    esac
+    case "$seen" in
+      *" $code "*) continue ;;
+    esac
+    seen="${seen}${code} "
+    diagnostic child "$code" "child stderr reported this category; raw details suppressed; verify the MCP response before diagnosing the cause"
+  done
+}
+
+report_child_exit() {
+  diagnostic child-exit CHILD_EXIT "mcp-grafana exited with status $1"
+}
+
 build_mcp_args() {
   MCP_ARGS=(--disable-write --max-loki-log-limit 20)
   while [ "$#" -gt 0 ]; do
@@ -983,10 +1019,10 @@ build_mcp_args() {
         shift
         ;;
       --disable-write=* | --max-loki-log-limit=* | --disable-proxied)
-        die "caller argument would weaken the canonical read-only Grafana MCP policy: $1"
+        die "caller argument would weaken the canonical read-only Grafana MCP policy"
         ;;
       *)
-        die "unsupported mcp-grafana argument; this wrapper accepts only the canonical read-only flags: $1"
+        die "unsupported mcp-grafana argument; this wrapper accepts only the canonical read-only flags"
         ;;
     esac
   done
@@ -999,7 +1035,7 @@ refresh_with_retries() {
     return 0
   fi
   for delay in $NEBIUS_GRAFANA_TOKEN_REFRESH_RETRY_SECONDS; do
-    printf 'warning: Nebius Grafana token refresh failed; retrying after %s seconds\n' "$delay" >&2
+    diagnostic token TOKEN_RETRY "Nebius Grafana token retrieval failed; retrying after $delay seconds"
     wait_for_worker_timer "$delay"
     exit_if_refresh_worker_stop_requested
     if refresh_token noninteractive; then
@@ -1017,17 +1053,16 @@ run_refresh_loop() {
   wait_for_worker_timer "$NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS"
   exit_if_refresh_worker_stop_requested
   if ! refresh_with_retries; then
-    printf 'error: Nebius Grafana token refresh exhausted; stopping MCP before credential expiry\n' >&2
+    diagnostic restart TOKEN_RETRIEVAL_EXHAUSTED "Nebius Grafana token retrieval exhausted; stopping MCP; foreground sign-in and restart may be required"
     refresh_worker_stopped_mcp="true"
     write_refresh_exit_reason "refresh-exhausted" || return 1
     return 1
   fi
 
-  # mcp-grafana stdio (source-verified in v2.0.2) keeps the startup Grafana client
-  # for the life of the process and do not re-read a rotated token file.
-  # Close the transport after rotation so the next process loads the fresh
-  # credential instead of silently retaining the expiring in-memory token.
-  printf 'warning: refreshed the Nebius Grafana token; requesting bounded stdio shutdown because a new chat or Codex restart is required to load it\n' >&2
+  # mcp-grafana stdio (source-verified in v2.1.1) retains the startup client.
+  # Retrieval may return the same token. Close the transport so the next
+  # process loads the file; neither retrieval nor this timer proves expiry.
+  diagnostic restart RESTART_REQUIRED "scheduled token retrieval completed; stopping stdio so the next MCP process loads the file; start a new chat or restart Codex"
   refresh_worker_stopped_mcp="true"
   write_refresh_exit_reason "rotation-required" || return 1
   return 75
@@ -1046,9 +1081,9 @@ case "${1:-}" in
     ;;
 esac
 
-: "${NEBIUS_GRAFANA_USER_PROFILE:?NEBIUS_GRAFANA_USER_PROFILE is required}"
-: "${NEBIUS_GRAFANA_IDENTITY_FILE:?NEBIUS_GRAFANA_IDENTITY_FILE is required}"
-: "${GRAFANA_TOKEN_FILE:?GRAFANA_TOKEN_FILE is required}"
+[ -n "${NEBIUS_GRAFANA_USER_PROFILE:-}" ] || die "NEBIUS_GRAFANA_USER_PROFILE is required"
+[ -n "${NEBIUS_GRAFANA_IDENTITY_FILE:-}" ] || die "NEBIUS_GRAFANA_IDENTITY_FILE is required"
+[ -n "${GRAFANA_TOKEN_FILE:-}" ] || die "GRAFANA_TOKEN_FILE is required"
 
 require_command python3
 require_command ps
@@ -1067,6 +1102,8 @@ validate_positive_integer \
   240
 validate_retry_delays
 validate_nebius_grafana_url
+diagnostic_phase="private-state"
+diagnostic_code="PRIVATE_STATE_INVALID"
 validate_state_paths
 read_identity_binding
 
@@ -1098,21 +1135,29 @@ if [ "${1:-}" = "--refresh-token-only" ]; then
   exit 0
 fi
 
+diagnostic_phase="child-startup"
+diagnostic_code="CHILD_STARTUP_FAILED"
 require_command mcp-grafana
 require_command strings
 mcp_supports_token_file \
   || die "installed mcp-grafana lacks required token-file authentication support; update it before using Nebius-managed Grafana"
-if ! token_file_is_fresh; then
-  printf 'warning: cached pinned-human token is missing or older than one hour; renewing it before MCP startup\n' >&2
+diagnostic_phase="token"
+diagnostic_code="TOKEN_RETRIEVAL_FAILED"
+if ! token_cache_age_is_acceptable; then
+  diagnostic token TOKEN_CACHE_RETRIEVAL "token cache is missing or outside the one-hour file-age window; retrieving it before MCP startup"
   refresh_token interactive \
-    || die "unable to renew the pinned-human token before MCP startup"
-  token_file_is_fresh \
-    || die "renewed pinned-human token failed the startup freshness check"
+    || die "unable to retrieve the pinned-human token before MCP startup"
+  token_cache_age_is_acceptable \
+    || die "retrieved pinned-human token failed the startup cache-age check"
 fi
 
 export GRAFANA_URL
 configure_token_environment
+diagnostic_phase="config"
+diagnostic_code="CONFIG_INVALID"
 build_mcp_args "$@"
+diagnostic_phase="private-state"
+diagnostic_code="PRIVATE_STATE_INVALID"
 refresh_reason_file="$(
   mktemp "${GRAFANA_TOKEN_FILE}.restart.XXXXXX"
 )" || die "unable to create private refresh-reason state"
@@ -1124,7 +1169,8 @@ validate_private_file "$refresh_reason_file"
 # is unavailable unless the command has an explicit stdin redirection. Preserve
 # the wrapper's MCP stdio stream on a private descriptor before backgrounding.
 exec 3<&0
-mcp-grafana "${MCP_ARGS[@]}" <&3 3<&- &
+diagnostic child-startup CHILD_STARTING "launching read-only Grafana MCP; initialization and API readiness are separate checks"
+mcp-grafana "${MCP_ARGS[@]}" <&3 3<&- 2> >(sanitize_child_stderr >&2) &
 mcp_pid="$!"
 mcp_process_started_at="$(process_started_at "$mcp_pid" 2>/dev/null || true)"
 exec 3<&-
@@ -1132,6 +1178,7 @@ if [ -z "$mcp_process_started_at" ]; then
   status=0
   wait "$mcp_pid" || status="$?"
   mcp_pid=""
+  report_child_exit "$status"
   exit "$status"
 fi
 
@@ -1168,7 +1215,10 @@ status=0
 wait "$mcp_pid" || status="$?"
 mcp_pid=""
 case "$confirmed_refresh_reason" in
-  '') exit "$status" ;;
+  '')
+    report_child_exit "$status"
+    exit "$status"
+    ;;
 esac
 
 refresh_reason="$confirmed_refresh_reason"
@@ -1178,10 +1228,10 @@ case "$refresh_reason" in
     wait "$refresher_pid" || refresh_status="$?"
     refresher_pid=""
     if [ "$refresh_status" -ne 75 ]; then
-      printf 'error: token rotation stopped MCP without the expected refresh-worker status\n' >&2
+      diagnostic restart REFRESH_WORKER_FAILED "scheduled retrieval stopped MCP without the expected worker status"
       exit 1
     fi
-    printf 'error: Nebius Grafana credential rotated; start a new chat or restart Codex before using grafana-nebius again\n' >&2
+    diagnostic restart RESTART_REQUIRED "scheduled token retrieval requires a new chat or Codex restart before using grafana-nebius again"
     exit 75
     ;;
   refresh-exhausted | refresh-worker-failed)
@@ -1192,7 +1242,7 @@ case "$refresh_reason" in
   '')
     ;;
   *)
-    printf 'error: invalid refresh exit reason; refusing to report MCP success\n' >&2
+    diagnostic restart REFRESH_WORKER_FAILED "invalid refresh exit reason; refusing to report MCP success"
     exit 1
     ;;
 esac

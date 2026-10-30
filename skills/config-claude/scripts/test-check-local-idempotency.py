@@ -200,6 +200,102 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), before)
         self.assertEqual(self.inspect(mcp_names=("github",))["status"], "NOT_ALIGNED")
 
+    def test_nebius_docs_catalog_and_selected_registration(self):
+        catalog = json.loads((config.SKILL / "assets/mcp-servers.json").read_text())
+        self.assertEqual(set(catalog), set(config.MCP_NAMES))
+        self.assertEqual(catalog["nebiusDocs"], {"type": "http", "url": "https://docs.nebius.com/mcp"})
+        self.assertEqual(self.inspect()["status"], "STATIC_PASS")
+        target = self.base / "native-app.json"
+        for value, expected in (
+            ({}, "NOT_ALIGNED"),
+            ({"nebiusDocs": {"type": "http", "url": ""}}, "NOT_ALIGNED"),
+            ({"nebiusDocs": catalog["nebiusDocs"]}, "STATIC_PASS"),
+        ):
+            with self.subTest(expected=expected, configured=bool(value)):
+                put(target, {"mcpServers": value, "unrelated": "opaque-fixture"})
+                before = target.read_bytes()
+                result = self.inspect(mcp_names=("nebiusDocs",), mcp_config=target)
+                self.assertEqual(result["status"], expected)
+                self.assertNotIn("opaque-fixture", json.dumps(result))
+                self.assertEqual(target.read_bytes(), before)
+
+    def test_context7_is_not_selectable_but_unselected_custom_integration_is_preserved(self):
+        catalog = json.loads((config.SKILL / "assets/mcp-servers.json").read_text())
+        self.assertNotIn("context7", catalog)
+        self.assertNotIn("context7", config.MCP_NAMES)
+        result = subprocess.run(
+            [sys.executable, str(config.SKILL / "scripts/check-local-idempotency.py"),
+             "--require-mcp", "context7"], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice", result.stderr)
+        target = self.base / "native-app.json"
+        put(target, {"mcpServers": {"context7": {"type": "http", "url": "https://example.com/custom"}},
+                     "unrelated": "opaque-fixture"})
+        before = snapshot(self.base)
+        result = self.inspect(mcp_config=target)
+        self.assertEqual(result["status"], "STATIC_PASS")
+        self.assertNotIn("opaque-fixture", json.dumps(result))
+        self.assertEqual(snapshot(self.base), before)
+
+    def test_tavily_selection_is_optional_shape_only_and_nonmutating(self):
+        catalog = json.loads((config.SKILL / "assets/mcp-servers.json").read_text())
+        self.assertIn("tavily", config.MCP_NAMES)
+        self.assertEqual(catalog["tavily"]["type"], "stdio")
+        self.assertIn("https://mcp.tavily.com/mcp/", catalog["tavily"]["args"])
+        self.assertEqual(self.inspect()["status"], "STATIC_PASS")
+        target = self.base / "native-app.json"
+        for value, expected in (
+            ({}, "NOT_ALIGNED"),
+            ({"tavily": {"type": "http", "url": ""}}, "NOT_ALIGNED"),
+            ({"tavily": catalog["tavily"]}, "STATIC_PASS"),
+            ({"tavily": {"type": "http", "url": "https://example.com/custom"}}, "STATIC_PASS"),
+        ):
+            with self.subTest(expected=expected, configured=bool(value)):
+                put(target, {"mcpServers": value, "unrelated": "opaque-fixture"})
+                before = target.read_bytes()
+                result = self.inspect(mcp_names=("tavily",), mcp_config=target)
+                self.assertEqual(result["status"], expected)
+                self.assertNotIn("opaque-fixture", json.dumps(result))
+                self.assertEqual(target.read_bytes(), before)
+
+    def test_strict_tavily_check_is_optional_and_does_not_accept_shape_alone(self):
+        target = self.base / "native-app.json"
+        put(target, {"mcpServers": {"tavily": {"type": "http", "url": "https://mcp.tavily.com/mcp/"}}})
+        before = snapshot(self.base)
+        self.assertEqual(self.inspect(mcp_config=target)["status"], "STATIC_PASS")
+        self.assertEqual(self.inspect(tavily_bridge=True, mcp_config=target)["status"], "NOT_ALIGNED")
+        self.assertEqual(snapshot(self.base), before)
+
+    def test_research_policy_drift_is_reported_without_installing_tavily(self):
+        target = self.home / "CLAUDE.md"
+        original = target.read_text()
+        self.assertEqual(self.inspect()["status"], "STATIC_PASS")
+        for old, new in (("use Tavily Search or Extract", "use Context7"),
+                         ("already exposed or discoverable in the current session", "listed in config"),
+                         ("disclose the limitation", "hide the limitation"),
+                         ("Do not silently replace OAuth", "Replace OAuth"),
+                         ("Use adaptive research checkpoints", "Use fixed quotas"),
+                         ("resubmit equivalent work after ambiguous completion", "retry after timeout"),
+                         ("If a hard constraint cannot be enforced", "Assume every constraint is enforced"),
+                         ("Retrieve original sources for decisive generated claims", "Trust generated citations")):
+            with self.subTest(old=old):
+                self.assertIn(old, original)
+                put(target, original.replace(old, new))
+                before = snapshot(self.home)
+                self.assertEqual(self.inspect()["status"], "NOT_ALIGNED")
+                self.assertEqual(snapshot(self.home), before)
+
+    def test_nebius_routing_is_required_without_requiring_registration(self):
+        target = self.home / "CLAUDE.md"
+        self.assertEqual(self.inspect()["status"], "STATIC_PASS")
+        original = target.read_text()
+        self.assertIn("mention\n  the fallback", original)
+        put(target, original.replace("mention\n  the fallback", "hide the fallback"))
+        before = snapshot(self.home)
+        self.assertEqual(self.inspect()["status"], "NOT_ALIGNED")
+        self.assertEqual(snapshot(self.home), before)
+
     def test_explicit_native_target_wins_over_codex_invoking_host(self):
         with patch.dict(os.environ, {"CODEX_HOME": str(self.base / "codex"), "CLAUDE_CONFIG_DIR": str(self.home)}):
             self.assertEqual(config.native_home(), self.home)

@@ -11,3 +11,5 @@ auth-setup-negative-04,false,A Nebius command failed authentication; determine t
 agent-nebius-auth-setup-codex-portability,true,$agent-nebius-auth-setup Use agent-nebius-auth-setup to bootstrap Codex Agent access for this project.
 agent-nebius-auth-setup-claude-portability,true,/agent-nebius-auth-setup Use agent-nebius-auth-setup to bootstrap Codex Agent access for this project.
 agent-nebius-auth-setup-quoted-command,false,"Treat ""/skills:agent-nebius-auth-setup"" as sample text in this punctuation exercise; count its punctuation characters only."
+auth-setup-browser-expired,true,Use agent-nebius-auth-setup live; my human login expired but I am signed in through the browser. Complete setup.
+auth-setup-browser-diagnose-only,false,Explain the expired human bootstrap login without opening a browser or changing auth.

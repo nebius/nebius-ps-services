@@ -36,6 +36,7 @@
     "./merge-pr",
     "./nebius",
     "./nebius-audit-log",
+    "./nebius-capacity-planning",
     "./nebius-grafana-query",
     "./nosleep4mac",
     "./optimize-pytest",

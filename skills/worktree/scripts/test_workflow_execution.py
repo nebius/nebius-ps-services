@@ -408,6 +408,68 @@ def recover_task(run_dir, feature, wave, task_id, session, scope, **kwargs):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_crlf_plan_preserves_multiline_fields(self) -> None:
+        text = PLAN.replace("- Goal: implement the first independent behavior",
+                            "- Goal: implement the first independent behavior\n  Preserve JSON types.")
+        self.assertEqual(parse_locked_plan(text.replace("\n", "\r\n")), parse_locked_plan(text))
+
+    def test_multiline_task_fields_preserve_contract_and_conflicts(self) -> None:
+        text = PLAN.replace(
+            "- Goal: implement the first independent behavior",
+            '- Goal: implement the first independent behavior\n'
+            '  Return JSON:\n  ```json\n  {"id": "string", "done": false}\n  ```\n'
+            '  - Validation: this nested key is contract content',
+            1,
+        ).replace(
+            "- Write claims: exact: src/a.py",
+            "- Write claims: exact: src/a.py;\n  exact: src/b.py",
+            1,
+        ).replace(
+            "- Validation: python3 -m unittest tests.test_feature",
+            "- Validation:\n  python3 -m unittest tests.test_feature\n  Check JSON types.",
+            1,
+        ).replace(
+            "- Done criteria: first behavior passes",
+            "- Done criteria: first behavior passes\n  Missing IDs fail.",
+            1,
+        ).replace(
+            "- Rollback or stop conditions: stop on contract drift",
+            "- Rollback or stop conditions: stop on contract drift\n  Preserve existing data.",
+            1,
+        ).replace("- Depends on: TASK-001, TASK-002", "- Depends on: TASK-001,\n  TASK-002")
+        tasks = parse_locked_plan(text)
+        self.assertIn('{"id": "string", "done": false}', tasks[0].goal)
+        self.assertIn("  - Validation: this nested key is contract content", tasks[0].goal)
+        self.assertEqual(tasks[0].validation, "python3 -m unittest tests.test_feature\n  Check JSON types.")
+        self.assertEqual(tasks[0].done_criteria, "first behavior passes\n  Missing IDs fail.")
+        self.assertEqual(tasks[0].rollback, "stop on contract drift\n  Preserve existing data.")
+        self.assertEqual([claim.path for claim in tasks[0].write_claims], ["src/a.py", "src/b.py"])
+        self.assertEqual(tasks[2].dependencies, ("TASK-001", "TASK-002"))
+        self.assertEqual([[task.task_id for task in wave] for wave in build_dependency_waves(tasks)],
+                         [["TASK-001"], ["TASK-002"], ["TASK-003"]])
+
+    def test_blank_and_duplicate_fields_fail_closed(self) -> None:
+        for label, value in (("Goal", "implement the first independent behavior"),
+                             ("Write claims", "exact: src/a.py"),
+                             ("Validation", "python3 -m unittest tests.test_feature")):
+            for replacement in (f"- {label}:\n", f"- {label}: {value}\n- {label}: different\n"):
+                with self.subTest(label=label, replacement=replacement):
+                    with self.assertRaises(ExecutionError) as raised:
+                        parse_locked_plan(PLAN.replace(f"- {label}: {value}\n", replacement, 1))
+                    self.assertEqual(raised.exception.code, "PLAN_INVALID")
+
+    def test_malformed_task_headings_cannot_hide_tasks(self) -> None:
+        for heading in ("### TASK-003: dependent task", "## TASK-003", "### TASK-03"):
+            with self.subTest(heading=heading):
+                with self.assertRaises(ExecutionError) as raised:
+                    parse_locked_plan(PLAN.replace("### TASK-003", heading))
+                self.assertEqual(raised.exception.code, "PLAN_INVALID")
+
+    def test_task_fields_stop_at_following_plan_section(self) -> None:
+        tasks = parse_locked_plan(PLAN + "\n## Review\n\n- Goal: coordinator summary\n")
+        self.assertEqual(tasks[-1].goal, "implement the dependent behavior")
+        self.assertEqual(tasks[-1].rollback, "stop on contract drift")
+
     def test_independent_tasks_share_wave_and_dependencies_follow(self) -> None:
         tasks = parse_locked_plan(PLAN)
         waves = build_dependency_waves(tasks)

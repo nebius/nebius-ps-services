@@ -171,45 +171,28 @@ def _write_sources_file(
                     "version": expected_cli["flux"]["version"],
                     "release_timeout": expected_cli["flux"]["release_timeout"],
                 },
-                "terraform": {
-                    "version": expected_cli["terraform"]["version"],
-                },
+                "terraform": {"version": expected_cli["terraform"]["version"]},
             },
             "components": {
                 "infra": {
                     module_name: {
                         "source": {
-                            "portable": (
-                                "git::https://github.com/example/infra.git//modules/"
-                                f"{module_name}?ref=v1.2.3"
-                            ),
-                            "local": (
-                                f"platform-infra/modules/{module_name}"
-                                if local_source is None
-                                else local_source
-                            ),
+                            "portable": f"git::https://github.com/example/infra.git//modules/{module_name}?ref=v1.2.3",
+                            "local": f"platform-infra/modules/{module_name}"
+                            if local_source is None
+                            else local_source,
                         },
-                        "ui": {
-                            "title": f"{module_name} module",
-                            "enabled": True,
-                        },
+                        "ui": {"title": f"{module_name} module", "enabled": True},
                     }
                 },
                 "apps": {
                     "demo-app": {
                         "source": _portable_chart_source(
-                            repo="https://example.invalid/charts",
-                            chart="demo-app",
-                            version="1.0.0",
+                            repo="https://example.invalid/charts", chart="demo-app", version="1.0.0"
                         ),
-                        "release": {
-                            "namespace": "demo",
-                            "name": "demo-app",
-                        },
-                        "ui": {
-                            "enabled": False,
-                        },
-                    },
+                        "release": {"namespace": "demo", "name": "demo-app"},
+                        "ui": {"enabled": False},
+                    }
                 },
             },
         },
@@ -320,7 +303,7 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
 
     nfs = next(module for module in sources.tf_modules if module.module == "nfs")
     assert nfs.local_source is not None
-    assert nfs.local_source.endswith("platform-infra/modules/nfs")
+    assert nfs.local_source.endswith("platform-infra//modules/nfs")
     assert nfs.description == "VM-based NFS bridge (non-HA)"
     nfs_wizard_fields = _required(nfs.wizard_fields)
     assert nfs_wizard_fields["inputs.subnet_id"]["options"] == {
@@ -1092,26 +1075,15 @@ def test_load_component_sources_rejects_cli_settings_inside_source_catalog(
     sources_file.write_text(
         yaml.safe_dump(
             {
-                "cli": {
-                    "flux": {
-                        "version": expected_cli["flux"]["version"],
-                    }
-                },
-                "observability": {
-                    "endpoints": {
-                        "read": {},
-                        "write": {},
-                    }
-                },
+                "cli": {"flux": {"version": expected_cli["flux"]["version"]}},
+                "observability": {"endpoints": {"read": {}, "write": {}}},
                 "components": {
                     "infra": {
                         "mk8s": {
                             "source": {
-                                "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                                "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3"
                             },
-                            "cli": {
-                                "boot_disk_defaults": {},
-                            },
+                            "cli": {"boot_disk_defaults": {}},
                         }
                     },
                     "apps": {},
@@ -1135,12 +1107,7 @@ def test_load_component_sources_rejects_cli_settings_for_unknown_component(
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            {
-                "components": {
-                    "infra": {},
-                    "apps": {},
-                }
-            },
+            {"components": {"infra": {}, "apps": {}}},
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -3092,7 +3059,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     assert "inputs.gpu_node_groups" not in mk8s_wizard_fields
     assert "inputs.mk8s_gpu_node_group_overrides" not in mk8s_wizard_fields
     assert mk8s_wizard_fields[
-        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled"
+        "infra.components[].deployment_testing.mk8s_gpu.operator_readiness.enabled"
     ] == {
         "default": True,
         "write_default_to_config": True,
@@ -3100,21 +3067,21 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "type_hint": "bool",
     }
     assert (
-        "deploy.targets[].deployment_testing.mk8s_gpu.cluster_smoke.enabled"
+        "infra.components[].deployment_testing.mk8s_gpu.cluster_smoke.enabled"
         not in mk8s_wizard_fields
     )
     assert mk8s_wizard_fields[
-        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
+        "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
     ] == {
         "default": 3,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert "deploy.targets[].deployment_testing.mk8s_gpu.nccl.max_nodes" not in mk8s_wizard_fields
-    assert mk8s_wizard_fields["deploy.targets[].observability.kubernetes.logs.enabled"] == {
+    assert "infra.components[].deployment_testing.mk8s_gpu.nccl.max_nodes" not in mk8s_wizard_fields
+    assert mk8s_wizard_fields["infra.components[].observability.kubernetes.logs.enabled"] == {
         "default": True,
     }
-    assert mk8s_wizard_fields["deploy.targets[].secrets.mysterybox.enabled"] == {
+    assert mk8s_wizard_fields["infra.components[].secrets.mysterybox.enabled"] == {
         "default": True,
         "write_default_to_config": True,
     }
@@ -3492,13 +3459,13 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             "prompt_complex": True,
             "required": False,
         },
-        "deploy.observability.enabled": {
+        "infra.components[].observability.enabled": {
             "default": False,
         },
-        "deploy.observability.vm.logs.enabled": {
+        "infra.components[].observability.vm.logs.enabled": {
             "default": True,
         },
-        "deploy.observability.vm.logs.systemd_units": {
+        "infra.components[].observability.vm.logs.systemd_units": {
             "default": [],
         },
         "inputs.boot_disk_existing_id": {
@@ -3584,6 +3551,16 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         },
     }
     assert wireguard.wizard_fields == {
+        "access.admin_group_id": {
+            "options": {"from": "wireguard_admin_groups"},
+            "required": True,
+            "type_hint": "string",
+        },
+        "inputs.access_bootstrap": {"prompt": False},
+        "inputs.bootstrap_user_data": {"prompt": False},
+        "inputs.create_public_ip_allocation": {"write_default_to_config": True},
+        "inputs.client_default_persistent_keepalive": {"write_default_to_config": True},
+        "inputs.nat_mode": {"write_default_to_config": True},
         "inputs.network_id": {
             "options": {
                 "from": "project_networks",
@@ -3706,6 +3683,7 @@ def test_bundled_object_storage_uses_wizard_profile() -> None:
     module = next(item for item in loaded.tf_modules if item.module == "object-storage")
 
     assert module.wizard_fields == {
+        "inputs.labels": {"prompt_complex": True},
         "inputs.versioning_policy": {
             "sources": [
                 {
@@ -3748,8 +3726,8 @@ def test_local_profile_uses_local_source_when_available() -> None:
     )
     wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-gw")
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
-    assert wireguard.source == "../../platform-infra/modules/wireguard-gw"
-    assert ssh.source == "../../platform-infra/modules/ssh-jumphost"
+    assert wireguard.source == "../../platform-infra//modules/wireguard-gw"
+    assert ssh.source == "../../platform-infra//modules/ssh-jumphost"
     assert wireguard.metadata_source == str(
         (Path(__file__).resolve().parents[3] / "platform-infra/modules/wireguard-gw").resolve()
     )
@@ -3827,7 +3805,9 @@ def test_wireguard_gw_cloud_init_enforces_key_only_admin_access() -> None:
     assert "AuthenticationMethods publickey" in template
     assert "AllowTcpForwarding no" in template
     assert "fail2ban" in template
-    assert 'run(["sshd", "-t"])' in template
+    assert (
+        "ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_config.d/50-wireguard-gw.conf" in template
+    )
 
 
 def test_load_component_sources_explicit_missing_file_raises(tmp_path: Path) -> None:
@@ -4605,7 +4585,7 @@ def test_load_component_sources_rejects_transient_chart_enabled_or_selectable(
                     "usage": {
                         "lifecycle": "transient",
                         "config": {
-                            "ref": "deploy.targets[].checks.transient_tool",
+                            "ref": "infra.components[].checks.transient_tool",
                         },
                     },
                     "ui": ui,
@@ -4667,7 +4647,7 @@ def test_load_component_sources_rejects_usage_config_without_lifecycle(
                     ),
                     "usage": {
                         "config": {
-                            "ref": "deploy.targets[].checks.transient_tool",
+                            "ref": "infra.components[].checks.transient_tool",
                         },
                     },
                     "ui": {
@@ -4703,7 +4683,7 @@ def test_load_component_sources_rejects_unsupported_helm_chart_lifecycle(
                     "usage": {
                         "lifecycle": "ephemeral",
                         "config": {
-                            "ref": "deploy.targets[].checks.ephemeral_tool",
+                            "ref": "infra.components[].checks.ephemeral_tool",
                         },
                     },
                     "ui": {

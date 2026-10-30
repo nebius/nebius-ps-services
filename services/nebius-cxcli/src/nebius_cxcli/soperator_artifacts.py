@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
 
@@ -147,8 +148,7 @@ def soperator_cluster_artifact_identity_from_snapshot(
 
 
 def _target_row(payload: Mapping[str, Any], target_ref: str) -> Mapping[str, Any]:
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     normalized_target = normalize_component_token(target_ref)
     if not isinstance(targets, list) or not normalized_target:
         return {}

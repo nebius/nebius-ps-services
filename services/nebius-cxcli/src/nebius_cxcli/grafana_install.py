@@ -36,6 +36,11 @@ def configure(
     """Return a candidate; cancellation never mutates the caller's payload."""
     candidate = copy.deepcopy(payload)
     flags = dict(overrides or {})
+    from .grafana_database import reject_old_grafana_binding
+    from .observability_intent import preset_overrides
+
+    reject_old_grafana_binding(candidate)
+    flags = preset_overrides(candidate, target, local=True, overrides=flags)
     # Resolve once before prompts, validating target identity and explicit flags.
     settings = resolve_settings(
         candidate,
@@ -54,7 +59,7 @@ def configure(
                 payload,
                 target,
                 settings=settings,
-                flags=flags,
+                flags=dict(overrides or {}),
                 locked_names={item[0] for item in datasources},
                 build_candidate=lambda selected: _configured_candidate(
                     payload, target, selected, preserve_existing_access=preserve_existing_access
@@ -76,15 +81,9 @@ def _configured_candidate(
     candidate = copy.deepcopy(payload)
     settings = copy.deepcopy(settings)
     settings["signals"] = list(SIGNALS)
-    # Existing collector ownership requires an explicit cutover, never a duplicate.
-    if (
-        not target_settings(payload, target)
-        and app_row(payload, target, "nebius-observability-agent")
-        and any(settings[signal]["storage"] != "remote" for signal in SIGNALS)
-    ):
-        raise ValueError(
-            "Existing Nebius collector requires an explicit pipeline cutover before local storage can be enabled"
-        )
+    from .observability_intent import select_collectors
+
+    select_collectors(candidate, target, settings)
     if "grafana_access" not in settings:
         settings["grafana_access"] = "existing" if preserve_existing_access else "private"
     save_settings(candidate, target, settings)
@@ -130,9 +129,18 @@ def summary(payload: dict[str, Any], target: str) -> list[str]:
         for item in connections(payload, target)
     )
     gateway = app_row(payload, target, "opentelemetry-collector")
-    if gateway:
-        host = f"{gateway['release-name']}.{gateway['namespace']}.svc"
-        lines.append(f"  OTLP ingestion: http://{host}:4317 (gRPC), http://{host}:4318 (HTTP)")
+    from .observability_routing import effective_signals
+
+    if gateway and "traces" in effective_signals(payload, target):
+        from .observability import soperator_target_refs
+        from .observability_intent import trace_endpoint
+
+        endpoint = (
+            f"{gateway['release-name']}.{gateway['namespace']}.svc.cluster.local:4317"
+            if target in soperator_target_refs(payload)
+            else trace_endpoint()
+        )
+        lines.append(f"  Application traces: http://{endpoint} (OTLP/gRPC)")
     if settings["pushgateway"]:
         from .observability_backends import pushgateway_address
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 
+from .cluster_config import cluster_rows
 from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import (
     component_input_binding_ref,
@@ -756,18 +757,21 @@ def _output_value_text(outputs: Mapping[str, Any], output_name: str) -> str:
 
 
 def _terraform_outputs_if_available(paths: ProjectPaths) -> dict[str, Any]:
-    candidate_dirs = [paths.infra_dir]
-    canonical_infra_dir = paths.project_dir / "generated" / "infra"
-    if canonical_infra_dir != paths.infra_dir:
-        candidate_dirs.append(canonical_infra_dir)
-    for infra_dir in candidate_dirs:
-        if not (infra_dir / ".terraform").exists():
-            continue
-        try:
-            return terraform_output_json(infra_dir, initialize=False)
-        except Exception:
-            continue
-    return {}
+    outputs: dict[str, Any] = {}
+    for name, active in (("infra", paths.infra_dir), ("infra-access", paths.access_infra_dir)):
+        candidates = [active, paths.project_dir / "generated" / name]
+        for root in dict.fromkeys(candidates):
+            if not (root / ".terraform").exists():
+                continue
+            try:
+                values = terraform_output_json(root, initialize=False)
+            except Exception:
+                continue
+            if set(values) & set(outputs):
+                raise RuntimeError("Terraform roots returned duplicate output identities")
+            outputs.update(values)
+            break
+    return outputs
 
 
 def _enabled_component_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1055,7 +1059,7 @@ def _manifest_target_metadata(paths: ProjectPaths) -> dict[str, dict[str, Any]]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    deploy = _mapping(_lookup(_mapping(manifest), "deploy"))
+    deploy = _mapping(_lookup(_mapping(manifest), "execution"))
     targets = _lookup(deploy, "targets")
     if not isinstance(targets, list):
         return {}
@@ -1225,8 +1229,7 @@ def _mysterybox_secret_markdown_lines(instances: Sequence[Mapping[str, Any]]) ->
 
 
 def _mysterybox_sync_summaries(payload_data: Mapping[str, Any]) -> list[dict[str, Any]]:
-    deploy = _mapping(_lookup(payload_data, "deploy"))
-    targets = _lookup(deploy, "targets")
+    targets = cluster_rows(payload_data)
     if not isinstance(targets, list):
         return []
     summaries: list[dict[str, Any]] = []

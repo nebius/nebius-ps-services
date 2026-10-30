@@ -279,11 +279,19 @@ current_human_profile() {
 
 require_human_profile() {
   local profile=""
+  local auth_args=(--no-browser --auth-timeout 10s)
+  local failure="Human profile authentication is unavailable non-interactively; explicitly invoke live ensure to complete browser sign-in."
 
   profile="$(current_human_profile || true)"
   [[ -n "$profile" ]] || die "blocked-admin-auth: current Nebius profile is missing or is an agent profile; an exact IAM plan requires a non-agent administrative profile."
-  nebius iam get-access-token --no-browser --auth-timeout 10s --timeout 20s --profile "$profile" </dev/null >/dev/null \
-    || die "blocked-admin-auth: non-agent profile '$profile' is not valid non-interactively. Re-authenticate it, then rerun the IAM plan."
+  if [[ "$COMMAND" == "ensure" ]] && ! is_dry_run; then
+    auth_args=(--auth-timeout 3m)
+    failure="Human profile authentication failed or timed out. No IAM changes were made; check browser sign-in and connectivity before retrying ensure."
+    log "Validating human profile; the CLI may open browser sign-in (up to 3 minutes)."
+  fi
+  # Provider stderr can contain authorization URLs and credential diagnostics.
+  nebius iam get-access-token "${auth_args[@]}" --timeout 20s --profile "$profile" </dev/null >/dev/null 2>&1 \
+    || die "blocked-admin-auth: $failure"
   printf '%s\n' "$profile"
 }
 
@@ -308,7 +316,7 @@ resolve_project_metadata() {
 
   HUMAN_PROFILE="$(require_human_profile)"
   metadata="$(
-    nebius iam project get \
+    nebius iam v2 project get \
       --id "$PROJECT_ID" \
       --no-browser \
       --profile "$HUMAN_PROFILE" \
@@ -721,6 +729,8 @@ ensure_iam_shape_for_service_account() {
   local group_id=""
 
   group_id="$(get_or_create_group "$GROUP_NAME" "$TENANT_ID" "agent authorization")"
+  # Reject unexpected members before a missing permit could grant them access.
+  managed_group_membership_exact "$group_id" "$sa_id" || true
   ensure_exact_agent_group_permits "$group_id"
   ensure_group_membership "$group_id" "$sa_id"
 }
@@ -1112,7 +1122,7 @@ resolve_agent_profile_tenant() {
   local resolved_tenant_id=""
 
   metadata="$(
-    nebius iam project get \
+    nebius iam v2 project get \
       --id "$PROJECT_ID" \
       --no-browser \
       --profile "$PROFILE" \

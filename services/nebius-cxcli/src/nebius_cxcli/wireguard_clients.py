@@ -17,10 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from .component_instances import component_instance_id, component_instance_label, component_type_id
-from .component_sources import component_output_root_name
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
-from .ssh_trust import ssh_trust_options
+from .ssh_trust import ssh_failure_detail, ssh_host_trust_options
 
 WIREGUARD_COMPONENT_ID = "wireguard-gw"
 WIREGUARD_CLIENT_OUTPUT_DIR = "wireguard-clients"
@@ -161,22 +160,6 @@ def default_wireguard_client_output_dir(paths: ProjectPaths) -> Path:
     return paths.project_dir / WIREGUARD_CLIENT_OUTPUT_DIR
 
 
-def wireguard_public_ip_from_outputs(
-    terraform_outputs: Mapping[str, Any],
-    component: WireGuardComponent,
-) -> str:
-    output_name = component_output_root_name(component.instance_id, "public_ip")
-    output_payload = terraform_outputs.get(output_name)
-    value = output_payload.get("value") if isinstance(output_payload, Mapping) else None
-    public_ip = _as_text(value)
-    if not public_ip:
-        raise RuntimeError(
-            f"Terraform output `{output_name}` is missing or empty. "
-            "Run render/deploy for this config before running WireGuard day-2 operations."
-        )
-    return public_ip
-
-
 def normalize_local_subnets(values: Sequence[str]) -> tuple[str, ...]:
     normalized: list[str] = []
     for value in values:
@@ -231,7 +214,7 @@ def _safe_client_config_filename(client_name: str) -> str:
     return f"{client_name}.conf"
 
 
-def _atomic_write_secret_text(path: Path, content: str) -> None:
+def _atomic_write_secret_text(path: Path, content: str, *, overwrite: bool = False) -> None:
     fd = -1
     temp_path: Path | None = None
     try:
@@ -247,8 +230,10 @@ def _atomic_write_secret_text(path: Path, content: str) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-        path.chmod(0o600)
+        if overwrite:
+            os.replace(temp_path, path)
+        else:
+            os.link(temp_path, path)
     finally:
         if fd >= 0:
             os.close(fd)
@@ -279,12 +264,25 @@ def _ssh_command_parts(
     remote_command = " ".join(shlex.quote(part) for part in remote_parts)
     command = [
         "ssh",
+        "-F",
+        "/dev/null",
         "-o",
         "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        "CertificateFile=none",
+        "-o",
+        "PreferredAuthentications=publickey",
+        "-o",
+        "ConnectTimeout=15",
     ]
-    command.extend(ssh_trust_options(ssh_known_hosts_file))
-    if ssh_private_key is not None:
-        command.extend(["-i", str(ssh_private_key.expanduser())])
+    command.extend(ssh_host_trust_options(ssh_known_hosts_file, public_ip))
+    if ssh_private_key is None:
+        raise RuntimeError("WireGuard requires its authenticated SecretStash login credential")
+    command.extend(["-i", str(ssh_private_key.expanduser())])
     command.extend([f"{ssh_user}@{public_ip}", remote_command])
     return command
 
@@ -351,8 +349,15 @@ def generate_wireguard_client_config(
 
     request = replace(request, client_name=resolved_client_name)
     ssh_command = _ssh_command(request)
+    output_path = request.output_dir / _safe_client_config_filename(resolved_client_name)
+    if os.path.lexists(output_path) and not request.force:
+        raise RuntimeError(f"Refusing to overwrite existing WireGuard client config: {output_path}")
     request.output_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(request.output_dir, 0o700)
+    recovery = (
+        f"Client {resolved_client_name!r} may already exist on the gateway; "
+        "inspect that client before retrying. No automatic retry was performed."
+    )
     try:
         completed = run_command(
             ssh_command,
@@ -362,39 +367,46 @@ def generate_wireguard_client_config(
             timeout=120,
         )
     except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
+        detail = ssh_failure_detail(exc)
         message = (
             f"SSH WireGuard client generation failed for {request.component.label} "
             f"at {request.public_ip}"
         )
         if detail:
             message = f"{message}: {detail}"
-        raise RuntimeError(message) from exc
-    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{message}. {recovery}") from None
+    except (OSError, subprocess.TimeoutExpired):
         raise RuntimeError(
-            f"SSH WireGuard client generation timed out for {request.component.label} "
-            f"at {request.public_ip}"
-        ) from exc
-    payload = _extract_json_payload(completed.stdout or "")
-    client_name = _as_text(payload.get("name"))
-    config_text = str(payload.get("config") or "")
-    if not client_name or not config_text:
-        raise RuntimeError("WireGuard client generator returned incomplete client data")
+            f"SSH WireGuard client generation did not complete for {request.component.label}. "
+            f"{recovery}"
+        ) from None
+    try:
+        payload = _extract_json_payload(completed.stdout or "")
+        client_name = _as_text(payload.get("name"))
+        config_text = str(payload.get("config") or "")
+        if client_name != resolved_client_name or not config_text:
+            raise ValueError("Unexpected client response")
+        local_subnets = payload.get("local_subnets", [])
+        if not isinstance(local_subnets, list) or any(
+            not isinstance(item, str) for item in local_subnets
+        ):
+            raise ValueError("Unexpected client routes")
+        result = WireGuardClientGenerationResult(
+            client_name=client_name,
+            client_wg_tunnel_address=_as_text(payload.get("client_wg_tunnel_address")),
+            local_subnets=tuple(local_subnets),
+            output_path=output_path,
+            remote_config_path=_as_text(payload.get("config_path")),
+            clients_created=int(payload.get("clients_created") or 0),
+            remaining_client_slots=int(payload.get("remaining_client_slots") or 0),
+        )
+        _atomic_write_secret_text(output_path, config_text, overwrite=request.force)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise RuntimeError(
+            f"Could not validate or save WireGuard client configuration. {recovery}"
+        ) from None
 
-    output_path = request.output_dir / _safe_client_config_filename(client_name)
-    if output_path.exists() and not request.force:
-        raise RuntimeError(f"Refusing to overwrite existing WireGuard client config: {output_path}")
-    _atomic_write_secret_text(output_path, config_text)
-
-    return WireGuardClientGenerationResult(
-        client_name=client_name,
-        client_wg_tunnel_address=_as_text(payload.get("client_wg_tunnel_address")),
-        local_subnets=tuple(str(item) for item in payload.get("local_subnets") or []),
-        output_path=output_path,
-        remote_config_path=_as_text(payload.get("config_path")),
-        clients_created=int(payload.get("clients_created") or 0),
-        remaining_client_slots=int(payload.get("remaining_client_slots") or 0),
-    )
+    return result
 
 
 def update_wireguard_local_subnets(
@@ -416,14 +428,14 @@ def update_wireguard_local_subnets(
             timeout=120,
         )
     except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
+        detail = ssh_failure_detail(exc)
         message = (
             f"SSH WireGuard local subnet update failed for {request.component.label} "
             f"at {request.public_ip}"
         )
         if detail:
             message = f"{message}: {detail}"
-        raise RuntimeError(message) from exc
+        raise RuntimeError(message) from None
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"SSH WireGuard local subnet update timed out for {request.component.label} "

@@ -272,6 +272,22 @@ jobs:
             implement/scripts/test_implement_contract.py \
             implement-test/scripts/public_workflow_trial.py
 
+      - name: Validate Nebius capacity planning
+        run: |
+          set -euo pipefail
+          python -B nebius-capacity-planning/scripts/test_capacity.py
+          python -B nebius-capacity-planning/scripts/test_quota.py
+          python -B nebius-capacity-planning/scripts/test_scope.py
+          ruff check --no-cache nebius-capacity-planning/scripts
+
+      - name: Validate Nebius SDK inspectors offline
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/nebius-sdk-validation"
+          "${RUNNER_TEMP}/nebius-sdk-validation/bin/python" -m pip install -r nebius/requirements-validation.txt
+          "${RUNNER_TEMP}/nebius-sdk-validation/bin/python" -B -m unittest discover -s nebius/tests -v
+          "${RUNNER_TEMP}/nebius-sdk-validation/bin/ruff" check --no-cache nebius/assets nebius/scripts nebius/tests
+
       - name: Validate cross-agent distribution and evaluation adapters
         env:
           PYTHONDONTWRITEBYTECODE: "1"
