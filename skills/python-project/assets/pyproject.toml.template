@@ -81,10 +81,11 @@ required_plugins = ["pytest-socket>=0.8.1,<0.9"]
 markers = [
   "unit: focused behavior with isolated external boundaries",
   "integration: collaboration between real components or controlled dependencies",
+  "e2e: complete local workflow excluded from the fast feedback lane",
   "slow: excluded from the fast feedback lane",
   "external: requires explicit live-test opt-in and target preflight",
   "local_network: permits loopback TCP for a controlled local dependency",
-  # Register contract, e2e and smoke when generating those tests.
+  # Register contract and smoke when generating those tests.
 ]
 testpaths = ["tests"]
 

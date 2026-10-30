@@ -20,3 +20,7 @@ research-negative-07,false,Create the Agentic SDLC context pack for this feature
 research-codex-portability,true,$research Research this protocol claim using authoritative sources and resolve the disagreement.
 research-claude-portability,true,/research Research this protocol claim using authoritative sources and resolve the disagreement.
 research-quoted-command,false,"Treat ""/skills:research"" as sample text in this punctuation exercise; count its punctuation characters only."
+research-positive-doc-routing,true,Research the current official authentication contract for one SDK using available vendor documentation tools or Tavily; do not configure my agent.
+research-adaptive-synthesis,true,"Research one public workflow engine across recovery, retries and versioning using adaptive evidence checkpoints and optional Tavily synthesis."
+research-hard-limit,true,Investigate this one SDK contract within my explicit source and spending limits; report what cannot be verified.
+research-setup-not-due-diligence,false,Configure Tavily MCP OAuth and update my global agent search instructions.

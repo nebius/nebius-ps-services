@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from nebius_cxcli import cli, deployment_cli, mk8s_upgrade
+from nebius_cxcli.cluster_config import require_soperator_row
 from nebius_cxcli.deployment_observation import (
     observe_release_settings,
     rendered_release_identities,
@@ -91,7 +92,28 @@ def test_target_inventory_preserves_shared_namespace_owner(ordinary_first, confl
         "flux/ordinary/namespace.yaml": ordinary,
     }
     generation = SimpleNamespace(
-        manifest={"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux"}]}},
+        manifest={
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": "flux",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         files={
             name: base64.b64encode(yaml.safe_dump(value).encode()).decode()
             for name, value in files.items()
@@ -162,9 +184,9 @@ def test_empty_terraform_state_requires_independent_provider_absence(monkeypatch
 def test_external_chart_transition_freezes_current_version_and_reuses_it_on_recovery(monkeypatch):
     desired = config()
     desired["infra"]["components"] = []
-    desired["deploy"] = {
-        "targets": [{"instance_id": "cluster", "kind": "external-mk8s", "cluster_id": "mk8s"}]
-    }
+    desired["infra"].setdefault("external_clusters", []).append(
+        {"instance_id": "cluster", "cluster_id": "mk8s"}
+    )
     runtime = SimpleNamespace(
         client_info=SimpleNamespace(nebius=SimpleNamespace(project_id="project"))
     )
@@ -175,7 +197,19 @@ def test_external_chart_transition_freezes_current_version_and_reuses_it_on_reco
         options=deployment_cli.DeployOptions(),
         lease=None,
     )
-    executor.generation = SimpleNamespace(manifest={"runtime_config": desired})
+    executor.generation = SimpleNamespace(
+        manifest={
+            "runtime_config": desired,
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        }
+    )
     executor.plan = SimpleNamespace(target_ref="cluster", target_release="1.23.0")
     closed = []
     monkeypatch.setattr(
@@ -218,13 +252,9 @@ def test_saved_rollout_round_trips_through_campaign_admission(strategy, surge, e
     import yaml
 
     desired = config()
-    desired["deploy"] = {
-        "targets": [
-            {
-                "instance_id": "cluster",
-                "soperator_rollout": {"strategy": strategy, "max_surge_count": surge},
-            }
-        ]
+    require_soperator_row(desired, "cluster")["rollout"] = {
+        "strategy": strategy,
+        "max_surge_count": surge,
     }
     executor = deployment_cli._CliDeploymentExecutor(
         SimpleNamespace(),
@@ -234,7 +264,17 @@ def test_saved_rollout_round_trips_through_campaign_admission(strategy, surge, e
         lease=None,
     )
     executor.generation = SimpleNamespace(
-        manifest={"runtime_config": yaml.safe_load(yaml.safe_dump(desired))}
+        manifest={
+            "runtime_config": yaml.safe_load(yaml.safe_dump(desired)),
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        }
     )
     executor.plan = SimpleNamespace(target_ref="cluster", target_release="4.1.8", stages=())
     executor.hooks = SimpleNamespace(source_groups=("worker-a", "worker-b"))
@@ -269,7 +309,28 @@ def test_desired_proof_rejects_retained_removed_values_and_stale_readiness():
         "spec": {"values": {"kept": 2}},
     }
     generation = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "target", "flux_dir": "flux/target"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "target",
+                        "flux_dir": "flux/target",
+                        "instance_id": "target",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "target" + "_cluster_id",
+                        "component_output_ref": "target" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/target/kustomization.yaml": base64.b64encode(
                 b"resources: [release.yaml]"
@@ -321,7 +382,28 @@ def test_desired_proof_accepts_apply_null_deletion_only(live_values, matches):
         "spec": {"values": {"observability": {"enabled": True, "overrideValues": None}}},
     }
     generation = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "target", "flux_dir": "flux/target"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "target",
+                        "flux_dir": "flux/target",
+                        "instance_id": "target",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "target" + "_cluster_id",
+                        "component_output_ref": "target" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/target/kustomization.yaml": base64.b64encode(
                 b"resources: [release.yaml]"
@@ -370,7 +452,28 @@ def test_oci_repository_without_status_and_removed_resource_proof():
         "charts", "oci://registry.example.invalid/charts", repo_type="oci"
     )
     generation = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "target", "flux_dir": "flux/target"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "target",
+                        "flux_dir": "flux/target",
+                        "instance_id": "target",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "target" + "_cluster_id",
+                        "component_output_ref": "target" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/target/kustomization.yaml": base64.b64encode(b"resources: [repo.yaml]").decode(),
             "flux/target/repo.yaml": base64.b64encode(yaml.safe_dump(document).encode()).decode(),
@@ -426,7 +529,28 @@ def test_desired_soperator_documents_share_stable_executor_projection():
     }
     documents = [outer, graph]
     frozen = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": "flux/cluster",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/cluster/kustomization.yaml": base64.b64encode(
                 b"resources: [bundle.yaml]"
@@ -510,7 +634,28 @@ def test_desired_proof_uses_real_checks_phase_projection(phase):
     }
     documents = [outer, graph, value_map]
     frozen = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": "flux/cluster",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/cluster/kustomization.yaml": base64.b64encode(
                 b"resources: [bundle.yaml]"

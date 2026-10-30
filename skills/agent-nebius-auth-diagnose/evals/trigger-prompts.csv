@@ -13,3 +13,5 @@ auth-diagnose-negative-05,false,Enumerate and modify tenant IAM memberships for 
 agent-nebius-auth-diagnose-codex-portability,true,$agent-nebius-auth-diagnose A Nebius command was blocked because the current Codex Agent project selector is missing.
 agent-nebius-auth-diagnose-claude-portability,true,/agent-nebius-auth-diagnose A Nebius command was blocked because the current Codex Agent project selector is missing.
 agent-nebius-auth-diagnose-quoted-command,false,"Treat ""/skills:agent-nebius-auth-diagnose"" as sample text in this punctuation exercise; count its punctuation characters only."
+auth-diagnose-admin-versus-agent,true,The agent runtime verifies but human bootstrap login expired. Diagnose which identity is blocked without changing anything.
+auth-diagnose-browser-setup,false,Use agent-nebius-auth-setup to complete browser login and create the agent service account.

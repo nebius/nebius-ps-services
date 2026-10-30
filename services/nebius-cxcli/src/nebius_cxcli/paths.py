@@ -25,6 +25,14 @@ class ProjectPaths:
     path_tenant_folder: str
     path_project_folder: str
 
+    @property
+    def access_infra_dir(self) -> Path:
+        return self.infra_dir.with_name("infra-access")
+
+    @property
+    def terraform_dirs(self) -> tuple[Path, ...]:
+        return (self.infra_dir, self.access_infra_dir)
+
 
 def normalize_project_folder_name(value: str, *, fallback: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
@@ -179,7 +187,11 @@ def resolve_generated_subtree_paths(
         )
 
     subtree_dir = generated_dir / subtree_name
-    if resolved != generated_dir and resolved != subtree_dir and subtree_dir not in resolved.parents:
+    if (
+        resolved != generated_dir
+        and resolved != subtree_dir
+        and subtree_dir not in resolved.parents
+    ):
         try:
             actual_label = f"generated/{resolved.relative_to(generated_dir)}"
         except ValueError:

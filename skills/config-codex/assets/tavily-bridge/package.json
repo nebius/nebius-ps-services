@@ -1,0 +1,9 @@
+{
+  "name": "managed-tavily-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned setup-time dependency; never installed during agent startup.",
+  "dependencies": {
+    "mcp-remote": "0.15.2"
+  }
+}

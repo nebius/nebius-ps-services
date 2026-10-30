@@ -401,7 +401,7 @@ def accepted_install_identity(state, accepted, target_ref):
     )
     rows = [
         row
-        for row in generation.manifest["deploy"]["targets"]
+        for row in generation.manifest["execution"]["targets"]
         if row.get("target_ref") == target_ref
     ]
     if len(rows) != 1 or snapshot.get("release") != accepted["evidence"].get("release"):

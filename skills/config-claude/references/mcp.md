@@ -9,7 +9,7 @@ Verify the selected provider's current instructions before changing a pin.
 ## Reconciliation
 
 1. Identify selected servers and prerequisites without launching them: `npx`
-   for Context7/Playwright, Docker for Terraform, `uvx` for MarkItDown; HTTP
+   for Playwright, Docker for Terraform, `uvx` for MarkItDown; HTTP
    services need native HTTP MCP support. Do not install prerequisites
    implicitly. Check required environment-variable presence without printing
    values; missing variables make that integration incomplete.
@@ -23,10 +23,12 @@ Verify the selected provider's current instructions before changing a pin.
    alone is insufficient. Preserve existing custom definitions and ask about a
    concrete conflict unless the requested replacement is already authorized.
    Account for project and plugin definitions to avoid duplicate connections.
-4. For an authorized missing user server, pass that catalog entry as literal
+4. Tavily requires the preparation and placeholder rendering in
+   [tavily-bridge.md](tavily-bridge.md); never register its catalog placeholders
+   literally. For another authorized missing user server, pass that catalog entry as literal
    JSON to `claude mcp add-json --scope user NAME JSON`. Use an argument array
    when invoking from code; do not interpolate JSON through a shell. Keep
-   `${CONTEXT7_API_KEY}` and `${GITHUB_TOKEN}` literal in saved configuration.
+   `${GITHUB_TOKEN}` literal in saved configuration when selected.
    Never expand secret values into command arguments or public files.
 5. If replacing a user entry was explicitly authorized, use native scoped
    commands and verify that entry afterward. Do not restore an entire
@@ -47,11 +49,55 @@ claude mcp add-json --scope user microsoftdocs \
 The default MCP CLI scope is local, so always specify `--scope user` for this
 skill. Claude owns the corresponding application JSON and authentication;
 do not put `mcpServers` into `settings.json` or copy Codex TOML fields. OAuth
-and secrets stay in their native external flows. [Claude MCP](https://code.claude.com/docs/en/mcp)
+and secrets stay in their owning flows; selected Tavily uses the bridge's
+private file store. [Claude MCP](https://code.claude.com/docs/en/mcp)
+
+## Selected removal
+
+Remove only explicitly selected native registrations. Use
+`claude mcp remove --scope user NAME` for this skill's user scope; recheck the
+entry and unrelated application state afterward. Native removal of a remote
+server also removes its stored OAuth tokens and client registration. Do not
+reconstruct application JSON, delete provider accounts or clear shared caches.
+An already-absent registration needs no rewrite. Report local credential
+cleanup separately from provider-side revocation.
 
 ## Provider References
 
-- [Context7 environment configuration](https://context7.com/docs/resources/developer)
+### Nebius documentation
+
+For explicitly selected `nebiusDocs`, preserve any equivalent existing entry
+and add a missing entry through the native user-scope command:
+
+```bash
+claude mcp add-json --scope user nebiusDocs \
+  '{"type":"http","url":"https://docs.nebius.com/mcp"}'
+```
+
+This public endpoint needs no tenant credentials. Keep its preference in the
+native `CLAUDE.md` managed block, using the template's search/retrieval-first
+rule, then Tavily retrieval of official pages, then disclosed official-web
+fallback and source citations. The rule may exist without
+the optional integration; it does not authorize automatic installation.
+
+Inspect registration and `/mcp` connection status, then use a bounded public
+documentation search when connection verification is requested. Do not call
+`submit_feedback` as a health check. Keep registration, endpoint reads and
+fresh-agent routing evidence separate. The optional
+`--require-mcp nebiusDocs --mcp-config PATH` check validates presence and shape,
+not endpoint identity or runtime health; compare the selected URL separately.
+
+Sources: [Claude native MCP scopes](https://code.claude.com/docs/en/mcp-quickstart)
+and the [public Nebius endpoint](https://docs.nebius.com/mcp).
+
+### Tavily OAuth
+
+For selected Tavily bridge registration, browser login and global routing, read
+[research-routing.md](research-routing.md). Use user scope, preserve native
+scope ownership and verify bridge OAuth separately from the shape-only checker.
+
+### Other providers
+
 - [Playwright MCP](https://github.com/microsoft/playwright-mcp)
 - [Terraform MCP](https://github.com/hashicorp/terraform-mcp-server)
 - [MarkItDown MCP](https://github.com/microsoft/markitdown/tree/main/packages/markitdown-mcp)

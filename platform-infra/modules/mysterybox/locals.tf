@@ -30,6 +30,7 @@ locals {
       secret_name = secret_name
       payload     = secret.payload
     }
+    if var.create_initial_versions
   }
 
   version_payload_values = {

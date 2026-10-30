@@ -227,7 +227,18 @@ def admit_compatibility(
         if subject["kind"] == "terraform":
             if not terraform_validated:
                 raise ValueError("Native Terraform compatibility validation was not performed")
-            evidence.append(terraform_evidence(subject, paths.infra_dir))
+            from .component_instances import component_instance_id
+            from .wireguard_dependencies import access_dependencies
+
+            access_instances = {
+                component_instance_id(row) for row in access_dependencies(config).values()
+            }
+            root = (
+                paths.access_infra_dir
+                if subject.get("instance_id") in access_instances
+                else paths.infra_dir
+            )
+            evidence.append(terraform_evidence(subject, root))
         if subject["component_id"] == "mk8s":
             evidence.extend(provider_evidence(subject, payload))
         if "gpu_network_driver_and_nfd_ownership" in subject.get("required_adapters", []):

@@ -12,6 +12,7 @@ and operating instructions belong in the owning project folder.
 
 | Path | Purpose | Local docs |
 | --- | --- | --- |
+| `agents/ai-support-agent/` | Public support-agent source and information-boundary tooling. | [README](agents/ai-support-agent/README.md) |
 | `.github/` | Repository automation, dependency updates, and shared workflows. | [root changelog](CHANGELOG.md) |
 | `services/` | Service and CLI projects. | service-local `README.md` / `CHANGELOG.md` files |
 | `courses/` | Seven courses: a text-only Slurm/Soperator introduction, five GPU foundations and specializations, and advanced sixteen-GPU communication labs. | [course catalog](https://nebius.github.io/nebius-ps-services/courses/), [authoring and validation](courses/docs/course-builder.md) |
@@ -71,7 +72,10 @@ requires fresh review. Standalone review never merges, and automatic PR/CI
 and scheduled events only report CI or recover already-authorized completion.
 
 [Protected merge setup](.github/merge-automation.md) documents the operator list,
-required protection, bootstrap and live acceptance. Completion CI can run from
+required protection, bootstrap and live acceptance. Its scoped Actions event
+policies allow privileged PR events only for reviewer routing and the merge
+broker; the same guide records policy ownership, verification and rollback.
+Completion CI can run from
 a newer workflow revision; its exact-result artifact identifies the tested commit.
 Verify skill installation and default-branch workflow deployment separately
 from source tests, CI and live completion.
@@ -88,7 +92,7 @@ intent/spec inheritance, typed spec-gap reporting, and safe hook retirement.
 
 The protected merge broker reacts to PR and relevant CI events. The completion
 workflow runs one hourly recovery at minute 17 UTC and supports manual recovery;
-there is no per-minute or 15-minute merge polling. The seven CI workflow identities
+there is no per-minute or 15-minute merge polling. The registered CI workflow identities
 and their exact-result evidence remain separate. See the
 [merge protocol](.github/merge-automation.md) for recovery and trust boundaries.
 

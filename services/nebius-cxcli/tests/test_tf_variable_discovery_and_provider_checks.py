@@ -13,6 +13,7 @@ from nebius_cxcli.cli import (
     _materialize_vm_image_defaults,
     _run_component_field_wizard,
 )
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.component_sources import ComponentDefault, StatusWatcher
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.compute_boot_disks import ComputeBootDiskRecommendationError
@@ -351,7 +352,7 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -462,12 +463,14 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
     assert prompt_type_hints["infra.components[0].inputs.optional_field"] == "string"
 
 
+@pytest.mark.parametrize("cancel_placement", [None, "back", "quit"])
 def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     monkeypatch,
+    cancel_placement,
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -538,6 +541,7 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
 
     prompted_paths: list[str] = []
     new_group_names = ["system", "burst"]
+    cancelled = False
     add_another_answers = [True, False]
 
     def _fake_prompt(
@@ -549,8 +553,22 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         required=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
+        nonlocal cancelled
         _ = choices, type_hint, required, unset_on_skip
+        if path_label.endswith(".burst.taints[0].effect") and cancel_placement and not cancelled:
+            cancelled = True
+            if cancel_placement == "back":
+                new_group_names.append("burst")
+                return cli._WIZARD_BACKTRACK, False
+            return current, True
         prompted_paths.append(path_label)
+        if path_label.endswith(".placement.rule"):
+            return ("label" if ".system." in path_label else "both"), False
+        if path_label.endswith(".node_labels.<new>.key"):
+            return "scheduling.example.com/pool", False
+        if path_label.endswith(".node_labels.<new>.value"):
+            return ("core" if ".system." in path_label else "task"), False
+
         if path_label.endswith(".inputs.cluster.cluster_name"):
             return "demo-cluster", False
         if path_label.endswith(".inputs.cluster.network_id"):
@@ -656,7 +674,16 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         provider_lookup=_StaticVpcLookup(),
     )
 
+    if cancel_placement == "quit":
+        assert completed is False
+        groups = yaml.safe_load(updated_yaml)["infra"]["components"][0]["inputs"]["node_groups"]
+        assert set(groups) == {"system"}
+        assert groups["system"]["node_labels"] == {"scheduling.example.com/pool": "core"}
+        return
     assert completed is True
+    if cancel_placement == "back":
+        assert cancelled
+        assert prompted_paths.count("infra.components[0].inputs.node_groups.<new>.name") == 3
     assert "infra.components[0].inputs.cluster" not in prompted_paths
     assert "infra.components[0].inputs.node_groups" not in prompted_paths
     assert "infra.components[0].inputs.cluster.cluster_name" in prompted_paths
@@ -690,6 +717,13 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     assert inputs["cluster"]["k8s_version"] == "1.33"
     assert inputs["cluster"]["public_endpoint"] is True
     assert "node_group_defaults" not in inputs
+    assert inputs["node_groups"]["system"]["node_labels"] == {"scheduling.example.com/pool": "core"}
+    assert "taints" not in inputs["node_groups"]["system"]
+    assert inputs["node_groups"]["burst"]["node_labels"] == {"scheduling.example.com/pool": "task"}
+    assert inputs["node_groups"]["burst"]["taints"] == [
+        {"key": "scheduling.example.com/pool", "value": "task", "effect": "NO_SCHEDULE"}
+    ]
+    assert all("placement" not in group for group in inputs["node_groups"].values())
     assert inputs["node_groups"]["system"]["node_count"] == 2
     assert inputs["node_groups"]["system"]["gpu"] is False
     assert inputs["node_groups"]["system"]["platform"] == "cpu-d3"
@@ -719,7 +753,7 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
         {
             # Synthetic operator versions explicitly opt out of the production set.
             "compatibility": {"targets": {"mk8s": {"version_set": None}}},
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -962,7 +996,7 @@ def test_wizard_back_inside_plain_mk8s_node_group_stays_in_group_loop(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1121,7 +1155,7 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1317,7 +1351,7 @@ def test_wizard_plain_mk8s_boot_disk_policy_errors_are_not_hidden(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1471,7 +1505,7 @@ def test_wizard_declared_infra_field_does_not_warn_when_input_key_is_not_seeded(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1565,7 +1599,7 @@ def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1655,7 +1689,7 @@ def test_wizard_declared_target_observability_path_is_prompted(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1686,7 +1720,7 @@ def test_wizard_declared_target_observability_path_is_prompted(
         config_path="infra.components.mk8s",
         description="MK8s",
         wizard_fields={
-            "deploy.targets[].observability.enabled": {},
+            "infra.components[].observability.enabled": {},
         },
     )
 
@@ -1725,20 +1759,20 @@ def test_wizard_declared_target_observability_path_is_prompted(
     )
 
     assert completed is True
-    assert prompted_paths.count("deploy.targets[0].observability.enabled") == 1
+    assert prompted_paths.count("infra.components[0].observability.enabled") == 1
     assert not any("Skipping wizard field" in message for message in rendered_messages)
     payload = yaml.safe_load(updated_yaml)
-    assert payload["deploy"]["targets"][0]["observability"]["enabled"] is True
+    assert cluster_rows(payload)[0]["observability"]["enabled"] is True
 
 
 @pytest.mark.usefixtures("remote_observability_choices")
 def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target(
     monkeypatch,
 ) -> None:
-    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "grafana-postgresql")
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1755,12 +1789,20 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
                         "instance_id": "cluster1",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {
+                            "enabled": True,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
                     },
                     {
                         "id": "mk8s",
                         "instance_id": "cluster2",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {
+                            "enabled": False,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
                     },
                 ]
             },
@@ -1777,24 +1819,6 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
                     for app_id in app_ids
                 ]
             },
-            "deploy": {
-                "targets": [
-                    {
-                        "instance_id": "cluster1",
-                        "observability": {
-                            "enabled": True,
-                            "kubernetes": {"logs": {"enabled": True}},
-                        },
-                    },
-                    {
-                        "instance_id": "cluster2",
-                        "observability": {
-                            "enabled": False,
-                            "kubernetes": {"logs": {"enabled": True}},
-                        },
-                    },
-                ]
-            },
         },
         sort_keys=False,
     )
@@ -1805,8 +1829,8 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
         description="MK8s",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].observability.enabled": {"type_hint": "bool"},
-            "deploy.targets[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
+            "infra.components[].observability.enabled": {"type_hint": "bool"},
+            "infra.components[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
         },
     )
     app_entries = tuple(
@@ -1848,9 +1872,9 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
-        if path_label == "deploy.targets[1].observability.enabled":
+        if path_label == "infra.components[1].observability.enabled":
             return True, False
-        if path_label == "deploy.targets[1].observability.kubernetes.logs.enabled":
+        if path_label == "infra.components[1].observability.kubernetes.logs.enabled":
             return True, False
         return current, False
 
@@ -1866,7 +1890,7 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
     )
 
     assert completed is True
-    assert "deploy.targets[1].observability.kubernetes.logs.enabled" in prompted_paths
+    assert "infra.components[1].observability.kubernetes.logs.enabled" in prompted_paths
     rendered = "\n".join(rendered_messages)
     assert "mk8s@cluster2" in rendered
     assert "nebius-observability-agent on cluster2" in rendered
@@ -1892,10 +1916,10 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
 def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
     monkeypatch,
 ) -> None:
-    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "grafana-postgresql")
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -1912,12 +1936,20 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
                         "instance_id": "cluster1",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {
+                            "enabled": True,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
                     },
                     {
                         "id": "mk8s",
                         "instance_id": "cluster2",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {
+                            "enabled": False,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
                     },
                 ]
             },
@@ -1934,24 +1966,6 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
                     for app_id in app_ids
                 ]
             },
-            "deploy": {
-                "targets": [
-                    {
-                        "instance_id": "cluster1",
-                        "observability": {
-                            "enabled": True,
-                            "kubernetes": {"logs": {"enabled": True}},
-                        },
-                    },
-                    {
-                        "instance_id": "cluster2",
-                        "observability": {
-                            "enabled": False,
-                            "kubernetes": {"logs": {"enabled": True}},
-                        },
-                    },
-                ]
-            },
         },
         sort_keys=False,
     )
@@ -1962,8 +1976,8 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
         description="MK8s",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].observability.enabled": {"type_hint": "bool"},
-            "deploy.targets[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
+            "infra.components[].observability.enabled": {"type_hint": "bool"},
+            "infra.components[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
         },
     )
     app_entries = tuple(
@@ -1993,8 +2007,8 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
     )
 
     answers = {
-        "deploy.targets[1].observability.enabled": [True, False],
-        "deploy.targets[1].observability.kubernetes.logs.enabled": [cli._WIZARD_BACKTRACK],
+        "infra.components[1].observability.enabled": [True, False],
+        "infra.components[1].observability.kubernetes.logs.enabled": [cli._WIZARD_BACKTRACK],
     }
 
     def _fake_prompt(
@@ -2025,7 +2039,7 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
 
     assert completed is True
     payload = yaml.safe_load(updated_yaml)
-    assert payload["deploy"]["targets"][1]["observability"]["enabled"] is False
+    assert cluster_rows(payload)[1]["observability"]["enabled"] is False
     chart_targets = sorted(
         (row["id"], row["instance_id"])
         for row in payload["apps"]["charts"]
@@ -2038,11 +2052,16 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
 def test_wizard_gpu_auto_apps_preserve_target_scoped_app_selection(
     monkeypatch,
 ) -> None:
-    existing_app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
+    existing_app_ids = (
+        "nebius-observability-agent",
+        "grafana",
+        "gateway-helm",
+        "grafana-postgresql",
+    )
     gpu_app_ids = ("nvidia-gpu-operator", "nvidia-network-operator")
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2059,12 +2078,14 @@ def test_wizard_gpu_auto_apps_preserve_target_scoped_app_selection(
                         "instance_id": "cluster1",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {"enabled": True},
                     },
                     {
                         "id": "mk8s",
                         "instance_id": "cluster2",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {"enabled": True},
                     },
                 ]
             },
@@ -2080,18 +2101,6 @@ def test_wizard_gpu_auto_apps_preserve_target_scoped_app_selection(
                     }
                     for target_ref in ("cluster1", "cluster2")
                     for app_id in existing_app_ids
-                ]
-            },
-            "deploy": {
-                "targets": [
-                    {
-                        "instance_id": "cluster1",
-                        "observability": {"enabled": True},
-                    },
-                    {
-                        "instance_id": "cluster2",
-                        "observability": {"enabled": True},
-                    },
                 ]
             },
         },
@@ -2193,7 +2202,7 @@ def test_wizard_gpu_auto_apps_preserve_target_scoped_app_selection(
 def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2218,7 +2227,7 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
                         "enabled": True,
                         "inputs": {},
                     },
-                ],
+                ]
             },
             "apps": {
                 "charts": [
@@ -2231,14 +2240,12 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
                         "namespace": "demo",
                         "release-name": "demo-app",
                         "values": {},
-                    }
-                ]
-            },
-            "deploy": {
-                "targets": [
+                    },
                     {
+                        "id": "external-secrets",
                         "instance_id": "mk8s",
-                    }
+                        "enabled": True,
+                    },
                 ]
             },
         },
@@ -2252,15 +2259,15 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].secrets.mysterybox.enabled": {
+            "infra.components[].secrets.mysterybox.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
+            "infra.components[].secrets.mysterybox.allow_all_namespaces": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].secrets.mysterybox.sync_namespaces": {
+            "infra.components[].secrets.mysterybox.sync_namespaces": {
                 "default": ["default"],
                 "type_hint": "list(string)",
                 "prompt_complex": True,
@@ -2313,13 +2320,13 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         _ = choices, type_hint, required, unset_on_skip
         if path_label == "infra.components[0].inputs.required_field":
             return "infra-value", False
-        if path_label == "deploy.targets[0].secrets.mysterybox.enabled":
+        if path_label == "infra.components[0].secrets.mysterybox.enabled":
             assert current is True
             return True, False
-        if path_label == "deploy.targets[0].secrets.mysterybox.allow_all_namespaces":
+        if path_label == "infra.components[0].secrets.mysterybox.allow_all_namespaces":
             assert current is True
             return True, False
-        if path_label == "deploy.targets[0].secrets.mysterybox.sync_namespaces":
+        if path_label == "infra.components[0].secrets.mysterybox.sync_namespaces":
             assert current == ["default"]
             return ["app"], False
         if path_label == "apps.charts[0].values.image.tag":
@@ -2353,26 +2360,22 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
     )
     assert (
         "[bold cyan]Wizard context:[/bold cyan] [dim]Current:[/dim] "
-        "[bold magenta]Deploy Target[/bold magenta] [dim]/[/dim] "
+        "[bold magenta]Infra[/bold magenta] [dim]/[/dim] "
         "[bold green]mk8s / MysteryBox ESO sync[/bold green]" in rendered_output
     )
-    assert "Selected deploy.targets[0].secrets.mysterybox.enabled = true" in rendered_output
+    assert "Selected infra.components[0].secrets.mysterybox.enabled = true" in rendered_output
     assert (
-        "Selected deploy.targets[0].secrets.mysterybox.allow_all_namespaces = true"
+        "Selected infra.components[0].secrets.mysterybox.allow_all_namespaces = true"
         in rendered_output
     )
     assert (
-        'Selected deploy.targets[0].secrets.mysterybox.sync_namespaces = ["app"]' in rendered_output
+        'Selected infra.components[0].secrets.mysterybox.sync_namespaces = ["app"]'
+        in rendered_output
     )
     updated_payload = yaml.safe_load(updated_yaml)
-    assert updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["enabled"] is True
-    assert (
-        updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"]
-        is True
-    )
-    assert updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["sync_namespaces"] == [
-        "app"
-    ]
+    assert cluster_rows(updated_payload)[0]["secrets"]["mysterybox"]["enabled"] is True
+    assert cluster_rows(updated_payload)[0]["secrets"]["mysterybox"]["allow_all_namespaces"] is True
+    assert cluster_rows(updated_payload)[0]["secrets"]["mysterybox"]["sync_namespaces"] == ["app"]
     assert "    * mk8s (current)" not in rendered_output
     assert "    * demo-app on mk8s (current)" not in rendered_output
     assert any(
@@ -2390,7 +2393,7 @@ def test_vm_preemptible_wizard_sets_required_recovery_policy(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2495,7 +2498,7 @@ def test_vm_preemptible_wizard_hides_preemptible_fields_for_cpu_platform(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2578,7 +2581,7 @@ def test_vm_preemptible_wizard_hides_preemptible_fields_for_cpu_platform(
 def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2615,7 +2618,7 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
         config_path="infra.components.mk8s",
         description="MK8s",
         wizard_fields={
-            "deploy.targets[].observability.enabled": {},
+            "infra.components[].observability.enabled": {},
         },
     )
     vm_entry = ComponentEntry(
@@ -2624,8 +2627,8 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
         config_path="infra.components.vm",
         description="VM",
         wizard_fields={
-            "deploy.observability.enabled": {},
-            "deploy.observability.vm.logs.enabled": {},
+            "infra.components[].observability.enabled": {},
+            "infra.components[].observability.vm.logs.enabled": {},
         },
     )
 
@@ -2658,13 +2661,23 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
     )
 
     assert completed is True
-    assert prompted_paths.count("deploy.targets[0].observability.enabled") == 1
-    assert prompted_paths.count("deploy.observability.enabled") == 1
-    assert prompted_paths.count("deploy.observability.vm.logs.enabled") == 1
+    assert prompted_paths.count("infra.components[0].observability.enabled") == 1
+    assert prompted_paths.count("infra.components[1].observability.enabled") == 1
+    assert prompted_paths.count("infra.components[1].observability.vm.logs.enabled") == 1
     payload = yaml.safe_load(updated_yaml)
-    assert payload["deploy"]["targets"][0]["observability"]["enabled"] is True
-    assert payload["deploy"]["observability"]["enabled"] is True
-    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
+    assert cluster_rows(payload)[0]["observability"]["enabled"] is True
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "enabled"
+        ]
+        is True
+    )
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "vm"
+        ]["logs"]["enabled"]
+        is True
+    )
 
 
 def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
@@ -2672,7 +2685,7 @@ def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2682,14 +2695,6 @@ def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
                 },
                 "notifications": {"email_enabled": True, "email": None},
             },
-            "deploy": {
-                "observability": {
-                    "enabled": True,
-                    "vm": {
-                        "logs": {"enabled": True, "systemd_units": []},
-                    },
-                },
-            },
             "infra": {
                 "components": [
                     {
@@ -2697,6 +2702,10 @@ def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
                         "instance_id": "vm",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {
+                            "enabled": True,
+                            "vm": {"logs": {"enabled": True, "systemd_units": []}},
+                        },
                     }
                 ]
             },
@@ -2711,8 +2720,8 @@ def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
         config_path="infra.components.vm",
         description="VM",
         wizard_fields={
-            "deploy.observability.enabled": {},
-            "deploy.observability.vm.logs.enabled": {},
+            "infra.components[].observability.enabled": {},
+            "infra.components[].observability.vm.logs.enabled": {},
             "inputs.service_account_id": {"prompt": False},
         },
     )
@@ -2756,7 +2765,7 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -2766,14 +2775,6 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
                 },
                 "notifications": {"email_enabled": True, "email": None},
             },
-            "deploy": {
-                "observability": {
-                    "enabled": False,
-                    "vm": {
-                        "logs": {"enabled": True, "systemd_units": []},
-                    },
-                },
-            },
             "infra": {
                 "components": [
                     {
@@ -2781,6 +2782,10 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
                         "instance_id": "vm",
                         "enabled": True,
                         "inputs": {},
+                        "observability": {
+                            "enabled": False,
+                            "vm": {"logs": {"enabled": True, "systemd_units": []}},
+                        },
                     }
                 ]
             },
@@ -2795,8 +2800,8 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
         config_path="infra.components.vm",
         description="VM",
         wizard_fields={
-            "deploy.observability.enabled": {},
-            "deploy.observability.vm.logs.enabled": {},
+            "infra.components[].observability.enabled": {},
+            "infra.components[].observability.vm.logs.enabled": {},
             "inputs.service_account_id": {"prompt": False},
         },
     )
@@ -2816,7 +2821,7 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
         prompted[path_label] = current
-        if path_label == "deploy.observability.enabled":
+        if path_label == "infra.components[0].observability.enabled":
             return True, False
         return current, False
 
@@ -2832,19 +2837,34 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
     )
 
     assert completed is True
-    assert prompted["deploy.observability.vm.logs.enabled"] is True
+    assert prompted["infra.components[0].observability.vm.logs.enabled"] is True
     assert "infra.components[0].inputs.service_account_id" not in prompted
     payload = yaml.safe_load(updated_yaml)
-    assert payload["deploy"]["observability"]["enabled"] is True
-    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
-    assert "collector" not in payload["deploy"]["observability"]["vm"]
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "enabled"
+        ]
+        is True
+    )
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "vm"
+        ]["logs"]["enabled"]
+        is True
+    )
+    assert (
+        "collector"
+        not in next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+            "observability"
+        ]["vm"]
+    )
     assert "service_account_id" not in payload["infra"]["components"][0]["inputs"]
 
 
 def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3036,7 +3056,7 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
 def test_vm_wizard_prompts_secondary_data_disk_shape_when_enabled(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3245,7 +3265,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3380,6 +3400,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
         type_hint=None,
         required=False,
         unset_on_skip=False,
+        blank_text=None,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
         prompted_defaults[path_label] = current
@@ -3399,6 +3420,12 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
         return current, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+    monkeypatch.setattr(
+        "nebius_cxcli.wizard_defaults.prompt_wireguard_input",
+        lambda field, current, inputs, instance_id: _fake_prompt(
+            f"infra.components[0].inputs.{field}", current
+        ),
+    )
 
     updated_yaml, completed = _run_component_field_wizard(
         config_yaml=config_yaml,
@@ -3448,7 +3475,7 @@ def test_vm_style_wizard_prompts_boot_disk_encryption_for_supported_disk_types(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3601,7 +3628,7 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3688,6 +3715,7 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
         type_hint=None,
         required=False,
         unset_on_skip=False,
+        blank_text=None,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint
         prompted_required[path_label] = required
@@ -3707,6 +3735,12 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
         return current, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+    monkeypatch.setattr(
+        "nebius_cxcli.wizard_defaults.prompt_wireguard_input",
+        lambda field, current, inputs, instance_id: _fake_prompt(
+            f"infra.components[0].inputs.{field}", current
+        ),
+    )
 
     updated_yaml, completed = _run_component_field_wizard(
         config_yaml=config_yaml,
@@ -3731,7 +3765,7 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
 def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3852,7 +3886,7 @@ def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None
 def test_wizard_q_revisits_previous_flat_module_prompt(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -3978,7 +4012,7 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -4085,7 +4119,7 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
 
 def test_materialize_singleton_provider_defaults_sets_missing_single_choice_field() -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -4149,7 +4183,7 @@ def test_materialize_singleton_provider_defaults_sets_missing_single_choice_fiel
 
 def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -4217,7 +4251,7 @@ def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -
 
 def test_materialize_singleton_provider_defaults_sets_hidden_mk8s_gpu_fabric() -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -4300,7 +4334,7 @@ def test_materialize_singleton_provider_defaults_sets_hidden_mk8s_gpu_fabric() -
 
 def test_materialize_singleton_provider_defaults_decodes_mk8s_gpu_capacity_choice() -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -4453,7 +4487,7 @@ def test_materialize_singleton_provider_defaults_keeps_one_gpu_capacity_choice_e
     None
 ):
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -4532,7 +4566,7 @@ def test_materialize_singleton_provider_defaults_keeps_one_gpu_capacity_choice_e
 
 def test_materialize_vm_image_defaults_sets_first_live_image_family() -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -4610,7 +4644,7 @@ def test_wizard_skips_empty_top_level_app_values_prompt_without_known_leaf_field
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -4693,7 +4727,7 @@ def test_wizard_prompts_optional_complex_defaults_but_keeps_them_virtual(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -4803,7 +4837,7 @@ def test_wizard_leaves_optional_unset_field_absent_when_blank(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -4869,7 +4903,7 @@ def test_wizard_prompts_literal_component_defaults_for_custom_module_fields(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -4963,7 +4997,7 @@ def test_wizard_skips_optional_module_field_marked_prompt_false(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5060,7 +5094,7 @@ def test_wizard_uses_declared_default_for_nested_helper_field_without_persisting
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5149,7 +5183,7 @@ def test_wizard_writes_declared_default_when_config_write_is_enabled(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5230,7 +5264,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5271,19 +5305,19 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
+            "infra.components[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
+            "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
+            "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
                 "default": 3,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": {
+            "infra.components[].deployment_testing.mk8s_gpu.health_checker.enabled": {
                 "default": False,
                 "write_default_to_config": True,
             },
@@ -5334,15 +5368,19 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
 
     assert completed is True
     assert (
-        "deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled" in prompted_paths
+        "infra.components[0].deployment_testing.mk8s_gpu.operator_readiness.enabled"
+        in prompted_paths
     )
-    assert "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
     assert (
-        "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
+        "infra.components[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
+    )
+    assert (
+        "infra.components[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
     )
     assert all(".nccl." not in path for path in prompted_paths)
     assert (
-        "deploy.targets[0].deployment_testing.mk8s_gpu.health_checker.enabled" not in prompted_paths
+        "infra.components[0].deployment_testing.mk8s_gpu.health_checker.enabled"
+        not in prompted_paths
     )
 
 
@@ -5351,7 +5389,7 @@ def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5392,19 +5430,19 @@ def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
+            "infra.components[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
+            "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
+            "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
                 "default": 3,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": {
+            "infra.components[].deployment_testing.mk8s_gpu.health_checker.enabled": {
                 "default": False,
                 "write_default_to_config": True,
             },
@@ -5456,7 +5494,7 @@ def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
     assert completed is True
     assert all(".nccl." not in path for path in prompted_paths)
     payload = yaml.safe_load(updated_yaml)
-    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    mk8s_gpu_deployment_testing = cluster_rows(payload)[0]["deployment_testing"]["mk8s_gpu"]
     assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
     assert "nccl" not in mk8s_gpu_deployment_testing
 
@@ -5466,7 +5504,7 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
         {
             # Synthetic operator versions explicitly opt out of the production set.
             "compatibility": {"targets": {"mk8s": {"version_set": None}}},
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5617,7 +5655,7 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
         {
             # Synthetic operator versions explicitly opt out of the production set.
             "compatibility": {"targets": {"mk8s": {"version_set": None}}},
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5767,7 +5805,7 @@ def test_wizard_keeps_optional_provider_field_unset_without_reprompt(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5860,7 +5898,7 @@ def test_wizard_skips_dependent_fields_when_enabled_toggle_is_false(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -5973,7 +6011,7 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -6083,7 +6121,7 @@ def test_wizard_prompts_gpu_preset_only_after_platform_is_selected(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -6201,7 +6239,7 @@ def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -6349,7 +6387,7 @@ def test_wizard_prompts_infiniband_after_clusterable_gpu_preset(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -6512,7 +6550,7 @@ def test_wizard_skips_infiniband_for_non_clusterable_gpu_preset(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {
@@ -6663,7 +6701,7 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": "demo",
                 "nebius": {

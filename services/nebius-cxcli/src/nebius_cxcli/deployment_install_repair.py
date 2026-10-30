@@ -99,7 +99,7 @@ def storage_input_transition(
         return None
     if entry.get("status") != "executing" or entry.get("inputRepair") or entry.get("evidence"):
         raise RuntimeError("Application render repair requires an unfinished initial bundle")
-    rows = [r for r in desired.manifest["deploy"]["targets"] if r["target_ref"] == target_ref]
+    rows = [r for r in desired.manifest["execution"]["targets"] if r["target_ref"] == target_ref]
     root = rows[0]["flux_dir"].rstrip("/") + "/"
 
     def files(generation: DeploymentGeneration) -> dict[str, bytes]:

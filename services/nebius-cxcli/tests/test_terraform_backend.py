@@ -24,7 +24,7 @@ def _config(
 ):
     return wrap_runtime_config(
         {
-            "version": "v1",
+            "version": "v2",
             "client_info": {
                 "client_name": client_name,
                 "nebius": {

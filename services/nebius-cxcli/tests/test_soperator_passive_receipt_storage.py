@@ -26,7 +26,7 @@ def worker_receipts(tmp_path, request):
     root = tmp_path / "execution"
     config = root / "tenant/project/config.yaml"
     config.parent.mkdir(parents=True)
-    config.write_text("cluster: lab\n")
+    config.write_text("version: v2\ncompatibility: {fixture: lab}\n")
     paths = resolve_project_paths(config)
     snapshot = project_generation_snapshot_sha256(paths)
 

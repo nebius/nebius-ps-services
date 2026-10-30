@@ -28,8 +28,6 @@ def test_install_app_settings_customize_only_after_explicit_yes(
         for name in (first_component, "nvidia-network-operator")
     )
     payload = {
-        # Synthetic chart versions are intentional custom selections; the
-        # matrix-owned defaults have separate contract tests.
         "compatibility": {"targets": {"cluster": {"version_set": None}}},
         "infra": {
             "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
@@ -47,6 +45,7 @@ def test_install_app_settings_customize_only_after_explicit_yes(
                 for entry in entries
             ]
         },
+        "version": "v2",
     }
     # Required SSH input is already supplied; this test isolates optional settings.
     if first_component == "soperator":

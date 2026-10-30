@@ -29,11 +29,26 @@ def bundles(tmp_path):
     }
     desired = DeploymentGeneration(
         {
-            "deploy": {
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+            "execution": {
+                "backend": {},
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
                 "targets": [
-                    {"target_ref": ref, "flux_dir": f"flux/targets/{ref}"} for ref in ("one", "two")
-                ]
-            }
+                    {
+                        "target_ref": ref,
+                        "instance_id": ref,
+                        "kind": "external-mk8s",
+                        "ownership": "external",
+                        "kube_context": ref,
+                        "access": "external",
+                        "flux_dir": f"flux/targets/{ref}",
+                    }
+                    for ref in ("one", "two")
+                ],
+            },
         },
         {name: base64.b64encode(content).decode() for name, content in files.items()},
     )
@@ -117,7 +132,7 @@ def test_publication_fails_closed_before_target_writes(tmp_path, monkeypatch, fa
             },
         )
     elif failure == "overlap":
-        desired.manifest["deploy"]["targets"][1]["flux_dir"] = "flux"
+        desired.manifest["execution"]["targets"][1]["flux_dir"] = "flux"
     elif failure == "missing":
         selected = ["missing"]
     before = values.read_bytes()
@@ -193,7 +208,7 @@ def test_restored_cache_rebinds_only_frozen_oci_identity(tmp_path, drift):
 
     raw()
     bind_flux_artifacts(local, inputs)
-    manifest.update(runtime_config={})
+    manifest.update(runtime_config={"version": "v2"})
     manifest["render"] = {
         "compatibility": {"chart_inputs": inputs},
         "application_files": application_files(local),

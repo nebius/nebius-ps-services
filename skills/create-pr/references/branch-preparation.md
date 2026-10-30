@@ -37,8 +37,8 @@ selected target after any dirty work has been validated and committed. The
 helper owns the normal-hook merge from the frozen base; do not perform raw
 merges. Review/check the actual result and acknowledge its exact tree before
 publication. Never merge the PR branch into the default branch, rebase or
-force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
-`git push origin HEAD:<branch>` for an existing one.
+force-push. Use [private PR publication](pr-publication.md) for new branches and
+existing same-repository or fork PRs.
 
 ## Branch Selection
 

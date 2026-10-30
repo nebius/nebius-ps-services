@@ -29,6 +29,9 @@ reviewable supporting assets.
 - AC-005: Identical shared hook payloads produce one installed file and one
   registration per event without a duplicate-destination notice. Conflicting
   payloads fail preflight before skill or hook writes.
+- AC-006: Shared hook runtime dependencies are included in expected-file
+  reporting and changed/unchanged totals. A runtime-only update triggers the
+  same restart notice as any other changed hook payload.
 
 #### Negative Criteria
 
@@ -3321,11 +3324,14 @@ request, a successful merge, and successful verification.
   after verified membership; distinguish removal from never-proven membership,
   and defer requested branch deletion while queued. Cleanup must reject a
   head that advances beyond the explicitly expected SHA at deletion time.
-- AC-004: Observe all applicable post-merge CI on the resulting SHA, including
-  check runs, statuses, and Actions provenance. Poll every 30 seconds for up to
-  10,800 seconds per observation attempt; retries, repairs and observed CI
-  reruns do not reset the deadline. Release callers persist this independent
-  verification deadline and renew it only through explicit release resume. Missing result metadata has a 60-second settlement bound.
+- AC-004: Ordinary PR readiness, merge settlement and exact-result CI/Pages
+  verification each use an independent fixed 86,400-second (24-hour) budget.
+  Observe checks, statuses and Actions provenance every 30 seconds; retries,
+  repairs and CI reruns never reset deadlines. An explicit user continuation
+  starts a new observation attempt while retaining the original transaction and
+  prior outcome. Caller-supplied checkpoint deadlines remain authoritative;
+  release workflows retain their own phase budgets and explicit resume rules.
+  Missing result metadata has a 60-second settlement bound.
 - AC-005: Report merge, destination verification, and CI separately. CI outcomes
   include passed, failed, pending, not configured, unverified, and not applicable
   while queued. Preserve actual conclusions and disclose neutral/skipped checks.
@@ -3514,7 +3520,7 @@ Ordinary create-pr performs complete local code review before publication and st
 
 - AC-015: Review without checkout-dependent work leaves local refs and checkout alone. Checkout-dependent review switches back at completion or safe pause without integrating default history. Create-only from default leaves its new feature checked out; visiting existing targets switches back at the outer boundary.
 - AC-016: Following confirmed merge and verified destination containment, fetch that destination, fast-forward eligible existing local default/original branches and switch back to the original branch, including after CI or Pages failure/timeout. Preserve unique/diverged histories; never implicitly merge, rebase, reset or recreate missing refs. Resolve the actual default branch. Squash proof uses the authoritative result, not PR-head ancestry.
-- AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
+- AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork permission and identity, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
 - AC-018: Global completion discovery failures display a sanitized reason and original nonzero status and publish no targets. Target-specific receipt failures are isolated with blocked diagnostics and aggregate failure, while valid independent targets may proceed. Preserve API deadlines, receipt gates and effect permissions.
 
 - AC-019: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs.
@@ -3682,6 +3688,334 @@ Cover direct/plan/continue intake, stale basis, invalid ownership, steering/canc
 Run fresh native and disposable application trials through both public workflows; report observed concurrency and unavailable evidence separately.
 
 <!-- /REQUIREMENT: REQ-046 -->
+
+<!-- REQUIREMENT: REQ-047 status=active priority=P1 type=feature -->
+### REQ-047: Design-first Nebius capacity planning
+
+#### User Story
+
+Project owners need an auditable Nebius resource plan derived from their design,
+with per-component allocations, headroom, optional tenant quota and regional capacity checks
+and verifiable costs, before provisioning infrastructure.
+
+#### Acceptance Criteria
+
+- AC-001: Provide the implicitly discoverable `nebius-capacity-planning` skill for Kubernetes, VMs and relevant managed services. Inventory components before resolving missing sizing inputs; preserve design constraints and account for every component, sizing only Nebius-hosted resources.
+- AC-002: Explain per-container CPU/memory requests and limits, justified unset CPU limits, scale/concurrency, ephemeral storage, GPUs, placement and evidence. Separate effective Pod scheduling demand from simultaneous runtime demand.
+- AC-003: Size exact supported Nebius platforms/presets, pools, storage and network resources using explicit overhead, growth, failure and rollout scenarios without double counting.
+- AC-004: A user-selected tenant automatically triggers read-only tenant-level inspection through `nebius` using the official Python SDK. Preserve selected identity and distinguish quota headroom, incomplete evidence, documented regional support and capacity advice. No credentials are required for design-only work; missing live access preserves useful offline results.
+- AC-005: Save a complete report whose opening executive summary includes the selected profile, exact per-pool provisioning quantities, storage/network, surge/growth, external dependencies and unresolved gates, with linked TOC to the selected project's `docs/nebius-capacity-planning.md`; honor no-write requests and preserve identifiable human notes.
+- AC-006: Include traceable costs only with verified rates and assumptions; identify unpriced items. Keep reusable sources public-safe and reports free of secrets and raw cloud dumps.
+- AC-007: Provide offline deterministic arithmetic, meaningful synthetic cases, portable packaging, trigger evaluations and separately qualified static, runtime and quality evidence.
+- AC-008: Expose tenant/region/profile selectors, default region to all, reject the removed project selector, and retain explicit quota-check and quota-request modes plus a multiplier of at least one over the incremental scenario envelope. Quota requests require one concrete region; all-region request mode prepares values without submitting. Cloud-access scripts use the official Nebius Python SDK, never a non-SDK request adapter. Compare usage plus multiplied demand, preserve unknowns, deduplicate requests, submit once as the selected human account and verify receipts. Never promise permanent spare quota or physical reservation.
+
+- AC-009: Resolve current user amendments, explicit design references, relevant conversation design, then selected-local-project docs. Trace every component to evidence, clarify conflicting authorities, exclude generated capacity reports as primary designs, and keep an external input from silently relocating the report.
+- AC-010: Group tenant totals by region, with all-region coverage from current public documentation and tenant evidence. Preserve locality exclusions, restricted-region uncertainty, global quotas and unresolved rows. Treat regional placements as alternatives unless the design requires simultaneous multi-region deployment.
+- AC-011: Collect timestamped GPU capacity advice with bounded SDK pagination, validated composite identities and allocation/data states. Never sum overlapping preset advice or equate CPU quota with physical capacity; leave project deployment eligibility unchecked. Deduct reused resources only with current explicit evidence.
+
+#### Negative Criteria
+
+- NC-001: Do not provision, directly edit/approve quotas, change authentication, apply manifests, run load tests or silently install dependencies. Explicit quota-request mode may submit only verified shortfalls through an existing human identity.
+- NC-002: Do not inherit one project's region, CPU-only or SFS choices as universal defaults, or claim schedulability/availability from aggregate arithmetic or quotas.
+
+#### Validation Method
+
+Run changed-scope unit, structure, portability, catalog and canonical-spec checks;
+perform code/security reviews through align-skill and align.
+
+#### Test Method
+
+Cover unit discipline, effective Pod inputs, node loss, rollout overlap,
+unbounded limits, resource accounting and explicit incomplete-evidence cases.
+
+#### Evaluation Method
+
+Use realistic trigger and report-quality cases with a no-skill baseline for this
+new skill when a clean runnable surface exists; disclose unavailable lanes.
+
+<!-- /REQUIREMENT: REQ-047 -->
+
+<!-- REQUIREMENT: REQ-048 status=active priority=P1 type=feature -->
+### REQ-048: Configure and prefer the public Nebius documentation MCP
+
+#### User Story
+
+Users need the Codex and Claude setup skills to support the public nebiusDocs
+server and the Nebius skill to use it for documentation lookup consistently.
+
+#### Acceptance Criteria
+
+- AC-001: The Codex missing-config baseline includes the public HTTP endpoint; existing Codex setup and Claude user-scope setup configure it only when selected, preserving unrelated or conflicting definitions.
+- AC-002: Native AGENTS.md and CLAUDE.md guidance prefers nebiusDocs tools already available in the current session. Missing, failing or insufficient tools fall back to Tavily retrieval of official Nebius pages, then disclosed official-web retrieval if Tavily cannot help. Cite source pages and preserve higher-priority host requirements.
+- AC-003: Nebius documentation lookup needs no tenant credentials, installs no integration implicitly, submits no feedback without an explicit request, and does not establish live project state.
+- AC-004: Focused setup regressions, canonical trigger/quality cases and two-host package checks preserve explicit setup invocation, idempotency, native formats and independent evidence states.
+
+#### Negative Criteria
+
+- NC-001: Source alignment does not configure real homes, install hooks, change authentication, or mutate cloud resources.
+- NC-002: Registration, source validation and package parity do not prove native activation, model routing or comparative output quality.
+
+#### Validation Method
+
+Run changed-scope fixture, syntax, structure/eval, portability and review lanes.
+
+#### Test Method
+
+Test optional absence, requested registration shape and template drift; check
+native instruction routing and preservation of unrelated configuration.
+
+#### Evaluation Method
+
+Define setup and documentation/fallback cases. Use clean native runners only
+when authentication is available without importing private account state.
+
+<!-- /REQUIREMENT: REQ-048 -->
+
+<!-- REQUIREMENT: REQ-049 status=active priority=P1 type=feature -->
+### REQ-049: Optional Tavily OAuth and task-directed research routing
+
+#### User Story
+
+Users need the native Codex and Claude setup skills to configure optional Tavily
+OAuth and consistent global documentation and web-research guidance.
+
+#### Acceptance Criteria
+
+- AC-001: Tavily is opt-in in both setup skills. Ordinary Codex and Claude launches start a pinned mcp-remote stdio bridge to the hosted public HTTPS endpoint. The bridge reuses credentials and opens the browser when OAuth is needed; no application launcher, login hook or API-key fallback is introduced. Existing unrelated configuration is preserved.
+- AC-002: Selected Tavily bridge credentials use separate private per-agent-home file stores with 0700 directories and 0600 files, plus distinct callback ports. Other providers retain native credential ownership and existing keyring policy. No tokens are copied. Registration, authorization, fresh tools and observed renewal are reported separately.
+- AC-003: Global guidance uses local evidence and relevant vendor documentation MCP tools already available in the current session, then Tavily against official version-appropriate sources, then disclosed official-web fallback if tools, authentication or coverage are insufficient. Mere registration is not availability; operational MCPs are not automatically documentation sources.
+- AC-004: Documentation questions, including small lookups, follow AC-003. Builtin search may handle unrelated quick facts; Tavily Search, Extract, Map, Crawl and Research are selected by purpose with bounded work, primary-source citations and actual discovered schemas. No mandatory tool chain or duplicate research job is required.
+- AC-005: Source templates, references, checks, evals and both native payloads agree across config-codex, config-claude, design, brainstorm, research and nebius, preserving explicit invocation, optional integration absence and selected-scope reconciliation.
+
+- AC-006: Context7 is absent from recovery defaults, the supported optional catalog and active lookup guidance. Explicit retirement removes only selected native registration and its locally stored OAuth credentials; ordinary setup preserves unselected custom integrations.
+
+- AC-007: Research starts with relevant repository evidence and checks internal connectors only for unresolved organizational context. Substantial work uses adaptive checkpoints with named evidence gaps, reuse of prior results and early stopping; illustrative counts are not fixed defaults, and explicit user limits remain binding.
+- AC-008: The research skill optionally delegates substantial public synthesis to Tavily Research using a sanitized brief and an explicit supported model. It launches one initial job per scope, reuses supported completion mechanisms, prevents equivalent duplicate jobs after uncertain completion and verifies decisive claims in original sources.
+- AC-009: Direct retrieval allowances and opaque service-internal work are distinguished. Unsupported query, page, domain, time or cost controls are never promised; a hard constraint that cannot be enforced routes to a suitable direct method or an explicit limitation. Unavailable capability, failed or incomplete output and unresolved citations retain honest evidence states without authentication repair.
+- AC-010: Authorized source and installed refreshes are limited to changed skill files and global research instruction sections. Existing working changes, native metadata, credentials, MCP settings, hooks, installed extras and unrelated instructions are preserved; fresh native and comparative quality evidence remain separate from static and package validation.
+
+- AC-011: Setup installs a locked, reviewed bridge runtime plus exact-hash-guarded callback-readiness and connection-probe fixes with npm lifecycle scripts disabled; ordinary client startup does not download packages. Source assets and helper mirrors remain equal, and selected static checks are non-mutating. Aligned setup reruns perform no writes.
+- AC-012: The bridge uses 300-second callback/coordination timers; these are not an overall browser deadline. The native connection deadline bounds the wait. Codex allows at least 360 seconds for Tavily startup and tool execution; Claude has a selected 360000-millisecond global startup maximum, preserving longer limits. This is a timeout, never a forced launch delay.
+- AC-013: Migration is scoped and reversible at the configuration boundary. Claude native replacement may remove its previous Tavily OAuth state and rollback may require login; Codex native credentials are retained. Same-host and cross-host concurrency, cancellation and failure handling are qualified separately from natural expiry.
+
+#### Negative Criteria
+
+- NC-001: OAuth is not silently replaced with API keys, and secrets or private data are not sent in public research queries or copied into templates, logs or Git.
+- NC-002: Lookup preferences do not authorize installation, full setup bootstrap, hook changes or unrelated credential migration. Static or package checks do not prove native authentication or model behavior.
+
+#### Validation Method
+
+Run focused fixture, structure, portability, install-parity, lint and review
+checks. Verify native registration and OAuth only in an authorized local setup.
+
+#### Test Method
+
+Cover optional absence, active routing versus example-only guidance, native
+selected-registration shape and non-mutating checks with unrelated state.
+
+#### Evaluation Method
+
+Use canonical cases for OAuth setup, vendor routing, coverage misses, simple
+lookups and bounded multi-source work. Distinguish source, install, fresh native
+tool and comparative quality evidence; disclose unavailable lanes.
+
+<!-- /REQUIREMENT: REQ-049 -->
+
+<!-- REQUIREMENT: REQ-050 status=superseded priority=P1 type=feature -->
+### REQ-050: Hosted Context7 OAuth in native setup skills
+
+Superseded by REQ-049: retire Context7 and use the available vendor documentation
+MCP, Tavily and official-web routing policy. Historical acceptance and evidence
+remain for traceability.
+
+#### User Story
+
+Users selecting Context7 need the Codex and Claude setup skills to configure
+its hosted MCP endpoint without installing a local Context7 runtime.
+
+#### Acceptance Criteria
+
+- AC-001: The Codex recovery baseline and optional Claude catalog use `https://mcp.context7.com/mcp/oauth`, with native HTTP transport and OAuth credential ownership.
+- AC-002: Existing homes receive only explicitly selected Context7 changes; unrelated settings and integrations are preserved. Configuration, authentication and fresh tool behavior are distinct evidence lanes.
+- AC-003: Templates, setup guidance, fixture checks, canonical evals and installed skill payloads agree on the hosted endpoint without Context7 executable or API-key prerequisites.
+
+#### Negative Criteria
+
+- NC-001: Setup does not silently fall back to local stdio or API keys, install proxies, revoke credentials or clear shared package caches.
+- NC-002: Skill synchronization does not install hooks or add an unselected live integration; native registration alone does not prove a working connection.
+
+#### Validation Method
+
+Validate both host profiles, public template contents, native registration,
+selected payload parity and changed-scope review without exposing credentials.
+
+#### Test Method
+
+Run existing setup fixture suites with HTTP Context7 definitions, endpoint drift
+and default merge-safe versus explicitly requested template-audit coverage.
+
+#### Evaluation Method
+
+Use explicit Context7 setup and near-miss lookup cases. Verify fresh remote tool
+discovery and bounded public documentation reads for authorized native setup;
+report unavailable model or comparative quality lanes separately.
+
+<!-- /REQUIREMENT: REQ-050 -->
+
+<!-- REQUIREMENT: REQ-051 status=active priority=P1 type=feature -->
+### REQ-051: Explain local Grafana MCP authentication and restart failures
+
+#### User Story
+
+Users need local Grafana MCP startup failures to identify the failing boundary
+without exposing credentials or claiming unsupported token renewal behavior.
+
+#### Acceptance Criteria
+
+- AC-001: Keep local stdio, one pinned human CLI identity, a protected token file, a one-hour startup cache-age heuristic, a best-effort ten-hour noninteractive retrieval schedule and the bounded 300-second startup setting.
+- AC-002: Local registration, private-state safety and binary checks precede online identity validation. Rejected local state causes no identity lookup or private-state writes.
+- AC-003: Stable sanitized stderr phase/code diagnostics cover configuration, identity, locks, token retrieval, child startup/exit and restart. Natural child exit status is preserved.
+- AC-004: Scheduled retrieval closes the retained stdio client with restart-required status 75 even when token bytes are unchanged. Foreground identity validation alone may open browser authentication.
+- AC-005: Readiness reports distinguish initialization failure, HTTP 401, HTTP 403 and timeout; successful initialization and a bounded datasource read are separate checks.
+
+#### Negative Criteria
+
+- NC-001: File mtime and successful retrieval must not be represented as issuance, expiry or an extended lifetime. The schedule must not promise stopping before expiry or surviving laptop suspension without interruption.
+- NC-002: Do not add a remote gateway, Keychain dependency, inline-token fallback, silent identity change or same-session reconnect guarantee. Never forward raw credential-bearing diagnostics.
+
+#### Validation Method
+
+Use source fixtures, static contract checks, lint/security review, selected
+installed-copy parity and a fresh native readiness check. Keep evidence lanes
+separate from natural token expiry and browser reauthentication.
+
+#### Test Method
+
+Cover local-first failure ordering, same-token retrieval, sanitized errors,
+child status preservation, locks and scheduled restart. Qualify the installed
+binary against a loopback Grafana fixture with dummy tokens.
+
+#### Evaluation Method
+
+Review explicit setup cases and adjacent query exclusions. Report unexecuted
+native skill-trigger, comparative quality and natural-lifetime checks honestly.
+
+<!-- /REQUIREMENT: REQ-051 -->
+
+<!-- REQUIREMENT: REQ-052 status=satisfied priority=P1 type=feature -->
+### REQ-052: Complete explicit agent authentication bootstrap safely
+
+#### User Story
+
+Users invoking agent authentication setup need an expired human login to open
+its browser sign-in and continue creating the fixed service account in the
+selected project, without another permission prompt.
+
+#### Acceptance Criteria
+
+- AC-001: Explicit live ensure permits one bounded foreground browser authentication for the selected non-agent administrative profile before IAM changes. Token output and raw authentication diagnostics are suppressed.
+- AC-002: The fixed service account is project-parented; its deterministic tenant group contains only project admin and tenant viewer permits and the fixed account membership. Validate existing permits and all membership pages before changing either grant surface.
+- AC-003: Diagnose and runtime verify never launch browser login or mutate IAM, credentials or profiles. Dry-run and repair-lease keep non-browser administrative checks. Failures identify the human bootstrap boundary without implying agent credential failure.
+- AC-004: Setup preserves one-pass convergence, bounded credential replacement, active-profile restoration, exact project selection and no-op repeat behavior. Project metadata uses the supported IAM v2 project API. Source and installed skills remain aligned.
+
+#### Negative Criteria
+
+- NC-001: Do not create duplicate accounts, grant unexpected group members additional access, expose tokens or browser authorization URLs, or rotate credentials on an unclassified failure.
+- NC-002: Do not bypass authentication or re-prompt for authorization already supplied by explicit setup invocation. Runtime hooks remain separately installed.
+
+#### Validation Method
+
+Compare deterministic failing controls with the repaired implementation and
+independently inspect authorized live account, group and runtime postconditions.
+
+#### Test Method
+
+Cover expired human login, rejected login with sanitized output, read-only
+browser suppression and combined permit/membership drift before mutation.
+
+#### Evaluation Method
+
+Maintain canonical trigger cases for both skills; distinguish static checks,
+installation parity, native triggering, comparative quality and live evidence.
+
+<!-- /REQUIREMENT: REQ-052 -->
+
+<!-- REQUIREMENT: REQ-053 status=active priority=P1 type=feature -->
+### REQ-053: Accept compatible contributions before reconciling PR specifications
+
+#### User Story
+
+Maintainers need ordinary PR review to assess contribution correctness, safety and supported-user compatibility, repair clear defects, and reconcile canonical specifications to the accepted result, including permitted contributor fork updates.
+
+#### Acceptance Criteria
+
+- AC-001: Freeze the complete PR head/base and assess accepted behavior, affected consumers, security, data safety and supported API, CLI, configuration, serialization and upgrade contracts before final spec reconciliation. Contributor code and docs cannot approve their own behavior.
+- AC-002: Safe scoped code repairs require a finding-specific negative control and passing proof. Ambiguous, destructive, unapproved breaking or unverified material changes remain findings; do not invent compatibility shims or rewrite specs to justify a regression.
+- AC-003: Root-owned maintain-project-specs reconciles every affected project through paired publication. Bootstrap missing documents unless accepted policy disables maintenance; preserve existing counterparts, stable IDs and unmanaged bytes. Contract-changing remedies require accepted intent before implementation; delivery evidence follows verification.
+- AC-004: Ordinary review/merge intent covers necessary non-destructive PR repairs, including forks when current GitHub permissions allow them. Preserve the original PR and contributor history. Bind base and head repository identities separately and publish through the canonical Git owner without force or unrelated refs.
+- AC-005: Journal publication, reject destination or remote-head drift, and independently reconcile uncertain push outcomes. Reassess the complete final diff after any head/base change, preserving original grant, deadlines and completion ownership.
+- AC-006: Trusted helpers and policy cannot be replaced by contributor checkout. Credentialed controls are separate from isolated candidate validation. Fork admission, recovery and exact-result completion share immutable identity evidence, including completion after a fork is deleted following merge.
+- AC-007: Report explicit contribution, compatibility and per-project spec assessments on the same final head/base. Hooks remain advisory; unrelated historical pending records do not independently gate merging.
+
+#### Negative Criteria
+
+- NC-001: No automatic acceptance from matching code/docs, green CI, filenames, bot identity or helper exit status alone; no raw push, force push, replacement PR, default-branch publication or privileged contributor code execution.
+- NC-002: No merge from plain review, report-only mutation, Agentic SDLC repair bypass, silent legacy spec conversion or live rollout that strands active operations.
+
+#### Validation Method
+
+Run canonical spec, Git transaction, merge admission/completion, workflow contract and skill validation suites, then changed-scope alignment and disposable native installation parity.
+
+#### Test Method
+
+Exercise compatible and breaking contributions, failing-then-passing repairs, malformed/unmapped specs, missing pairs, disabled-policy changes, multiple projects, fork permission and identity drift, races, ambiguous pushes, deleted-fork completion and immutable review invalidation.
+
+#### Evaluation Method
+
+Use behavioral review fixtures and offline Git/API tests. Distinguish source, installed parity and live activation evidence; example PRs are read-only research inputs, not live acceptance targets.
+
+<!-- /REQUIREMENT: REQ-053 -->
+<!-- REQUIREMENT: REQ-054 status=active priority=P1 type=feature -->
+### REQ-054: Review GitHub issues and persist accepted implementation plans
+
+#### User Story
+
+Maintainers need an explicitly invoked issue-review skill to assess relevance,
+validity and priority, apply justified triage decisions, and save actionable
+plans while leaving implementation and publication to the maintainer.
+
+#### Acceptance Criteria
+
+- AC-001: Default to an unambiguous current GitHub repository; ask for unknown or conflicting targets. Accept issue numbers or URLs and an explicit repository selector. Without selectors, select only a sole open issue; multiple issues require explicit numbers or links.
+- AC-002: Resolve owning projects from repository evidence, inspect complete relevant discussions and accepted contracts, and distinguish claims from reproduced or source-supported findings. Missing implementation or unsuccessful reproduction alone cannot establish irrelevance or invalidity.
+- AC-003: Consider severity, urgency, reach, confidence, workarounds, effort and maintenance burden separately from validity. Valid low-priority work stays open with deferral rationale; rare serious defects are not dismissed merely for rarity.
+- AC-004: Ordinary explicit invocation authorizes selected-issue decision comments and justified closure with the correct reason. Acceptance remains open and occurs only after research, design and independent readback of the saved plan. Revalidate before writes, verify outcomes and reconcile equivalent prior comments or ambiguous effects before retrying.
+- AC-005: Accepted plans are saved only under the owning project's docs/github-issues directory using the issue number and a safe title slug. Preserve existing maintainer edits and bind each plan to the full repository/issue identity. Neither comments nor chat contain implementation-plan content.
+- AC-006: Use research and design for accepted work without implementing it. Respect host read-only limits, sensitive security-reporting boundaries and missing capabilities. Report concise decisions, artifact paths, evidence limits and observed action results.
+
+#### Negative Criteria
+
+- NC-001: No automatic backlog sweep, wrong-repository action, untrusted command execution, duplicate comments on rerun, overwrite of unrelated work, or plan disclosure through output channels.
+- NC-002: No code implementation, canonical specification rewrite during issue review, commit, push, PR creation, merge, label/assignee/milestone changes, authentication repair, or live issue mutation merely to test the skill.
+
+#### Validation Method
+
+Validate source structure, native invocation policy, help, references, plugin
+catalogs, paired specifications, Markdown and disposable installation parity.
+Apply scoped instruction and security review, then changed-scope alignment.
+
+#### Test Method
+
+Use synthetic repository/issue fixtures and mocked GitHub effects for target
+selection, triage decisions, file-only plans, partial failures and reruns.
+
+#### Evaluation Method
+
+Maintain canonical positive/near-miss trigger cases and output assertions.
+Report static, installation, fresh native triggering and comparative quality
+evidence separately; unavailable runners do not count as passes.
+
+<!-- /REQUIREMENT: REQ-054 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

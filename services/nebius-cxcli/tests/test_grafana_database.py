@@ -20,7 +20,7 @@ from nebius_cxcli.observability import _grafana_managed_values, _set_path_value
 def database_config():
     charts = []
     for component in load_component_sources().helm_charts:
-        if component.name not in {"postgresql", "grafana"}:
+        if component.name not in {"grafana-postgresql", "grafana"}:
             continue
         row = {
             "id": component.name,
@@ -47,15 +47,56 @@ def test_generated_binding_and_standalone_database_are_idempotent():
     original = copy.deepcopy(config)
     assert not database.materialize_database_values(config)
     assert config == original
-    pg = next(row for row in config["apps"]["charts"] if row["id"] == "postgresql")
+    pg = next(row for row in config["apps"]["charts"] if row["id"] == "grafana-postgresql")
     gf = next(row for row in config["apps"]["charts"] if row["id"] == "grafana")
     assert gf["values"]["replicas"] == 2
-    assert gf["values"]["grafana.ini"]["database"]["host"] == "postgresql.observability.svc:5432"
+    assert (
+        gf["values"]["grafana.ini"]["database"]["host"]
+        == "grafana-postgresql.observability.svc:5432"
+    )
     assert pg["values"]["auth"]["existingSecret"] != pg["values"]["customUser"]["existingSecret"]
     assert pg["values"]["persistence"]["size"] == "10Gi"
     assert "password" not in pg["values"]["auth"]
     config["apps"]["charts"].remove(gf)
     assert database.database_rows(config, "cluster") == [pg]
+
+
+def test_generic_database_coexists_without_grafana_materialization():
+    config = database_config()
+    generic = {
+        "id": "postgresql",
+        "enabled": True,
+        "instance_id": "cluster",
+        "target_ref": "cluster",
+        "namespace": "database",
+        "release-name": "application-db",
+        "values": {
+            "auth": {"existingSecret": "application-admin"},
+            "customUser": {
+                "name": "grafana",
+                "database": "application",
+                "existingSecret": "application-user",
+            },
+            "config": {"pgHbaConfig": "host grafana grafana 10.0.0.0/8 scram-sha-256"},
+        },
+    }
+    before = copy.deepcopy(generic)
+    config["apps"]["charts"].append(generic)
+    database.materialize_database_values(config)
+    assert generic == before
+    assert len(database.database_rows(config)) == 1
+
+
+def test_old_binding_fails_before_new_database_materialization():
+    from nebius_cxcli.observability import ensure_observability_app_rows
+
+    config = database_config()
+    old = next(row for row in config["apps"]["charts"] if row["id"] == "grafana-postgresql")
+    old["id"] = "postgresql"
+    before = copy.deepcopy(config)
+    with pytest.raises(ValueError, match="preserving the release, namespace, PVC and Secrets"):
+        ensure_observability_app_rows(config)
+    assert config == before
 
 
 @pytest.mark.parametrize(
@@ -81,7 +122,7 @@ def test_database_binding_is_target_local_and_rejects_ambiguity():
     other["release-name"] = "other-db"
     config["apps"]["charts"].append(other)
     assert (
-        "postgresql.observability"
+        "grafana-postgresql.observability"
         in database.grafana_database_values(config, gf)["values.grafana\\.ini.database"]["host"]
     )
     other["target_ref"] = "cluster"
@@ -129,8 +170,8 @@ def retained(cluster):
     cluster.objects[("persistentvolumeclaims", "")] = [
         {
             "metadata": {
-                "name": "data-postgresql-0",
-                "labels": {"app.kubernetes.io/instance": "postgresql"},
+                "name": "data-grafana-postgresql-0",
+                "labels": {"app.kubernetes.io/instance": "grafana-postgresql"},
                 "annotations": {database.OWNER_ANNOTATION: cluster.owner},
             },
         }
@@ -140,8 +181,8 @@ def retained(cluster):
 def test_fresh_bootstrap_then_reapply_reuses_all_credentials(cluster):
     bootstrap(cluster)
     assert set(cluster.writes) == {
-        "postgresql-admin",
-        "postgresql-grafana",
+        "grafana-postgresql-admin",
+        "grafana-postgresql-grafana",
         "grafana-encryption",
         "nebius-cxcli-grafana-admin",
     }
@@ -156,12 +197,17 @@ def test_fresh_bootstrap_then_reapply_reuses_all_credentials(cluster):
 def test_standalone_database_bootstraps_without_grafana(cluster):
     cluster.config["apps"]["charts"] = database.database_rows(cluster.config)
     bootstrap(cluster)
-    assert set(cluster.writes) == {"postgresql-admin", "postgresql-grafana"}
+    assert set(cluster.writes) == {"grafana-postgresql-admin", "grafana-postgresql-grafana"}
 
 
 @pytest.mark.parametrize(
     "name",
-    ["postgresql-admin", "postgresql-grafana", "grafana-encryption", "nebius-cxcli-grafana-admin"],
+    [
+        "grafana-postgresql-admin",
+        "grafana-postgresql-grafana",
+        "grafana-encryption",
+        "nebius-cxcli-grafana-admin",
+    ],
 )
 def test_retained_database_never_regenerates_missing_credentials(cluster, name):
     bootstrap(cluster)
@@ -212,7 +258,9 @@ def test_sqlite_backend_rejected_without_dashboard_declarations(cluster):
 
 
 def test_helm_history_without_workload_is_not_a_fresh_database(cluster):
-    cluster.objects[("secrets", "owner=helm,name=postgresql")] = [{"metadata": {"name": "history"}}]
+    cluster.objects[("secrets", "owner=helm,name=grafana-postgresql")] = [
+        {"metadata": {"name": "history"}}
+    ]
     with pytest.raises(RuntimeError, match="refusing regeneration"):
         bootstrap(cluster)
     assert not cluster.writes
@@ -283,7 +331,7 @@ def test_backend_admission_precedes_all_application_preparation(monkeypatch, tmp
 
 
 def test_acceptance_checks_every_grafana_replica(cluster):
-    cluster.objects[("statefulset", "postgresql")] = {
+    cluster.objects[("statefulset", "grafana-postgresql")] = {
         "metadata": {"generation": 2},
         "status": {"observedGeneration": 2, "readyReplicas": 1},
     }
@@ -329,7 +377,7 @@ def live_grafana(cluster):
                                         "name": "GF_DATABASE_PASSWORD",
                                         "valueFrom": {
                                             "secretKeyRef": {
-                                                "name": "postgresql-grafana",
+                                                "name": "grafana-postgresql-grafana",
                                                 "key": "password",
                                             }
                                         },
@@ -361,7 +409,7 @@ def live_grafana(cluster):
     ]
     cluster.objects[("configmap", "grafana")] = {
         "data": {
-            "grafana.ini": "[database]\ntype=postgres\nhost=postgresql.observability.svc:5432\nname=grafana\nuser=grafana\nssl_mode=disable\n"
+            "grafana.ini": "[database]\ntype=postgres\nhost=grafana-postgresql.observability.svc:5432\nname=grafana\nuser=grafana\nssl_mode=disable\n"
         }
     }
     return cluster.objects[("deployments", "")][0]["spec"]["template"]["spec"]
@@ -483,17 +531,17 @@ def test_declarative_startup_override_without_pods_is_rejected(cluster, drift):
 def test_runtime_uses_catalog_storage_default_when_row_omits_values(cluster):
     cluster.config["apps"]["charts"] = [
         {
-            "id": "postgresql",
+            "id": "grafana-postgresql",
             "enabled": True,
             "instance_id": "cluster",
             "target_ref": "cluster",
             "namespace": "observability",
-            "release-name": "postgresql",
+            "release-name": "grafana-postgresql",
             "values": {},
         }
     ]
     bootstrap(cluster)
-    assert set(cluster.writes) == {"postgresql-admin", "postgresql-grafana"}
+    assert set(cluster.writes) == {"grafana-postgresql-admin", "grafana-postgresql-grafana"}
 
 
 def failed_grafana(cluster):

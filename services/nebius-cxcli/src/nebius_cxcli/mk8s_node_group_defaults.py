@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .component_instances import component_instance_id, component_type_id
 from .components import ComponentEntry, component_entries
 from .deploy_targets import app_chart_target_ref, deploy_target_is_external_mk8s
@@ -16,8 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _external_target_refs(payload: Mapping[str, Any]) -> set[str]:
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if not isinstance(targets, list):
         return set()
     return {

@@ -4,6 +4,137 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add explicit-only `review-github-issues` for selected GitHub issue triage,
+  evidence-based disposition and file-only implementation plans. Keep valid
+  low-priority work open, verify saved project plans before acceptance, preserve
+  existing edits, and leave implementation and Git/PR publication to maintainers.
+  Keep nested research/design advisory within the current host mode so their
+  handoff neither blocks the authorized save nor exposes a user-visible plan.
+
+- Review contribution correctness, safety and supported behavior before repairs
+  and root-owned canonical spec reconciliation. Add per-project outcomes,
+  missing-spec bootstrap and exact final-diff assessments to ordinary PR review.
+- Support bound contributor forks through trusted intake, journaled non-force
+  publication and protected merge completion. Version review/intent evidence to
+  v2 and private task state to v3; require a drained, protected bootstrap before
+  live activation.
+
+- Extend ordinary PR readiness, merge settlement and result verification to
+  independent fixed 24-hour budgets. Preserve caller checkpoint deadlines,
+  protected merge checks and transaction identity across explicit continuation.
+
+- Align Nebius inspector path initialization with the existing SDK import pattern
+  so the complete skills CI Ruff gate passes without suppressing import-order checks.
+- Document the intentional workload-identity exception boundaries for the pinned
+  Ruff gate, preserving error sanitization, cleanup, and reconciliation identities.
+- Register the Python scaffold's default `e2e` marker so fresh bootstrap succeeds
+  with pytest 9.2 while retaining strict marker checks and fast-lane exclusions.
+- Place Tavily bridge executable fixtures under a private temporary home directory
+  so Linux tests honor the same executable-ancestry checks as production.
+
+- Document SDK-first Kubernetes workload identity for Nebius IAM APIs and direct SecretStash access. Add exact OIDC trust and renewable projected-token helpers; separate resource grants, application-secret refresh and optional ESO 2.10.0+ synchronization.
+
+### Added
+
+- Extend `ai-agent-design` with provider-neutral rules for derived-context
+  lineage and revocation, mandatory-context budgets, bounded artifact access,
+  cache eligibility, final request enforcement, credential boundaries, fenced
+  execution, atomic successor admission, telemetry semantics, capacity, and
+  acceptance-trial integrity. Add synthetic trigger and quality cases, preserve
+  advisory scope and host invocation, and distinguish static from runtime proof.
+
+- Capacity planning now resolves explicit/conversation/local-doc designs, defaults
+  to all regions and automatically checks a selected tenant. Remove its public
+  `--project` selector; group tenant totals by region and leave project
+  eligibility explicit. Add an offline scope helper and Nebius Python SDK GPU
+  advice inspector with bounded pagination, timestamp/state handling and
+  non-additive preset evidence. All-region quota-request mode prepares values
+  only; cloud scripts use the SDK, never non-SDK request adapters. Expand source,
+  scope and regional report evals and wire inspector tests into CI.
+
+- `nebius-capacity-planning` tenant/region/profile selectors, quota-check and
+  explicit human-account quota-request modes, plus an offline reserve-multiplier
+  planner. Requests require verified shortfalls, duplicate checks and readback;
+  design-only use remains independent of cloud credentials.
+  Enforce the planner input bound in UTF-8 bytes and return structured errors
+  for invalid encodings and numeric exponents. Align the report template with
+  explicit quota-request receipts and pending-versus-usable allowance states.
+
+- Make capacity reports directly useful for provisioning review: include the
+  selected profile, exact per-pool presets/counts/boot disks, control plane,
+  storage/network, surge/growth, external prerequisites and unresolved gates in
+  the opening summary. Preserve container identity across split allocation
+  tables and route Nebius documentation fallbacks through available Tavily.
+  Add a synthetic multi-container, multi-pool output evaluation.
+
+- Include every shared hook runtime helper in expected-file reporting and
+  update counts, and request restart for runtime-only changes in all install
+  modes. Explain missing skill ownership markers and how copy installers can
+  discard them; preserve unmanaged skills and unowned hook files.
+
+- Add phase-coded redacted Grafana MCP diagnostics and run offline setup checks
+  before online identity validation. Keep local stdio and protected token files;
+  document cache-age and scheduled retrieval as heuristics, preserve child exit
+  status and require restart even when retrieval returns the same token. Add
+  failure-ordering, redaction and lifecycle regression coverage.
+
+- Preserve multiline Implement and SDLC task contracts through assignment
+  serialization, including schema examples, acceptance checks and ownership
+  lists. Reject empty or duplicate fields and malformed task headings before
+  preparation; cover the parser and real-Git assignment boundary.
+
+- Harden Tavily executable symlink checks and reject disabled selected Codex
+  entries. Assert OAuth follower ownership, callback counts and delayed-probe
+  behavior; document the manual macOS qualification boundary.
+
+- Pin the opt-in Tavily bridge with a hash-guarded callback-readiness repair,
+  scoped probe timeout, and loopback OAuth recovery regression fixture.
+
+- Configure selected Tavily through a locked mcp-remote OAuth bridge in both
+  setup skills, using ordinary client launch, separate private file stores and
+  callback ports. Add standalone preparation, integrity and selected wiring
+  checks; document maximum authentication timeouts, native migration/rollback
+  and the distinction between simulated recovery and observed token expiry.
+  Preserve unrelated native settings, OAuth stores and research routing.
+
+- Add adaptive research checkpoints and an explicit optional Tavily Research
+  workflow to research and both native search policies. Preserve quick-fact
+  routing, verify decisive original sources, prevent duplicate jobs after
+  ambiguous completion, and distinguish direct allowances from unenforceable
+  service-internal limits. Refresh only selected skill files and instruction
+  sections; retain native controls and separate runtime/quality evidence.
+  Align the UI prompt to inspect local files before conditional internal searches.
+
+- Retire Context7 from setup defaults and the supported optional catalog. Align
+  Codex, Claude, design, brainstorm, research and Nebius documentation routing:
+  available vendor documentation tools, then Tavily against official sources,
+  then disclosed official-web fallback. Preserve selected-scope removal and
+  native credential ownership without automatic installation or hook refresh.
+
+- Use hosted Context7 HTTP OAuth in the Codex recovery baseline and optional
+  Claude catalog. Align native setup guidance, endpoint-drift fixtures and
+  canonical evals; preserve explicit selection, unrelated configuration and
+  separate registration, authentication and fresh-tool evidence.
+
+- Add optional native Tavily OAuth setup to config-codex and config-claude,
+  with selected Codex keyring storage and compact documentation/search routing.
+  Document purpose-specific Search, Extract, Map, Crawl and Research workflows,
+  preserve vendor-specific routes and keep registration/auth/runtime evidence
+  separate. Extend focused fixtures and canonical evaluation cases.
+
+- Align `config-codex`, `config-claude` and `nebius` around the public
+  `nebiusDocs` MCP: native configuration options, documentation-first routing,
+  cited official-page fallback, optional-registration checks and eval coverage.
+  Preserve existing integrations and separate endpoint reads from fresh-agent
+  activation; documentation lookup does not install servers or submit feedback.
+
+- Fix the capacity calculator so known runtime or finite-limit demand that
+  already exceeds capacity remains a violation when other terms are unknown.
+  Expose auditable known subtotals while keeping incomplete totals and margins
+  null; cover mixed known/unknown and inactive terms with regression tests.
+
+- Add `nebius-capacity-planning` for design-first Nebius resource sizing, per-container Kubernetes requests/limits, failure and rollout headroom, optional read-only quota/region assessment and verifiable costs in `docs/nebius-capacity-planning.md`. Include an offline arithmetic helper, reusable report template and synthetic evaluation cases.
+
 - Update the Nebius validation environment to aiohttp 3.14.4 and its required
   yarl 1.25.1 dependency, addressing the aiohttp security advisories while
   preserving an installable pinned environment.
@@ -276,6 +407,21 @@ All notable changes to the reusable Agent Skills are tracked here.
   change together without converting old authority; delegated schemas stay intact.
 
 ### Fixed
+
+- Validate synchronized PR publication against the authoritative live base ref,
+  and settle proven successful pushes after concurrent PR closure or merge.
+  Preserve open-PR and write-permission checks before every new push.
+
+- Keep independently completed merge operations settled when retained older
+  intent artifacts fail the current schema, without admitting old authority.
+
+- Let explicitly invoked agent-auth setup complete bounded browser sign-in for
+  an expired human session while suppressing authentication diagnostics. Keep
+  diagnosis, runtime verification and previews non-browser. Validate managed
+  group membership before adding permissions, and align both auth skills and
+  regression cases with these boundaries. Retain post-write membership
+  verification and use IAM v2 for project metadata reads. Correct stale hook
+  installation test totals to include the four shared runtime files.
 
 - Isolate native workflow CI fixtures from runner-installed system Git filters
   and run the owned-origin safety regressions in the same test step.
@@ -921,7 +1067,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   workspace; all other mismatches and non-mutating `workspace reuse` remain
   fail-closed.
 
-### Added
+### Added (continued)
 
 - Added `config-claude` for native personal setup, patch-only reconciliation,
   private missing-settings recovery, restricted roles and selected MCP

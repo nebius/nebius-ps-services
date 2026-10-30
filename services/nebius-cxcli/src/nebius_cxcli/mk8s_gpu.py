@@ -18,6 +18,13 @@ from typing import Any
 import yaml
 
 from . import kubernetes_process
+from .cluster_config import (
+    cluster_row,
+    cluster_rows,
+    external_clusters,
+    require_cluster_row,
+    soperator_row,
+)
 from .component_defaults import resolve_component_defaults
 from .component_instances import INSTANCE_ID_FIELD, component_instance_id, component_type_id
 from .component_sources import (
@@ -214,48 +221,8 @@ def _deep_merge_mapping(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> 
     return merged
 
 
-def _deploy_target_rows(payload: dict[str, Any], *, create: bool = False) -> list[Any]:
-    deploy = payload.get("deploy")
-    if not isinstance(deploy, dict):
-        if not create:
-            return []
-        deploy = {}
-        payload["deploy"] = deploy
-    targets = deploy.get("targets")
-    if not isinstance(targets, list):
-        if not create:
-            return []
-        targets = []
-        deploy["targets"] = targets
-    return targets
-
-
 def _deploy_target_ref(row: Mapping[str, Any]) -> str:
     return _as_text(row.get(INSTANCE_ID_FIELD)).lower().replace("_", "-")
-
-
-def _deploy_target_row_for_ref(
-    payload: dict[str, Any],
-    *,
-    target_ref: str,
-    create: bool = False,
-) -> dict[str, Any] | None:
-    normalized_target_ref = _as_text(target_ref).lower().replace("_", "-")
-    if not normalized_target_ref:
-        return None
-    rows = _deploy_target_rows(payload, create=create)
-    for row in rows:
-        if isinstance(row, dict) and _deploy_target_ref(row) == normalized_target_ref:
-            return row
-    if not create:
-        return None
-    row: dict[str, Any] = {INSTANCE_ID_FIELD: normalized_target_ref}
-    rows.append(row)
-    return row
-
-
-def _deploy_target_row_has_settings(row: Mapping[str, Any]) -> bool:
-    return any(str(key) != INSTANCE_ID_FIELD for key in row)
 
 
 def _nested_path_value(value: Any, dotted_path: str) -> Any:
@@ -454,61 +421,18 @@ def normalize_mk8s_gpu_project_deployment_testing_settings(payload: dict[str, An
     enabled_gpu_target_refs = list(_gpu_enabled_target_refs(payload_map))
     changed = False
 
-    if not enabled_gpu_target_refs:
-        deploy = payload_map.get("deploy")
-        if not isinstance(deploy, dict):
-            return changed
-        targets = deploy.get("targets")
-        if isinstance(targets, list):
-            next_targets: list[Any] = []
-            for row in targets:
-                if not isinstance(row, dict):
-                    next_targets.append(row)
-                    continue
-                deployment_testing = row.get("deployment_testing")
-                if isinstance(deployment_testing, dict) and "mk8s_gpu" in deployment_testing:
-                    deployment_testing.pop("mk8s_gpu", None)
-                    changed = True
-                    if not deployment_testing:
-                        row.pop("deployment_testing", None)
-                if _deploy_target_row_has_settings(row):
-                    next_targets.append(row)
-            if next_targets != targets:
-                deploy["targets"] = next_targets
-                changed = True
-            if not next_targets:
-                deploy.pop("targets", None)
-        if not deploy:
-            payload_map.pop("deploy", None)
-        return changed
-
     disabled_by_ref = _disabled_target_validations_by_ref(payload_map)
-    seen_target_refs = set(enabled_gpu_target_refs)
-    targets = _deploy_target_rows(payload_map, create=True)
-    next_targets: list[Any] = []
-    for row in targets:
-        if not isinstance(row, dict):
-            next_targets.append(row)
-            continue
-        target_ref = _deploy_target_ref(row)
-        if target_ref and target_ref not in seen_target_refs:
-            deployment_testing = row.get("deployment_testing")
-            if isinstance(deployment_testing, dict) and "mk8s_gpu" in deployment_testing:
-                deployment_testing.pop("mk8s_gpu", None)
+    for row in cluster_rows(payload_map):
+        if _deploy_target_ref(row) not in enabled_gpu_target_refs:
+            testing = row.get("deployment_testing")
+            if isinstance(testing, dict) and "mk8s_gpu" in testing:
+                testing.pop("mk8s_gpu")
+                if not testing:
+                    row.pop("deployment_testing")
                 changed = True
-                if not deployment_testing:
-                    row.pop("deployment_testing", None)
-        if _deploy_target_row_has_settings(row) or target_ref in seen_target_refs:
-            next_targets.append(row)
-    if next_targets != targets:
-        deploy = payload_map.get("deploy")
-        if isinstance(deploy, dict):
-            deploy["targets"] = next_targets
-            targets = next_targets
-            changed = True
 
     for target_ref in enabled_gpu_target_refs:
-        row = _deploy_target_row_for_ref(payload_map, target_ref=target_ref, create=True)
+        row = require_cluster_row(payload_map, target_ref)
         if row is None:
             continue
         deployment_testing = row.get("deployment_testing")
@@ -540,9 +464,6 @@ def normalize_mk8s_gpu_project_deployment_testing_settings(payload: dict[str, An
             deployment_testing["mk8s_gpu"] = merged
             changed = True
 
-    deploy = payload_map.get("deploy")
-    if isinstance(deploy, dict) and not deploy:
-        payload_map.pop("deploy", None)
     return changed
 
 
@@ -652,7 +573,7 @@ def _project_mk8s_gpu_deployment_testing_config(
     *,
     target_ref: str,
 ) -> dict[str, Any]:
-    target_row = _deploy_target_row_for_ref(payload, target_ref=target_ref)
+    target_row = cluster_row(payload, target_ref)
     if not isinstance(target_row, Mapping):
         return {}
     deployment_testing = target_row.get("deployment_testing")
@@ -698,7 +619,7 @@ def _effective_mk8s_gpu_deployment_testing_overrides(
             dotted_path="operator_readiness.enabled",
             coerce=_coerce_optional_bool,
             default=deployment_testing.operator_readiness.enabled_by_default,
-            field_label="deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled",
+            field_label="cluster settings[].deployment_testing.mk8s_gpu.operator_readiness.enabled",
         ),
         gpu_visibility_enabled=_resolve_project_gpu_deployment_testing_setting(
             payload,
@@ -706,7 +627,7 @@ def _effective_mk8s_gpu_deployment_testing_overrides(
             dotted_path="gpu_visibility.enabled",
             coerce=_coerce_optional_bool,
             default=deployment_testing.gpu_visibility.enabled_by_default,
-            field_label="deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled",
+            field_label="cluster settings[].deployment_testing.mk8s_gpu.gpu_visibility.enabled",
         ),
         gpu_visibility_max_nodes=_resolve_project_gpu_deployment_testing_setting(
             payload,
@@ -714,7 +635,7 @@ def _effective_mk8s_gpu_deployment_testing_overrides(
             dotted_path="gpu_visibility.max_nodes",
             coerce=_coerce_optional_positive_int,
             default=deployment_testing.gpu_visibility.max_nodes,
-            field_label="deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes",
+            field_label="cluster settings[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes",
         ),
         health_checker_enabled=_resolve_project_gpu_deployment_testing_setting(
             payload,
@@ -722,7 +643,7 @@ def _effective_mk8s_gpu_deployment_testing_overrides(
             dotted_path="health_checker.enabled",
             coerce=_coerce_optional_bool,
             default=deployment_testing.health_checker.enabled_by_default,
-            field_label="deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled",
+            field_label="cluster settings[].deployment_testing.mk8s_gpu.health_checker.enabled",
         ),
     )
 
@@ -803,8 +724,7 @@ def _raw_node_group_expected_node_count(raw_group: Mapping[str, Any]) -> int | N
 
 
 def _external_mk8s_gpu_contexts(payload: Mapping[str, Any]) -> tuple[Mk8sGpuClusterContext, ...]:
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = external_clusters(payload)
     if not isinstance(targets, list):
         return ()
 
@@ -812,7 +732,9 @@ def _external_mk8s_gpu_contexts(payload: Mapping[str, Any]) -> tuple[Mk8sGpuClus
     for target in targets:
         if not isinstance(target, Mapping) or not deploy_target_is_external_mk8s(target):
             continue
-        registration = target.get("soperator_registration")
+        registration = (soperator_row(payload, component_instance_id(target)) or {}).get(
+            "registration"
+        )
         if not isinstance(registration, Mapping) or registration.get("accepted") is not True:
             continue
         target_ref = component_instance_id(target)
@@ -1346,7 +1268,7 @@ def resolve_mk8s_gpu_app_selection(
     auto_enabled: list[str] = []
     if health_checker_enabled and "health_checker" not in _mk8s_gpu_app_id_by_role():
         issues.append(
-            "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled requires one apps "
+            "cluster settings[].deployment_testing.mk8s_gpu.health_checker.enabled requires one apps "
             "component with cli.mk8s_gpu_policy.role: health_checker"
         )
     gpu_operator_id = _mk8s_gpu_app_id_by_role().get("gpu_operator")

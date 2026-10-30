@@ -346,6 +346,7 @@ def init_nebius_sdk(
     prefer_operator_auth: bool = False,
     allow_cli_token: bool = True,
     require_renewable_auth: bool = False,
+    workload_identity: dict[str, str] | None = None,
 ):
     """Initialize Nebius SDK with robust auth fallback order.
 
@@ -354,6 +355,32 @@ def init_nebius_sdk(
     CLI, config-profile, and impersonation tokens are deliberately excluded
     from that path.
     """
+    if workload_identity is not None:
+        from .workload_identity import workload_identity_sdk
+
+        if set(workload_identity) != {"service_account_id", "token_file"}:
+            raise ValueError("Workload identity requires exactly service_account_id and token_file")
+        if (
+            profile
+            or config_file
+            or any(
+                os.environ.get(key)
+                for key in (
+                    "NEBIUS_AUTH_CREDENTIALS_FILE",
+                    "NEBIUS_IAM_TOKEN",
+                    "NEBIUS_PROFILE",
+                    "NEBIUS_SERVICE_ACCOUNT_ID",
+                    "CXCLI_NEBIUS_DELEGATE_ID",
+                )
+            )
+        ):
+            raise ValueError("Workload identity cannot be combined with another identity source")
+        return workload_identity_sdk(
+            **workload_identity,
+            parent_id=parent_id or "",
+            domain=endpoint or "api.nebius.cloud",
+            user_agent_prefix=NEBIUS_SDK_USER_AGENT_PREFIX,
+        )
     try:
         from nebius.sdk import SDK
     except Exception as exc:  # pragma: no cover - import guard

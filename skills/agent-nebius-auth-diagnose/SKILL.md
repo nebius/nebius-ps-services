@@ -166,6 +166,12 @@ Keep these outcomes distinct:
 - Runtime verification succeeds but the non-agent administrative profile is
   unavailable: report `blocked-admin-auth` only if an explicit setup invocation
   later needs IAM mutation. Do not call this agent credential failure.
+- An explicitly invoked setup reaches an expired human login: setup owns the
+  bounded foreground browser sign-in. Return to that authorized setup workflow
+  without another permission prompt or a manual terminal-command handoff.
+  Diagnosis itself never launches interactive authentication. Report a browser
+  blocker only after the authorized setup attempt actually cannot complete;
+  never echo authorization URLs or raw authentication diagnostics.
 - Token mint succeeds but project access fails: report project-authorization
   drift.
 - Project access succeeds but tenant quota-allowance listing is denied: report

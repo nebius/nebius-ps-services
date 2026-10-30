@@ -15,9 +15,8 @@ from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
 
 def source_payload():
     return {
-        "version": "v1",
+        "version": "v2",
         "client_info": {},
-        "deploy": {},
         "infra": {
             "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
         },
@@ -83,7 +82,17 @@ def test_coordinated_admission_projects_runtime_at_the_real_renderer_boundary(tm
         progress_console=Console(file=StringIO(), force_terminal=False),
     )
     executor.generation = executor.source_generation = SimpleNamespace(
-        manifest={"runtime_config": runtime}
+        manifest={
+            "runtime_config": runtime,
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        }
     )
     executor.paths = SimpleNamespace(config_path=tmp_path / "config.yaml")
     executor.plan = SimpleNamespace(

@@ -1,5 +1,13 @@
 # Review PR
 
+Ordinary review first assesses the contribution against accepted behavior,
+safety and supported existing-user workflows. After proven safe repairs, the
+root invokes maintain-project-specs for every affected project, then reviews the
+complete final diff again. No docs changes in the diff alone are not a finding; changed docs
+alone are not proof of alignment. See [contribution assessment](references/contribution-assessment.md).
+Normal invocation covers scoped non-destructive fork repairs when GitHub permits;
+report-only and active SDLC stay read-only. Standalone review never merges.
+
 `review-pr` reviews GitHub pull requests and safely moves them closer to
 merge-readiness when permissions allow.
 

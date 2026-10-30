@@ -83,6 +83,8 @@ not a hook, performs semantic classification and repository writes.
   delivery state or satisfy a requirement.
 - A user explicitly requests reconciliation, validation, or legacy migration.
 - A hook advisory says spec review may be useful.
+- An ordinary PR coordinator supplies accepted baseline/intent and validated
+  contribution evidence for root-owned reconciliation of affected projects.
 
 ## When Not To Use
 
@@ -94,7 +96,8 @@ not a hook, performs semantic classification and repository writes.
 - Do not create a parallel objective-impact or plan owner inside Implement
   or Agentic SDLC.
 - Honor committed `mode: disabled` policy by skipping lifecycle observation and
-  automatic spec maintenance.
+  automatic spec maintenance. In a PR handoff, the root must establish that
+  policy is accepted; an unaccepted contributor policy edit cannot waive review.
 
 ## Inputs
 
@@ -110,6 +113,10 @@ not a hook, performs semantic classification and repository writes.
 ## Required Reads
 
 - Read `references/lifecycle.md` for the advisory hook and private-state model.
+- For ordinary PR handoffs, read the contribution assessment reference
+  from the installed review-pr skill.
+  The root supplies exact project scope and accepted evidence; nested reviewers
+  report gaps only. This owner never commits, pushes or calls a PR owner.
 - Read `references/migration.md` before changing legacy managed regions.
 - Read applicable repository instructions and both canonical specs when present.
 - Read only the repository docs, source, tests, and accepted intent needed to
@@ -221,7 +228,7 @@ recover  --project-root <path>
 ## Process
 
 1. Resolve the exact selected project and Git root. Explicit scope supplied by
-   the current user wins; otherwise use the startup cwd. If multiple plausible
+   the current user or its root PR coordinator wins; otherwise use the startup cwd. If multiple plausible
    projects remain, ask before any spec write. Read applicable instructions
    and optional `.codex/project-specs.json` policy.
 2. Inspect existing documents and ownership markers. If legacy ownership is

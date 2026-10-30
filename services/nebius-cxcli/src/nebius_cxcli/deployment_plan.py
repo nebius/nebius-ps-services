@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .deployment_state import digest
 from .soperator_release import SoperatorVersion
 
@@ -117,11 +118,7 @@ def owned_config(config: Mapping[str, Any], target: str) -> dict[str, Any]:
         "cluster": cluster,
         "storage": [row for row in _rows(config, "infra") if row.get("id") == "sfs"],
         "soperator": app[1] if app else None,
-        "target": [
-            row
-            for row in config.get("deploy", {}).get("targets", [])
-            if row.get("instance_id") == target
-        ],
+        "target": [row for row in cluster_rows(config) if row.get("instance_id") == target],
     }
 
 
@@ -302,8 +299,8 @@ def plan_deployment(
         def desired_platform(config: Mapping[str, Any]) -> Any:
             return next(
                 (
-                    row.get("soperator_desired_platform")
-                    for row in config.get("deploy", {}).get("targets", [])
+                    row.get("desired_platform")
+                    for row in cluster_rows(config)
                     if row.get("instance_id") == target
                 ),
                 None,

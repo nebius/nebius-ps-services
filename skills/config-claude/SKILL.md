@@ -98,12 +98,32 @@ the session. Installing this skill does not configure the user's machine.
 7. Configure only selected options: trusted-local permissions, delegation
    policy, private Implement storage, and MCP integrations. For MCP,
    read [references/mcp.md](references/mcp.md); use Claude's native user-scope
-   commands and secret-variable references. Do not reconstruct Claude's global
+   commands, native OAuth and selected secret-variable references. The selected
+   Tavily bridge owns separate protected credential files as documented in
+   `references/tavily-bridge.md`; never silently downgrade a Keychain-only policy.
+   Do not reconstruct Claude's global
    application/authentication JSON or import private Codex configuration.
+   `nebiusDocs` is an optional public HTTP integration. The native `CLAUDE.md`
+   template prefers its available documentation tools, then Tavily retrieval of
+   official pages with a disclosed official-web fallback;
+   that routing rule does not authorize installing an unselected integration.
 8. Rerun the checker and inspect the final diff. Report static configuration,
    installed payloads and actual fresh-session activation separately. Follow
    the native validation steps in the setup reference; a template or JSON parse
    does not prove runtime hook execution or model behavior.
+
+## Selected Research Setup
+
+For requested Tavily OAuth or global research routing, read
+[references/research-routing.md](references/research-routing.md). Tavily remains
+opt-in. Selected bridge setup follows [references/tavily-bridge.md](references/tavily-bridge.md),
+including locked preparation, private file storage and native migration.
+Reconcile only the selected configuration and the template's
+Documentation and Web Research section; preserve equivalent active user rules
+without duplication. A routing-only request does not bootstrap hooks, roles,
+permissions or the rest of the home. An absent instruction file may contain
+only that section inside the native managed-context markers. Full-home checks
+remain separate and may report unrelated missing defaults on such a home.
 
 ## Native Boundaries
 

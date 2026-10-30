@@ -11,6 +11,23 @@ from nebius_cxcli.component_sources import ComponentOutput
 
 
 @pytest.fixture
+def trusted_gateway_hosts(tmp_path: Path) -> Path:
+    """A valid, disposable public host pin; no real environment key material."""
+    import base64
+    import struct
+
+    from nacl.signing import SigningKey
+
+    algorithm = b"ssh-ed25519"
+    public = bytes(SigningKey.generate().verify_key)
+    blob = struct.pack(">I", len(algorithm)) + algorithm + struct.pack(">I", len(public)) + public
+    path = tmp_path / "known_hosts"
+    path.write_text(f"203.0.113.10 ssh-ed25519 {base64.b64encode(blob).decode()}\n")
+    path.chmod(0o600)
+    return path
+
+
+@pytest.fixture
 def standard_deployment_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicitly choose standard in tests of other field-wizard controls."""
 
@@ -72,6 +89,8 @@ def _block_unit_test_network(
     def guarded_popen(args, *positional, **kwargs):
         executable = args[0] if isinstance(args, (list, tuple)) else str(args).split()[0]
         command = list(args) if isinstance(args, (list, tuple)) else str(args).split()
+        if "nebius_cxcli.nat_gateway_probe_logs" in command:
+            _blocked()
         if command[1:3] == ["-m", "nebius_cxcli.owned_process_worker"]:
             # Apply the same offline boundary to the contained command; the
             # supervisor must not hide a cloud CLI behind a Python executable.

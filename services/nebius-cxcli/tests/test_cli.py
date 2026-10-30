@@ -21,6 +21,7 @@ import nebius_cxcli.deploy_targets as deploy_targets_module
 import nebius_cxcli.soperator_config_materialization as soperator_config
 import nebius_cxcli.templates as templates_module
 from nebius_cxcli.cli import _load_context, _load_runtime_context, app
+from nebius_cxcli.cluster_config import cluster_rows, require_cluster_row
 from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
     ComponentOutput,
@@ -43,6 +44,7 @@ from nebius_cxcli.runtime_validation import (
     validate_dynamic_payload_structure,
     validate_runtime_payload,
 )
+from nebius_cxcli.vpc_choices import combined_vpc_choices
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 from soperator_fixtures import sample_snapshot
 
@@ -651,13 +653,11 @@ def _discover_config_payload(
                     "project_id": project_id,
                     "region_id": "eu-north1",
                 },
-                "notifications": {
-                    "email_enabled": False,
-                    "email": None,
-                },
+                "notifications": {"email_enabled": False, "email": None},
             },
             "infra": {"components": []},
             "apps": {"charts": []},
+            "version": "v2",
         },
         sort_keys=False,
     )
@@ -680,7 +680,12 @@ def _component_add(config_path: Path, *extra: str, input_text: str | None = None
 
 @pytest.mark.parametrize("via_add", [False, True])
 def test_headless_grafana_selection_saves_local_private_backends(tmp_path, via_add):
-    from nebius_cxcli.observability_routing import SIGNALS, app_row, target_settings
+    from nebius_cxcli.observability_routing import (
+        SIGNALS,
+        app_row,
+        collector_owners,
+        target_settings,
+    )
 
     result = _create_non_interactive(
         tmp_path,
@@ -703,7 +708,20 @@ def test_headless_grafana_selection_saves_local_private_backends(tmp_path, via_a
     assert app_row(data, target, "victoria-metrics-k8s-stack")
     assert app_row(data, target, "victoria-logs-single")
     assert app_row(data, target, "victoria-traces-single")
-    assert not app_row(data, target, "nebius-observability-agent")
+    assert collector_owners(data, target) == {
+        "metrics": "victoria-metrics-k8s-stack",
+        "logs": "opentelemetry-collector",
+        "traces": "opentelemetry-collector",
+    }
+
+
+def _select_wireguard_admin_group(config_yaml: str) -> str:
+    """Model the required group selection in a completed offline field wizard."""
+    payload = yaml.safe_load(config_yaml)
+    for row in payload["infra"]["components"]:
+        if row["id"] == "wireguard-gw" and row["enabled"]:
+            row.setdefault("access", {}).update(admin_group_id="group-test-admins")
+    return yaml.safe_dump(payload, sort_keys=False)
 
 
 def _set_mk8s_public_endpoint_false(config_yaml: str) -> str:
@@ -900,7 +918,7 @@ def test_create_guided_prefilled_infra_example_skips_source_and_post_write_valid
     def capture_field_wizard(**kwargs: object) -> tuple[str, bool]:
         captured["selected_infra"] = set(kwargs["selected_infra"])  # type: ignore[arg-type]
         captured["selected_apps"] = set(kwargs["selected_apps"])  # type: ignore[arg-type]
-        return str(kwargs["config_yaml"]), True
+        return _select_wireguard_admin_group(str(kwargs["config_yaml"])), True
 
     def capture_quota_check(_config: object, *, phase: str, all_regions: bool = False):
         captured["quota_phase"] = phase
@@ -940,6 +958,7 @@ def test_create_guided_prefilled_infra_example_skips_source_and_post_write_valid
         "mk8s",
         "vm",
         "wireguard-gw",
+        "wireguard-gw-access",
         "ssh-jumphost",
     }
     assert captured["selected_apps"] == set()
@@ -951,6 +970,7 @@ def test_create_guided_prefilled_infra_example_skips_source_and_post_write_valid
         "mk8s": True,
         "vm": True,
         "wireguard-gw": True,
+        "mysterybox": True,
         "ssh-jumphost": True,
     }
 
@@ -1081,7 +1101,7 @@ def test_create_guided_prefilled_infra_and_apps_example_is_accepted(
     def capture_field_wizard(**kwargs: object) -> tuple[str, bool]:
         captured["selected_infra"] = set(kwargs["selected_infra"])  # type: ignore[arg-type]
         captured["selected_apps"] = set(kwargs["selected_apps"])  # type: ignore[arg-type]
-        return str(kwargs["config_yaml"]), True
+        return _select_wireguard_admin_group(str(kwargs["config_yaml"])), True
 
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", capture_field_wizard)
     monkeypatch.setattr(
@@ -1120,6 +1140,7 @@ def test_create_guided_prefilled_infra_and_apps_example_is_accepted(
         "mk8s",
         "vm",
         "wireguard-gw",
+        "wireguard-gw-access",
         "ssh-jumphost",
     }
     assert captured["selected_apps"] == {"n8n", "gateway-helm", "cert-manager"}
@@ -1417,7 +1438,7 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -1481,7 +1502,8 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
         entry = kwargs["entry"]
         full_path_label = kwargs["full_path_label"]
         if full_path_label.endswith(".inputs.cluster.network_id"):
-            return cli_module._combined_vpc_choices(
+            return combined_vpc_choices(
+                read_field=cli_module._read_payload_field,
                 payload=current_payload,
                 entry=entry,
                 full_path_label=full_path_label,
@@ -1490,7 +1512,8 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
                 live_choices=[],
             )
         if full_path_label.endswith(".inputs.cluster.subnet_id"):
-            return cli_module._combined_vpc_choices(
+            return combined_vpc_choices(
+                read_field=cli_module._read_payload_field,
                 payload=current_payload,
                 entry=entry,
                 full_path_label=full_path_label,
@@ -1673,17 +1696,9 @@ def test_component_field_wizard_reports_skipped_component_phase(
 ) -> None:
     vm_entry = next(entry for entry in cli_module.component_entries("infra") if entry.id == "vm")
     payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "vm",
-                    "instance_id": "vm",
-                    "enabled": True,
-                    "inputs": {},
-                }
-            ]
-        },
+        "infra": {"components": [{"id": "vm", "instance_id": "vm", "enabled": True, "inputs": {}}]},
         "apps": {"charts": []},
+        "version": "v2",
     }
     skipped_components: set[tuple[ComponentScope, str, str]] = set()
 
@@ -1793,12 +1808,7 @@ def _patch_late_observability_enable_wizard(monkeypatch: pytest.MonkeyPatch) -> 
         _ = selected_infra, selected_apps, infra_entries, app_entries, provider_lookup
         payload = yaml.safe_load(config_yaml) or {}
         assert isinstance(payload, dict)
-        deploy = payload.setdefault("deploy", {})
-        assert isinstance(deploy, dict)
-        targets = deploy.setdefault("targets", [{"instance_id": "mk8s"}])
-        assert isinstance(targets, list)
-        target = targets[0]
-        assert isinstance(target, dict)
+        target = require_cluster_row(payload, "mk8s")
         observability = target.setdefault("observability", {})
         assert isinstance(observability, dict)
         observability["enabled"] = True
@@ -2058,7 +2068,7 @@ def test_create_no_validate_config_still_prints_mk8s_gpu_validation_warning(
         cli_module,
         "mk8s_gpu_validation_warnings",
         lambda _payload: (
-            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
+            "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
         ),
     )
 
@@ -2383,7 +2393,7 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     deployments_root = repo_root / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    create_result = _create_non_interactive(deployments_root)
+    create_result = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
     assert create_result.exit_code == 0, create_result.output
 
     gitignore_path = deployments_root / ".gitignore"
@@ -2444,7 +2454,7 @@ def test_render_rejects_config_under_nested_deployments_root_with_managed_parent
         ("ssh-jumphost", "ssh-jumphost", {"allowed_cidrs": ["203.0.113.10/32"]}),
     ],
 )
-def test_render_normalizes_ssh_public_key_without_rewriting_config(
+def test_render_handles_personal_ssh_keys_without_rewriting_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     component_id: str,
@@ -2454,7 +2464,7 @@ def test_render_normalizes_ssh_public_key_without_rewriting_config(
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    create_result = _create_non_interactive(deployments_root, "--infra", component_id)
+    create_result = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
     assert create_result.exit_code == 0, create_result.output
 
     key_path = tmp_path / "id_ed25519.pub"
@@ -2462,12 +2472,10 @@ def test_render_normalizes_ssh_public_key_without_rewriting_config(
 
     config_path = _project_config_path(deployments_root)
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    jumphost = next(
-        item
-        for item in payload["infra"]["components"]
-        if isinstance(item, dict) and item.get("id") == component_id
-    )
-    jumphost["instance_id"] = instance_name
+    jumphost = {"id": component_id, "instance_id": instance_name, "enabled": True}
+    payload["infra"]["components"].append(jumphost)
+    if component_id == "wireguard-gw":
+        jumphost["access"] = {"admin_group_id": "group-test-admins"}
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -2479,6 +2487,9 @@ def test_render_normalizes_ssh_public_key_without_rewriting_config(
         "ssh_public_key": str(key_path),
         **extra_inputs,
     }
+    from nebius_cxcli.wireguard_dependencies import materialize_wireguard_dependencies
+
+    materialize_wireguard_dependencies(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     source_before = config_path.read_bytes()
@@ -2519,8 +2530,13 @@ def test_render_normalizes_ssh_public_key_without_rewriting_config(
 
     result = runner.invoke(app, ["render", "--force", str(config_path)])
 
-    assert result.exit_code == 0, result.output
     assert config_path.read_bytes() == source_before
+    if component_id == "wireguard-gw":
+        assert result.exit_code == 1, result.output
+        assert "WireGuard SSH keys/bootstrap are lifecycle-owned" in result.output
+        assert rendered_configs == []
+        return
+    assert result.exit_code == 0, result.output
     refreshed = rendered_configs[0]
     refreshed_jumphost = next(
         item
@@ -2627,7 +2643,7 @@ def test_first_render_from_create_scaffold_does_not_require_force(tmp_path: Path
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    create_result = _create_non_interactive(deployments_root)
+    create_result = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
     assert create_result.exit_code == 0, create_result.output
 
     config_path = _project_config_path(deployments_root)
@@ -2644,7 +2660,7 @@ def test_first_render_with_only_lifecycle_reports_does_not_require_force(tmp_pat
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    create_result = _create_non_interactive(deployments_root)
+    create_result = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
     assert create_result.exit_code == 0, create_result.output
 
     config_path = _project_config_path(deployments_root)
@@ -2740,7 +2756,7 @@ def test_create_force_overwrites_from_scratch_without_reusing_client_info_defaul
     for chart in payload.get("apps", {}).get("charts", []):
         if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
             chart["instance_id"] = "custom-cluster"
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == "mk8s":
             target["instance_id"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -3218,12 +3234,12 @@ def test_create_validates_late_auto_enabled_nfs_csi_driver_sources(
     assert result.exit_code == 0, result.output
     assert source_validation_calls[0] == {"selected_app_ids": set()}
     assert {
-        "selected_app_ids": {"csi-driver-nfs"},
+        "selected_app_ids": {"csi-driver-nfs", "nebius-observability-agent"},
         "include_infra": False,
     } in source_validation_calls
 
 
-def test_create_mysterybox_with_mk8s_surfaces_external_secrets_dependency(
+def test_create_mysterybox_with_mk8s_keeps_eso_user_selected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3248,10 +3264,7 @@ def test_create_mysterybox_with_mk8s_surfaces_external_secrets_dependency(
         captured_selected_apps.append(set(selected_apps))
         payload = yaml.safe_load(config_yaml) or {}
         charts = payload.get("apps", {}).get("charts", [])
-        external_secrets = next(
-            row for row in charts if isinstance(row, dict) and row.get("id") == "external-secrets"
-        )
-        assert external_secrets["instance_id"] == "mk8s"
+        assert not any(row.get("id") == "external-secrets" and row.get("enabled") for row in charts)
         return config_yaml, True
 
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _fake_run_component_field_wizard)
@@ -3281,8 +3294,8 @@ def test_create_mysterybox_with_mk8s_surfaces_external_secrets_dependency(
     )
 
     assert result.exit_code == 0, result.output
-    assert "'apps:external-secrets@mk8s'" in result.output
-    assert captured_selected_apps == [{"external-secrets"}]
+    assert "'apps:external-secrets@mk8s'" not in result.output
+    assert captured_selected_apps == [set()]
 
 
 def test_create_auto_enables_network_operator_only_for_gpu_cluster_shapes(
@@ -3389,11 +3402,8 @@ def test_align_new_mk8s_target_name_repairs_existing_app_target_refs() -> None:
                     "id": "mk8s",
                     "instance_id": "mk8s",
                     "enabled": True,
-                    "inputs": {
-                        "cluster": {
-                            "cluster_name": "soperator-cluster1",
-                        },
-                    },
+                    "inputs": {"cluster": {"cluster_name": "soperator-cluster1"}},
+                    "component_id": "mk8s",
                 }
             ]
         },
@@ -3404,9 +3414,7 @@ def test_align_new_mk8s_target_name_repairs_existing_app_target_refs() -> None:
                     "instance_id": "mk8s",
                     "target_ref": "mk8s",
                     "enabled": True,
-                    "values": {
-                        "clusterName": "mk8s",
-                    },
+                    "values": {"clusterName": "mk8s"},
                 },
                 {
                     "id": "cert-manager",
@@ -3417,14 +3425,7 @@ def test_align_new_mk8s_target_name_repairs_existing_app_target_refs() -> None:
                 },
             ]
         },
-        "deploy": {
-            "targets": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                }
-            ]
-        },
+        "version": "v2",
     }
 
     assert cli_module._align_new_infra_instance_ids_with_resource_names(
@@ -3434,7 +3435,7 @@ def test_align_new_mk8s_target_name_repairs_existing_app_target_refs() -> None:
 
     mk8s = payload["infra"]["components"][0]
     assert mk8s["instance_id"] == "soperator-cluster1"
-    assert payload["deploy"]["targets"][0]["instance_id"] == "soperator-cluster1"
+    assert cluster_rows(payload)[0]["instance_id"] == "soperator-cluster1"
 
     charts = {row["id"]: row for row in payload["apps"]["charts"]}
     assert charts["soperator"]["instance_id"] == "soperator-cluster1"
@@ -3475,10 +3476,10 @@ def test_create_auto_enables_observability_agent_when_wizard_turns_on_observabil
     )
 
     assert result.exit_code == 0, result.output
-    assert "Adjusted component selection:" in result.output
-    assert "'apps:nebius-observability-agent'" in result.output
 
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    assert "deploy" not in payload
+    assert cluster_rows(payload)[0]["observability"]["enabled"] is True
     apps_enabled = _apps_enabled_map(payload)
     assert apps_enabled["nebius-observability-agent"] is True
 
@@ -3512,11 +3513,12 @@ def test_create_vm_only_omits_kubernetes_observability_defaults(tmp_path: Path) 
 
     assert result.exit_code == 0, result.output
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
-    observability = payload["deploy"]["observability"]
+    observability = next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+        "observability"
+    ]
     assert "kubernetes" not in observability
     assert observability["vm"]["logs"]["enabled"] is True
-    deploy = payload.get("deploy", {})
-    assert "validations" not in deploy
+    assert "deploy" not in payload
 
 
 def test_prune_redundant_app_chart_default_values_skips_chart_lookup_without_scalar_values(
@@ -3820,6 +3822,12 @@ def test_load_context_uses_component_sources_override_file(tmp_path: Path, monke
 
     config_path = _project_config_path(deployments_root)
 
+    payload = yaml.safe_load(config_path.read_text())
+    for row in cluster_rows(payload):
+        row["observability"] = {"enabled": False}
+    payload["apps"]["charts"] = []
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+
     external_sources = tmp_path / "external-component-sources.yaml"
     external_sources.write_text(
         yaml.safe_dump(
@@ -3977,11 +3985,7 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
     sources_file.write_text(
         yaml.safe_dump(
             {
-                "shared": {
-                    "admin_ssh": {
-                        "user_name": "adminuser",
-                    }
-                },
+                "shared": {"admin_ssh": {"user_name": "adminuser"}},
                 "components": {
                     "infra": {
                         "mk8s": {
@@ -3989,9 +3993,7 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
                                 "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
                                 "local": str(mk8s_module_dir),
                             },
-                            "ui": {
-                                "enabled": True,
-                            },
+                            "ui": {"enabled": True},
                         }
                     },
                     "apps": {
@@ -4001,17 +4003,9 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
                                 chart="demo-app",
                                 version="1.0.0",
                             ),
-                            "release": {
-                                "namespace": "demo",
-                                "name": "demo-app",
-                            },
-                            "ui": {
-                                "group": "Workloads",
-                                "enabled": False,
-                            },
-                            "defaults": {
-                                "values.admin.sshUser": "shared.admin_ssh.user_name",
-                            },
+                            "release": {"namespace": "demo", "name": "demo-app"},
+                            "ui": {"group": "Workloads", "enabled": False},
+                            "defaults": {"values.admin.sshUser": "shared.admin_ssh.user_name"},
                         }
                     },
                 },
@@ -4028,7 +4022,7 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
     config_path = _project_config_path(deployments_root)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -4330,16 +4324,37 @@ def test_create_materializes_catalog_owned_compute_boot_disk_defaults_into_confi
     assert cpu_group["boot_disk"]["type"] == "NETWORK_SSD"
 
 
-def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Path) -> None:
+def test_create_materializes_shared_admin_ssh_username_into_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    result = _create_non_interactive(
-        deployments_root,
-        "--infra",
-        "wireguard-gw",
-        "--infra",
-        "ssh-jumphost",
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        lambda **kwargs: (_select_wireguard_admin_group(kwargs["config_yaml"]), True),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--no-validate-sources",
+            "--infra",
+            "wireguard-gw",
+            "--infra",
+            "ssh-jumphost",
+            "--app",
+            "none",
+        ],
+        input="\n\n\n",
     )
     assert result.exit_code == 0, result.output
 
@@ -4351,6 +4366,9 @@ def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Pat
     }
 
     assert public_access_components["wireguard-gw"]["inputs"]["ssh_user_name"] == "ubuntu"
+    assert (
+        public_access_components["wireguard-gw"]["access"]["admin_group_id"] == "group-test-admins"
+    )
     assert public_access_components["ssh-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
 
 
@@ -4362,11 +4380,7 @@ def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> 
     sources_file.write_text(
         yaml.safe_dump(
             {
-                "shared": {
-                    "admin_ssh": {
-                        "user_name": "adminuser",
-                    }
-                },
+                "shared": {"admin_ssh": {"user_name": "adminuser"}},
                 "components": {
                     "infra": {
                         "mk8s": {
@@ -4374,9 +4388,7 @@ def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> 
                                 "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
                                 "local": str(mk8s_module_dir),
                             },
-                            "ui": {
-                                "enabled": True,
-                            },
+                            "ui": {"enabled": True},
                         }
                     },
                     "apps": {
@@ -4386,16 +4398,9 @@ def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> 
                                 chart="demo-app",
                                 version="1.0.0",
                             ),
-                            "release": {
-                                "namespace": "demo",
-                                "name": "demo-app",
-                            },
-                            "ui": {
-                                "enabled": True,
-                            },
-                            "defaults": {
-                                "values.admin.sshUser": "shared.admin_ssh.user_name",
-                            },
+                            "release": {"namespace": "demo", "name": "demo-app"},
+                            "ui": {"enabled": True},
+                            "defaults": {"values.admin.sshUser": "shared.admin_ssh.user_name"},
                         }
                     },
                 },
@@ -4458,24 +4463,16 @@ def test_create_seeds_private_shared_admin_ssh_public_key_into_config(
         yaml.safe_dump(
             {
                 "shared": {
-                    "admin_ssh": {
-                        "user_name": "ubuntu",
-                        "public_key": _VALID_ED25519_PUBLIC_KEY,
-                    }
+                    "admin_ssh": {"user_name": "ubuntu", "public_key": _VALID_ED25519_PUBLIC_KEY}
                 },
                 "components": {
                     "infra": {
                         "demo-jumphost": {
                             "source": {
-                                "portable": (
-                                    "git::https://github.com/example/infra.git//modules/demo-jumphost"
-                                    "?ref=v1.2.3"
-                                ),
+                                "portable": "git::https://github.com/example/infra.git//modules/demo-jumphost?ref=v1.2.3",
                                 "local": str(module_dir),
                             },
-                            "ui": {
-                                "enabled": True,
-                            },
+                            "ui": {"enabled": True},
                         }
                     },
                     "apps": {},
@@ -4536,24 +4533,16 @@ def test_component_add_seeds_private_shared_admin_ssh_public_key_into_config(
         yaml.safe_dump(
             {
                 "shared": {
-                    "admin_ssh": {
-                        "user_name": "ubuntu",
-                        "public_key": _VALID_ED25519_PUBLIC_KEY,
-                    }
+                    "admin_ssh": {"user_name": "ubuntu", "public_key": _VALID_ED25519_PUBLIC_KEY}
                 },
                 "components": {
                     "infra": {
                         "demo-jumphost": {
                             "source": {
-                                "portable": (
-                                    "git::https://github.com/example/infra.git//modules/demo-jumphost"
-                                    "?ref=v1.2.3"
-                                ),
+                                "portable": "git::https://github.com/example/infra.git//modules/demo-jumphost?ref=v1.2.3",
                                 "local": str(module_dir),
                             },
-                            "ui": {
-                                "enabled": False,
-                            },
+                            "ui": {"enabled": False},
                         }
                     },
                     "apps": {},
@@ -4660,7 +4649,7 @@ def test_app_field_wizard_prompts_for_chart_version(monkeypatch: pytest.MonkeyPa
         default_release_name="soperator",
     )
     payload = {
-        "version": "v1",
+        "version": "v2",
         "infra": {"components": []},
         "apps": {
             "charts": [
@@ -4719,7 +4708,7 @@ def test_app_wizard_prompts_for_chart_version_before_full_app_config(
         default_release_name="soperator",
     )
     payload = {
-        "version": "v1",
+        "version": "v2",
         "infra": {"components": []},
         "apps": {
             "charts": [
@@ -4776,14 +4765,7 @@ def test_changed_app_chart_version_detection_uses_exact_helm_version() -> None:
     )
     payload = {
         "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "mk8s",
-                    "enabled": True,
-                    "inputs": {},
-                }
-            ]
+            "components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}]
         },
         "apps": {
             "charts": [
@@ -4799,6 +4781,7 @@ def test_changed_app_chart_version_detection_uses_exact_helm_version() -> None:
                 }
             ]
         },
+        "version": "v2",
     }
 
     assert cli_module._app_chart_ids_with_non_catalog_versions(
@@ -4863,7 +4846,7 @@ def test_create_force_treats_components_as_new_selection(tmp_path: Path) -> None
     for chart in payload.get("apps", {}).get("charts", []):
         if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
             chart["instance_id"] = "custom-cluster"
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == "mk8s":
             target["instance_id"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -5055,7 +5038,7 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     for chart in payload.get("apps", {}).get("charts", []):
         if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
             chart["instance_id"] = "custom-cluster"
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == "mk8s":
             target["instance_id"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -5396,15 +5379,11 @@ def test_all_infra_components_can_allocate_additional_instances() -> None:
         payload = {
             "infra": {
                 "components": [
-                    {
-                        "id": entry.id,
-                        "instance_id": entry.id,
-                        "enabled": True,
-                        "inputs": {},
-                    }
+                    {"id": entry.id, "instance_id": entry.id, "enabled": True, "inputs": {}}
                 ]
             },
             "apps": {"charts": []},
+            "version": "v2",
         }
 
         row = cli_module._append_component_instance_row(
@@ -5440,6 +5419,7 @@ def test_runtime_validation_rejects_duplicate_infra_instance_id() -> None:
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="instance_id 'worker-vm' is duplicated"):
@@ -5464,6 +5444,7 @@ def test_runtime_validation_rejects_mismatched_scalar_name_and_instance_id() -> 
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(
@@ -5492,6 +5473,7 @@ def test_runtime_validation_rejects_duplicate_scalar_names_for_same_infra_type()
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match=r"inputs\.name 'worker-vm' duplicates"):
@@ -5502,17 +5484,12 @@ def test_runtime_validation_rejects_unsupported_region_id() -> None:
     payload = {
         "client_info": {
             "client_name": "client-a",
-            "nebius": {
-                "project_id": "project-1",
-                "region_id": "eu-north",
-            },
-            "notifications": {
-                "email_enabled": False,
-                "email": None,
-            },
+            "nebius": {"project_id": "project-1", "region_id": "eu-north"},
+            "notifications": {"email_enabled": False, "email": None},
         },
         "infra": {"components": []},
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(
@@ -5532,16 +5509,14 @@ def test_runtime_validation_does_not_force_collection_identity_to_scalar_name() 
                     "enabled": True,
                     "inputs": {
                         "secrets": [
-                            {
-                                "name": "db-credentials",
-                                "payload": {"USERNAME": {"text": "app"}},
-                            }
+                            {"name": "db-credentials", "payload": {"USERNAME": {"text": "app"}}}
                         ]
                     },
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     validate_dynamic_payload_structure(payload)
@@ -5558,6 +5533,7 @@ def test_runtime_validation_does_not_force_collection_identity_to_scalar_name() 
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     validate_dynamic_payload_structure(scalar_collection_payload)
 
@@ -5593,6 +5569,7 @@ def test_runtime_validation_rejects_overlapping_planned_vpc_private_cidrs() -> N
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="Nebius requires subnet CIDR blocks"):
@@ -5616,6 +5593,7 @@ def test_runtime_validation_rejects_new_planned_vpc_without_network_private_cidr
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="network\\.ipv4_private_cidrs"):
@@ -5637,16 +5615,14 @@ def test_runtime_validation_rejects_vpc_subnet_network_private_pool_inheritance(
                             "ipv4_private_cidrs": ["172.16.0.0/12"],
                         },
                         "subnets": {
-                            "worker": {
-                                "name": "worker",
-                                "use_network_private_pools": True,
-                            }
+                            "worker": {"name": "worker", "use_network_private_pools": True}
                         },
                     },
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="use_network_private_pools must be false"):
@@ -5673,6 +5649,7 @@ def test_runtime_validation_rejects_non_mapping_vpc_subnet() -> None:
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="subnets\\.worker must be a mapping"):
@@ -5705,6 +5682,7 @@ def test_runtime_validation_accepts_new_planned_vpc_with_network_private_pool_id
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     validate_dynamic_payload_structure(payload)
@@ -5742,6 +5720,7 @@ def test_runtime_validation_accepts_new_planned_vpc_with_pool_id_and_extended_ci
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     validate_dynamic_payload_structure(payload)
@@ -5775,6 +5754,7 @@ def test_runtime_validation_accepts_new_planned_vpc_with_public_pool_id() -> Non
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     validate_dynamic_payload_structure(payload)
@@ -5807,6 +5787,7 @@ def test_runtime_validation_accepts_new_planned_vpc_with_private_source_pool_id(
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     validate_dynamic_payload_structure(payload)
@@ -5832,6 +5813,7 @@ def test_runtime_validation_rejects_private_source_pool_without_network_cidr() -
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="ipv4_private_source_pool_id"):
@@ -5864,6 +5846,7 @@ def test_runtime_validation_rejects_planned_subnet_outside_new_vpc_network_range
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="must fit inside the VPC network private CIDR range"):
@@ -5889,6 +5872,7 @@ def test_runtime_validation_rejects_network_private_cidrs_for_existing_vpc_netwo
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="cannot be set when network\\.existing_id is set"):
@@ -5941,6 +5925,7 @@ def test_runtime_validation_rejects_overlapping_planned_vpc_cidrs_for_same_live_
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     with pytest.raises(ValueError, match="same VPC network"):
@@ -5995,6 +5980,7 @@ def test_runtime_validation_allows_overlapping_planned_vpc_cidrs_for_different_l
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     validate_dynamic_payload_structure(payload)
@@ -6029,10 +6015,7 @@ def _vpc_binding_payload() -> dict:
                     "instance_id": "worker",
                     "enabled": True,
                     "source": "../../platform-infra/modules/vm",
-                    "inputs": {
-                        "parent_id": "project-123",
-                        "name": "worker",
-                    },
+                    "inputs": {"parent_id": "project-123", "name": "worker"},
                     "bindings": {
                         "inputs.network_id": {
                             "source_component": "vpc",
@@ -6051,6 +6034,7 @@ def _vpc_binding_payload() -> dict:
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
 
@@ -6312,21 +6296,16 @@ def test_component_add_auto_enables_nfs_csi_driver_when_nfs_meets_mk8s(
 
 def test_component_add_added_app_labels_prefer_target_scoped_rows() -> None:
     payload = {
-        "deploy": {"targets": [{"instance_id": "cluster2"}]},
         "apps": {
             "charts": [
-                {
-                    "id": "nvidia-gpu-operator",
-                    "instance_id": "cluster2",
-                    "enabled": True,
-                },
-                {
-                    "id": "nvidia-network-operator",
-                    "instance_id": "cluster2",
-                    "enabled": True,
-                },
+                {"id": "nvidia-gpu-operator", "instance_id": "cluster2", "enabled": True},
+                {"id": "nvidia-network-operator", "instance_id": "cluster2", "enabled": True},
             ]
         },
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "cluster2", "enabled": True, "inputs": {}}]
+        },
+        "version": "v2",
     }
 
     assert cli_module._target_aware_added_app_labels(
@@ -6369,6 +6348,7 @@ def test_mk8s_node_group_shape_prompt_refreshes_boot_disk_size() -> None:
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]["preset"] = "32vcpu-128gb"
     entry = cli_module.ComponentEntry(
@@ -6457,12 +6437,14 @@ def test_component_remove_cluster_target_cascades_target_bound_apps(
     result = _component_remove(config_path, "mk8s", "--no-interactive")
     assert result.exit_code == 0, result.output
     assert "Removed infra components: mk8s" in result.output
-    assert "Removed apps components: n8n@mk8s" in result.output
+    assert "Removed apps components:" in result.output
+    assert "n8n@mk8s" in result.output
+    assert "nebius-observability-agent@mk8s" in _normalized_cli_output(result.output)
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["infra"]["components"] == []
     assert payload["apps"]["charts"] == []
-    assert payload.get("deploy", {}).get("targets", []) == []
+    assert cluster_rows(payload) == []
     _load_context(config_path)
 
 
@@ -6494,11 +6476,8 @@ def test_component_remove_rejects_all_soperator_lifecycle_state_before_auth_or_c
             }
         )
     else:
-        payload.setdefault("deploy", {}).setdefault("targets", []).append(
-            {
-                "instance_id": "mk8s",
-                "soperator_registration": None,
-            }
+        payload["apps"]["charts"].append(
+            {"id": "soperator", "instance_id": "mk8s", "enabled": False, "registration": None}
         )
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     expected_bytes = config_path.read_bytes()
@@ -6536,18 +6515,14 @@ def test_component_remove_cluster_instance_cascades_only_that_target(
     assert add_app.exit_code == 0, add_app.output
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    payload["deploy"] = {
-        "targets": [
-            {"instance_id": "mk8s"},
-            {"instance_id": "mk8s-2"},
-        ]
-    }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     result = _component_remove(config_path, "infra:mk8s-2", "--no-interactive")
     assert result.exit_code == 0, result.output
     assert "Removed infra components: mk8s@mk8s-2" in result.output
-    assert "Removed apps components: n8n@mk8s-2" in result.output
+    assert "Removed apps components:" in result.output
+    assert "n8n@mk8s-2" in result.output
+    assert "nebius-observability-agent@mk8s-2" in _normalized_cli_output(result.output)
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     mk8s_rows = [
@@ -6560,7 +6535,7 @@ def test_component_remove_cluster_instance_cascades_only_that_target(
         not (isinstance(row, dict) and row.get("instance_id") == "mk8s-2")
         for row in refreshed["apps"]["charts"]
     )
-    assert [row["instance_id"] for row in refreshed["deploy"]["targets"]] == ["mk8s"]
+    assert [row["instance_id"] for row in cluster_rows(refreshed)] == ["mk8s"]
     _load_context(config_path)
 
 
@@ -6612,7 +6587,7 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "grafana-postgresql")
     infra_entries = (
         cli_module.ComponentEntry(
             id="mk8s",
@@ -6626,8 +6601,8 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
                 access_source_path="inputs.cluster.public_endpoint",
             ),
             wizard_fields={
-                "deploy.targets[].observability.enabled": {"type_hint": "bool"},
-                "deploy.targets[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
+                "infra.components[].observability.enabled": {"type_hint": "bool"},
+                "infra.components[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
             },
         ),
     )
@@ -6662,13 +6637,20 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
 
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", _wizard_phase)
 
+    telemetry_targets = []
+
+    def choose_telemetry(**kwargs):
+        telemetry_targets.append(kwargs["target"])
+        return {"enabled": True, "local": False}, False
+
+    monkeypatch.setattr("nebius_cxcli.wizard_defaults.prompt_telemetry_mode", choose_telemetry)
     prompted_paths: list[str] = []
 
     def _prompt_scalar(path_label: str, current: object, **_kwargs) -> tuple[object, bool]:
         prompted_paths.append(path_label)
-        if path_label == "deploy.targets[1].observability.enabled":
+        if path_label == "infra.components[1].observability.enabled":
             return True, False
-        if path_label == "deploy.targets[1].observability.kubernetes.logs.enabled":
+        if path_label == "infra.components[1].observability.kubernetes.logs.enabled":
             return True, False
         return current, False
 
@@ -6695,7 +6677,7 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
     config_path.write_text(
         yaml.safe_dump(
             {
-                "version": "v1",
+                "version": "v2",
                 "client_info": {
                     "client_name": "client-a",
                     "nebius": {
@@ -6712,6 +6694,10 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
                             "instance_id": "cluster1",
                             "enabled": True,
                             "inputs": {"cluster": {"cluster_name": "cluster1"}},
+                            "observability": {
+                                "enabled": True,
+                                "kubernetes": {"logs": {"enabled": True}},
+                            },
                         }
                     ]
                 },
@@ -6726,17 +6712,6 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
                             "values": {},
                         }
                         for app_id in app_ids
-                    ]
-                },
-                "deploy": {
-                    "targets": [
-                        {
-                            "instance_id": "cluster1",
-                            "observability": {
-                                "enabled": True,
-                                "kubernetes": {"logs": {"enabled": True}},
-                            },
-                        }
                     ]
                 },
             },
@@ -6758,21 +6733,16 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
 
     assert result.exit_code == 0, result.output
     assert "list index out of range" not in result.output
-    assert "Component selections:" in result.output
     assert "mk8s@cluster2" in result.output
-    assert "nebius-observability-agent on cluster2" in result.output
-    assert "grafana on cluster2" in result.output
-    assert "gateway-helm on cluster2" in result.output
-    assert "nebius-observability-agent on cluster1" not in result.output
-    assert "grafana on cluster1" not in result.output
-    assert "gateway-helm on cluster1" not in result.output
-    assert "Added infra components:" not in result.output
-    assert "Added apps components:" not in result.output
-    assert "deploy.targets[1].observability.enabled" in prompted_paths
+    assert telemetry_targets == ["cluster2"]
+    assert prompted_paths == [
+        "infra.components[1].observability.kubernetes.logs.enabled",
+        "apps.charts[4].version",
+    ]
     assert not any(" on cluster1" in label for label in phase_prompts)
     assert source_validation_calls == [
         (set(), True),
-        (set(app_ids), False),
+        ({"nebius-observability-agent"}, False),
     ]
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -6782,7 +6752,13 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
         if isinstance(row, dict) and row.get("id") in app_ids and row.get("enabled") is True
     )
     assert app_targets == sorted(
-        (app_id, target_ref) for target_ref in ("cluster1", "cluster2") for app_id in app_ids
+        [(app_id, "cluster1") for app_id in app_ids] + [("nebius-observability-agent", "cluster2")]
+    )
+    added_observability = cluster_rows(refreshed)[1]["observability"]
+    assert added_observability["enabled"] is True
+    assert all(
+        added_observability["routing"][signal]["storage"] == "remote"
+        for signal in ("metrics", "logs", "traces")
     )
 
 
@@ -6808,11 +6784,11 @@ def test_component_add_interactive_prompts_for_new_component_fields(
     config_path = _project_config_path(deployments_root)
     result = _component_add(
         config_path,
-        input_text="managed-postgresql\nn\ndemo-pg\ny\n\n",
+        input_text="managed-postgresql\nnone\ndemo-pg\ny\n\n",
     )
     assert result.exit_code == 0, result.output
-    assert "Select apps components to add too?" in result.output
-    assert "Select apps components (comma-separated ids or indexes)" not in result.output
+    assert "Select apps components to add too?" not in result.output
+    assert "Select apps components (comma-separated ids or indexes" in result.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -6823,6 +6799,111 @@ def test_component_add_interactive_prompts_for_new_component_fields(
         if isinstance(row, dict) and str(row.get("id", "")).strip() == "managed-postgresql"
     )
     assert managed_pg["inputs"]["name"] == "demo-pg"
+
+
+@pytest.mark.parametrize(
+    ("infra_selection", "resource_answers", "expected_infra"),
+    [
+        ("managed-postgresql,object-storage", "\n\n", {"managed-postgresql", "object-storage"}),
+        ("none", "", set()),
+    ],
+)
+def test_component_add_full_wizard_adds_multiple_infra_and_apps(
+    tmp_path, monkeypatch, infra_selection, resource_answers, expected_infra
+):
+    created = _create_non_interactive(tmp_path, "--infra", "mk8s", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    original = yaml.safe_load(config_path.read_text())
+    wizard_selections = []
+
+    def configure_additions(**kwargs):
+        wizard_selections.append((kwargs["selected_infra"], kwargs["selected_apps"]))
+        return kwargs["config_yaml"], True
+
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", configure_additions)
+    result = _component_add(
+        config_path,
+        input_text=f"{infra_selection}\nn8n,external-dns\n{resource_answers}y\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Select apps components to add too?" not in result.output
+    assert wizard_selections == [(expected_infra, {"n8n@mk8s", "external-dns@mk8s"})]
+    updated = yaml.safe_load(config_path.read_text())
+    assert {row["id"] for row in updated["infra"]["components"]} == {"mk8s"} | expected_infra
+    assert {row["id"] for row in updated["apps"]["charts"]} == {
+        "n8n",
+        "external-dns",
+        "nebius-observability-agent",
+    }
+    assert updated["infra"]["components"][0] == original["infra"]["components"][0]
+
+
+@pytest.mark.parametrize("answers", ["none\nnone\n", "qq\n", "vm\nqq\n", "vm\nq\nnone\nnone\n"])
+def test_component_add_full_wizard_empty_or_cancel_preserves_config(tmp_path, answers):
+    created = _create_non_interactive(tmp_path, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    original = config_path.read_bytes()
+
+    result = _component_add(config_path, input_text=answers)
+
+    assert result.exit_code == 0, result.output
+    assert config_path.read_bytes() == original
+    if answers != "qq\n":
+        assert "Select apps components (comma-separated ids or indexes" in result.output
+
+
+def test_component_add_full_wizard_retains_infra_on_back(tmp_path, monkeypatch):
+    created = _create_non_interactive(tmp_path, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    original = config_path.read_bytes()
+    answers = iter((["vm"], cli_module._WizardBackRequested(), [], []))
+    prompts = []
+
+    def select(**kwargs):
+        prompts.append((kwargs["scope"], set(kwargs["defaults"])))
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(cli_module, "_prompt_component_with_checkboxes", select)
+    result = _component_add(config_path)
+
+    assert result.exit_code == 0, result.output
+    assert prompts == [("infra", set()), ("apps", set()), ("infra", {"vm"}), ("apps", set())]
+    assert config_path.read_bytes() == original
+
+
+def test_component_add_full_wizard_retains_apps_after_missing_target(tmp_path, monkeypatch):
+    created = _create_non_interactive(tmp_path, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(tmp_path)
+    answers = iter(([], ["n8n"], ["mk8s"], ["n8n"]))
+    prompts = []
+
+    def select(**kwargs):
+        prompts.append((kwargs["scope"], set(kwargs["defaults"])))
+        return next(answers)
+
+    monkeypatch.setattr(cli_module, "_prompt_component_with_checkboxes", select)
+    monkeypatch.setattr(
+        cli_module, "_run_component_field_wizard", lambda **kwargs: (kwargs["config_yaml"], True)
+    )
+    result = _component_add(config_path, input_text="\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid app selection:" in result.output
+    assert prompts == [("infra", set()), ("apps", set()), ("infra", set()), ("apps", {"n8n"})]
+    updated = yaml.safe_load(config_path.read_text())
+    assert {row["id"] for row in updated["infra"]["components"]} == {"mk8s"}
+    assert [(row["id"], row["instance_id"]) for row in updated["apps"]["charts"]] == [
+        ("n8n", "mk8s"),
+        ("nebius-observability-agent", "mk8s"),
+    ]
 
 
 def test_component_add_does_not_write_when_quit_leaves_required_fields_missing(
@@ -6861,9 +6942,11 @@ def test_component_add_does_not_write_when_quit_leaves_required_fields_missing(
     assert config_path.read_text(encoding="utf-8") == original_config
 
 
+@pytest.mark.parametrize("resource_name", ["", "wg-gw"])
 def test_component_add_requeues_provider_dependent_module_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    resource_name: str,
 ) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -6872,6 +6955,13 @@ def test_component_add_requeues_provider_dependent_module_fields(
     config_path.write_text(_discover_config_payload(), encoding="utf-8")
 
     module_specs = (
+        SimpleNamespace(
+            name="client_default_persistent_keepalive",
+            required=False,
+            type_hint="number",
+            has_default=True,
+            default=25,
+        ),
         SimpleNamespace(
             name="name",
             required=True,
@@ -6915,10 +7005,17 @@ def test_component_add_requeues_provider_dependent_module_fields(
             default=None,
         ),
     )
-    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: module_specs)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: () if "mysterybox" in _source else module_specs,
+    )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: tuple(item.name for item in module_specs),
+        lambda _source: (
+            ()
+            if "mysterybox" in _source
+            else tuple(item.name for item in module_specs if item.required)
+        ),
     )
 
     def _fake_dynamic_choices(
@@ -6929,6 +7026,8 @@ def test_component_add_requeues_provider_dependent_module_fields(
         provider_lookup,
     ):
         _ = entry, provider_lookup
+        if full_path_label.endswith(".access.admin_group_id"):
+            return [cli_module.OptionChoice(value="group-admins", label="Admin group")]
         if full_path_label.endswith(".inputs.network_id"):
             return [cli_module.OptionChoice(value="vpcnetwork-1", label="default network")]
         if full_path_label.endswith(".inputs.subnet_id"):
@@ -6949,6 +7048,8 @@ def test_component_add_requeues_provider_dependent_module_fields(
         provider_lookup,
     ):
         _ = payload, entry, provider_lookup
+        if full_path_label.endswith(".access.admin_group_id"):
+            return {"group-admins"}, ("wireguard_admin_groups",)
         if full_path_label.endswith(".inputs.network_id"):
             return {"vpcnetwork-1"}, ("project_networks",)
         if full_path_label.endswith(".inputs.subnet_id"):
@@ -6965,32 +7066,55 @@ def test_component_add_requeues_provider_dependent_module_fields(
     result = _component_add(
         config_path,
         "wireguard-gw",
-        input_text="wg-gw\ny\ny\n\n\n\n\n",
+        input_text=f"{resource_name}\ny\ny\n" + "\n" * 40,
     )
 
     assert result.exit_code == 0, result.output
+    assert "Wizard stopped" not in result.output
     assert "infra.components[0].inputs.preset" in result.output
+    assert result.output.count("WireGuard VPN gateway name for new infra:wireguard-gw") == 1
+    assert "infra.components[0].inputs.name" not in result.output
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(components, list)
     wireguard = next(
         item for item in components if isinstance(item, dict) and item.get("id") == "wireguard-gw"
     )
-    assert wireguard["instance_id"] == "wg-gw"
-    assert wireguard["inputs"]["name"] == "wg-gw"
+    assert wireguard["instance_id"] == (resource_name or "wireguard-gw")
+    assert wireguard["inputs"]["name"] == (resource_name or "wireguard-gw")
     assert wireguard["inputs"]["network_id"] == "vpcnetwork-1"
     assert wireguard["inputs"]["subnet_id"] == "vpcsubnet-1"
     assert wireguard["inputs"]["platform"] == "cpu-d3"
     assert wireguard["inputs"]["preset"] == "4vcpu-16gb"
 
 
+@pytest.mark.parametrize(
+    ("selected_eso", "sync_enabled", "with_wireguard", "sync_answer"),
+    [
+        (False, None, False, ""),
+        (False, None, True, ""),
+        (True, None, False, ""),
+        (True, True, False, ""),
+        (True, False, False, ""),
+        (False, None, False, "y"),
+        (True, None, False, "n"),
+        (True, False, False, "y"),
+    ],
+)
 def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected_eso: bool,
+    sync_enabled: bool | None,
+    with_wireguard: bool,
+    sync_answer: str,
 ) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    created = _create_non_interactive(deployments_root, "--infra", "mk8s")
+    created = _create_non_interactive(
+        deployments_root, "--infra", "mk8s", "--app", "external-secrets" if selected_eso else "none"
+    )
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
@@ -6998,6 +7122,28 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     components = payload["infra"]["components"]
     mk8s = next(row for row in components if row["id"] == "mk8s")
     mk8s["instance_id"] = "cluster1"
+    mk8s.pop("secrets", None)
+    if sync_enabled is not None:
+        mk8s["secrets"] = {"mysterybox": {"enabled": sync_enabled}}
+        if sync_enabled:
+            mk8s["secrets"]["mysterybox"]["sync_namespaces"] = ["default"]
+            components.append(
+                {
+                    "id": "mysterybox",
+                    "instance_id": "existing-secrets",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-456",
+                        "secrets": [
+                            {
+                                "name": "existing",
+                                "version_id": "mbsecver-existing",
+                                "payload": {"KEY": {"type": "text"}},
+                            }
+                        ],
+                    },
+                }
+            )
     mk8s_inputs = mk8s.setdefault("inputs", {})
     mk8s_inputs.update(
         {
@@ -7005,23 +7151,72 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
             "node_groups": {
                 "worker": {
                     "node_count": 1,
-                    "gpu": True,
-                    "platform": "gpu-h100-sxm",
-                    "preset": "8gpu-128vcpu-1600gb",
-                    "gpu_cluster_key": "workers",
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "4vcpu-16gb",
                 }
             },
-            "gpu_clusters": {"workers": {"infiniband_fabric": "fabric-6"}},
         }
     )
     for chart in payload.get("apps", {}).get("charts", []):
         if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
             chart["instance_id"] = "cluster1"
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == "mk8s":
             target["instance_id"] = "cluster1"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
+    secret_type = "list(object({ name = string payload = map(object({ type = string })) }))"
+    monkeypatch.setattr(
+        cli_module,
+        "module_variables",
+        lambda source: (
+            (
+                SimpleNamespace(
+                    name="secrets",
+                    required=True,
+                    type_hint=secret_type,
+                    has_default=False,
+                    default=None,
+                ),
+            )
+            if "mysterybox" in source
+            else ()
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "module_required_variables",
+        lambda source: ("secrets",) if "mysterybox" in source else (),
+    )
+    if with_wireguard:
+        resolve_choices = cli_module._resolve_dynamic_field_choices
+
+        def wireguard_choices(**kwargs):
+            if kwargs["full_path_label"].endswith(".access.admin_group_id"):
+                return [cli_module.OptionChoice(value="group-admins", label="Admin group")]
+            if kwargs["full_path_label"].endswith(".inputs.platform"):
+                return [cli_module.OptionChoice(value="cpu-d3", label="CPU")]
+            if kwargs["full_path_label"].endswith(".inputs.preset"):
+                return [cli_module.OptionChoice(value="4vcpu-16gb", label="CPU preset")]
+            return resolve_choices(**kwargs)
+
+        monkeypatch.setattr(cli_module, "_resolve_dynamic_field_choices", wireguard_choices)
+        prompt = cli_module.typer.prompt
+
+        def wireguard_prompt(message, **kwargs):
+            if message.startswith("infra.components[2]."):
+                return kwargs.get("default", "")
+            return prompt(message, **kwargs)
+
+        monkeypatch.setattr(cli_module.typer, "prompt", wireguard_prompt)
+        monkeypatch.setattr(
+            "nebius_cxcli.wizard_defaults.prompt_wireguard_input",
+            lambda _field, current, *_args: (current, False),
+        )
+    syncing = sync_answer == "y" or (
+        sync_answer == "" and selected_eso and sync_enabled is not False
+    )
     secrets = [
         {
             "name": "app-runtime",
@@ -7034,12 +7229,30 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     ]
     result = _component_add(
         config_path,
-        "mysterybox",
-        input_text="y\ny\n\n" + json.dumps(secrets) + "\n\nn\n",
+        "mysterybox@mysterybox" if sync_enabled else "mysterybox",
+        *(["wireguard-gw"] if with_wireguard else []),
+        input_text=(
+            ("wg\n" if with_wireguard else "")
+            + "y\ny\n"
+            + sync_answer
+            + "\n"
+            + ("y\n" if syncing and not selected_eso else "")
+            + ("\n" if syncing else "")
+            + "app-runtime\n"
+            + ("\n\n" if syncing else "")
+            + "message\n\ncolor\n\n\n\n\nn\n"
+        ),
     )
 
     assert result.exit_code == 0, result.output
-    assert "'apps:external-secrets@cluster1'" in result.output
+    assert "Sync SecretBox secrets to Kubernetes secrets using ESO?" in result.output
+    assert result.output.index("Sync SecretBox secrets") < result.output.index(
+        "MysteryBox Secret name"
+    )
+    assert "Invalid value" not in result.output
+    assert ("Kubernetes Secret name for app-runtime" in result.output) is syncing
+    assert ("ESO version policy for app-runtime" in result.output) is syncing
+    assert ("configured to sync" in result.output) is syncing
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     infra_ids = {
         row["id"]
@@ -7047,12 +7260,31 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
         if isinstance(row, dict)
     }
     assert {"mk8s", "mysterybox"} <= infra_ids
-    external_secrets = next(
-        row
+    assert any(
+        row.get("id") == "external-secrets" and row.get("enabled")
         for row in refreshed.get("apps", {}).get("charts", [])
-        if isinstance(row, dict) and row.get("id") == "external-secrets"
+    ) is (selected_eso or syncing)
+    if syncing:
+        secrets[0].update(
+            kubernetes_secret_name="app-runtime", eso_version_policy="auto-primary-version-pinning"
+        )
+    mysterybox = next(
+        row for row in refreshed["infra"]["components"] if row["instance_id"] == "mysterybox"
     )
-    assert external_secrets["instance_id"] == "cluster1"
+    assert mysterybox["inputs"]["secrets"] == secrets
+    if with_wireguard:
+        assert "wireguard-gw" in infra_ids
+        assert any(
+            row["id"] == "mysterybox" and row["inputs"].get("create_initial_versions") is False
+            for row in refreshed["infra"]["components"]
+        )
+    assert cluster_rows(refreshed)[0]["secrets"]["mysterybox"]["enabled"] is syncing
+    if syncing:
+        assert cluster_rows(refreshed)[0]["secrets"]["mysterybox"]["sync_namespaces"] == ["default"]
+    if syncing and not selected_eso:
+        assert "--- Apps wizard section ---" in result.output
+        assert "Added apps components:" in result.output
+        assert "external-secrets@cluster1" in result.output.split("Added apps components:")[-1]
 
 
 def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_values(
@@ -7273,7 +7505,7 @@ def test_component_add_wizard_prompts_for_chart_version_before_full_app_config(
     result = _component_add(config_path, "n8n")
 
     assert result.exit_code == 0, result.output
-    assert prompted_paths == ["apps.charts[0].version"]
+    assert prompted_paths == ["apps.charts[1].version"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
@@ -8252,7 +8484,18 @@ def test_reconcile_observability_gpu_node_labels_uses_catalog_policy(
     monkeypatch.setattr(cli_module.kubernetes_process, "run", fake_run)
 
     cli_module._reconcile_observability_gpu_node_labels(
-        {"deploy": {"observability": {"enabled": True}}},
+        {
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "observability": {"enabled": True},
+                    }
+                ]
+            }
+        },
         extra_env={"KUBECONFIG": "/tmp/kubeconfig", "NEBIUS_IAM_TOKEN": "token-123"},
     )
 
@@ -8294,7 +8537,18 @@ def test_reconcile_observability_gpu_node_labels_noops_without_enabled_policy(
     )
 
     cli_module._reconcile_observability_gpu_node_labels(
-        {"deploy": {"observability": {"enabled": False}}},
+        {
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "observability": {"enabled": False},
+                    }
+                ]
+            }
+        },
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
     )
 
@@ -8499,6 +8753,16 @@ def test_soperator_create_real_creation_preserves_fields_and_frozen_release(
         for role in reused_roles:
             sfs["inputs"]["filesystems"][role]["existing_id"] = f"filesystem-{role}"
         if notifier:
+            target_ref = cluster_rows(payload)[0]["instance_id"]
+            payload["apps"]["charts"].append(
+                {
+                    "id": "external-secrets",
+                    "instance_id": target_ref,
+                    "target_ref": target_ref,
+                    "enabled": True,
+                    "values": {},
+                }
+            )
             row["values"]["soperator-notifier"].update(
                 enabled=True,
                 slack={
@@ -8869,7 +9133,9 @@ def test_install_sfs_cancellation_does_not_publish_complete_defaults(monkeypatch
     )
 
 
-def test_install_preserves_required_eso_from_upstream_notifier_configuration(monkeypatch, tmp_path):
+def test_install_preserves_user_selected_eso_for_upstream_notifier_configuration(
+    monkeypatch, tmp_path
+):
     test_soperator_create_real_creation_preserves_fields_and_frozen_release(
         monkeypatch, tmp_path, "cpu", False, True, notifier=True
     )
@@ -9213,7 +9479,10 @@ def test_soperator_real_component_add_remove_preserves_accepted_infrastructure(
     # Adding Grafana may author new routing, but applying that needs full deployment.
     from nebius_cxcli.grafana_install import configure
 
-    payload["deploy"] = configure(payload, target)["deploy"]
+    configured = configure(payload, target)
+    require_cluster_row(payload, target)["observability"] = require_cluster_row(configured, target)[
+        "observability"
+    ]
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False))
     paths.infra_dir.mkdir(parents=True, exist_ok=True)
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -9245,7 +9514,7 @@ def test_soperator_real_component_add_remove_preserves_accepted_infrastructure(
     assert removed.exit_code == 0, removed.output
     saved = yaml.safe_load(config_path.read_text())
     # Removing the standalone agent preserves accepted native collector routing.
-    assert saved["deploy"]["targets"][0]["observability"]["enabled"] is True
+    assert cluster_rows(saved)[0]["observability"]["enabled"] is True
     assert ordinary_apps.protected_config_digest(saved) == protected
 
     rendered_payloads = []
@@ -9345,8 +9614,9 @@ def test_ordinary_component_filter_preserves_exact_protected_soperator_row():
             "components": [{"id": "mk8s", "instance_id": "example", "enabled": True, "inputs": {}}]
         },
         "apps": {"charts": [protected, {"id": "unknown", "enabled": True}]},
+        "version": "v2",
     }
-    payload["deploy"] = {"targets": [{"id": "mk8s", "instance_id": "example", "enabled": True}]}
+    require_cluster_row(payload, "example").update({"id": "mk8s", "enabled": True})
     result = cli_module._filter_runtime_payload_for_selected_components(
         payload=payload,
         selected_infra={"mk8s"},

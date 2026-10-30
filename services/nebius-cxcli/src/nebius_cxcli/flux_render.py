@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from . import kubernetes_process
+from .cluster_config import cluster_rows, soperator_row
 from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
@@ -78,7 +79,6 @@ from .soperator_flux_graph import (
 )
 from .soperator_registration import (
     soperator_registration_is_accepted,
-    soperator_registration_target,
 )
 from .soperator_release import (
     SOPERATOR_UPSTREAM_UMBRELLA_CHART,
@@ -644,8 +644,7 @@ def _soperator_target_cluster_id(
     target_ref: str,
     resolved_component_outputs: Mapping[str, Any],
 ) -> str:
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if isinstance(targets, list):
         for row in targets:
             if not isinstance(row, Mapping):
@@ -784,8 +783,7 @@ def _registered_source_release_is_handoff(
     target_ref: str,
     release: str,
 ) -> bool:
-    target = soperator_registration_target(payload, target_ref=target_ref)
-    registration = target.get("soperator_registration") if isinstance(target, Mapping) else None
+    registration = (soperator_row(payload, target_ref) or {}).get("registration")
     return bool(
         isinstance(registration, Mapping)
         and str(registration.get("source_version") or "").strip() == release
@@ -1243,6 +1241,18 @@ def _configured_app_release_specs(
             release["depends_on"] = depends_on
         patches = list(release.get("post_render_patches") or [])
         patches.extend(post_render_patch_map.get((target_ref, entry_id)) or ())
+        from .observability_collectors import COLLECTORS, inactive_patches, owned_signals
+        from .observability_routing import collector_owners, target_settings
+
+        if (
+            entry_id in COLLECTORS
+            and target_ref not in soperator_target_refs(payload)
+            and target_settings(payload, target_ref)
+        ):
+            signals = owned_signals(entry_id, collector_owners(payload, target_ref))
+            release["telemetry_signals"] = ",".join(signals)
+            if not signals:
+                patches.extend(inactive_patches(entry_id))
         if entry_id == database_component_id():
             patches.append(database_readiness_patch(str(release["release_name"])))
         from .nsight import APP_TOOLS, validate_viewer_values, viewer_patches
@@ -1718,11 +1728,22 @@ def _render_flux_app_helm_releases(
                     if is_soperator
                     else None
                 ),
-                annotations=(
-                    {"cxcli.nebius.com/app-owner": release["grafana_owner"]}
-                    if release.get("grafana_owner")
-                    else None
-                ),
+                annotations={
+                    **(
+                        {"cxcli.nebius.com/app-owner": release["grafana_owner"]}
+                        if release.get("grafana_owner")
+                        else {}
+                    ),
+                    **(
+                        {
+                            "cxcli.nebius.com/telemetry-signals": release["telemetry_signals"],
+                            "cxcli.nebius.com/telemetry-component": release["entry_id"],
+                        }
+                        if "telemetry_signals" in release
+                        else {}
+                    ),
+                }
+                or None,
             ),
         )
 
@@ -2161,6 +2182,43 @@ def _render_post_flux_mysterybox_eso_resources(
     state.write_post_flux_docs(Path("post-flux-mysterybox-eso.yaml"), objects)
 
 
+def _render_observability_trace_service(state: _FluxRenderState, config: Any, target: str) -> None:
+    from .observability_intent import TRACE_SERVICE_NAME, TRACE_SERVICE_NAMESPACE, trace_receiver
+    from .observability_routing import target_settings
+
+    payload = to_plain_data(config)
+    if target in soperator_target_refs(config):
+        return
+    routing = target_settings(payload, target)
+    if not routing:
+        return
+    state.ensure_namespace(TRACE_SERVICE_NAMESPACE)
+    from .observability_routing import effective_signals
+
+    if "traces" not in effective_signals(payload, target):
+        return
+    owner = hashlib.sha256(
+        json.dumps([payload.get("client_info", {}), target], sort_keys=True).encode()
+    ).hexdigest()
+    state.write_doc(
+        Path("service-cxcli-otlp.yaml"),
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": TRACE_SERVICE_NAME,
+                "namespace": TRACE_SERVICE_NAMESPACE,
+                "annotations": {"cxcli.nebius.com/app-owner": owner},
+            },
+            "spec": {
+                "type": "ExternalName",
+                "externalName": trace_receiver(payload, target),
+                "ports": [{"name": "otlp-grpc", "port": 4317, "protocol": "TCP"}],
+            },
+        },
+    )
+
+
 def render_flux(
     config: Any,
     paths: ProjectPaths,
@@ -2221,6 +2279,7 @@ def render_flux(
                     scope="ordinary",
                     component_output_values=component_output_values,
                 )
+                _render_observability_trace_service(ordinary_state, config, target_ref)
                 _finalize_flux_render_state(ordinary_state)
                 owner = hashlib.sha256(
                     json.dumps(
@@ -2262,6 +2321,8 @@ def render_flux(
                     scope="protected" if split_target else "all",
                     component_output_values=component_output_values,
                 )
+            if not split_target:
+                _render_observability_trace_service(state, config, target_ref)
             _finalize_flux_render_state(state)
             written.extend(state.files)
         return written

@@ -88,7 +88,7 @@ def test_actual_admission_render_replays_completed_publication_across_midnight(
     tmp_path, monkeypatch
 ):
     paths = resolve_project_paths(tmp_path / "config.yaml")
-    paths.config_path.write_text("{}\n")
+    paths.config_path.write_text("version: v2\n")
     monkeypatch.setattr(cli, "validate_config", lambda *a, **kw: {})
     for name in (
         "_materialize_soperator_component_defaults",
@@ -116,8 +116,14 @@ def test_actual_admission_render_replays_completed_publication_across_midnight(
             json.dumps(
                 {
                     "schema": GENERATED_MANIFEST_SCHEMA,
-                    "execution": {"backend": {}},
-                    "runtime_config": {},
+                    "execution": {
+                        "backend": {},
+                        "targets": [],
+                        "required_component_outputs": [],
+                        "status_watchers": [],
+                        "validations": [],
+                    },
+                    "runtime_config": {"version": "v2"},
                     "render": {"compatibility": frozen(date(2026, 9, day[0]))},
                 }
             )
@@ -125,7 +131,10 @@ def test_actual_admission_render_replays_completed_publication_across_midnight(
 
     monkeypatch.setattr(cli, "_write_generated_runtime_manifest", write_manifest)
     args = dict(
-        source_payload={}, config_path=paths.config_path, paths=paths, require_soperator_flux=False
+        source_payload={"version": "v2"},
+        config_path=paths.config_path,
+        paths=paths,
+        require_soperator_flux=False,
     )
     first = cli._render_soperator_upgrade_admission(**args)
     try:

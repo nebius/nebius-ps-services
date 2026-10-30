@@ -39,7 +39,7 @@ def prepare_recovered_application_metadata(
     )
     roots = {
         row["target_ref"]: _safe_relative(row["flux_dir"]).as_posix() + "/"
-        for row in authored.manifest.get("deploy", {}).get("targets", [])
+        for row in authored.manifest.get("execution", {}).get("targets", [])
     }
     changed = {
         name

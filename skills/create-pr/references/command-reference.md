@@ -40,8 +40,7 @@ checks, or PR creation.
   - `git merge-tree --write-tree origin/<base> HEAD`
   - private `sync`, review/check its actual tree, then `sync --reviewed-tree <tree>`
   - rerun focused validation after the merge
-  - new remote branch: `git push -u origin HEAD:<branch>`
-  - existing remote branch: `git push origin HEAD:<branch>`
+  - new or existing branch: the owner's [private publish-target](pr-publication.md)
 
 ## Current Feature Branch Path
 
@@ -57,8 +56,7 @@ checks, or PR creation.
   - `git merge-tree --write-tree origin/<base> HEAD`
   - private `sync`, review/check its actual tree, then `sync --reviewed-tree <tree>`
   - rerun focused validation after merge
-  - new remote branch: `git push -u origin HEAD:<branch>`
-  - existing remote branch: `git push origin HEAD:<branch>`
+  - new or existing branch: the owner's [private publish-target](pr-publication.md)
   - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
 
 ## Ordered Merge Simulation

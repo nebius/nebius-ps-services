@@ -81,9 +81,9 @@ def test_applied_config_generation_recovers_after_receipt_write_interruption(
     config = project / "config.yaml"
     manifest = project / "generated" / "manifest.json"
     manifest.parent.mkdir(parents=True)
-    config.write_bytes(b"old\n")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     manifest.write_bytes(b'{"generation":"old"}\n')
-    plan = _plan(project, new=b"new\n")
+    plan = _plan(project, new=b"version: v2\ncompatibility: {fixture: new}\n")
     paths = _paths(project)
     store = _Store(fail_first_applied_record=True)
 
@@ -99,7 +99,7 @@ def test_applied_config_generation_recovers_after_receipt_write_interruption(
             current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
         )
 
-    assert config.read_bytes() == b"new\n"
+    assert config.read_bytes() == b"version: v2\ncompatibility: {fixture: new}\n"
     assert store.transitions["stage-a"].status == "planned"
     recovered = apply_project_generation_transition(
         project_dir=project,
@@ -122,11 +122,11 @@ def test_runtime_changes_after_commit_require_a_durable_applied_receipt(
 ) -> None:
     paths = _paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
-    paths.config_path.write_bytes(b"old\n")
+    paths.config_path.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     runtime = paths.infra_dir / ".terraform" / "terraform.tfstate"
     runtime.parent.mkdir()
     runtime.write_bytes(b"old runtime\n")
-    plan = _plan(tmp_path, new=b"new\n")
+    plan = _plan(tmp_path, new=b"version: v2\ncompatibility: {fixture: new}\n")
     # Model a completed generation that previously included a runtime tombstone.
     plan = replace(
         plan,
@@ -159,7 +159,7 @@ def test_runtime_changes_after_commit_require_a_durable_applied_receipt(
     def assert_current():
         assert_config_authority_current(
             tuple(store.transitions.values()),
-            initial_config_sha256=_digest(b"old\n"),
+            initial_config_sha256=_digest(b"version: v2\ncompatibility: {fixture: old}\n"),
             initial_project_snapshot_sha256="sha256:" + "a" * 64,
             current_config_sha256=file_sha256(paths.config_path),
             current_project_snapshot_sha256=project_generation_snapshot_sha256(paths),
@@ -184,9 +184,9 @@ def test_config_authority_rejects_a_foreign_postimage(tmp_path: Path) -> None:
     config = project / "config.yaml"
     manifest = project / "generated" / "manifest.json"
     manifest.parent.mkdir(parents=True)
-    config.write_bytes(b"old\n")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     manifest.write_bytes(b'{"generation":"old"}\n')
-    initial = _digest(b"old\n")
+    initial = _digest(b"version: v2\ncompatibility: {fixture: old}\n")
     paths = _paths(project)
     initial_snapshot = project_generation_snapshot_sha256(paths)
     store = _Store()
@@ -196,7 +196,7 @@ def test_config_authority_rejects_a_foreign_postimage(tmp_path: Path) -> None:
         owner="test-operation",
         stage="stage-a",
         store=store,
-        build_plan=lambda: _plan(project, new=b"new\n"),
+        build_plan=lambda: _plan(project, new=b"version: v2\ncompatibility: {fixture: new}\n"),
         assert_authority=lambda: None,
         current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
     )
@@ -220,7 +220,7 @@ def test_config_authority_rejects_foreign_generated_project_drift(tmp_path: Path
     config = project / "config.yaml"
     manifest = project / "generated" / "manifest.json"
     manifest.parent.mkdir(parents=True)
-    config.write_bytes(b"old\n")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     manifest.write_bytes(b'{"generation":"old"}\n')
     paths = _paths(project)
     initial_snapshot = project_generation_snapshot_sha256(paths)
@@ -231,7 +231,7 @@ def test_config_authority_rejects_foreign_generated_project_drift(tmp_path: Path
         owner="test-operation",
         stage="stage-a",
         store=store,
-        build_plan=lambda: _plan(project, new=b"new\n"),
+        build_plan=lambda: _plan(project, new=b"version: v2\ncompatibility: {fixture: new}\n"),
         assert_authority=lambda: None,
         current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
     )
@@ -240,7 +240,7 @@ def test_config_authority_rejects_foreign_generated_project_drift(tmp_path: Path
     with pytest.raises(SoperatorSafetyPauseError, match="generated project state"):
         assert_config_authority_current(
             tuple(store.transitions.values()),
-            initial_config_sha256=_digest(b"old\n"),
+            initial_config_sha256=_digest(b"version: v2\ncompatibility: {fixture: old}\n"),
             initial_project_snapshot_sha256=initial_snapshot,
             current_config_sha256=file_sha256(config),
             current_project_snapshot_sha256=project_generation_snapshot_sha256(paths),
@@ -384,8 +384,8 @@ def test_applied_transition_rejects_generated_mismatch_and_config_rollback(
     config = project / "config.yaml"
     manifest = project / "generated" / "manifest.json"
     manifest.parent.mkdir(parents=True)
-    config.write_bytes(b"old\n")
-    manifest.write_bytes(b"old\n")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
+    manifest.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     paths = _paths(project)
     store = _Store()
     apply_project_generation_transition(
@@ -394,7 +394,7 @@ def test_applied_transition_rejects_generated_mismatch_and_config_rollback(
         owner="test",
         stage="stage-a",
         store=store,
-        build_plan=lambda: _plan(project, new=b"new\n"),
+        build_plan=lambda: _plan(project, new=b"version: v2\ncompatibility: {fixture: new}\n"),
         assert_authority=lambda: None,
         current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
     )
@@ -411,7 +411,7 @@ def test_applied_transition_rejects_generated_mismatch_and_config_rollback(
             current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
         )
 
-    config.write_bytes(b"old\n")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     with pytest.raises(SoperatorSafetyPauseError, match="rolled back"):
         apply_project_generation_transition(
             project_dir=project,
@@ -432,8 +432,8 @@ def test_planned_transition_rejects_replanning_and_missing_config_ownership(
     config = project / "config.yaml"
     manifest = project / "generated" / "manifest.json"
     manifest.parent.mkdir(parents=True)
-    config.write_bytes(b"old\n")
-    manifest.write_bytes(b"old\n")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
+    manifest.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     paths = _paths(project)
     store = _Store()
 
@@ -444,7 +444,7 @@ def test_planned_transition_rejects_replanning_and_missing_config_ownership(
             owner="test",
             stage="stage-a",
             store=store,
-            build_plan=lambda: _plan(project, new=b"new\n"),
+            build_plan=lambda: _plan(project, new=b"version: v2\ncompatibility: {fixture: new}\n"),
             assert_authority=lambda: (_ for _ in ()).throw(RuntimeError("pause before commit")),
             current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
         )
@@ -462,10 +462,12 @@ def test_planned_transition_rejects_replanning_and_missing_config_ownership(
 
     empty_store = _Store()
     bad_plan = ProjectGenerationPlan(
-        writes={manifest.resolve(): b"new\n"},
+        writes={manifest.resolve(): b"version: v2\ncompatibility: {fixture: new}\n"},
         removals=(),
         sha256="sha256:" + "b" * 64,
-        expected_preimages={manifest.resolve(): _digest(b"old\n")},
+        expected_preimages={
+            manifest.resolve(): _digest(b"version: v2\ncompatibility: {fixture: old}\n")
+        },
         preimage_sha256="sha256:" + "c" * 64,
     )
     with pytest.raises(SoperatorSafetyPauseError, match="does not own config.yaml"):

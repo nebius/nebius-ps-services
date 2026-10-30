@@ -19,7 +19,20 @@ from test_observability_routing import payload
 
 
 def generation(data, files=None):
-    return DeploymentGeneration({"runtime_config": to_runtime_payload(data)}, files or {})
+    return DeploymentGeneration(
+        {
+            "runtime_config": to_runtime_payload(data),
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        files or {},
+    )
 
 
 def encoded(document):

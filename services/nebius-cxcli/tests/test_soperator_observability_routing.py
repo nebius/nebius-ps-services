@@ -47,6 +47,10 @@ def test_real_frozen_native_templates_have_exact_destinations(tmp_path, monkeypa
     data = grafana_install.configure(
         data, "cluster", overrides={"metrics_storage": mode, "logs_storage": mode}
     )
+    gateway = next(row for row in data["apps"]["charts"] if row["id"] == "opentelemetry-collector")
+    preview = "\n".join(grafana_install.summary(data, "cluster"))
+    assert f"{gateway['release-name']}.{gateway['namespace']}.svc.cluster.local:4317" in preview
+    assert "cxcli-otlp" not in preview
     values = yaml.safe_load((source / "helm/soperator-fluxcd/values.yaml").read_text())
     values["notifier"]["enabled"] = False
     bind_routing(data, "cluster", values)

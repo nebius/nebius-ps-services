@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
 import yaml
 
@@ -17,10 +19,10 @@ from nebius_cxcli.cli import (
     _skip_sfs_single_filesystem_prompt,
     _skip_soperator_child_chart_prompt,
     _skip_soperator_managed_mk8s_prompt,
-    _skip_soperator_profile_owned_prompt,
     _wizard_field_prompt_enabled,
     _wizard_field_write_default_to_config,
 )
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.component_sources import ComponentDefault
 from nebius_cxcli.components import ComponentEntry
 
@@ -56,13 +58,13 @@ def _mk8s_observability_wizard_entry() -> ComponentEntry:
         description="mk8s",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].observability.enabled": {"default": False},
-            "deploy.targets[].observability.kubernetes.logs.enabled": {"default": True},
-            "deploy.targets[].observability.kubernetes.metrics.enabled": {"default": True},
-            "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
+            "infra.components[].observability.enabled": {"default": False},
+            "infra.components[].observability.kubernetes.logs.enabled": {"default": True},
+            "infra.components[].observability.kubernetes.metrics.enabled": {"default": True},
+            "infra.components[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
                 "default": True,
             },
-            "deploy.targets[].observability.kubernetes.traces.enabled": {"default": True},
+            "infra.components[].observability.kubernetes.traces.enabled": {"default": True},
             "inputs.cluster.public_endpoint": {"default": True},
         },
     )
@@ -129,7 +131,7 @@ def _gateway_entry() -> ComponentEntry:
 
 def _mk8s_observability_payload() -> dict[str, object]:
     return {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -146,28 +148,18 @@ def _mk8s_observability_payload() -> dict[str, object]:
                     "instance_id": "mk8s",
                     "enabled": True,
                     "inputs": {},
-                }
-            ]
-        },
-        "apps": {"charts": []},
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "mk8s",
                     "observability": {
                         "enabled": False,
                         "kubernetes": {
                             "logs": {"enabled": True},
-                            "metrics": {
-                                "enabled": True,
-                                "collect_k8s_cluster_metrics": True,
-                            },
+                            "metrics": {"enabled": True, "collect_k8s_cluster_metrics": True},
                             "traces": {"enabled": True},
                         },
                     },
-                },
-            ],
+                }
+            ]
         },
+        "apps": {"charts": []},
     }
 
 
@@ -404,6 +396,7 @@ def test_soperator_target_prompts_cxcli_workload_gpu_validations() -> None:
                     "instance_id": "cluster1",
                     "enabled": True,
                     "inputs": {"node_groups": {"worker": {"gpu": True}}},
+                    "deployment_testing": {"mk8s_gpu": {}},
                 }
             ]
         },
@@ -417,28 +410,24 @@ def test_soperator_target_prompts_cxcli_workload_gpu_validations() -> None:
                 }
             ]
         },
-        "deploy": {
-            "targets": [{"instance_id": "cluster1", "deployment_testing": {"mk8s_gpu": {}}}]
-        },
+        "version": "v2",
     }
 
     assert not _skip_mk8s_gpu_deployment_testing_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled",
+        full_path_label="infra.components[0].deployment_testing.mk8s_gpu.operator_readiness.enabled",
     )
     assert not _skip_mk8s_gpu_deployment_testing_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled",
+        full_path_label="infra.components[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled",
     )
-    payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]["gpu_visibility"] = {
-        "enabled": True
-    }
+    cluster_rows(payload)[0]["deployment_testing"]["mk8s_gpu"]["gpu_visibility"] = {"enabled": True}
     assert not _skip_mk8s_gpu_deployment_testing_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes",
+        full_path_label="infra.components[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes",
     )
 
 
@@ -449,22 +438,25 @@ def test_mk8s_gpu_deployment_testing_max_nodes_required_only_when_section_enable
         config_path="infra.mk8s",
         description="mk8s",
     )
-    label = "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
+    label = "infra.components[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
     payload = {
-        "deploy": {
-            "targets": [
+        "infra": {
+            "components": [
                 {
+                    "id": "mk8s",
                     "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
                     "deployment_testing": {"mk8s_gpu": {"gpu_visibility": {"enabled": True}}},
                 }
             ]
-        }
+        },
+        "apps": {"charts": []},
+        "version": "v2",
     }
 
     assert _dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
-    payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]["gpu_visibility"][
-        "enabled"
-    ] = False
+    cluster_rows(payload)[0]["deployment_testing"]["mk8s_gpu"]["gpu_visibility"]["enabled"] = False
     assert not _dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
     assert _skip_mk8s_gpu_deployment_testing_prompt(
         payload={
@@ -480,6 +472,7 @@ def test_mk8s_gpu_deployment_testing_max_nodes_required_only_when_section_enable
             },
             "apps": {"charts": []},
             **payload,
+            "version": "v2",
         },
         entry=entry,
         full_path_label=label,
@@ -489,21 +482,21 @@ def test_mk8s_gpu_deployment_testing_max_nodes_required_only_when_section_enable
 def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> None:
     required = {"cluster_name", "network_id", "subnet_id", "k8s_version"}
     required_prompts = {
-        "deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled",
+        "infra.components[0].deployment_testing.mk8s_gpu.operator_readiness.enabled",
     }
 
     assert _prompt_path_sort_key(
         ("infra", "components", 0, "inputs", "cluster", "k8s_version"),
         required_leaf_names=required,
     ) < _prompt_path_sort_key(
-        ("deploy", "targets", 0, "observability", "enabled"),
+        ("infra", "components", 0, "observability", "enabled"),
         required_leaf_names=required,
     )
     assert _prompt_path_sort_key(
         ("infra", "components", 0, "inputs", "node_groups", "system", "boot_disk", "type"),
         required_leaf_names=required,
     ) < _prompt_path_sort_key(
-        ("deploy", "targets", 0, "observability", "kubernetes", "metrics", "enabled"),
+        ("infra", "components", 0, "observability", "kubernetes", "metrics", "enabled"),
         required_leaf_names=required,
     )
     assert _prompt_path_sort_key(
@@ -520,8 +513,8 @@ def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> No
         required_prompt_labels=required_prompts,
     ) < _prompt_path_sort_key(
         (
-            "deploy",
-            "targets",
+            "infra",
+            "components",
             0,
             "deployment_testing",
             "mk8s_gpu",
@@ -537,8 +530,8 @@ def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> No
         required_prompt_labels=required_prompts,
     ) < _prompt_path_sort_key(
         (
-            "deploy",
-            "targets",
+            "infra",
+            "components",
             0,
             "deployment_testing",
             "mk8s_gpu",
@@ -576,7 +569,7 @@ def test_mk8s_k8s_version_sorts_before_public_endpoint_and_platform() -> None:
 def test_run_component_field_wizard_can_skip_preselected_soperator_profile(monkeypatch) -> None:
     prompted_paths: list[str] = []
     payload = {
-        "version": "v1",
+        "version": "v2",
         "infra": {"components": []},
         "apps": {
             "charts": [
@@ -654,6 +647,7 @@ def test_soperator_fabric_fallback_only_prompts_for_an_unresolved_gpu_cluster() 
                 }
             ]
         },
+        "version": "v2",
     }
     path = "infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric"
     assert not _skip_soperator_managed_mk8s_prompt(
@@ -680,25 +674,14 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
     )
     payload = {
         "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {},
-                }
-            ]
+            "components": [{"id": "mk8s", "instance_id": "cluster1", "enabled": True, "inputs": {}}]
         },
         "apps": {
             "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {},
-                }
+                {"id": "soperator", "instance_id": "cluster1", "enabled": True, "values": {}}
             ]
         },
+        "version": "v2",
     }
 
     assert _skip_soperator_managed_mk8s_prompt(
@@ -962,88 +945,6 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         full_path_label=(
             "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
         ),
-    )
-
-    payload["deploy"] = {
-        "targets": [
-            {
-                "instance_id": "cluster1",
-                "kind": "external-mk8s",
-                "ownership": "external",
-            }
-        ]
-    }
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label=(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled"
-        ),
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.soperator.worker_ephemeral_nodes.enabled",
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.soperator.worker_gpu_total_nodes",
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.soperator.system_node_count",
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label=(
-            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu.autoscaling.enabled"
-        ),
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.platform",
-    )
-    app_entry = ComponentEntry(
-        id="soperator",
-        scope="apps",
-        config_path="apps.slurm.soperator",
-        description="soperator",
-    )
-    assert _skip_soperator_profile_owned_prompt(
-        payload=payload,
-        entry=app_entry,
-        full_path_label="apps.charts[0].placements.worker",
-    )
-    payload["deploy"] = {"targets": []}
-    assert _skip_soperator_profile_owned_prompt(
-        payload=payload,
-        entry=app_entry,
-        full_path_label="apps.charts[0].placements.worker",
-    )
-    payload["apps"]["charts"] = []
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.soperator.worker_gpu_total_nodes",
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.soperator.system_node_count",
-    )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.platform",
-    )
-    assert not _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.node_groups.system.node_count",
     )
 
 
@@ -2390,16 +2291,14 @@ def test_prune_mk8s_node_group_defaults_for_non_soperator_target() -> None:
                             }
                         },
                         "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                            }
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "1gpu-16vcpu-200gb"}
                         },
                     },
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     entry = ComponentEntry(
         id="mk8s",
@@ -2423,10 +2322,7 @@ def test_keep_mk8s_node_group_defaults_for_soperator_target() -> None:
                     "enabled": True,
                     "inputs": {
                         "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                            }
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "8gpu-128vcpu-1600gb"}
                         }
                     },
                 }
@@ -2434,14 +2330,10 @@ def test_keep_mk8s_node_group_defaults_for_soperator_target() -> None:
         },
         "apps": {
             "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {},
-                }
+                {"id": "soperator", "instance_id": "cluster1", "enabled": True, "values": {}}
             ]
         },
+        "version": "v2",
     }
     entry = ComponentEntry(
         id="mk8s",
@@ -2465,14 +2357,8 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
                     "enabled": True,
                     "inputs": {
                         "node_group_defaults": {
-                            "cpu": {
-                                "platform": "cpu-d3",
-                                "preset": "32vcpu-128gb",
-                            },
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                            },
+                            "cpu": {"platform": "cpu-d3", "preset": "32vcpu-128gb"},
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "8gpu-128vcpu-1600gb"},
                         }
                     },
                 }
@@ -2489,6 +2375,7 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
                 }
             ]
         },
+        "version": "v2",
     }
     entry = ComponentEntry(
         id="mk8s",
@@ -2503,55 +2390,24 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
     assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "32vcpu-128gb"}}
 
 
-def test_prune_mk8s_node_group_defaults_for_registered_soperator_target() -> None:
+def test_prune_leaves_external_cluster_without_terraform_defaults() -> None:
     payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                }
-            ]
-        },
+        "version": "v2",
         "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "8gpu-128vcpu-1600gb",
-                            }
-                        }
-                    },
-                }
-            ]
+            "components": [],
+            "external_clusters": [
+                {"instance_id": "cluster1", "kube_context": "registered-context"}
+            ],
         },
         "apps": {
             "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {},
-                }
+                {"id": "soperator", "instance_id": "cluster1", "enabled": True, "values": {}}
             ]
         },
     }
-    entry = ComponentEntry(
-        id="mk8s",
-        scope="infra",
-        config_path="infra.mk8s",
-        description="mk8s",
-    )
-
-    _prune_mk8s_node_group_defaults_without_soperator(payload, infra_entries=(entry,))
-
-    assert "node_group_defaults" not in payload["infra"]["components"][0]["inputs"]
+    before = copy.deepcopy(payload)
+    _prune_mk8s_node_group_defaults_without_soperator(payload, infra_entries=())
+    assert payload == before
 
 
 def test_keep_mk8s_node_group_defaults_when_custom_module_declares_input(monkeypatch) -> None:
@@ -2564,16 +2420,14 @@ def test_keep_mk8s_node_group_defaults_when_custom_module_declares_input(monkeyp
                     "enabled": True,
                     "inputs": {
                         "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                            }
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "1gpu-16vcpu-200gb"}
                         }
                     },
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     entry = ComponentEntry(
         id="mk8s",
@@ -2605,16 +2459,14 @@ def test_keep_mk8s_node_group_defaults_when_module_introspection_fails(
                     "enabled": True,
                     "inputs": {
                         "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                            }
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "1gpu-16vcpu-200gb"}
                         }
                     },
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     entry = ComponentEntry(
         id="mk8s",
@@ -2645,16 +2497,14 @@ def test_keep_mk8s_node_group_defaults_when_catalog_seeds_helper() -> None:
                     "enabled": True,
                     "inputs": {
                         "node_group_defaults": {
-                            "gpu": {
-                                "platform": "gpu-h100-sxm",
-                                "preset": "1gpu-16vcpu-200gb",
-                            }
+                            "gpu": {"platform": "gpu-h100-sxm", "preset": "1gpu-16vcpu-200gb"}
                         }
                     },
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
     entry = ComponentEntry(
         id="mk8s",
@@ -2775,7 +2625,7 @@ def test_run_component_field_wizard_announces_observability_app_at_enable_prompt
 
     def _capture_prompt(path_label: str, current, **_kwargs):
         events.append(f"prompt:{path_label}")
-        if path_label == "deploy.targets[0].observability.enabled":
+        if path_label == "infra.components[0].observability.enabled":
             return True, False
         return current, False
 
@@ -2803,9 +2653,9 @@ def test_run_component_field_wizard_announces_observability_app_at_enable_prompt
     assert completed is True
     adjusted_index = next(index for index, event in enumerate(events) if event.startswith("print:"))
     assert events.index("prompt:infra.components[0].inputs.cluster.public_endpoint") < events.index(
-        "prompt:deploy.targets[0].observability.enabled"
+        "prompt:infra.components[0].observability.enabled"
     )
-    assert events.index("prompt:deploy.targets[0].observability.enabled") < adjusted_index
+    assert events.index("prompt:infra.components[0].observability.enabled") < adjusted_index
     assert adjusted_index < events.index("phase:Configure 'grafana on mk8s' component fields now?")
     assert "answering 'n' keeps the selected app defaults" in events[adjusted_index]
 
@@ -2840,7 +2690,7 @@ def test_run_component_field_wizard_defaults_observability_enabled_from_selected
         return label == "Configure 'mk8s' component fields now?"
 
     def _capture_prompt(path_label: str, current, **_kwargs):
-        if path_label == "deploy.targets[0].observability.enabled":
+        if path_label == "infra.components[0].observability.enabled":
             observed_defaults.append(current)
         return current, False
 
@@ -2862,7 +2712,7 @@ def test_run_component_field_wizard_defaults_observability_enabled_from_selected
     assert completed is True
     assert observed_defaults == [True]
     updated_payload = yaml.safe_load(updated_yaml)
-    assert updated_payload["deploy"]["targets"][0]["observability"]["enabled"] is True
+    assert cluster_rows(updated_payload)[0]["observability"]["enabled"] is True
 
 
 def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> None:
@@ -2951,7 +2801,7 @@ def test_run_component_field_wizard_previews_app_defaults_before_skip_prompt(
         ),
     )
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3005,8 +2855,8 @@ def test_run_component_field_wizard_removes_backtracked_observability_app(
 ) -> None:
     _local_observability_answers(monkeypatch)
     answers = {
-        "deploy.targets[0].observability.enabled": [True, False],
-        "deploy.targets[0].observability.kubernetes.logs.enabled": [cli_module._WIZARD_BACKTRACK],
+        "infra.components[0].observability.enabled": [True, False],
+        "infra.components[0].observability.kubernetes.logs.enabled": [cli_module._WIZARD_BACKTRACK],
     }
 
     def _answer_prompt(path_label: str, current, **_kwargs):
@@ -3038,9 +2888,9 @@ def test_run_component_field_wizard_removes_backtracked_observability_app(
 
     assert completed is True
     updated_payload = yaml.safe_load(updated_yaml)
-    assert updated_payload["deploy"]["targets"][0]["observability"]["enabled"] is False
+    assert cluster_rows(updated_payload)[0]["observability"]["enabled"] is False
     assert updated_payload["apps"]["charts"] == []
-    assert "routing" not in updated_payload["deploy"]["targets"][0]["observability"]
+    assert "routing" not in cluster_rows(updated_payload)[0]["observability"]
 
 
 @pytest.mark.parametrize("backtrack", [False, True])
@@ -3195,7 +3045,7 @@ def test_run_component_field_wizard_keeps_chart_defaults_virtual_on_stop(monkeyp
         default_release_name="envoy-gateway",
     )
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3269,7 +3119,7 @@ def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypat
     )
 
     infra_payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3292,7 +3142,7 @@ def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypat
         "apps": {"charts": []},
     }
     app_payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3354,8 +3204,7 @@ def test_mixed_target_wizard_announces_only_required_observability_targets(monke
     payload = _mk8s_observability_payload()
     payload["infra"]["components"].append(copy.deepcopy(payload["infra"]["components"][0]))
     payload["infra"]["components"][1]["instance_id"] = "sop"
-    payload["deploy"]["targets"].append(copy.deepcopy(payload["deploy"]["targets"][0]))
-    payload["deploy"]["targets"][1]["instance_id"] = "sop"
+    cluster_rows(payload)[1]["instance_id"] = "sop"
     payload["apps"]["charts"] = [
         {
             "id": "soperator",
@@ -3375,7 +3224,7 @@ def test_mixed_target_wizard_announces_only_required_observability_targets(monke
         return len(phases) <= 2
 
     def prompt(label, current, **_kwargs):
-        if label == "deploy.targets[0].observability.enabled":
+        if label == "infra.components[0].observability.enabled":
             return True, False
         return current, False
 
@@ -3405,7 +3254,7 @@ def test_mixed_target_wizard_announces_only_required_observability_targets(monke
     )
     assert {(row["id"], row["target_ref"]) for row in rows if row["id"] != "soperator"} == {
         ("grafana", "mk8s"),
-        ("postgresql", "mk8s"),
+        ("grafana-postgresql", "mk8s"),
         ("victoria-metrics-k8s-stack", "mk8s"),
         ("gateway-helm", "mk8s"),
         ("victoria-logs-single", "mk8s"),

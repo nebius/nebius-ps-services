@@ -36,11 +36,13 @@ Start a 60-second settlement window after the command returns (including an
 ambiguous error), or when first inspecting an already-merged/queued PR. Poll
 unsettled state every five seconds within this window. Do not reset it after a
 successful read. If merged state becomes known, start the independent
-10,800-second verification deadline then; result settlement consumes that budget too.
-For a release caller, use its checkpointed deadline through publish-release's
-private `verification-budget` action. Repeated helper calls, gate changes, repairs
+86,400-second verification deadline then; result settlement consumes that budget too.
+For a release caller, use its checkpointed deadline, even when shorter, through
+publish-release's private `verification-budget` action. Repeated helper calls, gate changes, repairs
 and CI reruns retain that deadline; only explicit release resume renews it. For
-standalone merge work, keep one fixed deadline for the explicitly requested attempt.
+standalone merge work, keep one fixed 24-hour deadline for the explicitly requested
+attempt. Only an explicit user continuation starts a new observation attempt;
+retain the original transaction and prior outcome when recording its new deadline.
 Budget sleeps and API calls against the absolute deadline and report progress at
 least once per minute. Timeout preserves the caller checkpoint and exact resume
 identity, leaving GitHub work running. The deployed completion workflow
@@ -48,7 +50,7 @@ separately reconciles retained intent receipts while the laptop is offline.
 
 ## Actions Broker Result Evidence
 
-For a merge carrying a `merge-intent/v1` receipt, use the installed completion
+For a merge carrying a `merge-intent/v2` receipt, use the installed completion
 helper with the trusted deployment policy and original broker run/attempt:
 
 ```text
@@ -146,7 +148,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
   matching PR identity; verify `isInMergeQueue` agrees. Read errors or
   contradictory fields are unverified, not proof of absence.
 - Observe externally queued PRs read-only within the merge phase's fixed
-  10,800-second deadline. Refresh immediately before reporting pending or timeout;
+  86,400-second deadline. Refresh immediately before reporting pending or timeout;
   queued is never complete for an ordinary completion or publication caller.
   While unmerged, destination and post-merge CI are `not applicable`, and branch
   deletion is deferred. Do not enqueue or requeue through this path.
@@ -182,7 +184,7 @@ configuration, provider identity, pagination, or visibility is incomplete,
 disclose the gap and do not claim complete CI success or `not configured`.
 An empty combined-status result can itself say `pending`; inspect its contexts.
 
-Refresh observations every 30 seconds, stopping at the absolute 10,800-second
+Refresh observations every 30 seconds, stopping at the absolute 86,400-second
 deadline. Expected workflows/contexts that have not appeared remain pending;
 an early empty response cannot establish absence. Select the latest attempt
 per workflow/app/check identity and latest status per context, without mixing
@@ -220,7 +222,9 @@ Keep deletion out of the initial merge/enqueue command. If explicitly requested,
 the grant, clean up only the PR's exact head branch after merged state and destination
 containment are verified. Re-read its repository/ref and require it still matches
 the guarded head before deleting; never delete the target/default/protected
-branch or another actor's newer work. Already absent means already deleted.
+branch or another actor's newer work. For forks, remote cleanup uses the bound
+head repository/ref and local cleanup uses its operation alias; never substitute
+origin or a same-named base branch. Already absent means already deleted.
 The remote deletion must atomically require the expected head SHA at mutation
 time; a prior read followed by unconditional API deletion is not safe. Git's
 fully specified `--force-with-lease=refs/heads/<head>:<guarded-sha>` with an exact

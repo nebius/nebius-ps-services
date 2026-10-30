@@ -243,7 +243,7 @@ def prepare_chart_upgrade(cli, source_payload, source_preimage, config, paths, m
         staged_manifest["render"]["chart_upgrade"] = {**evidence, "sha256": digest(evidence)}
         # Keep canonical locators when publishing; stage locators are execution-only.
         staged_manifest["paths"] = manifest["paths"]
-        staged_manifest["deploy"]["targets"] = manifest["deploy"]["targets"]
+        staged_manifest["execution"]["targets"] = manifest["execution"]["targets"]
         for path in stage.flux_dir.rglob("*"):
             if path.is_file():
                 writes[paths.flux_dir / path.relative_to(stage.flux_dir)] = path.read_bytes()

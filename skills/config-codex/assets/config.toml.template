@@ -23,6 +23,9 @@ sandbox_mode = "danger-full-access"
 web_search = "live"
 personality = "pragmatic"
 
+# Optional OS storage for native HTTP OAuth integrations; not the Tavily bridge:
+# mcp_oauth_credentials_store = "keyring"
+
 [features]
 shell_tool = true
 hooks = true
@@ -55,11 +58,6 @@ network_access = true
 # "{{CODEX_HOME}}/implement" without removing existing roots.
 writable_roots = ["{{CODEX_HOME}}/task-state"]
 
-[mcp_servers.context7]
-command = "npx"
-args = ["-y", "@upstash/context7-mcp@3.2.4"]
-env_vars = ["CONTEXT7_API_KEY"]
-
 [mcp_servers.playwright]
 command = "npx"
 args = ["-y", "@playwright/mcp@0.0.81", "--headless", "--browser", "chrome", "--isolated"]
@@ -83,9 +81,23 @@ bearer_token_env_var = "GITHUB_TOKEN"
 [mcp_servers.openaiDeveloperDocs]
 url = "https://developers.openai.com/mcp"
 
+[mcp_servers.nebiusDocs]
+url = "https://docs.nebius.com/mcp"
+
 # Add only the trusted project roots the user explicitly reviews.
 [projects."{{PROJECT_ROOT}}"]
 trust_level = "trusted"
 
 [projects."{{CODEX_HOME}}"]
 trust_level = "trusted"
+
+# Optional Tavily OAuth integration; enable only when explicitly selected.
+# First prepare the pinned bridge; see references/tavily-bridge.md.
+# Replace example paths with checked absolute local paths before enabling.
+# [mcp_servers.tavily]
+# command = "<ABSOLUTE_NODE>"
+# args = ["<TAVILY_RUNTIME>/node_modules/mcp-remote/dist/proxy.js", "https://mcp.tavily.com/mcp/", "37411", "--transport", "http-only", "--auth-timeout", "300", "--silent"]
+# startup_timeout_sec = 360.0
+# tool_timeout_sec = 360.0
+# [mcp_servers.tavily.env]
+# MCP_REMOTE_CONFIG_DIR = "<TAVILY_AUTH_DIR>"

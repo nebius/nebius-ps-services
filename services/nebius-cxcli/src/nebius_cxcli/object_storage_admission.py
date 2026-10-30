@@ -39,7 +39,12 @@ def validate_backend_bucket(settings: TerraformBackendSettings, bucket: Bucket) 
         StorageClass.INTELLIGENT,
     }:
         raise RuntimeError("Terraform backend bucket storage class is unsupported")
-    keys = (settings.key, settings.key + ".tflock")
+    keys = (
+        settings.key,
+        settings.key + ".tflock",
+        settings.key + ".nat.json",
+        settings.key + ".nat.lock",
+    )
     anonymous_seen = False
     for rule in bucket.spec.bucket_policy.rules:
         if not rule.check_presence("anonymous"):
@@ -48,6 +53,8 @@ def validate_backend_bucket(settings: TerraformBackendSettings, bucket: Bucket) 
         if not rule.paths:
             raise RuntimeError("Backend bucket has an indeterminate anonymous policy")
         for pattern in rule.paths:
+            if _overlaps(pattern, "cxcli/wireguard/", prefix=True):
+                raise RuntimeError("Anonymous bucket policy exposes WireGuard lifecycle records")
             if any(_overlaps(pattern, key) for key in keys):
                 raise RuntimeError(
                     "Anonymous bucket policy exposes Terraform/deployment backend objects"

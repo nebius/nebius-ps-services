@@ -1,0 +1,29 @@
+{
+  "skill_name": "install-grafana-mcp-for-nebius",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use install-grafana-mcp-for-nebius in report-only mode. Codex CLI says connection closed: initialize response. No wrapper stderr or HTTP result is available. Explain what we know and the next diagnostic boundary; do not run setup or contact services.",
+      "expected_output": "Treat the closed initialization as a symptom with unknown cause and request phase/code evidence before choosing a repair.",
+      "files": [],
+      "assertions": [
+        "Does not conclude that token expiry or OAuth failure caused the warning.",
+        "Explains local configuration, private state, identity, lock and child startup as distinguishable boundaries.",
+        "Keeps initialization separate from a successful bounded datasource read and distinguishes 401, 403 and timeout.",
+        "Does not perform setup, credential or external-service mutations."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use install-grafana-mcp-for-nebius in report-only mode. The pinned CLI retrieved exactly the same token bytes, updated a protected token file, and the local Grafana MCP v2.1.1 wrapper exited 75 after its ten-hour timer. I accept the token file. Explain the outcome and whether mcp-remote pointed at the Grafana web URL would remove the need for it. Do not run commands or contact services.",
+      "expected_output": "Explain retained stdio credentials, restart-required behavior, cache-age limits and why a Grafana web URL is not an HTTP MCP endpoint.",
+      "files": [],
+      "assertions": [
+        "Requires a new MCP process after status 75 even when retrieved token bytes are unchanged.",
+        "Does not claim mtime or successful retrieval proves new issuance, extended validity or stopping before expiry.",
+        "Retains the accepted protected token file and pinned CLI browser-authentication owner without adding Keychain or a gateway.",
+        "Explains that mcp-remote requires an actual HTTP MCP endpoint and cannot supply Nebius CLI credential renewal."
+      ]
+    }
+  ]
+}

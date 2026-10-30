@@ -39,7 +39,7 @@ def _build_release_ref() -> str | None:
 
 
 def _rewrite_internal_repo_refs(payload: dict[str, Any], *, release_ref: str) -> dict[str, Any]:
-    modules = (((payload or {}).get("components") or {}).get("infra") or {})
+    modules = ((payload or {}).get("components") or {}).get("infra") or {}
     if isinstance(modules, dict):
         for module in modules.values():
             if not isinstance(module, dict):
@@ -51,7 +51,7 @@ def _rewrite_internal_repo_refs(payload: dict[str, Any], *, release_ref: str) ->
             if source.startswith(_REPO_PREFIX):
                 source_block["portable"] = source.replace("?ref=main", f"?ref={release_ref}")
 
-    charts = (((payload or {}).get("components") or {}).get("apps") or {})
+    charts = ((payload or {}).get("components") or {}).get("apps") or {}
     if isinstance(charts, dict):
         for chart in charts.values():
             if not isinstance(chart, dict):
@@ -75,7 +75,7 @@ def _render_bundled_component_sources(source: Path) -> str:
     release_ref = _build_release_ref()
     if release_ref:
         payload = _rewrite_internal_repo_refs(payload, release_ref=release_ref)
-    modules = (((payload or {}).get("components") or {}).get("infra") or {})
+    modules = ((payload or {}).get("components") or {}).get("infra") or {}
     if isinstance(modules, dict):
         for module in modules.values():
             if not isinstance(module, dict):
@@ -83,7 +83,7 @@ def _render_bundled_component_sources(source: Path) -> str:
             source_block = module.get("source")
             if isinstance(source_block, dict):
                 source_block.pop("local", None)
-    charts = (((payload or {}).get("components") or {}).get("apps") or {})
+    charts = ((payload or {}).get("components") or {}).get("apps") or {}
     if isinstance(charts, dict):
         for chart in charts.values():
             if not isinstance(chart, dict):
@@ -113,6 +113,11 @@ class build_py(_build_py):
     def run(self) -> None:
         super().run()
         project_root = Path(__file__).resolve().parent
+        if os.environ.get("CXCLI_BUILD_TAILSCALE_HELPER") == "1":
+            import runpy
+
+            builder = runpy.run_path(str(project_root / "scripts/build_tailscale_helper.py"))
+            builder["build"](Path(self.build_lib).resolve() / "nebius_cxcli/hujson_helper/bin")
         source = _select_bundled_component_sources(project_root)
         if not source.exists() or not source.is_file():
             raise FileNotFoundError(f"Component sources file not found: {source}")
@@ -123,9 +128,7 @@ class build_py(_build_py):
         target = Path(self.build_lib) / "nebius_cxcli" / "component_sources.yaml"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_render_bundled_component_sources(source), encoding="utf-8")
-        cli_settings_target = (
-            Path(self.build_lib) / "nebius_cxcli" / "component_cli_settings.yaml"
-        )
+        cli_settings_target = Path(self.build_lib) / "nebius_cxcli" / "component_cli_settings.yaml"
         cli_settings_target.write_text(cli_settings.read_text(encoding="utf-8"), encoding="utf-8")
         (target.parent / "compatibility-matrix.yaml").write_text(
             (project_root / "compatibility-matrix.yaml").read_text(encoding="utf-8"),

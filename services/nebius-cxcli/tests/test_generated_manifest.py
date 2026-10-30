@@ -61,15 +61,10 @@ def _runtime_payload() -> dict:
             "notifications": {"email": "ops@example.com"},
         },
         "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "enabled": True,
-                    "inputs": {"cluster_name": "clust1"},
-                }
-            ]
+            "components": [{"id": "mk8s", "enabled": True, "inputs": {"cluster_name": "clust1"}}]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
 
@@ -129,6 +124,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     assert manifest["paths"] == {
         "generated_dir": "deployments/tenant-name-example/project-name-example/generated",
         "infra_dir": "deployments/tenant-name-example/project-name-example/generated/infra",
+        "access_infra_dir": "deployments/tenant-name-example/project-name-example/generated/infra-access",
         "flux_dir": "deployments/tenant-name-example/project-name-example/generated/flux",
         "reports_dir": "deployments/tenant-name-example/project-name-example/generated/reports",
     }
@@ -136,7 +132,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         "flux_version": flux_version,
         "terraform_version": terraform_version,
     }
-    assert manifest["deploy"]["targets"] == [
+    assert manifest["execution"]["targets"] == [
         {
             "component_id": "mk8s",
             "ownership": "managed",
@@ -148,10 +144,10 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
             "flux_dir": "deployments/tenant-name-example/project-name-example/generated/flux/targets/mk8s",
         }
     ]
-    assert manifest["deploy"]["required_component_outputs"] == [
+    assert manifest["execution"]["required_component_outputs"] == [
         {"component_id": "mk8s", "output_name": "cluster_id"}
     ]
-    assert manifest["deploy"]["status_watchers"] == [
+    assert manifest["execution"]["status_watchers"] == [
         {
             "component_id": "mk8s",
             "kind": "nebius.mk8s.cluster",
@@ -159,7 +155,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
             "resource_name": "clust1",
         }
     ]
-    assert manifest["deploy"]["validations"] == validations
+    assert manifest["execution"]["validations"] == validations
     assert manifest["render"]["source_profile"] == "portable"
     assert "portable" not in manifest["render"]
     assert manifest["render"]["terraform_tfvars"] == {"mk8s_cluster_name": "clust1"}
@@ -176,7 +172,7 @@ def test_build_generated_manifest_rejects_target_ref_that_differs_from_instance_
     with pytest.raises(
         ValueError,
         match=(
-            r"Generated manifest deploy\.targets\[0\]\.target_ref "
+            r"Generated manifest execution\.targets\[0\]\.target_ref "
             r"must equal instance_id 'cluster1'"
         ),
     ):
@@ -197,7 +193,7 @@ def test_build_generated_manifest_rejects_target_missing_target_ref(
 
     with pytest.raises(
         ValueError,
-        match=r"Generated manifest deploy\.targets\[0\]\.target_ref is required",
+        match=r"Generated manifest execution\.targets\[0\]\.target_ref is required",
     ):
         build_generated_manifest(
             config=_runtime_payload(),

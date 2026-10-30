@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review GitHub Issues"
+  short_description: "Triage GitHub issues and save implementation plans"
+  default_prompt: "Use $review-github-issues to review selected GitHub issues and save plans for accepted work."
+policy:
+  allow_implicit_invocation: false

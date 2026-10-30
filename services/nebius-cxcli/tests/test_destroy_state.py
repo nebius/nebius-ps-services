@@ -106,7 +106,7 @@ def test_diagnostic_loading_does_not_require_destroy_mutation_authority(
     from nebius_cxcli import cli, destroy_state
 
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("{}\n")
+    config_path.write_text("version: v2\n")
     config = object()
     calls = []
 
@@ -128,7 +128,7 @@ def test_diagnostic_loading_does_not_require_destroy_mutation_authority(
     )
     assert result is config
     assert calls == [{"need_terraform": False}]
-    assert config_path.read_text() == "{}\n"
+    assert config_path.read_text() == "version: v2\n"
 
 
 @pytest.mark.parametrize(
@@ -139,14 +139,16 @@ def test_readers_do_not_publish_pending_project_generations(tmp_path, monkeypatc
     from nebius_cxcli.project_bundle_transaction import ProjectBundleTransaction
 
     path = tmp_path / "config.yaml"
-    path.write_bytes(b"version: old\n")
+    path.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
 
     def crash(name):
         if name == "after-commit":
             raise OSError("publication interrupted")
 
     with pytest.raises(OSError):
-        ProjectBundleTransaction(tmp_path, failpoint=crash).commit({path: b"version: new\n"})
+        ProjectBundleTransaction(tmp_path, failpoint=crash).commit(
+            {path: b"version: v2\ncompatibility: {fixture: new}\n"}
+        )
     monkeypatch.setattr(
         cli,
         "_identity_values_from_payload",
@@ -158,7 +160,7 @@ def test_readers_do_not_publish_pending_project_generations(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "resolve_project_paths", lambda _: object())
     monkeypatch.setattr(cli, "validate_path_alignment", lambda *a: None)
     getattr(cli, loader)(path)
-    assert path.read_bytes() == b"version: old\n"
+    assert path.read_bytes() == b"version: v2\ncompatibility: {fixture: old}\n"
 
 
 def test_existing_writer_recovers_only_under_lease_and_refuses_stale_source(tmp_path, monkeypatch):
@@ -169,14 +171,16 @@ def test_existing_writer_recovers_only_under_lease_and_refuses_stale_source(tmp_
     from nebius_cxcli.project_bundle_transaction import ProjectBundleTransaction
 
     path = tmp_path / "config.yaml"
-    path.write_bytes(b"version: old\n")
+    path.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
 
     def crash(name):
         if name == "after-commit":
             raise OSError("publication interrupted")
 
     with pytest.raises(OSError):
-        ProjectBundleTransaction(tmp_path, failpoint=crash).commit({path: b"version: new\n"})
+        ProjectBundleTransaction(tmp_path, failpoint=crash).commit(
+            {path: b"version: v2\ncompatibility: {fixture: new}\n"}
+        )
     held = []
     monkeypatch.setattr(cli, "load_config", lambda *a, **kw: object())
     monkeypatch.setattr(
@@ -198,7 +202,7 @@ def test_existing_writer_recovers_only_under_lease_and_refuses_stale_source(tmp_
     monkeypatch.setattr(cli, "_deployment_execution", lease)
     with pytest.raises(RuntimeError, match="recovered.*rerun"), real_write_lease(path):
         pytest.fail("caller used stale source after recovery")
-    assert path.read_bytes() == b"version: new\n"
+    assert path.read_bytes() == b"version: v2\ncompatibility: {fixture: new}\n"
 
 
 def test_existing_writer_rejects_source_changes_during_lease_acquisition(tmp_path, monkeypatch):

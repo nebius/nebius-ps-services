@@ -617,7 +617,8 @@ def is_commit_transaction_command(words: list[str]) -> bool:
         and re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)*)?", Path(words[0]).name)
         is not None
         and Path(words[1]).name == "commit_transaction.py"
-        and words[2] in {"begin", "prepare", "execute", "review", "sync", "validate-order", "finish"}
+        and words[2] in {"begin", "prepare", "execute", "review", "sync", "validate-order", "finish",
+                         "checkout-target", "complete-checkout", "publish-target"}
     )
 
 
