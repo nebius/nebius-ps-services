@@ -1,0 +1,11 @@
+{
+  "path": "/private/tmp/vpngw-heartbeat-live-build/services/vpngw/dist/nebius_vpngw-0.6.3.dev30-py3-none-any.whl",
+  "sha256": "57c73c076b83994ddaa8ca4905437f92829b9b3832cbf649a18710f1a2a5a973",
+  "capabilities": [
+    "vm-ha-independent-heartbeat-v1",
+    "vm-ha-live-peer-replacement-v4",
+    "vm-ha-standby-restoration-v2",
+    "ipsec-replay-window-v1",
+    "static-forwarding-policy-v1"
+  ]
+}

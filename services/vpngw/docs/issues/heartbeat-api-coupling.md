@@ -1,6 +1,8 @@
 # Cloud API delays can trigger false VM-HA peer failure detection
 
-Status: reproduced in an isolated simulation. No production fix is included.
+Status: reproduced in an isolated simulation and implemented on this branch.
+See the [implementation and live validation report](heartbeat-independent-live-validation.md)
+for test results and the incomplete live deployment status.
 
 Branch: `codex/fix-vpngw-heartbeat-api-coupling`, based directly on local `main`
 commit `5b73a95bec179242e4850e01d12f7d970397bf51`. This issue is independent of
