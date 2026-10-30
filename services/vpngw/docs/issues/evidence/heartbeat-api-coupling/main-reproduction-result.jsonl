@@ -1,0 +1,4 @@
+{"scenario": "baseline", "step": 1, "snapshot_time": 112.0, "sampled_peer_age": 13.0, "latest_available_peer_age": 1.0, "peer_healthy": true, "decision": "suspect", "reasons": ["peer-heartbeat-stale"], "action": null}
+{"scenario": "baseline", "step": 2, "snapshot_time": 124.0, "sampled_peer_age": 13.0, "latest_available_peer_age": 1.0, "peer_healthy": true, "decision": "fencing", "reasons": ["former-owner-must-be-stopped"], "action": "stop-former-owner"}
+{"scenario": "refreshed-peer", "step": 1, "snapshot_time": 212.0, "sampled_peer_age": 1.0, "latest_available_peer_age": 1.0, "peer_healthy": true, "decision": "normal", "reasons": ["authoritative-owner-peer-is-healthy"], "action": null}
+{"scenario": "refreshed-peer", "step": 2, "snapshot_time": 224.0, "sampled_peer_age": 1.0, "latest_available_peer_age": 1.0, "peer_healthy": true, "decision": "normal", "reasons": ["authoritative-owner-peer-is-healthy"], "action": null}

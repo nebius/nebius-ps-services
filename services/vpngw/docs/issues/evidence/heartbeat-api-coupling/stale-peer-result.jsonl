@@ -1,0 +1,4 @@
+{"step": 1, "snapshot_time": 112.0, "sampled_peer_received_at": 99.0, "sampled_peer_age": 13.0, "latest_available_peer_received_at": 111.0, "latest_available_peer_age": 1.0, "peer_healthy": true, "decision": "suspect", "reasons": ["peer-heartbeat-stale"], "action": null}
+{"step": 2, "snapshot_time": 124.0, "sampled_peer_received_at": 111.0, "sampled_peer_age": 13.0, "latest_available_peer_received_at": 123.0, "latest_available_peer_age": 1.0, "peer_healthy": true, "decision": "fencing", "reasons": ["former-owner-must-be-stopped"], "action": "stop-former-owner"}
+{"control": "fresh-peer-after-cloud-read", "step": 1, "peer_age": 1.0, "decision": "normal", "action": null}
+{"control": "fresh-peer-after-cloud-read", "step": 2, "peer_age": 1.0, "decision": "normal", "action": null}
