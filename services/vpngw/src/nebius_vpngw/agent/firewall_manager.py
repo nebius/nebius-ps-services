@@ -7,15 +7,79 @@ This module manages UFW firewall rules to ensure:
 - XFRM interfaces are not filtered (BGP traffic flows freely)
 """
 
+import shlex
 from pathlib import Path
 from typing import Any
 
+from ..tunnel_state import collect_tunnel_state
 from .local_commands import run
 
 PEER_IPS_FILE = Path("/etc/vpngw_peer_ips")
 MGMT_CIDRS_FILE = Path("/etc/vpngw_mgmt_cidrs")
 LOCAL_PREFIXES_FILE = Path("/etc/vpngw_local_prefixes")
 FIREWALL_SETUP_SCRIPT = Path("/usr/local/bin/setup-vpngw-firewall.sh")
+
+
+def _tunnel_host_rules(cfg: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Plan rules without depending on whether XFRM devices already exist."""
+    _, _, endpoints = collect_tunnel_state(cfg, log=lambda message: None)
+    rules = []
+    for endpoint in endpoints:
+        interface = endpoint["name"]
+        rules.append(("ufw-user-input", "-i", interface))
+        rules.append(("ufw-user-output", "-o", interface))
+    return rules
+
+
+def _missing_tunnel_host_rules(
+    rules: list[tuple[str, str, str]], *, save_text: str | None = None
+) -> list[tuple[str, str, str]]:
+    if not rules:
+        return []
+    if save_text is None:
+        result = run(["iptables-save", "-t", "filter"], capture_output=True, text=True, timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError("unable to verify tunnel host firewall rules")
+        save_text = result.stdout
+    installed = set()
+    for line in save_text.splitlines():
+        if line.startswith("-A "):
+            installed.add(tuple(shlex.split(line)))
+    missing = []
+    for chain, direction, interface in rules:
+        if ("-A", chain, direction, interface, "-j", "ACCEPT") not in installed:
+            missing.append((chain, direction, interface))
+    return missing
+
+
+def verify_tunnel_host_rules(cfg: dict[str, Any], *, save_text: str | None = None) -> None:
+    """Require host INPUT/OUTPUT access independently of transit forwarding."""
+    if _missing_tunnel_host_rules(_tunnel_host_rules(cfg), save_text=save_text):
+        raise RuntimeError("required tunnel host firewall rules are missing")
+
+
+def ensure_tunnel_host_rules(cfg: dict[str, Any]) -> None:
+    """Repair missing rules, including on first boot before device creation.
+
+    UFW persists interface rules even when the interface does not exist yet.
+    Recheck live rules before reporting firewall reconciliation success.
+    """
+    rules = _tunnel_host_rules(cfg)
+    missing = _missing_tunnel_host_rules(rules)
+    if not missing:
+        return
+    for chain, _, interface in missing:
+        direction = "in" if chain == "ufw-user-input" else "out"
+        result = run(
+            ["ufw", "allow", direction, "on", interface],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("unable to install tunnel host firewall rules")
+    if _missing_tunnel_host_rules(rules):
+        raise RuntimeError("required tunnel host firewall rules are missing after repair")
 
 
 def update_peer_ips(cfg: dict[str, Any]) -> bool:
@@ -182,3 +246,5 @@ def update_firewall_from_config(
             raise RuntimeError("required firewall reload failed")
     else:
         print("[FirewallMgr] No firewall changes needed")
+
+    ensure_tunnel_host_rules(cfg)
