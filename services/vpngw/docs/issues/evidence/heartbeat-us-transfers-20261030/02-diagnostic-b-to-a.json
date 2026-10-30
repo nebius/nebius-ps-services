@@ -1,0 +1,9 @@
+{
+  "action": "failback",
+  "label": "02-diagnostic-b-to-a",
+  "started": 1793390387.3597062,
+  "started_utc": "2026-10-30T19:59:47.359708+00:00",
+  "finished": 1793390394.948832,
+  "elapsed_seconds": 7.589126825332642,
+  "returncode": 1
+}

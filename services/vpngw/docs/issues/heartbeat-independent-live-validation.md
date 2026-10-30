@@ -1,11 +1,12 @@
 # Independent heartbeat implementation and live validation
 
-Status at October 30, 2026, 15:03 America/Toronto (19:03 UTC): US and UK have
-the new wheel. US recovery and apply succeeded. US gateway-b is active and
-promotion-ready, gateway-a is standby-ready, and both apply locks are absent.
-UK owner forwarding remains healthy. The UK standby recovered automatically
-after its route cleanup timer removed a recurring DHCP route. End-to-end
-client forwarding and fault-injected failover validation remain incomplete.
+Status after the October 30, 2026 US live transfer campaign: gateway-a is
+active, gateway-b is verified standby-ready, and both pfSense BGP sessions are
+Established. Planned takeover and failback completed with local standby route
+repairs. This is not a clean unattended pass. The first transfer recovered after
+the CLI reported failure. The final UK check found gateway-b forwarding and
+gateway-a stopped with automatic restoration inhibited. See the US live results
+below for timings, interventions, and evidence.
 
 ## Code and artifact
 
@@ -22,8 +23,9 @@ Exact wheel: `nebius_vpngw-0.6.3.dev30-py3-none-any.whl`.
 SHA256: `57c73c076b83994ddaa8ca4905437f92829b9b3832cbf649a18710f1a2a5a973`.
 
 The artifact validator accepted the wheel, including its heartbeat capability,
-required assets, and package integrity. Both UK installations match its main,
-runtime, and controller module hashes. US retains the previous artifact.
+required assets, and package integrity. All four installations matched its main,
+runtime, and controller module hashes after the earlier recovery. Final US
+checks reconfirmed the same artifact.
 
 ## Implemented behavior
 
@@ -59,7 +61,8 @@ also create transport worker threads.
 | US BGP | Both pfSense neighbors Established, five prefixes received each |
 | UK owner routed-forwarding verification | Supported apply passed |
 | UK active tunnel inside-address probes | 3/3 replies from US gateway-b |
-| End-to-end client forwarding, takeover, failback, controlled API fault | Not validated |
+| US workload forwarding and planned takeover/failback | Exercised live with interventions, detailed below |
+| Controlled API fault injection | Not validated |
 
 Skipped tests include disposable systemd and privileged Linux packet fixtures
 unavailable on this macOS host. Unix socket and frozen-build tests passed when
@@ -221,9 +224,120 @@ Sanitized evidence is committed under `evidence/heartbeat-independent-live/`:
 - [UK route lookups](evidence/heartbeat-independent-live/uk-standby-routing.json)
 - [Evidence checksums](evidence/heartbeat-independent-live/SHA256SUMS)
 
-Next, address recurring UK standby readiness gaps and establish a stable
-baseline. Then validate controlled API delay, client routing, and failover/failback,
-including shared remote-peer failure: tunnel health currently contributes to
-owner readiness without distinguishing a local failure from a remote outage.
-Both deployments have converged, but these remaining checks are required for
-end-to-end validation.
+The user chose to retain the existing link-local cleanup and cold-static
+standby behavior. No draft changes to those policies were deployed. The later
+US campaign below covers planned transfers and client ICMP forwarding.
+Controlled API faults and shared remote-peer outage injection remain untested.
+
+## US live planned takeover and failback, October 30
+
+The campaign ran from 19:54 to approximately 20:28 UTC. UK was first accessed
+only after all US transfer commands finished. No UK configuration or controller
+changes were made. The installed wheel remained unchanged throughout the tests.
+
+Baseline: gateway-b owned US, gateway-a was standby-ready, both members ran the
+exact wheel above, and neither had an apply lock or pending cloud operation.
+The test sequence was B to A normalization, A to B takeover, then B to A failback.
+Each transfer used the supported CLI from the independent heartbeat branch.
+
+A one-second ICMP probe ran from the operator's home client to the existing US
+workload `10.81.0.20`. A bounded capture on US gateway-b confirmed the request
+and reply traversed `xfrm0`, from client `192.168.0.11`. This tests home/pfSense
+to US workload forwarding without depending on UK. The gaps below measure time
+between successful replies, rather than exact outage duration.
+
+| Test | Result | Traffic interruption | Completion |
+|---|---|---|---|
+| Initial B to A | CLI failed after 41.7 seconds, controller subsequently completed cutover and restarted B | 110 consecutive probes lost, 111.4-second reply gap | Controller cutover receipt: 112.4 seconds |
+| A to B preflight | Refused to submit a transfer after 301.5 seconds because standby evidence was invalid | No transfer-induced interruption | Failed safely before ownership changes |
+| A to B retry | Cutover succeeded, standby verified after local route repair | 54 consecutive probes lost, 55.2-second reply gap | Cutover 71.4 seconds, command completion 194.6 seconds |
+| Final B to A | Cutover succeeded, standby verified after local route repair | 57 consecutive probes lost, 58.2-second reply gap | Cutover 71.2 seconds, command completion 157.6 seconds |
+
+### Required interventions and reproduced failures
+
+1. Before the first actual transfer, two requests were rejected by a blocked
+   restoration authorization from obsolete generation `f37271254e3f...`.
+   Gateway-a's currently healthy status did not reveal that request blocker.
+   A protected on-VM backup was made. With only the passive controller stopped,
+   fresh cloud reads proved gateway-b's exact attachment and gateway-a's absent
+   attachment. Only authorization `a4366ed0e6c1...` was archived. No allocation or
+   route mutation occurred. The initial cleanup attempt stopped at a readiness
+   assertion because the DHCP link-local route had recurred. The existing timer
+   cleared it naturally before cleanup proceeded.
+2. During the initial transfer, A lost static/XFRM readiness after B was stopped.
+   A remained fenced until readiness recovered. The CLI reported generic failure,
+   but the controller later resumed the same transfer, acquired the allocation,
+   reconciled routes, and enabled forwarding. US observations showed A's UK SA
+   later established toward UK gateway-b. UK was not inspected during this event,
+   so its contemporaneous behavior is not independently established by this test.
+3. Each standby reboot installed `10.80.1.0/24 dev xfrm1` while the usable UK SA
+   was on `xfrm2`. The controller considered this repairable and published
+   `standby_ready=true`, but `standby_tunnel_state=not-standby`. The operator
+   status validator returned `standby-ready-evidence-invalid` because it accepts
+   only fully warm or cold readiness. Consequently, CLI preflight/restoration
+   could not validate the standby without intervention.
+4. Three backed-up local repairs invoked the installed static-route selector
+   under its existing routing lock, after proving passive mode, forwarding off,
+   exact peer ownership, and no pending operation. The selector moved the
+   configured UK route from `xfrm1` to `xfrm2`. Repairs were on B before takeover,
+   A after takeover, and B after final failback. They changed no cloud routes or
+   allocation ownership and did not enable standby forwarding. No application
+   code, configuration, or wheel was changed during this campaign.
+
+These results validate the transfer chain with intervention. They do not
+validate unattended standby restoration. The stale route and inconsistent
+readiness evidence need a separate fix. The early generic CLI failure also
+needs investigation because the transfer continued afterward.
+
+### Safety ordering and final state
+
+US effect journals show Stop completed before detach, detach completed before
+attachment, and cloud route reconciliation completed before active forwarding.
+The final fresh cloud read proved gateway-a's exact allocation attachment and
+gateway-b's absent attachment. The installed read-only route-context check
+revalidated the current cloud plan against the durable reconciliation receipt.
+No successful activation of both nodes at once was observed. Sampling cannot
+exclude every subsecond overlap by itself.
+
+During blocking Stop operations, the publisher continued attempting heartbeats
+and local health samples remained less than one second old while ownership
+observations aged beyond 20 seconds. Delivery failed while the peer VM was
+stopped, as expected. This demonstrates thread independence during real blocking
+operations, but is not a controlled API-timeout fault test.
+
+Final US operator status confirmed:
+
+- A active, promotion-ready, forwarding `1`, and the exact shared allocation owner.
+- B normal, standby-ready, forwarding `0`, with no standby readiness reasons.
+- Both pfSense BGP sessions Established, five prefixes received each. A advertises
+  12 prefixes and B advertises zero.
+- No apply locks, manual transfer requests, accepted cloud operation, or pending
+  route mutation. Installed module hashes still match the tested wheel.
+- Home-to-US workload replies resumed after each cutover. The final US-to-UK
+  active tunnel probe returned three of three replies at approximately 98 ms.
+
+The deferred UK check found gateway-b active and forwarding, with no pending
+operation. Gateway-a was unreachable over SSH and reported Stopped by the
+owner's cloud observation. Automatic standby restart was inhibited with
+`standby-auto-healing-peer-policy-unavailable`. UK redundancy therefore remains
+unrestored. No UK recovery was attempted in this US-only campaign.
+
+Long-lived TCP preservation, controlled API delay/failure, heartbeat isolation,
+process crash, and shared remote-peer failure injection were not exercised.
+Workload SSH rejected the available keys, so traffic validation used ICMP.
+
+### US campaign evidence
+
+Evidence is preserved in
+[evidence/heartbeat-us-transfers-20261030](evidence/heartbeat-us-transfers-20261030/):
+
+- [Command results and timings](evidence/heartbeat-us-transfers-20261030/06-b-to-a.log)
+- [Initial blocked restoration record](evidence/heartbeat-us-transfers-20261030/restoration-blocker.json)
+- [Backed-up obsolete-record archival](evidence/heartbeat-us-transfers-20261030/obsolete-restoration-cleanup.json)
+- [Invalid operator standby evidence](evidence/heartbeat-us-transfers-20261030/b-operator-status.json)
+- [Example bounded standby route repair](evidence/heartbeat-us-transfers-20261030/a-standby-route-repair.json)
+- [Traffic interruption measurements](evidence/heartbeat-us-transfers-20261030/traffic-summary.json)
+- [Effect/heartbeat events and fresh cloud proof](evidence/heartbeat-us-transfers-20261030/us-events-and-cloud-proof.json)
+- [Final US state](evidence/heartbeat-us-transfers-20261030/final-us.json)
+- [Deferred UK state](evidence/heartbeat-us-transfers-20261030/final-uk.json)
+- [Evidence checksums](evidence/heartbeat-us-transfers-20261030/SHA256SUMS)

@@ -1,0 +1,9 @@
+{
+  "action": "failover",
+  "label": "04-a-to-b",
+  "started": 1793391126.2152011,
+  "started_utc": "2026-10-30T20:12:06.215203+00:00",
+  "finished": 1793391427.699457,
+  "elapsed_seconds": 301.48425698280334,
+  "returncode": 1
+}

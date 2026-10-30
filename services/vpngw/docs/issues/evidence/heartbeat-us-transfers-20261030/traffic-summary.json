@@ -1,0 +1,55 @@
+{
+  "target": "10.81.0.20",
+  "interval_seconds": 1,
+  "gaps": [
+    {
+      "lost": 1,
+      "reply_gap_seconds": 2.009,
+      "last_reply": 1793390465.504129,
+      "recovered_at": 1793390467.512969,
+      "recovered_utc": "20:01:07"
+    },
+    {
+      "lost": 110,
+      "reply_gap_seconds": 111.366,
+      "last_reply": 1793390772.5255628,
+      "recovered_at": 1793390883.8916092,
+      "recovered_utc": "20:08:03"
+    },
+    {
+      "lost": 1,
+      "reply_gap_seconds": 1.78,
+      "last_reply": 1793391193.201643,
+      "recovered_at": 1793391194.98161,
+      "recovered_utc": "20:13:14"
+    },
+    {
+      "lost": 2,
+      "reply_gap_seconds": 2.718,
+      "last_reply": 1793391197.281863,
+      "recovered_at": 1793391200.0000792,
+      "recovered_utc": "20:13:20"
+    },
+    {
+      "lost": 1,
+      "reply_gap_seconds": 2.044,
+      "last_reply": 1793391205.018851,
+      "recovered_at": 1793391207.063262,
+      "recovered_utc": "20:13:27"
+    },
+    {
+      "lost": 54,
+      "reply_gap_seconds": 55.207,
+      "last_reply": 1793391504.0188642,
+      "recovered_at": 1793391559.225625,
+      "recovered_utc": "20:19:19"
+    },
+    {
+      "lost": 57,
+      "reply_gap_seconds": 58.228,
+      "last_reply": 1793391716.706742,
+      "recovered_at": 1793391774.9348512,
+      "recovered_utc": "20:22:54"
+    }
+  ]
+}

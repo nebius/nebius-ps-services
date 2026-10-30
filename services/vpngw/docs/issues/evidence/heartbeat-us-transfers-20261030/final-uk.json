@@ -1,0 +1,297 @@
+[
+  {
+    "node": "uk-a",
+    "error": "ssh: connect to host 89.124.37.185 port 22: Operation timed out",
+    "returncode": 255
+  },
+  {
+    "node": "uk-b",
+    "result": {
+      "time": 1793391909.3110983,
+      "boot_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb",
+      "status.json": {
+        "state": "active",
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "promotion_ready": true,
+        "standby_ready": false,
+        "pending_operation_id": null,
+        "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ]
+      },
+      "rearm-status.json": {
+        "phase": "inhibited",
+        "reason": "standby-auto-healing-peer-policy-unavailable"
+      },
+      "apply.lock": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failback.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "manual-failover.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "accepted-cloud-operation.json": {
+        "exists": false,
+        "mtime": null
+      },
+      "services": "MainPID=3729736\nExecMainStartTimestamp=Fri 2026-10-30 17:57:49 UTC\nActiveState=active\n",
+      "modules": {
+        "nebius_vpngw.agent.main": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/main.py",
+          "sha256": "1fac966bad067a7020098936408ed759309f1e74e07b4919fe1bff5b40b035aa"
+        },
+        "nebius_vpngw.agent.vm_ha.runtime": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha/runtime.py",
+          "sha256": "cf2fd4de50ce5fc13f6a85f4af3b7b03eccfd708c904ec6fbdc1ef1f58def8c3"
+        },
+        "nebius_vpngw.agent.vm_ha_controller": {
+          "path": "/usr/local/lib/python3.12/dist-packages/nebius_vpngw/agent/vm_ha_controller.py",
+          "sha256": "b8fb6379bbca8c281900cdf22fcbe5f1918f622e4235c929735deb1864cce744"
+        }
+      },
+      "full_status": {
+        "allocation_id": "vpcallocation-e03s2qrr8d8ghvyegm",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "candidate_attachment_absent": false,
+        "candidate_attachment_exact": true,
+        "cluster_id": "uk-south1-ha",
+        "configured_role": "passive",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb",
+        "data_plane_mode": "active",
+        "digests": {
+          "bgp_policy": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "configuration": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+          "static_routes": "8c43de54af72ea4f67967f0b836fd1d205bbe56a655df8df1bdb041fc18ce511"
+        },
+        "former_attachment_absent": true,
+        "former_attachment_exact": false,
+        "former_owner_compute_state": "stopped",
+        "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+        "guard_boot_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb",
+        "mtls": {
+          "certificate_fingerprint": "2b0c57561ce5dd16d46a23bfb2d5592db35bb526835360eafdcd70baed0a4408",
+          "cluster_id": "uk-south1-ha",
+          "compute_id": "computeinstance-e03vy7a1cq04mqceax",
+          "epoch": 2,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-b",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "a7b0d81a-6dce-4b2f-abc7-994f6b50e50d",
+            "certificate_fingerprint": "ad0f29a6c44defc3139427f33a0d9e419ad70429add9713bdf6bd0625d8b4ab2",
+            "epoch": 1,
+            "fresh": false,
+            "node_id": "gateway-a",
+            "sequence": 36335
+          },
+          "peer_fingerprints": [
+            "ad0f29a6c44defc3139427f33a0d9e419ad70429add9713bdf6bd0625d8b4ab2"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "c85d2f5912f2039d0441b0a29aed7085e2b06a2d03bc09accd2ab9aa4cfb984e",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "10",
+        "ownership_re_read_exact": true,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": 100.51916313171387,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": null
+        },
+        "promotion_committed": true,
+        "promotion_ready": true,
+        "rearm_phase": "inhibited",
+        "rearm_reason": "standby-auto-healing-peer-policy-unavailable",
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": false,
+        "repair": null,
+        "route_reconciliation": {
+          "allocation_id": "vpcallocation-e03s2qrr8d8ghvyegm",
+          "digests": {
+            "bgp_policy": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "configuration": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+            "static_routes": "8c43de54af72ea4f67967f0b836fd1d205bbe56a655df8df1bdb041fc18ce511"
+          },
+          "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+          "operation_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb:40:reconcile-routes:gateway-b",
+          "owner_node_id": "gateway-b",
+          "ownership_epoch": "10",
+          "ownership_incarnation": 3,
+          "route_runtime_id": "de7f135a92df04737c2fb456b640593e14e31583f2b7e9900543da41eee12765"
+        },
+        "route_runtime_id": "de7f135a92df04737c2fb456b640593e14e31583f2b7e9900543da41eee12765",
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [
+          "data-plane-not-passive",
+          "local-node-is-not-exact-non-owner",
+          "owner-shared-alias-not-exact",
+          "local-shared-alias-present"
+        ],
+        "standby_ready": false,
+        "standby_tunnel_state": "not-standby",
+        "state": "active",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "operator_status": {
+        "allocation_id": "vpcallocation-e03s2qrr8d8ghvyegm",
+        "apply_locked": false,
+        "apply_operation_id": null,
+        "auto_healing": {
+          "accepted_start": false,
+          "peer_agrees": false,
+          "state": "blocked"
+        },
+        "candidate_attachment_absent": false,
+        "candidate_attachment_exact": true,
+        "cluster_id": "uk-south1-ha",
+        "configured_role": "passive",
+        "controller_capabilities": [
+          "vm-ha-independent-heartbeat-v1",
+          "vm-ha-mtls-rotation-quiescence-v1",
+          "vm-ha-live-peer-replacement-v4",
+          "vm-ha-standby-replacement-inhibition-v2",
+          "vm-ha-standby-restoration-v2"
+        ],
+        "controller_ready_boot_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb",
+        "data_plane_mode": "active",
+        "digests": {
+          "bgp_policy": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "configuration": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+          "static_routes": "8c43de54af72ea4f67967f0b836fd1d205bbe56a655df8df1bdb041fc18ce511"
+        },
+        "former_attachment_absent": true,
+        "former_attachment_exact": false,
+        "former_owner_compute_state": "stopped",
+        "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+        "guard_boot_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb",
+        "mtls": {
+          "certificate_fingerprint": "2b0c57561ce5dd16d46a23bfb2d5592db35bb526835360eafdcd70baed0a4408",
+          "cluster_id": "uk-south1-ha",
+          "compute_id": "computeinstance-e03vy7a1cq04mqceax",
+          "epoch": 2,
+          "inhibited": false,
+          "inhibition_operation_id": null,
+          "node_id": "gateway-b",
+          "operation_id": null,
+          "operation_kind": null,
+          "peer": {
+            "boot_id": "a7b0d81a-6dce-4b2f-abc7-994f6b50e50d",
+            "certificate_fingerprint": "ad0f29a6c44defc3139427f33a0d9e419ad70429add9713bdf6bd0625d8b4ab2",
+            "epoch": 1,
+            "fresh": false,
+            "node_id": "gateway-a",
+            "sequence": 36335
+          },
+          "peer_fingerprints": [
+            "ad0f29a6c44defc3139427f33a0d9e419ad70429add9713bdf6bd0625d8b4ab2"
+          ],
+          "peer_target_epoch": null,
+          "phase": null,
+          "preserve_local": null,
+          "recovery": null,
+          "spki_fingerprint": "c85d2f5912f2039d0441b0a29aed7085e2b06a2d03bc09accd2ab9aa4cfb984e",
+          "state": "healthy",
+          "target_epoch": null
+        },
+        "node_id": "gateway-b",
+        "observed_owner_node_id": "gateway-b",
+        "ownership_epoch": "10",
+        "ownership_re_read_exact": true,
+        "pending_operation_id": null,
+        "phase_durations_seconds": {
+          "common_cutover": 100.51916313171387,
+          "detection_repair": null,
+          "preparation": null,
+          "redundancy_restoration": null
+        },
+        "promotion_committed": true,
+        "promotion_ready": true,
+        "rearm_phase": "inhibited",
+        "rearm_reason": "standby-auto-healing-peer-policy-unavailable",
+        "reasons": [
+          "authoritative-owner-active"
+        ],
+        "recovery_action": null,
+        "redundancy_ready": false,
+        "repair": null,
+        "route_reconciliation": {
+          "allocation_id": "vpcallocation-e03s2qrr8d8ghvyegm",
+          "digests": {
+            "bgp_policy": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "configuration": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+            "static_routes": "8c43de54af72ea4f67967f0b836fd1d205bbe56a655df8df1bdb041fc18ce511"
+          },
+          "generation_id": "d23b3d9d67bce041ddef4b89df52e9d9e08f0a12c3d20442000a4423d09f077e",
+          "operation_id": "be5b60bf-52c2-4633-82c9-531d4b6518bb:40:reconcile-routes:gateway-b",
+          "owner_node_id": "gateway-b",
+          "ownership_epoch": "10",
+          "ownership_incarnation": 3,
+          "route_runtime_id": "de7f135a92df04737c2fb456b640593e14e31583f2b7e9900543da41eee12765"
+        },
+        "route_runtime_id": "de7f135a92df04737c2fb456b640593e14e31583f2b7e9900543da41eee12765",
+        "runtime_identity": {
+          "reason": "exact-current-boot",
+          "state": "verified"
+        },
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "standby_readiness_reasons": [
+          "data-plane-not-passive",
+          "local-node-is-not-exact-non-owner",
+          "owner-shared-alias-not-exact",
+          "local-shared-alias-present"
+        ],
+        "standby_ready": false,
+        "standby_tunnel_state": "not-standby",
+        "state": "active",
+        "transfer_inhibition_operation_id": null,
+        "transfer_inhibition_quiescent": false
+      },
+      "forwarding": "1",
+      "bgp_summary": {},
+      "ipsec_status": "Security Associations (2 up, 0 connecting):\n     uk-us-4[22]: ESTABLISHED 73 seconds ago, 10.80.0.59[89.124.37.170]...204.12.189.249[204.12.189.249]\n     uk-us-4{6}:  INSTALLED, TUNNEL, reqid 2, ESP in UDP SPIs: cbffade2_i cd315e2e_o\n     uk-us-4{6}:   10.80.1.0/24 169.254.11.12/30 === 10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.11.12/30\n     uk-us-3[20]: ESTABLISHED 4 minutes ago, 10.80.0.59[89.124.37.170]...204.12.191.16[204.12.191.16]\n     uk-us-3{5}:  INSTALLED, TUNNEL, reqid 1, ESP in UDP SPIs: cd135516_i cb620b37_o\n     uk-us-3{5}:   10.80.1.0/24 169.254.11.8/30 === 10.81.0.16/28 10.81.0.32/27 10.81.0.64/26 10.81.0.128/25 10.81.1.0/24 10.81.2.0/23 10.81.4.0/22 10.81.8.0/21 10.81.16.0/20 10.81.32.0/19 10.81.64.0/18 10.81.128.0/17 169.254.11.8/30\n",
+      "static_route": [],
+      "pending_files": {
+        "accepted-cloud-operation.json": false,
+        "route-pending.json": false,
+        "manual-failover.json": false,
+        "manual-failback.json": false
+      }
+    }
+  }
+]

@@ -1,0 +1,25 @@
+{
+  "node": "us-b",
+  "result": {
+    "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/us-standby-route-20261030T202419Z",
+    "repaired": true,
+    "before_static": [
+      {
+        "dst": "10.80.1.0/24",
+        "dev": "xfrm1",
+        "scope": "link",
+        "flags": []
+      }
+    ],
+    "after_static": [
+      {
+        "dst": "10.80.1.0/24",
+        "dev": "xfrm2",
+        "scope": "link",
+        "flags": []
+      }
+    ],
+    "cloud_mutations": false,
+    "forwarding_enabled": false
+  }
+}

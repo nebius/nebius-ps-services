@@ -1,0 +1,516 @@
+[
+  {
+    "node": "us-a",
+    "result": {
+      "standby-restoration-authorization.json": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "attempt_count": 1,
+        "authorization_id": "a4366ed0e6c12c8f58d54a76557b4c370d2bb1517ec95e423dac4ce900b4b161",
+        "blocked_reason": "standby-readiness-timeout",
+        "certificate_id": "d9a0f61b08b002329bcfa31f62bd964ca482a12530583b3001c66831c26f7112",
+        "cluster_id": "us-central1-ha",
+        "created_at": 1793313470.069244,
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "first_operation_id": "e3f55bd0-0b6d-4623-933d-f2f4833fa7e6:57:stop-former-owner:gateway-b",
+        "former_owner_node_id": "gateway-b",
+        "generation_id": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+        "next_attempt_at": null,
+        "owner_node_id": "gateway-a",
+        "ownership_epoch": "10",
+        "phase": "blocked",
+        "policy_digest": "f10f5a3d8150609983bfee90c0326e90207a7d672b08cb9df70a59cde3ead78c",
+        "policy_operation_id": "04bd236ad98edde9b5454d9d9744ce366401ee9883479b22e75bf0b3ebaeba3c",
+        "promotion_receipt_id": "bf86703be99daf6f7d0022f6d38c31dea13c3a2f1ca80f25e03156ed574f61bb",
+        "rearm_operation_id": "0fc76546-21ac-4ed9-8741-fcae0582c12f",
+        "request_fingerprint": null,
+        "route_operation_id": "e3f55bd0-0b6d-4623-933d-f2f4833fa7e6:62:reconcile-routes:gateway-a",
+        "schema": "nebius-vpngw/vm-ha-standby-restoration-authorization-v1",
+        "source": "automatic-failover",
+        "standby_deadline_at": 1793314044.9025946,
+        "stopped_revision": "8",
+        "updated_at": 1793314308.7689915
+      },
+      "standby-restoration-agreement.json": {
+        "captured_at": 1793390408.5027184,
+        "certificate_id": "a3e66078c8788330ea5c75597d3e9df3176522d0f000279c6c2b104e2d6708e8",
+        "cluster_id": "us-central1-ha",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "heartbeat_digest": "288056d037e0450646e753353bfa842315b161f888c4b1b0b43ccddbb9991a21",
+        "node_id": "gateway-a",
+        "peer_boot_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129",
+        "peer_certificate_fingerprint": "311a09d490feaab6ddf5d1f94e7f92dab81fe5f9feb0fea7cd189848ab2a9f5a",
+        "peer_mtls_epoch": 1,
+        "peer_node_id": "gateway-b",
+        "peer_sent_at": "2026-10-30T20:00:07.905996Z",
+        "peer_sequence": 54375,
+        "policy_digest": "2970afe5eb3bed89478febc2cf4c38e585a5d093592eceed8a9df73c741cad81",
+        "policy_operation_id": "81042c5bd5718911f8cf30522fd7c5e78a44cabfc93c0f67d30fb00227fafca6",
+        "schema": "nebius-vpngw/vm-ha-restoration-agreement-v1"
+      },
+      "transfer-progress.json": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "candidate_node_id": "gateway-a",
+        "cluster_id": "us-central1-ha",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "first_operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+        "former_owner_node_id": "gateway-b",
+        "generation_id": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+        "history": [
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17924.178959942,
+            "sequence": 221,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17924.355420409,
+            "sequence": 222,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17930.334577524,
+            "sequence": 223,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17930.517662176,
+            "sequence": 224,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17936.612119194,
+            "sequence": 225,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17936.787313254,
+            "sequence": 226,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17942.84629447,
+            "sequence": 227,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17943.031085404,
+            "sequence": 228,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17949.701754369,
+            "sequence": 229,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17949.874120632,
+            "sequence": 230,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17956.039355416,
+            "sequence": 231,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17956.402649452,
+            "sequence": 232,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17962.667494865,
+            "sequence": 233,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17962.918411131,
+            "sequence": 234,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17968.998116585,
+            "sequence": 235,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17969.206491287,
+            "sequence": 236,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17975.289682394,
+            "sequence": 237,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17975.463912017,
+            "sequence": 238,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17981.480833419,
+            "sequence": 239,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17981.675096758,
+            "sequence": 240,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17987.832136042,
+            "sequence": 241,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17988.033721293,
+            "sequence": 242,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17994.085273885,
+            "sequence": 243,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 17994.266161218,
+            "sequence": 244,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18000.324143901,
+            "sequence": 245,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18000.513700713,
+            "sequence": 246,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18006.584999383,
+            "sequence": 247,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18006.794251522,
+            "sequence": 248,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18012.984718763,
+            "sequence": 249,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18013.282677714,
+            "sequence": 250,
+            "state": "failed"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": null,
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18019.640395453,
+            "sequence": 251,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+            "error_type": "effect-failed",
+            "operation_id": "d229272a-799c-472a-9a1b-033ef4838aa3:70:stop-former-owner:gateway-b",
+            "ownership_epoch": "15",
+            "recorded_at": 18019.982621604,
+            "sequence": 252,
+            "state": "failed"
+          }
+        ],
+        "intent": "automatic-failover",
+        "ownership_incarnation": 3,
+        "request_fingerprint": null,
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "schema": "nebius-vpngw/vm-ha-transfer-progress-v1"
+      },
+      "rearm-status.json": {
+        "completed_at": null,
+        "operation_id": null,
+        "phase": "blocked",
+        "promotion_receipt_id": null,
+        "reason": "promotion-receipt-invalid",
+        "schema": "nebius-vpngw/vm-ha-rearm-status-v1",
+        "updated_at": 1793390408.4829915
+      }
+    }
+  },
+  {
+    "node": "us-b",
+    "result": {
+      "standby-restoration-agreement.json": {
+        "captured_at": 1793390407.6161435,
+        "certificate_id": "50d9988aa5387908a5656e0a85003ed4a3031012e9d6f8b74b97220a68fd3818",
+        "cluster_id": "us-central1-ha",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "generation_id": "9877f8d5b2b131bcd4dd1b0df1237a314ea333e2da51703663b7dddb705f03a5",
+        "heartbeat_digest": "d76bd4eda85eef9096bb15a8adba6533b9b4d9815ebd8b2678fa2e1ab1f0e534",
+        "node_id": "gateway-b",
+        "peer_boot_id": "d229272a-799c-472a-9a1b-033ef4838aa3",
+        "peer_certificate_fingerprint": "530147e7e0a558226fcc05753cc73ea1c69fd620505d829f91511b49b7607805",
+        "peer_mtls_epoch": 1,
+        "peer_node_id": "gateway-a",
+        "peer_sent_at": "2026-10-30T20:00:06.896420Z",
+        "peer_sequence": 34909,
+        "policy_digest": "2970afe5eb3bed89478febc2cf4c38e585a5d093592eceed8a9df73c741cad81",
+        "policy_operation_id": "81042c5bd5718911f8cf30522fd7c5e78a44cabfc93c0f67d30fb00227fafca6",
+        "schema": "nebius-vpngw/vm-ha-restoration-agreement-v1"
+      },
+      "transfer-progress.json": {
+        "allocation_id": "vpcallocation-u00jbkxsahdxb2ww57",
+        "candidate_node_id": "gateway-b",
+        "cluster_id": "us-central1-ha",
+        "digests": {
+          "bgp_policy": "b8bdb7b7f15f45670ba6cf73888b60fc5c8ccf21c51bc1b57011f1272f7b8349",
+          "configuration": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+          "static_routes": "ad1ad434002f92cc47197bb2d54f958f315d7ea364145fc7ebf8531543330be3"
+        },
+        "first_operation_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129:42:stop-former-owner:gateway-a",
+        "former_owner_node_id": "gateway-a",
+        "generation_id": "f37271254e3f607f115c2acf1b91a451b7f4c9a72168c8ebfc7c8a3fe1201013",
+        "history": [
+          {
+            "action": "stop-former-owner",
+            "boot_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129",
+            "error_type": null,
+            "operation_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129:42:stop-former-owner:gateway-a",
+            "ownership_epoch": "9",
+            "recorded_at": 58.805919084,
+            "sequence": 1,
+            "state": "attempting"
+          },
+          {
+            "action": "stop-former-owner",
+            "boot_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129",
+            "error_type": null,
+            "operation_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129:42:stop-former-owner:gateway-a",
+            "ownership_epoch": "9",
+            "recorded_at": 101.191764291,
+            "sequence": 2,
+            "state": "completed"
+          },
+          {
+            "action": "detach-former-attachment",
+            "boot_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129",
+            "error_type": null,
+            "operation_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129:43:detach-former-attachment:gateway-a",
+            "ownership_epoch": "9",
+            "recorded_at": 101.194724986,
+            "sequence": 3,
+            "state": "attempting"
+          },
+          {
+            "action": "detach-former-attachment",
+            "boot_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129",
+            "error_type": null,
+            "operation_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129:43:detach-former-attachment:gateway-a",
+            "ownership_epoch": "9",
+            "recorded_at": 124.992452175,
+            "sequence": 4,
+            "state": "completed"
+          },
+          {
+            "action": "attach-candidate",
+            "boot_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129",
+            "error_type": null,
+            "operation_id": "f5df4488-dd0c-4007-8d92-9f2d359f7129:44:attach-candidate:gateway-b",
+            "ownership_epoch": "9",
+            "recorded_at": 124.995170401,
+            "sequence": 5,
+            "state": "attempting"
+          }
+        ],
+        "intent": "automatic-failover",
+        "ownership_incarnation": 3,
+        "request_fingerprint": null,
+        "route_runtime_id": "02db7b99a351f83bb47d60c53a90003b56cd5e5a801acef3327297483ab49031",
+        "schema": "nebius-vpngw/vm-ha-transfer-progress-v1"
+      },
+      "rearm-status.json": {
+        "completed_at": 1793386940.9933002,
+        "operation_id": "94f4ddf4-197a-406d-9a25-17811325c90f",
+        "phase": "running",
+        "promotion_receipt_id": "b2690109a0fe63646427b7a383f9d28ee68e9ff6eb90e123ca8ec63e13bb3cb9",
+        "reason": null,
+        "schema": "nebius-vpngw/vm-ha-rearm-status-v1",
+        "updated_at": 1793390407.8929946
+      }
+    }
+  }
+]

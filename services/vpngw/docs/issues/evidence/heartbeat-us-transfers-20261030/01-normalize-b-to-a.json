@@ -1,0 +1,9 @@
+{
+  "action": "failback",
+  "label": "01-normalize-b-to-a",
+  "started": 1793390338.048481,
+  "started_utc": "2026-10-30T19:58:58.048484+00:00",
+  "finished": 1793390346.523809,
+  "elapsed_seconds": 8.47533106803894,
+  "returncode": 1
+}

@@ -1,0 +1,8 @@
+{
+  "node": "us-a",
+  "result": {
+    "code": 0,
+    "stdout": "PING 169.254.11.9 (169.254.11.9) from 169.254.11.10 : 56(84) bytes of data.\n64 bytes from 169.254.11.9: icmp_seq=1 ttl=64 time=98.2 ms\n64 bytes from 169.254.11.9: icmp_seq=2 ttl=64 time=98.0 ms\n64 bytes from 169.254.11.9: icmp_seq=3 ttl=64 time=98.0 ms\n\n--- 169.254.11.9 ping statistics ---\n3 packets transmitted, 3 received, 0% packet loss, time 2002ms\nrtt min/avg/max/mdev = 98.025/98.077/98.171/0.066 ms\n",
+    "stderr": ""
+  }
+}
