@@ -3324,11 +3324,14 @@ request, a successful merge, and successful verification.
   after verified membership; distinguish removal from never-proven membership,
   and defer requested branch deletion while queued. Cleanup must reject a
   head that advances beyond the explicitly expected SHA at deletion time.
-- AC-004: Observe all applicable post-merge CI on the resulting SHA, including
-  check runs, statuses, and Actions provenance. Poll every 30 seconds for up to
-  10,800 seconds per observation attempt; retries, repairs and observed CI
-  reruns do not reset the deadline. Release callers persist this independent
-  verification deadline and renew it only through explicit release resume. Missing result metadata has a 60-second settlement bound.
+- AC-004: Ordinary PR readiness, merge settlement and exact-result CI/Pages
+  verification each use an independent fixed 86,400-second (24-hour) budget.
+  Observe checks, statuses and Actions provenance every 30 seconds; retries,
+  repairs and CI reruns never reset deadlines. An explicit user continuation
+  starts a new observation attempt while retaining the original transaction and
+  prior outcome. Caller-supplied checkpoint deadlines remain authoritative;
+  release workflows retain their own phase budgets and explicit resume rules.
+  Missing result metadata has a 60-second settlement bound.
 - AC-005: Report merge, destination verification, and CI separately. CI outcomes
   include passed, failed, pending, not configured, unverified, and not applicable
   while queued. Preserve actual conclusions and disclose neutral/skipped checks.

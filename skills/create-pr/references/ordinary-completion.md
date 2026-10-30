@@ -56,11 +56,13 @@ Read [checkout completion](checkout-completion.md) before intake and outer retur
    Preserve the original receipt, grant, targets and readiness deadline across
    every handoff. Only the completion owner closes at the selected boundary.
 8. The merge/completion owner observes until actual merge or the fixed
-   10,800-second limit; pending is not completed and the grant stays open.
+   86,400-second limit; pending is not completed and the grant stays open.
    PR readiness, merge settlement and post-merge verification each have an
-   independent fixed 10,800-second budget. Use publication checkpoint deadlines
-   when supplied. Repairs and reruns never reset them; only explicit release
-   resume renews release budgets. Preserve checkpoints, leave GitHub work running
+   independent fixed 86,400-second (24-hour) budget. Use publication checkpoint
+   deadlines when supplied, even when shorter. Repairs and reruns never reset
+   them. An explicit user continuation may start a new ordinary observation
+   attempt, retaining the original transaction and prior outcome; only explicit
+   release resume renews release-owned budgets. Preserve checkpoints, leave GitHub work running
    and report the exact resume command on timeout. Keep short API timeouts,
    bounded polling and minute progress. Verify exact-result CI and configured
    Pages through the completion helper before reporting complete. Record confirmed

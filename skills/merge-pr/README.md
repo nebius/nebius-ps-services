@@ -30,7 +30,7 @@ ordinary branches; keep the head branch unless deletion is explicitly requested.
 - Records GitHub's actual resulting commit and verifies its ancestry in the
   remote target branch, allowing the target to have advanced.
 - Uploads intent before effects and recovers exact-result CI/Pages after merge.
-- Observes applicable CI on the exact resulting commit for up to three hours.
+- Observes applicable CI on the exact resulting commit for up to 24 hours.
 - Observes externally queued PRs read-only within the merge deadline; it never
   enqueues or treats a pending queue entry as a completed merge.
 
@@ -55,7 +55,7 @@ External queue       Merged result SHA
 Read-only wait       Remote destination ancestry
                      |
                      v
-                     Result-commit CI (up to 3 hours)
+                     Result-commit CI (up to 24 hours)
 ```
 
 ## Core Concepts
@@ -80,9 +80,11 @@ Read-only wait       Remote destination ancestry
 - Completion candidate failures display the helper's sanitized reason and retain
   its nonzero exit status without publishing targets. An already verified merge
   remains distinct from a later recovery scan failure.
-- CI polling uses a fixed 10,800-second deadline and a 30-second interval.
-  Release callers retain this deadline in their checkpoint until explicit resume;
-  delayed checks, repairs and observed reruns do not reset it. Result settlement is
+- Ordinary readiness, merge settlement and result verification each use a fixed
+  86,400-second (24-hour) deadline and a 30-second polling interval. An explicit
+  user continuation can start a new observation attempt with the same transaction.
+  Caller-supplied checkpoint deadlines remain authoritative, even when shorter;
+  delayed checks, repairs and observed reruns do not reset deadlines. Result settlement is
   bounded to 60 seconds. Local verification is read-only; a separate trusted
   completion workflow dispatches exact-result CI and configured Pages builds.
 - CI reports passed, failed, pending, not configured, or unverified. Neutral and

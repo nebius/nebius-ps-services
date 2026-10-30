@@ -7242,7 +7242,7 @@ quality evidence; passing local fixtures do not claim model-output quality.
 
 <!-- /FEATURE: FEAT-038 -->
 
-<!-- FEATURE: FEAT-039 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-039 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-039: Evidence-based completion for general-purpose PR merges
 
 #### Requirements Covered
@@ -7288,11 +7288,14 @@ branch-update CI from the result revision and available provider configuration;
 exclude unrelated PR, queue, tag, scheduled, and manual-only executions. Unknown
 applicability or unreadable providers remain unverified. Expected missing checks
 remain pending. Poll every 30 seconds until a terminal result or the absolute
-10,800-second deadline starting at first merged observation in this invocation;
+86,400-second (24-hour) deadline starting at first merged observation in this invocation;
 read retries, repairs and observed reruns never reset it. A release caller uses
 its checkpointed verification deadline across repeated helper invocations; only
-explicit release resume renews it. Standalone merge observation keeps one fixed
-deadline for the current explicitly requested attempt. Neutral/skipped conclusions are
+explicit release resume renews it. Ordinary PR readiness, merge settlement and result verification each keep an
+independent fixed 24-hour deadline for the current explicitly requested attempt.
+An explicit user continuation starts a new observation attempt, records the prior
+outcome and retains the original transaction. Caller-supplied checkpoint deadlines
+remain authoritative, including the release workflow's existing three-hour phases. Neutral/skipped conclusions are
 explicitly disclosed as non-executed or non-successful tests even when accepted
 by check policy. No reruns, dispatch, requeue, or automatic rollback is performed.
 
@@ -7362,6 +7365,13 @@ explicit and never promoted to verified behavior.
 
 #### Implementation Evidence
 
+The merge skill and its ordinary create-pr handoff now use independent fixed
+86,400-second budgets for readiness, settlement and result verification. The
+completion reference, README and 26 quality definitions agree. Explicit ordinary
+continuation preserves transaction identity and prior outcomes; caller checkpoints
+retain precedence. Protection, review, exact-result gates, 30-second polling,
+minute progress, API limits and metadata settlement are unchanged.
+
 The three-hour update uses independent 10,800-second observation budgets. Release
 checkpoints own post-merge verification timing through a private budget action;
 repeated checks, gate changes, canonical repairs and reruns retain deadlines.
@@ -7383,6 +7393,17 @@ The fixtures simulate clocks and forbid network effects; no runtime controller,
 public flag, shared validator, publishing caller, or SDLC change was introduced.
 
 #### Verification Evidence
+
+The 24-hour revision passed strict Codex/Claude and portable structure checks,
+fixture chronology for 3-hour continuation, exact 24-hour expiry and a shorter
+caller deadline, plus 105 merge/completion tests. Pinned npx discovery, copy
+parity, repeat installation and isolation passed for both changed skills on both
+hosts. Code/security review retained all admission and no-repeat-effect gates.
+Source-owned installation refreshed both selected skills, with independent
+content and executable-mode parity across 48 payload files. Shared runtime files
+and hook registrations were unchanged. Native comparative quality is UNAVAILABLE
+because the isolated home lacks agent authentication; static and package checks
+do not establish fresh-session routing. Earlier evidence describes prior budgets.
 
 Three-hour source validation: 57 release tests and 86 merge/completion/publication
 helper tests pass. Simulated clocks prove waiting after one hour, exact three-hour

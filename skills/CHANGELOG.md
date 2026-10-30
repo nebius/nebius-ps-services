@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Extend ordinary PR readiness, merge settlement and result verification to
+  independent fixed 24-hour budgets. Preserve caller checkpoint deadlines,
+  protected merge checks and transaction identity across explicit continuation.
+
 - Align Nebius inspector path initialization with the existing SDK import pattern
   so the complete skills CI Ruff gate passes without suppressing import-order checks.
 - Document the intentional workload-identity exception boundaries for the pinned
