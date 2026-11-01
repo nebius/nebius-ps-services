@@ -128,9 +128,7 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
     assert build_job["if"] == (
         "(github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true'"
     )
-    manual_only = (
-        "github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'"
-    )
+    manual_only = "github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'"
     for name in ("packaging", "integration-tests", "coverage"):
         assert workflow["jobs"][name]["if"] == manual_only
     for job in (build_job, packaging_job):
@@ -186,3 +184,18 @@ def test_ci_and_release_cover_both_gcp_vm_ha_shell_helpers() -> None:
             assert shell.count(f"bash -n {helper}") == 1
         assert shell.count("./misc/gcp-vpngw.sh --vm-ha-peer --help") == 1
         assert shell.count("./misc/gcp-vpngw.sh --classic-vm-ha-peer --help") == 1
+
+
+def test_required_systemd_lane_runs_real_ufw_packet_regressions() -> None:
+    project = Path(__file__).resolve().parents[2]
+    workflow = yaml.safe_load(
+        (project.parents[1] / ".github/workflows/vpngw-ci.yml").read_text(encoding="utf-8")
+    )
+    commands = [
+        step.get("run", "") for step in workflow["jobs"]["ordinary-job-settlement"]["steps"]
+    ]
+    assert "python3 tests/systemd/run.py" in commands
+    runner = (project / "tests/systemd/run.py").read_text()
+    assert '"/workspace/tests/integration/test_tunnel_host_packets.py"' in runner
+    dockerfile = (project / "tests/systemd/Dockerfile").read_text()
+    assert "ufw iptables iputils-ping" in dockerfile

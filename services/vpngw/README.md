@@ -227,6 +227,11 @@ or reboot alone does not clear the guard. Preserve
 `/var/lib/nebius-vpngw/ordinary/operation.json` when diagnosing an unresolved update.
 Do not delete it or run another deployment tool to bypass admission.
 
+If a newly activated maintenance timer starts its guarded job during final
+verification, apply waits for that job within the existing deadline, keeping the
+operation guard active. It then repeats the complete final verification before
+reporting success. This wait does not repeat installation or reconciliation.
+
 Existing ordinary management services are stopped before package/config changes.
 A persistent startup condition also protects previous-release services if the VM
 reboots during an incomplete upgrade. The exact new agent can start and wait for
@@ -536,7 +541,15 @@ If it changes after convergence starts, the result explicitly says effects may
 have begun and the next `vm-ha` run resumes from durable checkpoints.
 
 New VM-HA activations initialize automatic standby restoration as explicitly
-`enabled`. During an agent-schema upgrade, activation invalidates only the
+`enabled`. When a former owner later takes over under a newer configuration,
+the controller retires its exact completed restoration before retiring the old
+promotion receipt, then arms restoration for the new transfer. Active, blocked
+or unreadable records never grant new restart authority. An automatic cutover
+can still complete safely when restoration is unavailable; fixed reason codes
+in the controller journal distinguish cleanup, arming and commit rejection.
+No operator record editing or heartbeat-timeout change is needed.
+
+During an agent-schema upgrade, activation invalidates only the
 cached advisory peer heartbeat through an exact generation-bound reset consumed
 after the old controller stops, while retaining the anti-replay boundary. The
 restarted controller must authenticate fresh peer evidence before using it.
@@ -1421,7 +1434,9 @@ command exits nonzero and reports the cutover outcome or standby restoration as
 Likewise, a terminal-looking read followed by the controller's exact
 current-request ownership reproof remains attached only through the closed
 self-fence, passive re-entry, detach/attach, ownership confirmation, route, and
-forwarding sequence inside the same fixed cutover budget. Missing or foreign
+forwarding sequence inside the same fixed cutover budget. The pending self-fence
+may already have a blocked guard while its cached action remains pending; the
+command continues observing that exact request without treating it as success. Missing or foreign
 lineage, an unexpected action or blocked reason, an apply lock, or unexplained
 well-formed drift still fails immediately. If exact reproof remains in progress
 at the deadline, the command reports that cutover is not yet verified instead
@@ -3037,6 +3052,47 @@ Agent synchronizes UFW rules with active tunnels:
 - Removes stale peer IPs when tunnels deleted
 - Keeps local prefix rules in sync with `gateway.local_prefixes`
 - XFRM interfaces not filtered by UFW (allows BGP/encrypted traffic to flow)
+
+Host INPUT and OUTPUT permits are installed for configured tunnel interfaces before
+the interfaces exist. Unchanged reconciliation also repairs kernel-only permit
+loss when UFW already has the rule saved. Recovery restores only the affected
+UFW host chains from saved policy, preserving saved rule order; runtime-only
+edits inside those UFW-owned chains are replaced. Other chains, forwarding state,
+MSS handling and HA fencing remain unchanged. Invalid or unavailable saved policy
+fails reconciliation instead of triggering a firewall reset or reload.
+
+Existing customers use the normal artifact-bound `apply` workflow with their
+existing configuration. Apply may temporarily interrupt traffic; this fix adds
+no configuration migration or new CLI options. Established IPsec and successful
+ping alone do not prove that new BGP TCP connections are admitted.
+
+### IPsec Session Recovery
+
+Active tunnels initiate when their configuration loads. Authenticated sessions may
+overlap during negotiation or reauthentication; native INITIAL_CONTACT handling is
+preserved. A peer-closed session installs a demand policy so subsequent traffic
+can reestablish the tunnel without a repeated forced-replacement loop. Inert HA
+rendering keeps both initiation and demand recovery disabled. Authentication,
+configured lifetimes and existing configuration formats remain unchanged.
+
+Health checks use the exact IKE connection name and inspect all of its sessions.
+An established session remains healthy during overlapping negotiation, and a
+similarly named connection cannot trigger its repair or supply its health.
+
+### Packet-loss Acceptance
+
+Product acceptance requires **strictly less than 0.2% steady-state packet loss**
+for each tested direction. Exactly 0.2% fails. There is no fixed ten-minute test
+requirement: declare a bounded, representative interval before testing and report
+its actual duration, sent/lost counts, protocol, rate, packet size and tested artifact.
+Use complete receiver evidence and the full declared interval; do not combine
+opposite directions, round a result into a pass or retry until a clean sample appears.
+
+The criterion also applies to operation baselines and steady-state recovery.
+Operation-specific outage limits, recovery deadlines, BGP/HA health, ownership and
+compatibility checks remain separate requirements. Report transition loss separately.
+A passing sample qualifies only its tested scope; it does not prove an unrun upgrade
+or failover, identify a loss cause, or guarantee all network paths and future traffic.
 
 ### Secrets Management
 

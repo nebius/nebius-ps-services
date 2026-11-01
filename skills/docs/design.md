@@ -7798,7 +7798,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=8 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=9 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -7837,6 +7837,8 @@ Image tag builds exclusively own X.Y.Z and X.Y.Z-gSHA; manual builds own sha-SHA
 
 Reviewer routing uses trusted base policy to add configured nonauthor reviewers to same-repository nondraft PRs, preserving manually requested users and teams. No PR checkout or removal effect. Validate local source, template parity and installed payloads separately from GitHub deployment or live publication; this change does not authorize those effects.
 
+Fork CI association repair: preserve embedded run associations and commit associations as the first discovery paths. When both are empty, use one fully paginated, URL-encoded fork owner/ref selector. Require uniqueness before base filtering, hydrate the sole PR, and share full producer repository, fork repository, branch, exact head, creation-time and Actions check-suite validation with CI readiness. Stale, closed, deleted-fork and nondefault-base candidates are no-ops; malformed evidence, ambiguous selectors and incomplete API reads stop discovery. Keep JSON targets on stdout and bounded sanitized discovery diagnostics on stderr. Preserve the validator boolean contract, publisher current-head recheck, hourly recovery and all merge authority boundaries.
+
 #### Selected Option
 
 Python, Bash, gh and deterministic GitHub Actions using GITHUB_TOKEN. Agentic review/repair remains local; no hosted model runtime or new cloud services.
@@ -7858,6 +7860,8 @@ Ordinary review/merge/create and publication owners, reusable workflows, broker/
 - TDD-005: Plain create/review stops at readiness; explicit combined intent delegates once, preserves ownership and does not recurse. Final candidate analysis precedes publication; repairs invalidate analysis.
 - TDD-006: Valid immutable setup-uv updates pass; invalid identity/pinning/inputs/conditions/order fail. Pending/cancelled orchestration checks are excluded only with authoritative provenance; same-name validation and forged/ambiguous producers still gate.
 - TDD-007: Execute the actual candidate shell block with offline helper stubs: empty/populated success arrays, blocked/pending/arbitrary nonzero statuses, empty failure output, unchanged output files on failure, one invocation and no environment-secret disclosure.
+
+- TDD-008: Empty run and commit associations still select one verified current fork PR. Cover discovery-to-publication success/pending/failure, same-head reruns, encoded refs, ambiguous selectors across bases, stale/deleted candidates, invalid provenance and API failures with no approval or merge effects.
 
 #### Validation Plan
 
@@ -7899,6 +7903,8 @@ Native-agent comparative quality probes on Codex and Claude were authentication-
 
 #### Implementation Evidence
 
+Revision 9 implements the shared fork-run resolver in the canonical merge gate. Empty embedded and commit associations now route through a unique encoded fork/ref selector, hydrated PR and complete run/head/time/check-suite validation. Discovery and readiness share that validator; API failures propagate, rejected validation retains its boolean contract, and discovery diagnostics stay on stderr. Added causal and negative regressions and aligned the operational docs and changelogs. Workflow triggers, permissions, merge authority and recovery scheduling are unchanged. Earlier revision evidence below remains historical.
+
 Implemented workflow rationalization locally: one hourly recovery, targeted PR CI start/completion aggregation, run-scoped completion discovery, early routing receipts and target-isolated blocked diagnostics. Preserved exact-result evidence and effect journals. Retained the fifteen workflow boundaries and seven CI identities, added inventory/filter/listener contracts and add-only reviewer routing. Shared publication helpers enforce original asset hashes, tag-object identity, digest equality and fail-closed retries. Image release/manual aliases are disjoint under one destination queue; manual builds freeze the helper from the workflow revision. An explicit main-only latest request reuses a verified existing manual digest under the same lock, then rechecks every tag; it never rebuilds immutable aliases. Helm retains package/anonymous-pull/digest qualification with structured duplicate-repository observation. Release/image YAML templates have one source owner. Updated docs and installed the five affected skills from source.
 
 Implemented candidate diagnostic visibility in the deployed completion workflow and its reusable template. Both capture the helper status, print a generic exit-status message plus nonempty sanitized output on failure, preserve the status, and publish targets only on success. The helper, transport-error suppression, API deadline, receipt gates and permissions are unchanged.
@@ -7906,6 +7912,8 @@ Implemented candidate diagnostic visibility in the deployed completion workflow 
 Revision 5 implements PR-only create-pr defaults, complete nested code-review before publication, early one-time combined review-and-merge delegation and mandatory parent-owned review-pr for every unmerged PR. Updated instructions, metadata, evaluations, direct release/image/Helm callers and documentation preserve receipts, grants, deadlines, publication checkpoints and SDLC isolation. Removed the redundant create-pr preparation flag and check-name exclusions. CI now resolves orchestration producer provenance; cxcli workflow tests enforce structural immutable action pinning without a golden release hash. Refreshed all eight affected installed skill payloads while preserving their owners. No commit, deployment, PR update or live merge was performed.
 
 #### Verification Evidence
+
+Revision 9 local verification: the new empty-association and discovery-to-publication regressions failed against the original helper and pass with the repair. All 69 merge-gate, 40 completion and 5 workflow-contract tests pass (114 total); the latter uses the CI-pinned PyYAML 6.0.3 in an isolated environment. Scoped Ruff lint, changed-range formatting, Python syntax, Markdown, paired-spec and diff checks pass. Unrelated pre-existing whole-file formatting was preserved. Independent read-only code/security review found no blocking issue and separately passed all 69 merge-gate tests. No deployment or installed-copy parity is claimed. After default-branch activation, a dedicated unmerged maintainer-owned fork PR must prove the empty-association path and same-head rerun transitions in the corresponding CI event handlers before hourly/manual recovery intervenes. Source tests, deployment, installed-copy parity and live evidence remain separate; no GitHub scheduling SLA is promised.
 
 Local workflow rationalization verification: 58 merge-gate, 37 completion, 10 publication primitive, 18 publication evidence, 5 workflow contract, 2 template ownership, 57 release-session/doer, 39 cxcli publication/workflow/catalog and 11 VPN release tests pass (237 tests plus 56 release subtests). The VPN frozen-binary test initially lacked PyInstaller; it passed with the declared build dependency supplied through an isolated uv environment. Python lint/format, Markdown, paired-spec validation, core/Codex/Claude skill structure and workflow/template actionlint pass. Actionlint 1.7.12 does not recognize the currently documented concurrency.queue key: only that exact syntax diagnostic was excluded, with queue:max/noncanceling locks checked separately by contract tests. Independent read-only code/security review findings were repaired and covered by regressions. These are local source, fixture and installed-payload results; no GitHub deployment, live merge, release, registry push or native skill-trigger behavior is certified.
 

@@ -4,6 +4,7 @@ FROM ubuntu:24.04@sha256:186072bba1b2f436cbb91ef2567abca677337cfc786c86e107d25b7
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd systemd-sysv dbus netplan.io iproute2 python3-pytest python3-yaml python3-pip python3-venv sudo openssh-server \
+    ufw iptables iputils-ping strongswan-charon strongswan-swanctl libstrongswan-standard-plugins \
     && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml /tmp/fixture-pyproject.toml
 RUN python3 -m venv --system-site-packages /opt/vpngw-test \

@@ -216,9 +216,10 @@ network:
             if tun["ike_props"]:
                 swanctl_lines.append(f"    proposals = {','.join(tun['ike_props'])}")
             swanctl_lines.append(f"    rekey_time = {int(tun['ike_life'])}s")
-            # Loading a start_action connection and receiving a simultaneous peer
-            # initiation must converge to one IKE SA for the peer identity.
-            swanctl_lines.append("    unique = replace")
+            # Preserve authenticated reauthentication overlap and native
+            # INITIAL_CONTACT handling. Forced replacement can loop against a
+            # peer that immediately recreates a session on DELETE.
+            swanctl_lines.append("    unique = no")
             swanctl_lines.append("    local {")
             swanctl_lines.append("      auth = psk")
             if tun["local_public_ip"]:
@@ -243,7 +244,7 @@ network:
                 swanctl_lines.append(f"        replay_window = {tun['replay_window']}")
             swanctl_lines.append("        mode = tunnel")
             swanctl_lines.append(f"        start_action = {'start' if activate else 'none'}")
-            swanctl_lines.append(f"        close_action = {'restart' if activate else 'none'}")
+            swanctl_lines.append(f"        close_action = {'trap' if activate else 'none'}")
             swanctl_lines.append(f"        if_id_in = {tun['if_id']}")
             swanctl_lines.append(f"        if_id_out = {tun['if_id']}")
             swanctl_lines.append("      }")

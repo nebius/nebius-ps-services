@@ -15880,7 +15880,10 @@ def _vm_ha_planned_reproof_converging(
     )
     if (
         state == "blocked"
-        and data_plane_mode == "active"
+        # The guard may already reflect disable-active while the cached status
+        # still carries that exact pending action. Both observations remain
+        # within the same request-bound, fenced ownership reproof.
+        and data_plane_mode in {"active", "blocked"}
         and isinstance(reasons, list)
         and len(reasons) == 1
         and reasons[0] in _VM_HA_PLANNED_REPROOF_FENCE_REASONS

@@ -26,6 +26,8 @@ read-only source, tests, and project metadata mounts. Runtime state lives in its
 The tests exercise real job replies, failed reloads, a dead caller with a surviving
 job, lost acknowledgements, delayed stops, native Netplan convergence, effective
 unit dependencies, interrupted migration handoff, and old-agent startup admission.
+They also exercise an immediately dispatched timer job that observes the pending
+operation guard, and require bounded settlement without completing that operation.
 Local command tests also verify descendant settlement after leader exit and timeout
 using the real process journal and Linux process groups.
 Route retirement uses real XFRM interfaces in private network namespaces to verify
@@ -42,6 +44,23 @@ execution. Ordinary integration runs skip this dedicated lane; its own CI job
 requires the prerequisites and all tests to pass.
 
 The image base is pinned; Ubuntu package updates are resolved during each build.
+The default lane also runs real UFW host-policy tests serially, last in the
+disposable container. Its saved rules and POSIX lock are shared with product
+reconciliation inside the router namespace. Tests cover pre-device permits,
+kernel-only INPUT/OUTPUT loss, saved deny ordering, native match normalization,
+no-op repeat, invalid dependencies, public BGP denial, and preservation of
+management/peer rules, forwarding state, unrelated chains and MSS handling.
+Veth links model tunnel host interfaces; these UFW tests do not prove ESP or
+IPsec. Missing UFW/network prerequisites fail the opted-in fixture.
+
+Separate session tests run two actual strongSwan daemons in private network and
+mount namespaces, using ephemeral credentials and real ESP/XFRM policies. They
+require ESP4 kernel support, including a loaded module when automatic loading is
+disabled. They cover IKEv2 overlapping negotiation, IKEv1 startup, encrypted TCP/179,
+stable session identities and peer-close recovery, including the prior release's
+session settings on one peer. TCP/179 payload exchange does not prove BGP prefix
+exchange, and prior-policy coverage does not qualify a full release upgrade.
+
 Local validation can use native ARM64 Ubuntu. The `ubuntu-24.04` CI job
 provides the AMD64 runner lane. These tests do not prove a live gateway upgrade,
 VPN connectivity, cloud fencing, or HA failover.

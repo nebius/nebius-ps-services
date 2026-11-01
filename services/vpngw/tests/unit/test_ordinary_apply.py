@@ -338,6 +338,153 @@ def test_final_confirmation_rejects_missing_retirement_commit(transaction, monke
     assert result["status"] == "failed" and result["stage"] == "verify"
 
 
+def test_final_confirmation_waits_for_guarded_timer_job_and_rechecks(
+    transaction, monkeypatch, ordinary_operation_guest
+):
+    from nebius_vpngw import ordinary_operations as ops
+
+    tx = transaction
+    observations = []
+
+    def quiet(self, names):
+        value = ops.Journal().read()
+        if value and value["phase"] == "verify":
+            observations.append(value["state"])
+            if len(observations) == 2:
+                with open(ordinary_remote.ROUTING_LOCK) as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with pytest.raises(ops.OperationBlocked):
+                    ops.require_idle()
+            # An already-enabled timer dispatches its guarded oneshot after
+            # activation. The job settles without touching the pending apply.
+            return len(observations) > 1
+        return True
+
+    monkeypatch.setattr(ordinary_operation_guest, "quiet", quiet)
+    result = ordinary_remote.execute(tx.request)
+
+    assert result["status"] == "applied", result
+    assert len(observations) >= 3
+    assert set(observations) == {"active"}
+    assert tx.effects.count(["reconcile"]) == 1
+    assert tx.effects.count(["verify"]) == 2
+    assert ops.Journal().read()["state"] == "complete"
+
+
+def test_final_confirmation_rejects_artifact_drift_while_timer_job_settles(
+    transaction, monkeypatch, ordinary_operation_guest
+):
+    from nebius_vpngw import ordinary_operations as ops
+
+    tx = transaction
+    observations = []
+
+    def quiet(self, names):
+        value = ops.Journal().read()
+        if value and value["phase"] == "verify":
+            observations.append(value["state"])
+            if len(observations) == 1:
+                return False
+            tx.state["dependencies"]["cryptography"] = "changed-during-settlement"
+        return True
+
+    monkeypatch.setattr(ordinary_operation_guest, "quiet", quiet)
+    result = ordinary_remote.execute(tx.request)
+
+    assert len(observations) >= 2
+    assert tx.effects.count(["verify"]) == 2
+    assert result["status"] == "failed" and result["stage"] == "verify"
+    assert ops.Journal().read()["state"] == "unresolved"
+
+
+@pytest.mark.parametrize("fault", ["busy", "late", "owner", "observation"])
+def test_final_settlement_preserves_deadline_ownership_and_read_failures(
+    transaction, monkeypatch, ordinary_operation_guest, fault
+):
+    from nebius_vpngw import ordinary_operations as ops
+
+    tx = transaction
+    observations = []
+    clock = SimpleNamespace(now=time.monotonic())
+    monkeypatch.setattr(
+        ordinary_remote,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock.now,
+            sleep=lambda seconds: setattr(clock, "now", clock.now + seconds),
+        ),
+    )
+
+    def quiet(self, names):
+        value = ops.Journal().read()
+        if not value or value["phase"] != "verify":
+            return True
+        observations.append(value["state"])
+        if len(observations) == 1:
+            self.deadline = clock.now + 0.2
+            return False
+        if fault == "late":
+            clock.now = self.deadline + 1
+            return True
+        if fault == "owner":
+            value["id"] = "b" * 32
+            ops.Journal().write(value)
+        if fault == "observation":
+            raise ops.OperationBlocked("ordinary_manager_observation_failed")
+        return False
+
+    monkeypatch.setattr(ordinary_operation_guest, "quiet", quiet)
+    result = ordinary_remote.execute(tx.request)
+
+    assert result["status"] == "failed" and result["stage"] == "verify"
+    assert len(observations) >= 2
+    assert tx.effects.count(["reconcile"]) == 1
+    assert ops.Journal().read()["state"] != "complete"
+    if fault == "owner":
+        assert ops.Journal().read()["id"] == "b" * 32
+
+
+@pytest.mark.parametrize("releases", [True, False])
+def test_final_confirmation_bounds_guarded_routing_lock_contention(
+    transaction, monkeypatch, releases
+):
+    tx = transaction
+    clock = SimpleNamespace(now=time.monotonic(), sleeps=0)
+    held = []
+
+    def sleep(seconds):
+        clock.now += seconds
+        clock.sleeps += 1
+        if releases and held:
+            os.close(held.pop())
+
+    monkeypatch.setattr(
+        ordinary_remote, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep)
+    )
+
+    def receipt(*args, **kwargs):
+        value = tx.receipt(*args, **kwargs)
+        if kwargs["verify_only"] and clock.sleeps == 0:
+            # The periodic helper takes the routing lock before checking the
+            # pending-operation guard. It may race the parent's final lock.
+            lock = os.open(ordinary_remote.ROUTING_LOCK, os.O_RDONLY)
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held.append(lock)
+            ordinary_remote.OPERATION.manager.deadline = clock.now + 0.2
+        return value
+
+    monkeypatch.setattr(ordinary_remote, "agent_receipt", receipt)
+    try:
+        result = ordinary_remote.execute(tx.request)
+        assert clock.sleeps > 0
+        assert result["status"] == ("applied" if releases else "failed")
+        assert tx.effects.count(["reconcile"]) == 1
+        assert tx.effects.count(["verify"]) == (2 if releases else 1)
+    finally:
+        for lock in held:
+            os.close(lock)
+
+
 @pytest.mark.parametrize("member", ["ordinary_routes.py", "tunnel_state.py", "agent/ordinary.py"])
 def test_selected_wheel_must_implement_the_approved_route_contract(release_wheel, tmp_path, member):
     selected = tmp_path / "selected.whl"
@@ -963,3 +1110,33 @@ def test_remote_timeout_kills_grandchild_before_return(tmp_path, monkeypatch):
         ordinary_remote.command([sys.executable, "-c", parent])
     time.sleep(0.6)
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("mode", ["bgp", "static"])
+def test_real_060_nonempty_state_and_tunnel_identity_remain_compatible(tmp_path, mode):
+    import yaml
+
+    from nebius_vpngw.config_loader import load_local_config, merge_with_peer_configs
+    from nebius_vpngw.tunnel_state import collect_tunnel_state
+
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures/previous_release_0_6_0_ordinary.json").read_text()
+    )["cases"][mode]
+    old_state = fixture["state"]
+    assert old_state["package_version"] == "0.6.0"
+    assert old_state["resolved_config"]["connections"]
+    path = tmp_path / "last-applied.json"
+    path.write_text(json.dumps(old_state))
+    before = path.read_bytes()
+    store = ordinary.StateStore(path)
+    assert store.load_last_applied() == old_state
+    assert not store.is_changed(old_state["resolved_config"])
+    assert path.read_bytes() == before
+    config = tmp_path / "ordinary.yaml"
+    config.write_text(yaml.safe_dump(fixture["local_config"]))
+    plan = merge_with_peer_configs(load_local_config(config), [])
+    plan.validate()
+    assert len(plan.per_instance) == 1
+    resolved = yaml.safe_load(plan.per_instance[0].config_yaml)
+    assert resolved.get("vm_ha") is None
+    assert collect_tunnel_state(resolved, log=lambda _: None)[2] == fixture["interfaces"]

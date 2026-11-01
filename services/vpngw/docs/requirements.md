@@ -1449,6 +1449,9 @@ Unify planned and automatic VM ownership transfer around typed, durable intent, 
   controller-owned ownership-reproof path: candidate self-fencing, passive
   re-entry, detach-for-reproof, attach, ownership confirmation, tunnel
   preparation when required, route reconciliation, or forwarding enablement.
+  During the exact candidate-local pending self-fence, the current guard may
+  already report blocked while the cached action is still pending. Both active
+  and blocked guard observations remain bounded waiting states, never success.
   That evidence authorizes observation only; it cannot complete the transfer,
   drive an effect, or change the fixed deadline. A terminal-looking agent read
   followed by cloud or final-agent disagreement continues only when one fresh
@@ -2171,6 +2174,13 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
 
 #### Acceptance Criteria
 
+- At an admitted first transfer effect after a generation change, retire only
+  the exact receipt-bound completed restoration before removing its prior
+  promotion receipt. Preserve active, blocked, foreign or unreadable records.
+  Optional cleanup failure must not expand restoration authority or veto an
+  otherwise authorized automatic promotion; required durable transfer writes
+  remain mandatory before external effects. Existing public interfaces,
+  persisted formats, non-HA behavior and policy/fencing checks are unchanged.
 - A strict replay-protected policy-agreement certificate is created only from
   the exact committed enabled local policy and a fresh accepted peer heartbeat
   whose cluster, members, generation, policy digest, boot identity, sequence,
@@ -2757,5 +2767,173 @@ safe diagnostic before provisioning, including dry-run and recreation. Local reg
 and packaging checks pass; no additional live deployment is claimed.
 
 <!-- /REQUIREMENT: REQ-019 -->
+<!-- REQUIREMENT: REQ-021 status=active priority=P1 type=bugfix -->
+### REQ-021: Tunnel host firewall rule installation and repair
+
+#### User Story
+
+Gateway operators need configured tunnel host access to converge before devices exist
+and after kernel-only rule loss, without changing existing configuration or weakening
+customer firewall policy and VM-HA fencing.
+
+#### Acceptance Criteria
+
+- Install configured INPUT and OUTPUT tunnel permits before XFRM devices exist,
+  deriving names and disabled-tunnel exclusions from the canonical tunnel mapping.
+- Repair missing live permits during unchanged-configuration reconciliation even
+  when UFW already persists them; verify the live filter table before success.
+- Replay only affected existing UFW host chains from saved policy in saved order.
+  Preserve saved customer rules, unrelated chains, built-in policies, forwarding,
+  mangle/MSS rules, management access and VM-HA peer access and authority.
+- Preserve supported CLI, schema, configuration defaults, persisted formats and
+  ordinary BGP/static and VM-HA upgrade paths. Existing customers use normal apply;
+  no new flags, configuration migration or compatibility shim is required.
+- Mandatory isolated Linux CI runs actual UFW and fresh TCP/179 traffic for late
+  interface creation and persistent/live divergence; fixture prerequisites fail
+  visibly when the required lane cannot execute.
+
+#### Negative Criteria
+
+- No fallback firewall reset/reload, automatic UFW enablement, missing-chain
+  recreation, forwarding change, or modification of HA ownership/fencing.
+- No success from UFW exit status alone, established IPsec or ICMP reachability.
+- No continuous HA firewall monitoring or new activation authority in this fix.
+
+#### Validation Method
+
+Run focused tests, the existing isolated systemd CI lane, make all, paired spec
+validation and alignment. Qualify a source-matching wheel on an authorized test
+HA gateway through supported apply, unchanged apply, failover and failback.
+
+#### Test Method
+
+Separate saved and live policy in unit fixtures. Use real UFW in a disposable Linux
+namespace for first boot, independently missing INPUT/OUTPUT permits, saved rule order,
+no-op repeat, disabled tunnels, failures, dependencies and unchanged safety controls.
+
+#### Evaluation Method
+
+Record local, CI and live evidence separately. Apply REQ-023's strictly less than
+0.2% steady-state packet-loss criterion to each independently initiated direction.
+The selected non-production operation trial retains a two-minute traffic baseline,
+at most 300 seconds of continuous outage, independent 5 Hz probes each way, and
+healthy HA redundancy within the fixed 30-minute post-operation deadline. Declare
+the bounded post-operation measurement interval before running the trial; no fixed
+ten-minute window or reset after each isolated missed reply is required. Report
+transition outage and loss separately from steady-state acceptance without discarding
+either. These are qualification limits, not universal customer outage guarantees.
+Recovery or intervention does not satisfy the affected trial; replay from a proven
+healthy checkpoint. Workload round trips do not prove both initiation directions.
+Qualify authentic 0.6.0 ordinary agent and saved-state upgrades in BGP and static
+modes on isolated canaries. Candidate-native workload-route preparation is fixture
+setup; the BGP baseline may additionally install only missing tunnel host permits.
+Verify unchanged historical agent bytes and saved state, then establish a healthy
+checkpoint before the upgrade trial. Label this old-agent upgrade compatibility,
+not untouched historical-CLI deployment or native healthy-baseline creation.
+Fixture corrections do not qualify product-owned firewall or route restoration.
+Also qualify automatic HA restoration after a generation change; existing HA
+receives apply, repeat apply and planned transfers only after the isolated gates pass.
+Preserve failed and intervened trials without retrying until green.
+
+<!-- /REQUIREMENT: REQ-021 -->
+<!-- REQUIREMENT: REQ-022 status=active priority=P1 type=bugfix -->
+### REQ-022: Stable authenticated IPsec session recovery
+
+#### User Story
+
+Gateway operators need authenticated IPsec sessions to converge after overlapping
+negotiations and recover after peer closure without repeated replacement disrupting
+BGP or workload traffic, including during a one-sided ordinary gateway upgrade.
+
+#### Acceptance Criteria
+
+- Bounded overlapping authenticated negotiations converge without a self-sustaining
+  IKE/CHILD replacement loop. Preserve legitimate reauthentication overlap.
+- Health monitoring identifies the exact requested IKE connection and considers
+  every matching session. An established session takes precedence over an
+  overlapping negotiation; similarly named connections cannot supply its health.
+- Active tunnels initiate at load and recover on traffic after peer closure.
+  Inert rendering must neither initiate nor install demand-triggered recovery.
+- Preserve PSK authentication, peer identity, proposals, XFRM binding, configured
+  lifetimes, supported IKE versions, schema, CLI and persisted formats.
+- Validate one updated endpoint against the prior release's session policy.
+  BGP establishment, prefix exchange and workload traffic remain live gates.
+
+#### Negative Criteria
+
+- No unauthenticated admission, ignored INITIAL_CONTACT, new configuration mode,
+version fallback, manual session reset as proof, or a loss claim outside the
+measurement scope and strictly less than 0.2% criterion in REQ-023.
+
+#### Validation Method
+
+Use actual strongSwan daemons and ESP in the isolated Linux lane, renderer unit
+checks, full local gates, REQ-021 operation bounds and REQ-023 packet-loss acceptance.
+
+#### Test Method
+
+Reproduce sustained replacement with the old policy after one duplicate negotiation;
+verify stable SA identities, encrypted TCP/179 in both directions, peer closure and
+bounded on-demand recovery with both updated and prior-policy peers. Cover IKEv1
+startup and recovery separately from the IKEv2 duplicate-initiation reproducer.
+
+#### Evaluation Method
+
+Separate packet-localized evidence, policy experiments, source-built regressions
+and live qualification. A corrected isolated test does not establish actual BGP
+or customer upgrade compatibility. Retain failures and bind live proof to artifacts.
+
+<!-- /REQUIREMENT: REQ-022 -->
+<!-- REQUIREMENT: REQ-023 status=active priority=P1 type=reliability -->
+### REQ-023: Measured product packet-loss acceptance
+
+#### User Story
+
+Operators need a consistent product acceptance criterion for measured workload
+packet loss without a mandatory ten-minute observation period.
+
+#### Acceptance Criteria
+
+- Accept steady-state packet loss only when it is strictly less than 0.2% for each
+  independently initiated direction and each declared test case. Exactly 0.2% fails.
+- Calculate loss as 100 times missing unique packets or probe replies divided by
+  the transmitted count, with a positive denominator and complete receiver evidence.
+  Use the native receiver result when a client summary disagrees; disclose the discrepancy.
+- Use the full declared observation interval and record its actual duration, packet
+  count, protocol, packet size, rate, direction, artifact and topology. Declare a bounded,
+  representative interval before new tests; there is no fixed ten-minute minimum.
+- Apply the same loss threshold to operation baselines and steady-state recovery.
+  Preserve separately specified outage limits, recovery deadlines, BGP/HA health,
+  ownership/fencing and compatibility checks. Report transition loss separately.
+- Existing complete measurements may be compared with this newly accepted criterion,
+  with the original criteria and verdict preserved. Unrun, truncated or intervened
+  operations remain unverified; a loss-only pass does not qualify them.
+
+#### Negative Criteria
+
+- No acceptance from an empty sample, rounded percentages, combined directions,
+  cherry-picked subintervals, quiet control-plane counters or an incomplete capture.
+- No universal network-loss guarantee, causal-fix claim or deployment proof inferred
+  from accepting a measured loss rate. No automatic retry until a passing sample appears.
+
+#### Validation Method
+
+Check exact loss arithmetic against below, equal-to and above-threshold examples,
+then reconcile requirements, design, README and changelog. Preserve the artifact and
+scope of prior unit, integration, isolated Linux and live-operation evidence.
+
+#### Test Method
+
+Use complete sender/receiver records. Compare each test separately using exact
+counts; for integer counts the strict boundary is 500 times lost less than sent.
+Distinguish test infrastructure failures and missing evidence from measured packet loss.
+
+#### Evaluation Method
+
+Report a pass only for the exercised protocol, direction, interval and artifact.
+Test duration is evidence, not a universal qualification gate. Broader release or
+operation acceptance still requires its independently specified checks.
+
+<!-- /REQUIREMENT: REQ-023 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

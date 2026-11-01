@@ -11159,7 +11159,8 @@ def test_planned_terminal_readers_keep_permanent_and_malformed_failures_immediat
         )
 
 
-def test_planned_reproof_predicate_rejects_foreign_or_unsafe_evidence() -> None:
+@pytest.mark.parametrize("guard_mode", ("active", "blocked"))
+def test_planned_reproof_predicate_rejects_foreign_or_unsafe_evidence(guard_mode: str) -> None:
     request = {
         "schema": "nebius-vpngw/vm-ha-manual-failover-v1",
         "cluster_id": "cluster-a",
@@ -11175,7 +11176,7 @@ def test_planned_reproof_predicate_rejects_foreign_or_unsafe_evidence() -> None:
     blocked = {
         "state": "blocked",
         "promotion_committed": False,
-        "data_plane_mode": "active",
+        "data_plane_mode": guard_mode,
         "apply_locked": False,
         "reasons": ["local-ownership-lacks-establishment-proof"],
         "pending_operation_id": "boot-a:2:disable-active:node-passive",
@@ -11194,7 +11195,14 @@ def test_planned_reproof_predicate_rejects_foreign_or_unsafe_evidence() -> None:
     )
     for rejected in (
         {**blocked, "apply_locked": True},
+        {**blocked, "data_plane_mode": "passive"},
+        {**blocked, "transfer_progress": None},
+        {**blocked, "pending_operation_id": None},
         {**blocked, "reasons": ["controller-step-failed"]},
+        {
+            **blocked,
+            "reasons": ["local-ownership-lacks-establishment-proof", "controller-step-failed"],
+        },
         {**blocked, "pending_operation_id": "boot-a:2:disable-active:node-active"},
         {
             **blocked,
@@ -11242,11 +11250,16 @@ def test_planned_reproof_predicate_rejects_foreign_or_unsafe_evidence() -> None:
 
 @pytest.mark.parametrize("target_role", ("active", "passive"))
 @pytest.mark.parametrize("race", ("cloud", "final-agent"))
+@pytest.mark.parametrize("guard_mode", ("active", "blocked"))
 def test_planned_transfer_observes_exact_reproof_before_terminal_cutover(
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
     race: str,
     target_role: str,
+    guard_mode: str,
 ) -> None:
+    from nebius_vpngw.agent.main import _project_current_vm_ha_status
+
     operation = "failback" if target_role == "active" else "failover"
     target_node_id = f"node-{target_role}"
     request = {
@@ -11358,6 +11371,17 @@ def test_planned_transfer_observes_exact_reproof_before_terminal_cutover(
         reason="local-ownership-lacks-establishment-proof",
         pending=f"boot-a:2:disable-active:{target_node_id}",
     )
+    # The guard is updated by the effect before the next controller status
+    # publication. Exercise the real projection of that intermediate state.
+    blocked["guard_boot_id"] = "boot-a"
+    blocked = _project_current_vm_ha_status(
+        blocked,
+        state_dir=tmp_path,
+        guard={"guard_boot_id": "boot-a", "data_plane_mode": guard_mode},
+        current_boot_id="boot-a",
+        clock=lambda: 0.0,
+    )
+    assert blocked["data_plane_mode"] == guard_mode
     passive = bridge_record(
         state="normal",
         data_plane_mode="blocked",
@@ -11472,7 +11496,10 @@ def test_planned_transfer_observes_exact_reproof_before_terminal_cutover(
     assert "failed safely" not in progress_output
 
 
-def test_planned_transfer_reproof_timeout_is_fixed_and_cannot_admit_late_proof() -> None:
+@pytest.mark.parametrize("guard_mode", ("active", "blocked"))
+def test_planned_transfer_reproof_timeout_is_fixed_and_cannot_admit_late_proof(
+    guard_mode: str,
+) -> None:
     request = {
         "schema": "nebius-vpngw/vm-ha-manual-failover-v1",
         "cluster_id": "cluster-a",
@@ -11494,7 +11521,7 @@ def test_planned_transfer_reproof_timeout_is_fixed_and_cannot_admit_late_proof()
         return {
             "state": "blocked",
             "promotion_committed": False,
-            "data_plane_mode": "active",
+            "data_plane_mode": guard_mode,
             "apply_locked": False,
             "reasons": ["local-ownership-lacks-establishment-proof"],
             "pending_operation_id": "boot-a:2:disable-active:node-passive",

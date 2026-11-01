@@ -4,6 +4,11 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Repair fork Required CI discovery when GitHub omits both run and commit PR
+  associations. Resolve a unique current fork/ref with shared check-suite
+  provenance validation, preserve same-head rerun updates and fail-closed
+  ambiguity handling, and expose sanitized discovery diagnostics.
+
 - Add explicit-only `review-github-issues` for selected GitHub issue triage,
   evidence-based disposition and file-only implementation plans. Keep valid
   low-priority work open, verify saved project plans before acceptance, preserve

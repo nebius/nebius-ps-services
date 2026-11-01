@@ -29,6 +29,8 @@ def main() -> None:
             [
                 "/workspace/tests/integration/test_ordinary_systemd_jobs.py",
                 "/workspace/tests/integration/test_ordinary_transport.py",
+                "/workspace/tests/integration/test_strongswan_sessions.py",
+                "/workspace/tests/integration/test_tunnel_host_packets.py",
             ]
         )
     name = "vpngw-systemd-test-" + uuid.uuid4().hex[:12]

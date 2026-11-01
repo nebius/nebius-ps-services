@@ -1197,7 +1197,31 @@ def _record_transfer_effect_lineage(
         # generation.  At the first explicitly requested transfer effect, the
         # unchanged authoritative pre-transfer topology proves that this exact
         # prior-generation receipt no longer grants local owner authority.
-        # Retire it durably before recording current-generation lineage.
+        # A completed restoration still needs this receipt to prove its
+        # identity. Retire that exact terminal record first, under the same
+        # rearm lock, so it cannot orphan the next generation's arming step.
+        # Cleanup is optional for automatic promotion; required receipt and
+        # lineage durability below remain part of effect admission.
+        restoration_store = StandbyRestorationStore(path.parent)
+        try:
+            restoration = restoration_store.load()
+            if restoration is not None:
+                if (
+                    restoration.phase is RestorationPhase.COMPLETED
+                    and restoration.cluster_id == config.get("cluster_id")
+                    and restoration.owner_node_id == snapshot.local_node_id
+                    and restoration.former_owner_node_id == snapshot.peer_node_id
+                    and restoration.allocation_id == snapshot.cloud.allocation_id
+                    and restoration.generation_id != snapshot.local_generation_id
+                ):
+                    restoration_store.retire_terminal(
+                        authorization_id=restoration.authorization_id,
+                    )
+                else:
+                    print("[VM-HA-RESTORATION] prior-generation-record-retained", flush=True)
+        except (StandbyRestorationError, OSError):
+            print("[VM-HA-RESTORATION] prior-generation-cleanup-unavailable", flush=True)
+        # Retire the old receipt durably before current-generation lineage.
         _durably_unlink(promotion_receipt_path)
         promotion_receipt = None
     committed_owner_reconciliation = _promotion_receipt_matches_current_owner(
@@ -1273,10 +1297,12 @@ def _record_transfer_effect_lineage(
                     first_operation_id=action.operation_id,
                     updated_at=clock(),
                 )
+            else:
+                print("[VM-HA-RESTORATION] automatic-agreement-unavailable", flush=True)
         except (AutoHealingPolicyError, StandbyRestorationError):
             # Automatic owner-loss promotion remains availability-authoritative.
             # Missing enabled-policy agreement inhibits only later restoration.
-            pass
+            print("[VM-HA-RESTORATION] automatic-arm-rejected", flush=True)
     else:
         authorization = restoration_store.load()
         request_path = (
@@ -1603,7 +1629,9 @@ def _commit_promotion_receipt(
             # Unusable restoration evidence disables only the optional
             # standby restart; it must not invalidate an otherwise fenced,
             # terminal promotion.
+            print("[VM-HA-RESTORATION] automatic-commit-rejected", flush=True)
             restoration_store.discard_unusable_authorization()
+            print("[VM-HA-RESTORATION] automatic-authorization-discarded", flush=True)
     if lineage is not None:
         _durably_unlink(lineage_path)
     if adoption is not None and adoption_path is not None:

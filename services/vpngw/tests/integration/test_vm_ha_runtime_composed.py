@@ -419,7 +419,8 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
 
     assert materialized_endpoints
     assert "start_action = start" in (tmp_path / "swanctl.conf").read_text()
-    assert "unique = replace" in (tmp_path / "swanctl.conf").read_text()
+    assert "unique = no" in (tmp_path / "swanctl.conf").read_text()
+    assert "close_action = trap" in (tmp_path / "swanctl.conf").read_text()
     assert " neighbor 169.254.10.2 activate" in (tmp_path / "frr.conf").read_text()
     record = json.loads((state_dir / "materialization.json").read_text())
     assert record["boot_id"] == "boot-a"

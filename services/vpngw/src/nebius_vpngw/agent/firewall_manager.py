@@ -7,15 +7,193 @@ This module manages UFW firewall rules to ensure:
 - XFRM interfaces are not filtered (BGP traffic flows freely)
 """
 
+import fcntl
+import shlex
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from ..tunnel_state import collect_tunnel_state
 from .local_commands import run
 
 PEER_IPS_FILE = Path("/etc/vpngw_peer_ips")
 MGMT_CIDRS_FILE = Path("/etc/vpngw_mgmt_cidrs")
 LOCAL_PREFIXES_FILE = Path("/etc/vpngw_local_prefixes")
 FIREWALL_SETUP_SCRIPT = Path("/usr/local/bin/setup-vpngw-firewall.sh")
+UFW_USER_RULES = Path("/etc/ufw/user.rules")
+UFW_LOCK = Path("/run/ufw.lock")
+UFW_LOCK_TIMEOUT = 5.0
+
+
+def _tunnel_host_rules(cfg: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Plan rules without depending on whether XFRM devices already exist."""
+    _, _, endpoints = collect_tunnel_state(cfg, log=lambda message: None)
+    rules = []
+    for endpoint in endpoints:
+        interface = endpoint["name"]
+        rules.append(("ufw-user-input", "-i", interface))
+        rules.append(("ufw-user-output", "-o", interface))
+    return rules
+
+
+def _missing_tunnel_host_rules(
+    rules: list[tuple[str, str, str]], *, save_text: str | None = None
+) -> list[tuple[str, str, str]]:
+    if not rules:
+        return []
+    if save_text is None:
+        result = run(["iptables-save", "-t", "filter"], capture_output=True, text=True, timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError("unable to verify tunnel host firewall rules")
+        save_text = result.stdout
+    installed = set()
+    for line in save_text.splitlines():
+        if line.startswith("-A "):
+            installed.add(tuple(shlex.split(line)))
+    missing = []
+    for chain, direction, interface in rules:
+        if ("-A", chain, direction, interface, "-j", "ACCEPT") not in installed:
+            missing.append((chain, direction, interface))
+    return missing
+
+
+def verify_tunnel_host_rules(cfg: dict[str, Any], *, save_text: str | None = None) -> None:
+    """Require host INPUT/OUTPUT access independently of transit forwarding."""
+    if _missing_tunnel_host_rules(_tunnel_host_rules(cfg), save_text=save_text):
+        raise RuntimeError("required tunnel host firewall rules are missing")
+
+
+@contextmanager
+def _ufw_lock() -> Iterator[None]:
+    """Share UFW's POSIX record lock, never while running the UFW CLI itself."""
+    deadline = time.monotonic() + UFW_LOCK_TIMEOUT
+    with UFW_LOCK.open("a") as lock:
+        while True:
+            try:
+                fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("timed out locking tunnel host firewall policy") from None
+                time.sleep(min(0.05, remaining))
+        try:
+            yield
+        finally:
+            fcntl.lockf(lock, fcntl.LOCK_UN)
+
+
+def _filter_policy(save_text: str) -> tuple[set[str], dict[str, list[str]]]:
+    """Read one complete filter table without interpreting iptables matches."""
+    chains: set[str] = set()
+    rules: dict[str, list[str]] = {}
+    in_filter = False
+    seen_filter = False
+    complete = False
+    for raw_line in save_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "*filter":
+            if seen_filter:
+                raise ValueError("duplicate filter table")
+            seen_filter = in_filter = True
+        elif in_filter:
+            if line == "COMMIT":
+                in_filter = False
+                complete = True
+            elif line.startswith(":"):
+                parts = shlex.split(line)
+                if len(parts) != 3 or parts[0][1:] in chains:
+                    raise ValueError("invalid chain declaration")
+                chains.add(parts[0][1:])
+            else:
+                parts = shlex.split(line)
+                # UFW emits an insert in its logging chain. Those commands are
+                # parsed for completeness but never replayed as host policy.
+                if len(parts) < 3 or parts[0] not in {"-A", "-I"}:
+                    raise ValueError("unsupported filter rule")
+                rules.setdefault(parts[1], []).append(line)
+        else:
+            raise ValueError("unexpected content outside filter table")
+    if not complete or in_filter or not rules.keys() <= chains:
+        raise ValueError("incomplete filter policy")
+    return chains, rules
+
+
+def _restore_saved_host_rules(rules: list[tuple[str, str, str]]) -> None:
+    """Replay only affected UFW-owned host chains, retaining saved rule order."""
+    with _ufw_lock():
+        result = run(["iptables-save", "-t", "filter"], capture_output=True, text=True, timeout=20)
+        if result.returncode != 0:
+            raise RuntimeError("unable to read tunnel host firewall policy")
+        missing = _missing_tunnel_host_rules(rules, save_text=result.stdout)
+        if not missing:
+            return
+        affected = sorted({chain for chain, _, _ in missing})
+        try:
+            live_chains, _ = _filter_policy(result.stdout)
+            saved = UFW_USER_RULES.read_text(encoding="utf-8")
+            saved_chains, saved_rules = _filter_policy(saved)
+            if not set(affected) <= live_chains & saved_chains:
+                raise ValueError("host chain missing")
+            if any(
+                not line.startswith("-A ")
+                for chain in affected
+                for line in saved_rules.get(chain, [])
+            ):
+                raise ValueError("unsupported host chain command")
+            saved_filter_rules = "\n".join(line for lines in saved_rules.values() for line in lines)
+            if _missing_tunnel_host_rules(rules, save_text=saved_filter_rules):
+                raise ValueError("saved permit missing")
+        except (OSError, ValueError):
+            raise RuntimeError("unable to restore saved tunnel host firewall policy") from None
+        # --noflush retains other chains but rebuilds declared user chains. The
+        # native parser preserves implicit matches, comments and saved ordering.
+        payload = "\n".join(
+            [
+                "*filter",
+                *(f":{chain} - [0:0]" for chain in affected),
+                *(line for chain in affected for line in saved_rules.get(chain, [])),
+                "COMMIT",
+                "",
+            ]
+        )
+        for test in (True, False):
+            command = ["iptables-restore", "--noflush", "--wait", "5"]
+            if test:
+                command.append("--test")
+            restored = run(command, input=payload, capture_output=True, text=True, timeout=20)
+            if restored.returncode != 0:
+                raise RuntimeError("unable to restore saved tunnel host firewall rules")
+        if _missing_tunnel_host_rules(rules):
+            raise RuntimeError("required tunnel host firewall rules are missing after repair")
+
+
+def ensure_tunnel_host_rules(cfg: dict[str, Any]) -> None:
+    """Repair missing rules, including on first boot before device creation.
+
+    UFW persists interface rules even when the interface does not exist yet.
+    Recheck live rules before reporting firewall reconciliation success.
+    """
+    rules = _tunnel_host_rules(cfg)
+    missing = _missing_tunnel_host_rules(rules)
+    if not missing:
+        return
+    for chain, _, interface in missing:
+        direction = "in" if chain == "ufw-user-input" else "out"
+        result = run(
+            ["ufw", "allow", direction, "on", interface],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("unable to install tunnel host firewall rules")
+    if _missing_tunnel_host_rules(rules):
+        _restore_saved_host_rules(rules)
 
 
 def update_peer_ips(cfg: dict[str, Any]) -> bool:
@@ -182,3 +360,5 @@ def update_firewall_from_config(
             raise RuntimeError("required firewall reload failed")
     else:
         print("[FirewallMgr] No firewall changes needed")
+
+    ensure_tunnel_host_rules(cfg)

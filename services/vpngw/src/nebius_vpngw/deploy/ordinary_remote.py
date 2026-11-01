@@ -311,70 +311,112 @@ def stable_predecessor(observation: dict[str, Any]) -> str:
     )
 
 
+def _wait_final_settlement(operation: operations.Operation) -> None:
+    """Observe admitted manager work without releasing the pending-operation guard."""
+    while True:
+        operation.check()
+        remaining = operation.manager.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("ordinary_manager_unresolved")
+        if operation.manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
+            if time.monotonic() >= operation.manager.deadline:
+                raise TimeoutError("ordinary_manager_unresolved")
+            return
+        time.sleep(min(0.1, max(0, operation.manager.deadline - time.monotonic())))
+
+
 def final_confirmation(
     manifest: dict[str, Any],
     current: dict[str, Any],
     request_id: str,
     operation: operations.Operation | None = None,
 ) -> dict[str, Any]:
-    receipt = agent_receipt(
-        manifest["config_sha256"], current["boot_id"], verify_only=True, request_id=request_id
-    )
-    with routing_lock():
-        final = inspect(manifest, verify_runtime=False, route_locked=True)
-        proof = CONFIG.parent / "ordinary-verification.json"
-        if (
-            final["files"] != manifest["files"]
-            or final["agent_state"] != "active"
-            or final["boot_id"] != current["boot_id"]
-            or final["config_sha256"] != manifest["config_sha256"]
-            or final["assets"]
-            != {path: item["sha256"] for path, item in manifest["assets"].items()}
-            or final["asset_modes"]
-            != {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
-            or final["dependencies"] != manifest["expected_dependencies"]
-            or receipt.get("package_identity") != manifest["package_identity"]
-            or receipt.get("render_version") != manifest["render_version"]
-            or receipt.get("proof_sha256") != sha(proof.read_bytes())
-        ):
-            raise RuntimeError("final_artifact")
-        if manifest.get("route_projection") is not None:
-            import yaml
-
-            route_store = routes.RouteStore()
-            cfg = yaml.safe_load(CONFIG.read_bytes())
-            route_store.verify(cfg, command_result, current["boot_id"])
-            if operation is not None:
-                ledger = route_store.ledger()
-                envelope = route_store.envelope(operation.check())
-                saved_proof = routes._read(proof)
-                routes.require(
-                    ledger is not None
-                    and ledger["binding"] == envelope["binding"]
-                    and saved_proof is not None
-                    and saved_proof[1].get(routes.PROOF_KEY) == routes.digest(ledger),
-                    "ordinary_route_commit_unverified",
-                )
-                route_store.verify(
-                    cfg,
-                    command_result,
-                    current["boot_id"],
-                    obligations=envelope["plan"]["obligations"],
-                )
+    while True:
         if operation is not None:
-            if not operation.manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
-                raise RuntimeError("ordinary_manager_not_settled")
-            operation.complete()
-    return receipt
+            operation.check()
+            if time.monotonic() >= operation.manager.deadline:
+                raise TimeoutError("ordinary_manager_unresolved")
+        receipt = agent_receipt(
+            manifest["config_sha256"], current["boot_id"], verify_only=True, request_id=request_id
+        )
+        with routing_lock(operation) as waited:
+            if waited:
+                # The earlier runtime receipt predates this wait. Release the
+                # lock and obtain a fresh receipt before the final snapshot.
+                continue
+            final = inspect(manifest, verify_runtime=False, route_locked=True)
+            proof = CONFIG.parent / "ordinary-verification.json"
+            if (
+                final["files"] != manifest["files"]
+                or final["agent_state"] != "active"
+                or final["boot_id"] != current["boot_id"]
+                or final["config_sha256"] != manifest["config_sha256"]
+                or final["assets"]
+                != {path: item["sha256"] for path, item in manifest["assets"].items()}
+                or final["asset_modes"]
+                != {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
+                or final["dependencies"] != manifest["expected_dependencies"]
+                or receipt.get("package_identity") != manifest["package_identity"]
+                or receipt.get("render_version") != manifest["render_version"]
+                or receipt.get("proof_sha256") != sha(proof.read_bytes())
+            ):
+                raise RuntimeError("final_artifact")
+            if manifest.get("route_projection") is not None:
+                import yaml
+
+                route_store = routes.RouteStore()
+                cfg = yaml.safe_load(CONFIG.read_bytes())
+                route_store.verify(cfg, command_result, current["boot_id"])
+                if operation is not None:
+                    ledger = route_store.ledger()
+                    envelope = route_store.envelope(operation.check())
+                    saved_proof = routes._read(proof)
+                    routes.require(
+                        ledger is not None
+                        and ledger["binding"] == envelope["binding"]
+                        and saved_proof is not None
+                        and saved_proof[1].get(routes.PROOF_KEY) == routes.digest(ledger),
+                        "ordinary_route_commit_unverified",
+                    )
+                    route_store.verify(
+                        cfg,
+                        command_result,
+                        current["boot_id"],
+                        obligations=envelope["plan"]["obligations"],
+                    )
+            if operation is None:
+                return receipt
+            if operation.manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
+                if time.monotonic() >= operation.manager.deadline:
+                    raise TimeoutError("ordinary_manager_unresolved")
+                operation.complete()
+                return receipt
+        # An activated timer can dispatch its guarded maintenance job after
+        # activation settles. Release the routing lock while that job exits,
+        # retain ownership, then repeat every final proof before completion.
+        _wait_final_settlement(operation)
 
 
 @contextlib.contextmanager
-def routing_lock():
+def routing_lock(operation: operations.Operation | None = None):
     ROUTING_LOCK.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(ROUTING_LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+        waited = False
+        while True:
+            if operation is not None:
+                operation.check()
+                if time.monotonic() >= operation.manager.deadline:
+                    raise TimeoutError("routing_lock_deadline")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if operation is None:
+                    raise
+                waited = True
+                time.sleep(min(0.1, max(0, operation.manager.deadline - time.monotonic())))
+        yield waited
     finally:
         os.close(fd)
 

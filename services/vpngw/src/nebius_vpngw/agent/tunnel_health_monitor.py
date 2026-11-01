@@ -32,6 +32,7 @@ import errno
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -202,17 +203,26 @@ class TunnelHealthMonitor:
         if shutil.which("swanctl"):
             try:
                 result = subprocess.run(
-                    ["swanctl", "--list-sas"],
+                    ["swanctl", "--list-sas", "--ike", tunnel_name],
                     capture_output=True,
                     text=True,
                     timeout=5,
                 )
                 if result.returncode == 0 and result.stdout:
-                    for line in result.stdout.splitlines():
-                        if tunnel_name in line and "ESTABLISHED" in line.upper():
-                            return "ESTABLISHED"
-                        if tunnel_name in line and "CONNECTING" in line.upper():
-                            return "CONNECTING"
+                    # Only exact IKE headers identify this connection. A peer's
+                    # similarly named connection or an overlapping negotiation
+                    # must not trigger repair of an established session.
+                    states = set(
+                        re.findall(
+                            rf"^{re.escape(tunnel_name)}: #[1-9][0-9]*, "
+                            r"([A-Z_]+), IKEv[12](?:,|$)",
+                            result.stdout,
+                            flags=re.MULTILINE,
+                        )
+                    )
+                    for state in ("ESTABLISHED", "CONNECTING"):
+                        if state in states:
+                            return state
                 return "DOWN"
             except subprocess.TimeoutExpired:
                 return "UNKNOWN"
