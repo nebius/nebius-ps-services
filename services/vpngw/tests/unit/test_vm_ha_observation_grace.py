@@ -32,6 +32,7 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
     LocalAuthorityError,
     LocalDataPlaneObservation,
+    LocalObservationUnavailable,
     SystemDataPlaneRuntime,
 )
 from nebius_vpngw.agent.vm_ha_controller import (
@@ -80,7 +81,7 @@ def owner_runtime(tmp_path: Path):
             "7",
         )
     ]
-    failures = {"cloud": False, "mode": None}
+    failures = {"cloud": False, "mode": None, "receipt": None}
     routes = [None]
     effects = []
     guards = []
@@ -97,13 +98,18 @@ def owner_runtime(tmp_path: Path):
             raise failures["mode"]
         return mode[0]
 
+    def observe_routes():
+        if failures["receipt"] is not None:
+            raise failures["receipt"]
+        return routes[0]
+
     adapter = VMHASnapshotAdapter(
         config=_runtime_config(),
         providers=VMHASnapshotProviders(
             cloud=observe_cloud,
             readiness=lambda: health[0],
             data_plane=observe_mode,
-            routes=lambda: routes[0],
+            routes=observe_routes,
             peer=lambda: (None, None),
         ),
         state_dir=tmp_path,
@@ -166,6 +172,53 @@ def test_local_query_failure_keeps_forwarding_then_fences_only_after_grace(tmp_p
     assert effects[-1].kind is ActionKind.DISABLE_ACTIVE
     assert not status["forwarding_continuity"]
     assert not guards
+
+
+@pytest.mark.parametrize("readiness_also_unavailable", [False, True])
+def test_local_receipt_query_failure_uses_the_same_grace(
+    tmp_path: Path, readiness_also_unavailable: bool
+) -> None:
+    runtime, now, mode, health, _cloud, failures, effects, guards = owner_runtime(tmp_path)
+    runtime.step()
+    failures["receipt"] = LocalObservationUnavailable("FRR query unavailable")
+    if readiness_also_unavailable:
+        health[0] = replace(health[0], observation_available=False)
+    for count, turn in enumerate((1.0, 2.0, 9.0), start=1):
+        now[0] = turn
+        status = runtime.step()
+        assert status["forwarding_continuity"]
+        assert not status["promotion_ready"]
+        assert runtime.snapshots.local_observation_grace.consecutive_failures == count
+        assert mode[0] is DataPlaneMode.ACTIVE
+        assert not effects
+        assert not guards
+    now[0] = 11.0
+    status = runtime.step()
+    assert status["reasons"] == ["local-observation-grace-exhausted"]
+    assert effects[-1].kind is ActionKind.DISABLE_ACTIVE
+
+
+def test_local_receipt_query_failure_does_not_reuse_changed_ownership(tmp_path: Path) -> None:
+    runtime, now, _mode, _health, cloud, failures, effects, _guards = owner_runtime(tmp_path)
+    runtime.step()
+    failures["receipt"] = LocalObservationUnavailable("FRR query unavailable")
+    cloud[0] = replace(cloud[0], ownership_epoch="8")
+    now[0] = 1.0
+    runtime.step()
+    assert effects[-1].kind is ActionKind.DISABLE_ACTIVE
+
+
+def test_local_receipt_query_success_resets_grace(tmp_path: Path) -> None:
+    runtime, now, _mode, _health, _cloud, failures, _effects, _guards = owner_runtime(tmp_path)
+    runtime.step()
+    failures["receipt"] = LocalObservationUnavailable("FRR query unavailable")
+    for turn in (1.0, 2.0):
+        now[0] = turn
+        runtime.step()
+    failures["receipt"] = None
+    now[0] = 3.0
+    runtime.step()
+    assert runtime.snapshots.local_observation_grace.consecutive_failures == 0
 
 
 def test_a_successful_observation_resets_the_local_failure_streak(tmp_path: Path) -> None:

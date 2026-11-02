@@ -20,6 +20,7 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
     DataPlaneCommandSet,
     LocalDataPlaneObservation,
+    LocalObservationUnavailable,
     RuntimeStateStore,
     SystemDataPlaneRuntime,
     _advertised_bgp_prefixes,
@@ -1616,8 +1617,10 @@ def test_non_owner_observes_no_stale_route_receipt_without_blocking_snapshot(
     ports.close()
 
 
+@pytest.mark.parametrize("failed_mode", [None, DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE])
 def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
     tmp_path: Path,
+    failed_mode: DataPlaneMode | None,
 ) -> None:
     ports = build_runtime_ports(
         _runtime_config(tmp_path),
@@ -1665,6 +1668,18 @@ def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
     assert observed is not None
     assert observed.owner_node_id == "node-a"
     assert observed.ownership_incarnation == 1
+    if failed_mode is not None:
+
+        def unavailable():
+            raise RuntimeError("FRR query unavailable")
+
+        ports.data_plane.observe = unavailable
+        ports.data_plane.mode = lambda: failed_mode
+        if failed_mode is DataPlaneMode.ACTIVE:
+            with pytest.raises(LocalObservationUnavailable):
+                ports.routes.receipt_context()
+        else:
+            assert ports.routes.receipt_context() is None
     ports.close()
 
 

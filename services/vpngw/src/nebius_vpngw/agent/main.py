@@ -99,6 +99,7 @@ from .vm_ha.restoration import (
 )
 from .vm_ha.runtime import (
     LocalAuthorityError,
+    LocalObservationUnavailable,
     VMHARuntimePorts,
     build_runtime_ports,
     runtime_identity_public_status,
@@ -1068,6 +1069,35 @@ class VMHASnapshotAdapter:
                 else DataPlaneMode.BLOCKED
             )
             readiness = replace(readiness, observation_available=False)
+        try:
+            routes = self.providers.routes()
+        except LocalObservationUnavailable:
+            previous = self.last_snapshot
+            routes = None
+            if (
+                previous is not None
+                and previous.boot_id == self.boot_id()
+                and guard.get("guard_boot_id") == previous.boot_id
+                and guard.get("data_plane_mode") == "active"
+                and data_plane is DataPlaneMode.ACTIVE
+                and previous.data_plane_mode is DataPlaneMode.ACTIVE
+                and cloud.local_attachment_exact(self.local_node_id)
+                and cloud.ownership_epoch == previous.cloud.ownership_epoch
+                and apply_operation_id is None
+                and transfer_inhibition_operation_id is None
+            ):
+                # Same-process continuity only. Missing receipts, changed
+                # ownership and new activations never gain authority here.
+                routes = previous.routes_reconciled_context
+            if readiness.service_healthy or not readiness.observation_available:
+                readiness = replace(readiness, observation_available=False)
+        except Exception as error:
+            # Receipt validation rereads allocation, target membership and route
+            # inventory. Only this read-only boundary receives retry handling.
+            # The same errors from effects retain guarded journal recovery.
+            if not is_retryable_ha_cloud_error(error):
+                raise
+            raise self._cloud_observation_unavailable() from error
         if readiness.observation_available:
             self.local_observation_grace.succeeded()
         else:
@@ -1079,15 +1109,6 @@ class VMHASnapshotAdapter:
                     self.observation_clock()
                 ),
             )
-        try:
-            routes = self.providers.routes()
-        except Exception as error:
-            # Receipt validation rereads allocation, target membership and route
-            # inventory. Only this read-only boundary receives retry handling.
-            # The same errors from effects retain guarded journal recovery.
-            if not is_retryable_ha_cloud_error(error):
-                raise
-            raise self._cloud_observation_unavailable() from error
         self.cloud_observation_grace.succeeded()
         peer, peer_received_at = self.providers.peer()
         snapshot = ControllerSnapshot(

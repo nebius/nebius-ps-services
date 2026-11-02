@@ -1161,6 +1161,10 @@ class LocalAuthorityError(RuntimeError):
     """Positive local state conflicts with durable forwarding authority."""
 
 
+class LocalObservationUnavailable(RuntimeError):
+    """A local read could not validate the serving owner's route receipt."""
+
+
 class LocalDataPlaneObserver:
     """Read-only observation with one deadline for the entire command sequence."""
 
@@ -2863,7 +2867,21 @@ class BoundRouteRuntime:
         state = self.store.load_transition(now=self.clock())
         try:
             observed = self.data_plane.observe()
-        except RuntimeError:
+        except LocalAuthorityError:
+            raise
+        except RuntimeError as error:
+            try:
+                mode = self.data_plane.mode()
+            except LocalAuthorityError:
+                raise
+            except RuntimeError:
+                raise LocalObservationUnavailable(
+                    "local receipt observation unavailable"
+                ) from error
+            if mode is DataPlaneMode.ACTIVE:
+                raise LocalObservationUnavailable(
+                    "local receipt observation unavailable"
+                ) from error
             # A current-owner restart can retain a durable route receipt while
             # FRR is intentionally unavailable behind the boot guard. Treat
             # the receipt as unproven until passive materialization completes;
