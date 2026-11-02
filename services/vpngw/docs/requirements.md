@@ -2788,6 +2788,9 @@ must not disable established forwarding or invalidate ownership continuity.
 After bounded SDK retries, the controller waits five seconds and retries the
 observation. There is no outage-duration threshold that authorizes fencing.
 Independent local-health sampling and heartbeat publication continue.
+Read-only route-receipt validation belongs to the same boundary, including
+allocation, target-membership and route-inventory queries. A successful ownership
+read alone must not reset a failing receipt-observation streak.
 
 Unavailable cloud observations cannot authorize takeover, activation, route
 reconciliation, or replay of cloud-dependent effects. Pending operations retain
@@ -2805,6 +2808,10 @@ at least three consecutive failed observations span at least ten seconds.
 Successful observations reset the streak. Expired local uncertainty may fence.
 Expired cloud uncertainty remains informational and never fences by itself.
 Timers use a monotonic clock and reset on a guarded controller restart.
+Local receipt-validation query failures must receive the same grace. Continuity
+may reuse only the current process's previously verified receipt with unchanged
+fresh ownership and an active current-boot guard. It cannot authorize a new
+activation, bypass writer inhibition or conceal confirmed authority loss.
 
 Fresh unknown peer health receives the same grace before the existing
 five-second suspicion window starts. Count distinct authenticated frames, not

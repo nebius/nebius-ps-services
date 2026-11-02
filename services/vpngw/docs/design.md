@@ -7235,6 +7235,10 @@ health and the increasing age of the last successful ownership observation.
 An API outage has no automatic fencing deadline. Persisted status remains the
 last completed controller iteration during an exception, rather than claiming
 fresh cloud authority. Retry messages identify observation unavailability.
+This boundary includes route-receipt validation reads of allocation ownership,
+route-target membership and complete route inventory. Pagination failures qualify
+only when their underlying failure is a retryable transport error. Cloud grace
+resets only after both ownership and receipt observations complete successfully.
 
 A non-authoritative policy snapshot also pauses cloud-dependent effects and
 their replay. It preserves existing forwarding, reports unknown cloud authority,
@@ -7256,6 +7260,11 @@ explicit unavailable readiness, rather than synthesizing four confirmed failures
 The snapshot adapter counts failed local observations. Its last mode can preserve
 existing forwarding during grace but never authorizes activation. Proven durable
 authority conflicts remain immediate safety failures.
+Receipt validation also propagates unavailable local queries into this grace.
+The same process may retain its previously verified receipt solely for existing
+forwarding under unchanged fresh ownership, an active current-boot guard and no
+writer inhibition. A missing receipt, ownership change or new activation cannot
+use that continuity. A successful complete local observation resets the streak.
 
 Heartbeats retain null health for unavailable local observations. The receiver
 tracks distinct fresh authenticated frames, grants observation grace, then starts
