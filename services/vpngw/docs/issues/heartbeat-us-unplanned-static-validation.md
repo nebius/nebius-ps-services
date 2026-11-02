@@ -1,5 +1,52 @@
 # VM-HA validation summary
 
+## November 2 takeover prerequisite failure
+
+The subsequent deliberate-fault campaign stopped at its planned-transfer
+prerequisite. It ran from 14:12:26 to 14:24:32 EST on the same `0.6.3.dev34`
+artifact. None of the eight synthetic takeover faults was injected.
+
+The supported US A-to-B CLI returned failure after 38.7 seconds, while its
+controller operation continued. The controller reported a 98.4-second cutover
+and traffic resumed. The newly active gateway-b then crashed while requesting
+static-route repair:
+
+```text
+ValueError: repair attempt identity is incomplete
+```
+
+The stack ends in `_repair_action()` constructing `RepairAttempt`. An offline
+reproduction confirms the same exception when static-route repair is required
+but `readiness.blocked_reasons` is empty. That empty tuple becomes the repair
+fingerprint, which `RepairAttempt` rejects. The service exited and installed its
+shutdown guard. Repair needs a stable fingerprint for this route-drift case,
+with regression coverage for otherwise healthy readiness. No fix was deployed.
+
+UK changed owners twice, A to B and back to A. Before its first fence, a
+static/XFRM repair exhausted the five-second budget while the preceding sample
+still showed an established SA toward US gateway-b. After passive US gateway-a
+rejoined, UK's return route again selected its xfrm0 path while US gateway-b
+owned the allocation. Static-route/readiness behavior remains an additional
+blocker to qualification.
+
+A detached workload probe continued across management SSH outages. It measured
+reply gaps of 96.2 and 249.6 seconds and 313 failed probes across transfer,
+instability and recovery. These are approximate ICMP interruption measurements.
+They do not establish TCP survival.
+
+Supported US B-to-A recovery succeeded in 173.1 seconds, including a 72.2-second
+cutover. Both pairs finished with gateway-a active, gateway-b ready as standby,
+working US–UK traffic and both Home pfSense BGP sessions Established. The recovered
+baseline was observed for at least three minutes. No manual route, allocation
+or ledger edits were made. No code/configuration changes were deployed, and
+no faults were applied to pfSense. The probe and monitor were stopped.
+
+Private evidence and the full report are in
+`/private/tmp/vpngw-observation-tests-20261102/takeover-r4/`, including
+`repair-crash-stack.txt` and `repair-empty-reason-reproduction.json`.
+Fix the repair crash and investigate static-path readiness before repeating
+the prerequisite and resuming deliberate takeover faults.
+
 ## November 2 restarted observation-fault campaign
 
 Seven isolated no-disruption cases passed from 13:34:57 to 14:02:08 EST on
