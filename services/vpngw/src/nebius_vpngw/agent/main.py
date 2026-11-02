@@ -18,7 +18,7 @@ from typing import Any, cast
 
 import yaml
 
-from nebius_vpngw.deploy.vm_ha_cloud import RetryableHACloudError
+from nebius_vpngw.deploy.vm_ha_cloud import is_retryable_ha_cloud_error
 from nebius_vpngw.schema import VMHARuntimeBinding
 
 from .firewall_manager import update_firewall_from_config
@@ -931,16 +931,18 @@ class VMHASnapshotAdapter:
     def _observe_cloud(self) -> CloudObservation:
         try:
             cloud = self.providers.cloud()
-        except RetryableHACloudError as error:
-            self.cloud_observation_grace.failed(self.observation_clock())
-            # Scope the exception to observations. The same SDK error from a
-            # mutation must retain the guarded, journal-based recovery path.
-            raise VMHACloudObservationUnavailable(
-                "cloud observation unavailable; retrying",
-                observation_status=self.cloud_observation_grace.status(self.observation_clock()),
-            ) from error
-        self.cloud_observation_grace.succeeded()
+        except Exception as error:
+            if not is_retryable_ha_cloud_error(error):
+                raise
+            raise self._cloud_observation_unavailable() from error
         return cloud
+
+    def _cloud_observation_unavailable(self) -> VMHACloudObservationUnavailable:
+        self.cloud_observation_grace.failed(self.observation_clock())
+        return VMHACloudObservationUnavailable(
+            "cloud observation unavailable; retrying",
+            observation_status=self.cloud_observation_grace.status(self.observation_clock()),
+        )
 
     def _peer_in_observation_grace(
         self, peer: PeerHeartbeat | None, received_at: float | None, now: float
@@ -1077,7 +1079,16 @@ class VMHASnapshotAdapter:
                     self.observation_clock()
                 ),
             )
-        routes = self.providers.routes()
+        try:
+            routes = self.providers.routes()
+        except Exception as error:
+            # Receipt validation rereads allocation, target membership and route
+            # inventory. Only this read-only boundary receives retry handling.
+            # The same errors from effects retain guarded journal recovery.
+            if not is_retryable_ha_cloud_error(error):
+                raise
+            raise self._cloud_observation_unavailable() from error
+        self.cloud_observation_grace.succeeded()
         peer, peer_received_at = self.providers.peer()
         snapshot = ControllerSnapshot(
             now=self.clock(),

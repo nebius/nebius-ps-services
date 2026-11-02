@@ -38,15 +38,20 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     PermanentHACloudError,
     RetryableHACloudError,
 )
+from nebius_vpngw.nebius_pagination import NebiusPaginationError
 from nebius_vpngw.schema import VMHARuntimeBinding
 
 
 @pytest.mark.parametrize("mode", list(DataPlaneMode))
 @pytest.mark.parametrize("previous_observation", [False, True])
+@pytest.mark.parametrize("failure_provider", ["cloud", "routes"])
+@pytest.mark.parametrize("error_kind", ["classified", "raw-timeout", "paginated-timeout"])
 def test_read_retries_preserve_guard_forwarding_and_checkpoint(
     tmp_path: Path,
     mode: DataPlaneMode,
     previous_observation: bool,
+    failure_provider: str,
+    error_kind: str,
 ) -> None:
     guard = {"guard_boot_id": "boot-a", "data_plane_mode": mode.value}
     guard_path = tmp_path / "guard.json"
@@ -67,12 +72,23 @@ def test_read_retries_preserve_guard_forwarding_and_checkpoint(
     cloud_calls = []
     effects = []
     routes = [None]
+    error: Exception = RetryableHACloudError("SDK deadline exceeded")
+    if error_kind == "raw-timeout":
+        error = TimeoutError("SDK deadline exceeded")
+    elif error_kind == "paginated-timeout":
+        error = NebiusPaginationError("VM HA route inventory is unavailable")
+        error.__cause__ = TimeoutError("SDK deadline exceeded")
 
     def observe_cloud() -> CloudObservation:
         cloud_calls.append(now[0])
-        if unavailable[0]:
-            raise RetryableHACloudError("SDK deadline exceeded")
+        if unavailable[0] and failure_provider == "cloud":
+            raise error
         return healthy_cloud
+
+    def observe_routes():
+        if unavailable[0] and failure_provider == "routes":
+            raise error
+        return routes[0]
 
     snapshots = VMHASnapshotAdapter(
         config=_runtime_config(),
@@ -81,7 +97,7 @@ def test_read_retries_preserve_guard_forwarding_and_checkpoint(
             readiness=lambda: LocalReadiness(True, True, True, True),
             cloud=observe_cloud,
             data_plane=lambda: mode,
-            routes=lambda: routes[0],
+            routes=observe_routes,
         ),
         state_dir=tmp_path,
         clock=lambda: now[0],
@@ -122,10 +138,11 @@ def test_read_retries_preserve_guard_forwarding_and_checkpoint(
         auto_healing_policy_provider=lambda: ("enabled", "e" * 64),
     )
     standby = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
-    for elapsed in (1.0, 60.0, 3600.0):
+    for failures, elapsed in enumerate((1.0, 60.0, 3600.0), start=1):
         now[0] = 10.0 + elapsed
         with pytest.raises(VMHACloudObservationUnavailable):
             runtime.step()
+        assert snapshots.cloud_observation_grace.consecutive_failures == failures
         assert json.loads(guard_path.read_text()) == guard
         assert store.load() == checkpoint
         assert snapshots.last_snapshot is last_snapshot
@@ -163,10 +180,33 @@ def test_read_retries_preserve_guard_forwarding_and_checkpoint(
 
 @pytest.mark.parametrize(
     "error",
-    [PermanentHACloudError("identity conflict"), AmbiguousHACloudError("ambiguous mutation")],
+    [
+        PermanentHACloudError("identity conflict"),
+        AmbiguousHACloudError("ambiguous mutation"),
+        RuntimeError("VM-HA route target membership changed"),
+        NebiusPaginationError("VM HA route inventory is unavailable"),
+    ],
 )
-def test_non_retryable_observation_errors_still_guard(tmp_path: Path, error: Exception) -> None:
+@pytest.mark.parametrize("failure_provider", ["cloud", "routes"])
+def test_non_retryable_observation_errors_still_guard(
+    tmp_path: Path, error: Exception, failure_provider: str
+) -> None:
     def observe_cloud() -> CloudObservation:
+        if failure_provider == "cloud":
+            raise error
+        return CloudObservation(
+            True,
+            "allocation-a",
+            "node-a",
+            "node-b",
+            ComputeState.STOPPED,
+            True,
+            True,
+            True,
+            "7",
+        )
+
+    def observe_routes():
         raise error
 
     snapshots = VMHASnapshotAdapter(
@@ -176,7 +216,7 @@ def test_non_retryable_observation_errors_still_guard(tmp_path: Path, error: Exc
             readiness=lambda: LocalReadiness(True, True, True, True),
             cloud=observe_cloud,
             data_plane=lambda: DataPlaneMode.ACTIVE,
-            routes=lambda: None,
+            routes=observe_routes,
         ),
         state_dir=tmp_path,
     )
