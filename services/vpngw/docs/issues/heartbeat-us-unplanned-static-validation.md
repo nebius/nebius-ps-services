@@ -1,5 +1,74 @@
 # VM-HA validation summary
 
+## November 2 dev38 mixed-standby repeat
+
+The static US–UK live campaign ran with `0.6.3.dev38`, integration commit
+`6c1b3b9f`, wheel SHA256
+`0cf376495052c39dc376046dceb7dd9ea9d0892a6c693d69e393e8e69ede3088`.
+All four installed packages, six module hashes and controller unit bytes matched.
+Local validation passed 3,123 tests, with 35 skipped and one deselected.
+The disposable privileged Linux/systemd fixtures and unavailable PyInstaller
+check remain unqualified locally.
+
+Both supported applies succeeded after the initial dev37 UK deployment exposed
+an EROFS error writing the candidate swanctl configuration. Dev38 adds the exact
+`/etc/swanctl` sandbox permission and guards candidate-write errors. The temporary
+UK recovery override was removed. Preparation also required the authorized start
+of a stopped, detached UK standby after auto-healing policy checks inhibited
+restoration. No manual allocation, route or ledger edits were used.
+
+| Case | Outcome | Lost probes | ICMP interruption windows |
+|---|---|---:|---|
+| Planned US A→B | Passed, CLI 174.2 s, cutover 89.6 s | 69 | 76.1 s |
+| Planned US B→A | Passed, CLI 173.6 s, cutover 86.0 s | 69 | 76.1 s |
+| Owner API unavailable, 180 s | Passed, 1,056 successful probes | 0 | None |
+| Owner local query failure, 4 s | Passed, 175 successful probes | 0 | None |
+| Active US VM stopped | Automatic recovery with extra UK proof fencing | 151 | 73.9 s, 51.7 s |
+| Active US controller paused, 60 s | Automatic recovery with repeated US proof fencing | 220 | 54.1 s, 76.1 s, 112.6 s |
+
+Each transfer/fault recovery finished with at least 180 seconds of healthy
+owner/standby state and workload traffic. Deployment losses are excluded from
+these test windows. The API fault dropped 242 controller-cgroup packets and
+produced repeated unavailable cloud observations without disrupting forwarding
+or heartbeat publication. Eight failed read-only FRR queries exercised local
+and peer-local grace, then observations reset without takeover.
+
+The mixed-standby correction held. Returning US standbys loaded only their Home
+BGP responder, UK standbys had no static responders or SAs, and no second outage
+followed either planned standby rejoin. Active US static routes moved between
+xfrm2 toward UK B and xfrm1 toward UK A.
+
+The ownership-proof failure remains. In the VM-stop case UK briefly enabled,
+fenced and detached/reattached its own allocation. In the controller-pause case
+US A initially enabled, then twice fenced with
+`local-ownership-lacks-establishment-proof` and repeated candidate preparation.
+The immediate gate compares durable transfer continuity with the current
+ownership epoch. The cause of the disagreement remains unresolved. Initial
+promotion logs prove former-owner stop, attachment confirmation and route
+reconciliation before forwarding. That check does not qualify later proof
+refreshes as clean promotions.
+
+UK changed owner during US deployment and each measured US transfer. Within the
+measured tests this was A→B, B→A, A→B, B→A. The additional VM-stop proof refresh
+kept UK B as owner. No direct UK or pfSense fault was injected. Both Home BGP
+sessions were Established at the end, with re-establishment after VM reboots.
+This does not qualify US–UK BGP failover or TCP survival.
+
+Further injections were suspended after repeated proof fencing in the pause
+case. Repeated controller crashes, prolonged local observation loss, strongSwan
+loss, FRR loss, one-way heartbeat loss and bidirectional heartbeat loss were not
+run. Both regions recovered automatically before manual recovery was needed.
+The attempted guarded US standby start aborted before mutation because automatic
+restoration had already started it.
+
+Both pairs finished on gateway-a with gateway-b passive and ready. All four VMs
+were Running with exact allocation ownership, healthy traffic and fresh
+observations. Fault chains, active injectors, service masks and the temporary
+permission override were absent. The detached workload probe and monitor exited.
+Evidence and the complete report are preserved outside Git in
+`/Users/jkwong/git/llm-latency-test/.local/vpngw-live-tests/takeover-r6/`, including
+`results.txt`, `results.json`, `case-summary.json` and `evidence-manifest.json`.
+
 ## November 2 dev35 live repeat
 
 The scoped static-route repair correction was deployed to all four gateways as
