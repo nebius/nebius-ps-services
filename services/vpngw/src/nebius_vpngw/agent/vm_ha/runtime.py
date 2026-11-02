@@ -2423,6 +2423,38 @@ class BoundRouteRuntime:
         if changed:
             self.store.save_ledger(ledger)
 
+    def _adopt_cloud_authority_routes(
+        self,
+        ledger: dict[str, ManagedRouteOwnership],
+    ) -> None:
+        """Adopt routes whose published cloud authority proves this cluster owns them.
+
+        ``synchronize_authority_labels`` publishes each owned route's authority
+        onto the cloud route as a shared two-node ledger, and ``list_routes``
+        already merges that cloud authority with the local ledger when planning.
+        A member re-promoted after a peer failover never recorded the peer-authored
+        successor route in its own durable ledger, so ``_apply_mutation`` — which
+        reads the local ledger directly — would otherwise refuse to reconcile it
+        ("route mutation lacks exact durable management authority"). Promotion has
+        already fenced the former owner (Stopped) and confirmed the shared
+        allocation, so persisting the published authority locally is safe; only
+        routes whose cloud labels prove this exact cluster's authority are adopted.
+        """
+
+        changed = False
+        for target in self.binding.route_targets:
+            self.backend.verify_target(target)
+            for route in self.backend.list_routes(target, ledger):
+                if not isinstance(route, ManagedRouteSnapshot):
+                    continue
+                if route.ownership.cluster_id != self.binding.cluster_id:
+                    continue
+                if ledger.get(route.route_id) != route.ownership:
+                    ledger[route.route_id] = route.ownership
+                    changed = True
+        if changed:
+            self.store.save_ledger(ledger)
+
     def _retire_stably_absent_ledger_routes(
         self,
         ledger: dict[str, ManagedRouteOwnership],
@@ -2459,6 +2491,7 @@ class BoundRouteRuntime:
         if prepare_authority:
             self._retire_stably_absent_ledger_routes(ledger)
             self._adopt_migration_routes(ledger, bgp)
+            self._adopt_cloud_authority_routes(ledger)
             synchronize_authority_labels = getattr(
                 self.backend,
                 "synchronize_authority_labels",

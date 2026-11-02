@@ -1442,6 +1442,97 @@ def test_route_plan_adopts_only_an_exact_approval_bound_route(
     ports.close()
 
 
+def test_route_plan_adopts_peer_authored_cloud_authority_route(tmp_path: Path) -> None:
+    # A member re-promoted after a peer failover never recorded the peer-authored
+    # successor route in its own durable ledger. list_routes surfaces it as owned
+    # via the published cloud authority labels; promotion must persist that locally
+    # so _apply_mutation can reconcile it instead of raising the authority guard.
+    config = _runtime_config(tmp_path)
+    runtime_binding = config["runtime_binding"]
+    assert isinstance(runtime_binding, dict)
+    runtime_binding["migration_routes"] = []
+    target = VMHARouteTarget.model_validate(runtime_binding["route_targets"][0])
+    owned = ManagedRouteOwnership("cluster-a", ManagedRouteKind.BGP, target)
+
+    class CloudAuthorityBackend(FakeRouteBackend):
+        def list_routes(self, _target, _ownership):
+            return (
+                ManagedRouteSnapshot(
+                    route_id="route-peer",
+                    prefix="10.30.0.0/16",
+                    allocation_id="allocation-a",
+                    ownership=owned,
+                ),
+            )
+
+    backend = CloudAuthorityBackend()
+    ports = build_runtime_ports(
+        config,
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: backend,
+        data_plane_factory=FakeDataPlane,
+    )
+    try:
+        assert ports.routes.store.load_ledger() == {}
+        ports.routes._plan(
+            VerifiedAllocationOwnership(
+                cluster_id="cluster-a",
+                candidate_node_id="node-a",
+                observed_owner_node_id="node-a",
+                allocation_id="allocation-a",
+                ownership_epoch="7",
+            ),
+            RouteTransitionState(0.0),
+            prepare_authority=True,
+        )
+        assert ports.routes.store.load_ledger() == {"route-peer": owned}
+    finally:
+        ports.close()
+
+
+def test_cloud_authority_adoption_ignores_foreign_cluster_routes(tmp_path: Path) -> None:
+    # Only routes whose cloud labels prove *this* cluster's authority are adopted;
+    # a foreign-cluster route is never pulled into the local ledger.
+    config = _runtime_config(tmp_path)
+    runtime_binding = config["runtime_binding"]
+    assert isinstance(runtime_binding, dict)
+    runtime_binding["migration_routes"] = []
+    target = VMHARouteTarget.model_validate(runtime_binding["route_targets"][0])
+    foreign = ManagedRouteOwnership("other-cluster", ManagedRouteKind.BGP, target)
+
+    class ForeignAuthorityBackend(FakeRouteBackend):
+        def list_routes(self, _target, _ownership):
+            return (
+                ManagedRouteSnapshot(
+                    route_id="route-foreign",
+                    prefix="10.40.0.0/16",
+                    allocation_id="allocation-z",
+                    ownership=foreign,
+                ),
+            )
+
+    backend = ForeignAuthorityBackend()
+    ports = build_runtime_ports(
+        config,
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: backend,
+        data_plane_factory=FakeDataPlane,
+    )
+    try:
+        ledger: dict[str, ManagedRouteOwnership] = {}
+        ports.routes._adopt_cloud_authority_routes(ledger)
+        assert ledger == {}
+        assert ports.routes.store.load_ledger() == {}
+    finally:
+        ports.close()
+
+
 def test_route_reconcile_uses_same_cycle_adopted_migration_ledger(
     tmp_path: Path,
 ) -> None:
