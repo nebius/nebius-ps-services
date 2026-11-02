@@ -2856,3 +2856,32 @@ Heartbeat v4 and checkpoint formats remain unchanged. Validate query recovery,
 grace boundaries, replay/staleness, partial static/BGP loss, scoped repair errors,
 ownership loss and apply inhibition. No live qualification is implied by local
 test success.
+
+### Mixed static and BGP VM-HA standby tunnels
+
+VM ownership, shared allocation ownership, route authority and takeover remain
+whole-gateway operations. A mixed-routing standby must keep BGP tunnels available
+with exports withdrawn while suspending every enabled static tunnel. One BGP
+connection must not keep unrelated static connections available to remote peers.
+Static suspension includes removing responder configurations and terminating
+existing static IKE SAs. Merely disabling initiation is insufficient.
+
+Boot, blocked rendering, passive materialization, reload and non-owner drift
+reconciliation must retain that distinction without renumbering tunnels or XFRM
+interfaces. Preserve non-HA behavior, BGP-only warm standby, static-only cold
+standby and gateway-wide failover/failback. A standby service-status query error
+must not be interpreted as permission to restart a running strongSwan daemon.
+
+A mixed standby is transfer-ready only when its existing BGP, export, policy,
+service and routing-hygiene checks pass and static suspension is positively
+observed. It is not forwarding-ready until static paths are established on the
+new owner. Candidate preparation publishes and loads the full committed tunnel
+configuration only behind the existing ownership gates, with forwarding fenced.
+An established BGP SA cannot satisfy the static activation wait. Final route and
+forwarding activation still require fresh complete readiness.
+
+Retain existing heartbeat and persisted record formats, and add no service or
+background loop. Validate mixed standby restart/reload, responder removal,
+selective SA termination, disabled tunnels and stable numbering, preparation
+failure, observation failure and both ownership directions. Real US–UK static
+traffic after takeover and former-owner rearm remains a separate live gate.

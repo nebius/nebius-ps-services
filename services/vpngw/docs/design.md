@@ -7305,3 +7305,66 @@ evidence proves that continuity. It performs no activation or data-plane writes
 on that path. Fresh activation and ordinary forwarding writers still require the
 strict readiness gate. The guarded upgrade requires
 `vm-ha-independent-heartbeat-v2` and bundles the helper for isolated recovery.
+
+### Mixed-routing standby preparation
+
+The previous static-only optimization set `tunnel_cold_passive` when the committed
+static manifest was nonempty and the BGP manifest was empty. Mixed gateways took
+the BGP warm path and restored static SAs on the non-forwarding standby. The live
+US–UK repeat demonstrated that the remote static route could then prefer that
+standby even though the local HA ownership and forwarding fence were correct.
+
+Keep whole-gateway HA and the static-only suspension path. Also derive enabled
+static connection names from the canonical tunnel/XFRM projection, including
+routing inheritance and disabled-tunnel handling. Passive strongSwan rendering
+omits those connections entirely while preserving all interface numbers and BGP
+configuration. The default on-disk file is therefore safe for passive reloads and
+remote initiation. Preserve a running daemon carrying BGP IKE state. Initial
+bootstrap with positively observed absence of BGP SAs still restarts the daemon
+to apply its plugin settings. Unavailable service or SA queries cannot authorize
+a restart.
+
+After passive materialization publishes the BGP-only configuration, reload
+connections and verify static responder absence. Terminate static IKE IDs by
+exact configured connection name, then observe their absence again. BGP SAs are
+not terminated by this selective path. Do this before waiting for passive export
+verification, so an unrelated slow BGP observation cannot delay static cleanup.
+Failures retain the existing blocked forwarding authority. All mutations remain
+under the existing routing writer lock.
+
+The local sampler observes both loaded connection names and IKE SAs. Malformed
+or unavailable VICI responses remain unknown observations under the existing
+bounded grace. Positive static state on a non-owner requests passive
+rematerialization and prevents standby admission. A mixed standby may have BGP
+IKE SAs while its static component is cold. Existing `standby_tunnel_state=cold`
+then describes that suspended static component, without a new persisted enum.
+Cold readiness requires valid BGP/export readiness, static suspension, no usable
+static candidate path and normal routing hygiene.
+
+The existing candidate preparation action stays after exact ownership proof and
+before route reconciliation. Its callback renders full initiation syntax in
+memory and atomically publishes only the canonical swanctl file. It does not
+restart services, apply netplan, advertise prefixes or enable forwarding. The
+runtime loads that file, waits for a static SA rather than any BGP SA, and repairs
+static route selection. A later fresh observation must prove all final readiness
+conditions. An intervening passive reload may suspend static tunnels again, so
+candidate preparation remains replayable while forwarding stays fenced.
+
+No independent connection owner, connection takeover state machine, public YAML
+option, heartbeat format, checkpoint format, new worker or new service is added.
+The separate establishment-proof fence observed during the live repeat is not
+resolved by this change. Local simulation and wheel checks do not qualify live
+packet delivery or US–UK BGP failover.
+
+The cleanup relies on strongSwan's existing load operation, which unloads
+connections absent from the supplied file. Its
+[5.9 implementation](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/commands/load_conns.c#L357-L405)
+confirms that behavior. The read-only verifier uses the corresponding
+[list-conns event and reply format](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/commands/list_conns.c#L286-L349),
+with completeness and duplicate checks before asserting static responder absence.
+
+Offline validation passed 3,045 unit/integration tests, including nineteen new
+mixed-standby cases and the production bootstrap oracle. Another 31 require
+unavailable disposable Linux/systemd fixtures, and the frozen-binary test was
+excluded because PyInstaller is unavailable. Changed-source lint and type checks
+passed. This is not live deployment or takeover qualification.

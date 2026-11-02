@@ -2755,6 +2755,9 @@ def build_default_vm_ha_controller_runtime(
         boot_id=current_boot_id,
         identity_proof_mode=identity_proof_mode,
         systemd_invocation_id=systemd_invocation_id,
+        candidate_preparer=lambda: StrongSwanRenderer().prepare_candidate(
+            _resolved_vm_ha_data_plane_config(config_path)
+        ),
         active_preparer=lambda: _prepare_vm_ha_active_data_plane(config_path),
         blocked_preparer=lambda: _prepare_vm_ha_blocked_bgp(config_path),
     )
@@ -2902,7 +2905,7 @@ def _vm_ha_config_from_resolved(
     if vm_ha.get("enabled") is False:
         return None
     resolved = dict(vm_ha)
-    for data_plane_key in ("gateway", "connections"):
+    for data_plane_key in ("gateway", "connections", "defaults"):
         if data_plane_key in payload:
             resolved[data_plane_key] = payload[data_plane_key]
     return resolved
@@ -5131,7 +5134,7 @@ class Agent:
                         vm_ha_materialization = True
 
             if vm_ha_blocked and not vm_ha_materialization:
-                self.ss.render_and_apply(cfg, activate=False)
+                self.ss.render_and_apply(cfg, activate=False, standby=True)
                 self.frr.render_and_apply(cfg, activate=False)
                 print("[Agent] Rendered VM-HA configuration behind the blocked data-plane guard")
                 return
@@ -5142,7 +5145,7 @@ class Agent:
                 if vm_ha_config is None:
                     raise RuntimeError("passive materialization lost VM-HA configuration")
                 update_firewall_from_config(cfg, require_reload=True)
-                interface_endpoints = self.ss.render_and_apply(cfg)
+                interface_endpoints = self.ss.render_and_apply(cfg, standby=True)
                 if interface_endpoints:
                     self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
                 self.frr.render_and_apply(

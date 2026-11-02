@@ -98,6 +98,7 @@ from nebius_vpngw.schema import (
     VMHARuntimeBinding,
     VMHARuntimeNodeBinding,
 )
+from nebius_vpngw.tunnel_state import collect_tunnel_state
 from nebius_vpngw.vm_ha_credentials import (
     VM_HA_CREDENTIAL_MAX_BYTES,
     VMHACredentialIdentityError,
@@ -873,6 +874,7 @@ class LocalDataPlaneObservation:
     available_static_prefixes: frozenset[str] = frozenset()
     established_bgp_exports_ready: bool = False
     static_route_repair_targets: tuple[tuple[str, str], ...] = ()
+    static_tunnels_suspended: bool = True
 
 
 @dataclass(frozen=True)
@@ -1024,6 +1026,29 @@ def _ike_sa_ids(raw: str) -> tuple[str, ...]:
     if len(observed) != event_count or len(set(observed)) != len(observed):
         raise RuntimeError("local IKE SA observation is malformed")
     return observed
+
+
+def _named_ike_sa_ids(raw: str, names: frozenset[str]) -> tuple[str, ...]:
+    _ike_sa_ids(raw)
+    matches = re.findall(r"(?:^|\n)list-sa event \{([^{}\s]+) \{uniqueid=([1-9][0-9]*)\b", raw)
+    selected = []
+    for name, ike_id in matches:
+        if name in names:
+            selected.append(ike_id)
+    return tuple(selected)
+
+
+def _static_connections_absent(result: CommandResult, names: frozenset[str]) -> bool:
+    if result.returncode != 0 or not re.search(
+        r"(?:^|\n)list-conns reply \{.*\}\s*$", result.stdout, re.DOTALL
+    ):
+        raise RuntimeError("local loaded connection observation is malformed")
+    loaded_names = re.findall(r"(?:^|\n)list-conn event \{([^{}\s]+) \{", result.stdout)
+    if len(loaded_names) != result.stdout.count("list-conn event {") or len(
+        set(loaded_names)
+    ) != len(loaded_names):
+        raise RuntimeError("local loaded connection observation is malformed")
+    return names.isdisjoint(loaded_names)
 
 
 def _policy_digest(value: Mapping[str, Iterable[str]]) -> str:
@@ -1178,6 +1203,7 @@ class LocalDataPlaneObserver:
     expected_bgp_exports: dict[str, frozenset[str]]
     bgp_export_observation_required: bool
     tunnel_cold_passive: bool
+    passive_static_tunnels: frozenset[str]
     monotonic_clock: Callable[[], float]
 
     def __init__(
@@ -1195,6 +1221,7 @@ class LocalDataPlaneObserver:
         self.expected_bgp_exports = dict(source.expected_bgp_exports)
         self.bgp_export_observation_required = source.bgp_export_observation_required
         self.tunnel_cold_passive = source.tunnel_cold_passive
+        self.passive_static_tunnels = source.passive_static_tunnels
         self.monotonic_clock = source.monotonic_clock
         self.deadline = deadline
         self.cancelled = cancelled
@@ -1332,11 +1359,21 @@ class LocalDataPlaneObserver:
             is BGPExportState.MATCH
         )
         established_ike_sa_count = 0
-        if self.tunnel_cold_passive:
+        static_tunnels_suspended = True
+        if self.tunnel_cold_passive or self.passive_static_tunnels:
             listed_sas = self._run(self.commands.swanctl, "--list-sas", "--raw")
             if listed_sas.returncode != 0:
                 raise RuntimeError("unable to observe local IKE SA state")
-            established_ike_sa_count = len(_ike_sa_ids(listed_sas.stdout))
+            ike_ids = _ike_sa_ids(listed_sas.stdout)
+            established_ike_sa_count = len(ike_ids)
+            if self.passive_static_tunnels:
+                static_ids = _named_ike_sa_ids(listed_sas.stdout, self.passive_static_tunnels)
+                loaded = self._run(self.commands.swanctl, "--list-conns", "--raw")
+                static_tunnels_suspended = not static_ids and _static_connections_absent(
+                    loaded, self.passive_static_tunnels
+                )
+            else:
+                static_tunnels_suspended = not ike_ids
         learned = _learned_bgp_prefixes(rib)
         static_prefixes: set[str] = set()
         usable_xfrm: set[str] = set()
@@ -1388,6 +1425,7 @@ class LocalDataPlaneObserver:
                 running_config.stdout, configured
             ),
             established_ike_sa_count=established_ike_sa_count,
+            static_tunnels_suspended=static_tunnels_suspended,
             bgp_export_state=_bgp_export_state(
                 self._expected_exports_for_mode(self.mode()),
                 advertised,
@@ -1442,6 +1480,8 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         blocked_preparer: Callable[[], None] | None = None,
         static_candidates: tuple[StaticRouteCandidate, ...] = (),
         tunnel_cold_passive: bool = False,
+        passive_static_tunnels: Iterable[str] = (),
+        candidate_preparer: Callable[[], None] | None = None,
         passive_materialization_attempts: int = 12,
         passive_materialization_interval: float = 0.5,
         bgp_export_attempts: int = 60,
@@ -1494,6 +1534,8 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         self.blocked_preparer = blocked_preparer
         self.static_candidates = static_candidates
         self.tunnel_cold_passive = tunnel_cold_passive
+        self.passive_static_tunnels = frozenset(passive_static_tunnels)
+        self.candidate_preparer = candidate_preparer
         self.passive_materialization_attempts = passive_materialization_attempts
         self.passive_materialization_interval = passive_materialization_interval
         self.bgp_export_attempts = bgp_export_attempts
@@ -1720,10 +1762,6 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
             )
             if strongswan_running and self.tunnel_cold_passive:
                 self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
-            elif strongswan_running:
-                load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
-                if load.returncode != 0:
-                    raise RuntimeError("cluster tunnel configuration could not be loaded")
         try:
             self._write_state(action, mode)
             self._write_guard(action, mode)
@@ -1769,9 +1807,9 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
                     self.sleeper(self.passive_materialization_interval)
             else:
                 raise RuntimeError("passive data-plane materialization did not converge")
-            self._require_bgp_exports(DataPlaneMode.PASSIVE)
-            if self.tunnel_cold_passive:
+            if self.tunnel_cold_passive or self.passive_static_tunnels:
                 self._suspend_passive_tunnels(action)
+            self._require_bgp_exports(DataPlaneMode.PASSIVE)
         except Exception as error:
             # PASSIVE is observable controller authority, not merely a forwarding
             # setting.  If materialization or hygiene fails after the initial
@@ -1805,15 +1843,46 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("cold static standby lost its passive forwarding fence")
-            self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
+            if self.tunnel_cold_passive:
+                self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
+            else:
+                self._suspend_static_tunnels_locked()
             self._write_state(action, DataPlaneMode.PASSIVE)
             self._write_guard(action, DataPlaneMode.PASSIVE)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
+    def _suspend_static_tunnels_locked(self) -> None:
+        # The ordinary agent has published the BGP-only passive file. Loading
+        # it removes static responder configs without touching BGP IKE SAs.
+        loaded = self._run(self.commands.swanctl, "--load-conns")
+        if loaded.returncode != 0:
+            raise RuntimeError("passive connection configuration could not be loaded")
+        conns = self._run(self.commands.swanctl, "--list-conns", "--raw")
+        if not _static_connections_absent(conns, self.passive_static_tunnels):
+            raise RuntimeError("static responder configuration remains on standby")
+        listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+        if listed.returncode != 0:
+            raise RuntimeError("passive static IKE state is unavailable")
+        for ike_id in _named_ike_sa_ids(listed.stdout, self.passive_static_tunnels):
+            terminated = self._run(
+                self.commands.swanctl, "--terminate", "--ike-id", ike_id, "--timeout", "5"
+            )
+            if terminated.returncode != 0:
+                raise RuntimeError("passive static IKE termination failed")
+        remaining = self._run(self.commands.swanctl, "--list-sas", "--raw")
+        if remaining.returncode != 0 or _named_ike_sa_ids(
+            remaining.stdout, self.passive_static_tunnels
+        ):
+            raise RuntimeError("static IKE SA remains on standby")
+
     def prepare_candidate(self, action: ControllerAction) -> None:
-        if not self.tunnel_cold_passive and not self.static_candidates:
+        if (
+            not self.tunnel_cold_passive
+            and not self.static_candidates
+            and not self.passive_static_tunnels
+        ):
             raise RuntimeError("candidate tunnel preparation is not enabled for this runtime")
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -1821,14 +1890,22 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("candidate tunnel preparation requires passive fenced mode")
-            if self.tunnel_cold_passive:
+            if self.tunnel_cold_passive or self.passive_static_tunnels:
+                if self.candidate_preparer is not None:
+                    self.candidate_preparer()
                 load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
                 if load.returncode != 0:
                     raise RuntimeError("candidate tunnel configuration could not be loaded")
                 for attempt in range(1, self.passive_materialization_attempts + 1):
                     listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
-                    if listed.returncode == 0 and _ike_sa_ids(listed.stdout):
-                        break
+                    if listed.returncode == 0:
+                        ids = (
+                            _named_ike_sa_ids(listed.stdout, self.passive_static_tunnels)
+                            if self.passive_static_tunnels
+                            else _ike_sa_ids(listed.stdout)
+                        )
+                        if ids:
+                            break
                     if attempt < self.passive_materialization_attempts:
                         self.sleeper(self.passive_materialization_interval)
                 else:
@@ -2466,11 +2543,11 @@ class BoundRouteRuntime:
             static_route_repair_targets=observed.static_route_repair_targets,
             degraded_connections=tuple(sorted(degraded_connections)),
         )
-        static_only = bool(self.static_manifest.prefixes) and not self.bgp_policies
+        has_static = bool(self.static_manifest.prefixes)
         candidate_preparation_required = bool(
             passive_mode
             and (
-                (static_only and not readiness.promotion_ready)
+                (has_static and not readiness.promotion_ready)
                 or observed.static_route_repair_required
             )
         )
@@ -2484,9 +2561,11 @@ class BoundRouteRuntime:
         cold_standby_ready = bool(
             candidate_preparation_required
             and observed.service_healthy
-            and bgp.promotion_ready
-            and observed.established_ike_sa_count == 0
-            and not observed.usable_xfrm_prefixes
+            and readiness.bgp_ready
+            and (bool(self.bgp_policies) or observed.established_ike_sa_count == 0)
+            and observed.static_tunnels_suspended
+            and not observed.available_static_prefixes
+            and bgp.required_prefixes.issubset(observed.usable_xfrm_prefixes)
             and routing_hygiene_ready
         )
         return replace(
@@ -2494,6 +2573,9 @@ class BoundRouteRuntime:
             static_route_repair_ready=static_route_repair_ready,
             candidate_preparation_required=candidate_preparation_required,
             cold_standby_ready=cold_standby_ready,
+            standby_static_tunnels_ready=(
+                not passive_mode or not has_static or observed.static_tunnels_suspended
+            ),
         )
 
     def _current_ownership(
@@ -3451,6 +3533,7 @@ def build_runtime_ports(
     boot_id: str | None = None,
     identity_proof_mode: str = "online",
     systemd_invocation_id: str | None = None,
+    candidate_preparer: Callable[[], None] | None = None,
     active_preparer: Callable[[], None] | None = None,
     blocked_preparer: Callable[[], None] | None = None,
 ) -> VMHARuntimePorts:
@@ -3505,6 +3588,11 @@ def build_runtime_ports(
     bgp_records = json.loads(bgp_json)
     if not isinstance(bgp_records, list):
         raise ValueError("VM-HA BGP policy manifest must be a list")
+    tunnels, _, endpoints = collect_tunnel_state(dict(config), log=lambda _message: None)
+    passive_static_tunnels = []
+    for tunnel, endpoint in zip(tunnels, endpoints, strict=True):
+        if endpoint["mode"] == "static":
+            passive_static_tunnels.append(tunnel["name"])
     configured_sessions = _configured_bgp_sessions(config, bgp_records)
     connection_sessions = {}
     for record in bgp_records:
@@ -3587,8 +3675,11 @@ def build_runtime_ports(
             "runner": runner,
             "monotonic_clock": effective_monotonic_clock,
             "tunnel_cold_passive": bool(static_records) and not bgp_records,
+            "passive_static_tunnels": tuple(passive_static_tunnels),
             "static_candidates": static_route_candidates(config),
         }
+        if candidate_preparer is not None:
+            data_plane_kwargs["candidate_preparer"] = candidate_preparer
         if active_preparer is not None:
             data_plane_kwargs["active_preparer"] = active_preparer
         if blocked_preparer is not None:

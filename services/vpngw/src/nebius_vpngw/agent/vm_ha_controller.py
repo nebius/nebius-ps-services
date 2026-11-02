@@ -128,6 +128,7 @@ class LocalReadiness:
     static_route_repair_required: bool = False
     degraded_connections: tuple[str, ...] = ()
     static_route_repair_targets: tuple[tuple[str, str], ...] = ()
+    standby_static_tunnels_ready: bool = True
 
     @property
     def observation_grace_expired(self) -> bool:
@@ -168,6 +169,7 @@ class LocalReadiness:
         return (
             self.observation_available
             and self.routing_hygiene_ready
+            and self.standby_static_tunnels_ready
             and (self.promotion_ready or self.cold_standby_ready or repairable)
         )
 
@@ -175,6 +177,8 @@ class LocalReadiness:
     def transfer_blocked_reasons(self) -> tuple[str, ...]:
         if self.transfer_ready:
             return ()
+        if not self.standby_static_tunnels_ready:
+            return (*self.blocked_reasons, "standby-static-tunnels-not-suspended")
         return self.blocked_reasons
 
     @property
@@ -839,6 +843,14 @@ class VMHAController:
                 parity_reasons,
                 snapshot,
                 replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+            )
+        if not snapshot.readiness.standby_static_tunnels_ready:
+            return self._action(
+                HAState.NORMAL,
+                ("standby-static-tunnels-require-suspension",),
+                snapshot,
+                checkpoint,
+                ActionKind.ENTER_PASSIVE,
             )
         if not snapshot.readiness.transfer_ready:
             return self._result(
@@ -1510,7 +1522,10 @@ class VMHAController:
         return {
             ActionKind.INSTALL_COLD_START_GUARD: snapshot.guard_boot_id == snapshot.boot_id
             and snapshot.data_plane_mode is DataPlaneMode.BLOCKED,
-            ActionKind.ENTER_PASSIVE: snapshot.data_plane_mode is DataPlaneMode.PASSIVE,
+            ActionKind.ENTER_PASSIVE: bool(
+                snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+                and snapshot.readiness.standby_static_tunnels_ready
+            ),
             ActionKind.DISABLE_ACTIVE: snapshot.data_plane_mode is not DataPlaneMode.ACTIVE,
             ActionKind.REPAIR_LOCAL_DATAPLANE: (
                 snapshot.completed_effect_operation_id == action.operation_id
