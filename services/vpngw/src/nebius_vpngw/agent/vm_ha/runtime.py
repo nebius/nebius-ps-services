@@ -1348,7 +1348,8 @@ class LocalDataPlaneObserver:
             established_sessions=established,
         )
         advertised = {} if export_evidence is None else export_evidence[1]
-        expected_exports = self._expected_exports_for_mode(self.mode())
+        observed_mode = self.mode()
+        expected_exports = self._expected_exports_for_mode(observed_mode)
         established_exports = {}
         for peer in established:
             if peer in expected_exports:
@@ -1360,7 +1361,9 @@ class LocalDataPlaneObserver:
         )
         established_ike_sa_count = 0
         static_tunnels_suspended = True
-        if self.tunnel_cold_passive or self.passive_static_tunnels:
+        if observed_mode is DataPlaneMode.PASSIVE and (
+            self.tunnel_cold_passive or self.passive_static_tunnels
+        ):
             listed_sas = self._run(self.commands.swanctl, "--list-sas", "--raw")
             if listed_sas.returncode != 0:
                 raise RuntimeError("unable to observe local IKE SA state")
@@ -1427,7 +1430,7 @@ class LocalDataPlaneObserver:
             established_ike_sa_count=established_ike_sa_count,
             static_tunnels_suspended=static_tunnels_suspended,
             bgp_export_state=_bgp_export_state(
-                self._expected_exports_for_mode(self.mode()),
+                self._expected_exports_for_mode(observed_mode),
                 advertised,
                 configured_peers=configured,
             ),

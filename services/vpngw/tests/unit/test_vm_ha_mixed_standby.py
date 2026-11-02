@@ -16,6 +16,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
     _fake_mtls_snapshot,
     _runtime_config,
 )
+from tests.unit.test_vm_ha_static_selection import Kernel, action, config, runtime
 
 import nebius_vpngw.agent.strongswan_renderer as strongswan
 from nebius_vpngw.agent.vm_ha.runtime import (
@@ -448,3 +449,16 @@ def test_standby_bootstrap_without_sas_applies_daemon_settings(renderer_environm
     strongswan.StrongSwanRenderer().render_and_apply(mixed_config(), standby=True)
     assert ("systemctl", "restart", "strongswan-starter") in calls
     assert "uk-primary {" not in strongswan.SWANCTL_CONF.read_text()
+
+
+def test_active_owner_does_not_depend_on_standby_only_vici_observations(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm1"}
+    data_plane = runtime(tmp_path, kernel, config(mixed=True))
+    data_plane.passive_static_tunnels = frozenset({"uk-us-active", "uk-us-passive"})
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    observation = data_plane.observe()
+    assert observation.service_healthy
+    assert observation.forwarding_enabled
+    assert not any(command[0].endswith("swanctl") for command in kernel.calls)
