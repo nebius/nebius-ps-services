@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -462,3 +463,57 @@ def test_active_owner_does_not_depend_on_standby_only_vici_observations(tmp_path
     assert observation.service_healthy
     assert observation.forwarding_enabled
     assert not any(command[0].endswith("swanctl") for command in kernel.calls)
+
+
+def test_controller_sandbox_allows_atomic_candidate_config_publication():
+    unit_path = Path(__file__).parents[2] / "src/nebius_vpngw/systemd/nebius-vpngw-vm-ha.service"
+    unit = unit_path.read_text()
+    writable = set()
+    for line in unit.splitlines():
+        if line.startswith("ReadWritePaths="):
+            writable.update(line.partition("=")[2].split())
+    assert "ProtectSystem=strict" in unit
+    assert str(strongswan.SWANCTL_CONF.parent) in writable
+    assert "/etc" not in writable
+
+
+def test_candidate_publication_io_failure_keeps_the_pending_effect_guarded(tmp_path):
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        if argv[0] == DataPlaneCommandSet().sysctl:
+            return CommandResult(0, "0")
+        raise AssertionError(argv)
+
+    def publish():
+        raise OSError(30, "Read-only file system")
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        passive_static_tunnels=("uk-primary",),
+        candidate_preparer=publish,
+        runner=runner,
+    )
+    snapshot = _snapshot()
+    action = ControllerAction(
+        ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+        "candidate",
+        snapshot.boot_id,
+        snapshot.local_node_id,
+        "allocation",
+        "epoch",
+        snapshot.local_generation_id,
+        snapshot.local_digests,
+    )
+    runtime._write_state(action, DataPlaneMode.PASSIVE)
+    runtime._write_guard(action, DataPlaneMode.PASSIVE)
+    with pytest.raises(RuntimeError, match="could not be published"):
+        runtime.prepare_candidate(action)
+    assert runtime.mode() is DataPlaneMode.PASSIVE
+    assert not any("--load-all" in command for command in calls)
+    assert not any("net.ipv4.ip_forward=1" in command for command in calls)

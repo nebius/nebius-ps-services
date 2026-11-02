@@ -7368,3 +7368,13 @@ mixed-standby cases and the production bootstrap oracle. Another 31 require
 unavailable disposable Linux/systemd fixtures, and the frozen-binary test was
 excluded because PyInstaller is unavailable. Changed-source lint and type checks
 passed. This is not live deployment or takeover qualification.
+
+
+Candidate publication runs inside the controller's hardened service namespace.
+Grant only `/etc/swanctl` as an additional `ReadWritePaths` directory so the
+atomic temporary-file/rename writer can run under `ProtectSystem=strict`.
+Publication I/O failures become guarded retryable controller effects rather than
+uncaught process exits. Unit-policy regression coverage checks the canonical
+configuration parent, and an injected read-only failure verifies that publication
+failure neither loads tunnels nor enables forwarding. The November 2 live
+preflight exposed this permission omission before controlled fault injection.

@@ -1895,7 +1895,12 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
                 raise RuntimeError("candidate tunnel preparation requires passive fenced mode")
             if self.tunnel_cold_passive or self.passive_static_tunnels:
                 if self.candidate_preparer is not None:
-                    self.candidate_preparer()
+                    try:
+                        self.candidate_preparer()
+                    except OSError as error:
+                        raise RuntimeError(
+                            "candidate tunnel configuration could not be published"
+                        ) from error
                 load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
                 if load.returncode != 0:
                     raise RuntimeError("candidate tunnel configuration could not be loaded")
