@@ -775,12 +775,17 @@ class VMHACloudAdapter:
             except Exception:
                 code = None
             code_name = _enum_name(code)
-            if isinstance(exc, (TimeoutError, ConnectionError)) or code_name in {
+            retryable_codes = {
                 "ABORTED",
                 "DEADLINE_EXCEEDED",
                 "RESOURCE_EXHAUSTED",
                 "UNAVAILABLE",
-            }:
+            }
+            if (
+                isinstance(exc, (TimeoutError, ConnectionError))
+                or code_name in retryable_codes
+                or any(nebius_request_error_code_is(exc, name) for name in retryable_codes)
+            ):
                 raise RetryableHACloudError(f"{description}: {exc}") from exc
             if code_name == "NOT_FOUND" or nebius_request_error_code_is(exc, "NOT_FOUND"):
                 raise MissingHAComputeError(f"{description}: {exc}") from exc

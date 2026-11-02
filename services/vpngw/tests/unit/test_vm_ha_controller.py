@@ -1013,18 +1013,66 @@ def test_new_owner_cannot_finish_promotion_while_failover_is_disabled(
     assert reason in decision.reasons
 
 
-def test_loss_of_authoritative_ownership_disables_forwarding(
+@pytest.mark.parametrize("mode", list(DataPlaneMode))
+def test_unavailable_cloud_pauses_without_changing_forwarding(
     policy: VMHAController,
+    mode: DataPlaneMode,
 ) -> None:
+    checkpoint = ControllerCheckpoint(state=HAState.ACTIVE)
     decision = policy.decide(
         _snapshot(
             cloud=_cloud(authoritative=False),
-            data_plane_mode=DataPlaneMode.ACTIVE,
+            data_plane_mode=mode,
         ),
+        checkpoint,
+    )
+    assert decision.action is None
+    assert decision.forwarding_enabled is (mode is DataPlaneMode.ACTIVE)
+    assert decision.checkpoint == checkpoint
+    assert decision.reasons == ("cloud-ownership-unavailable",)
+
+
+def test_positive_ownership_loss_still_disables_forwarding(policy: VMHAController) -> None:
+    snapshot = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
+    checkpoint = _proven_transfer_checkpoint(snapshot, state=HAState.ACTIVE)
+    decision = policy.decide(replace(snapshot, cloud=_cloud()), checkpoint)
+    assert decision.action is not None
+    assert decision.action.kind is ActionKind.DISABLE_ACTIVE
+
+
+def test_cloud_outage_retains_pending_transfer_without_replay(policy: VMHAController) -> None:
+    snapshot = _snapshot(now=110.0, peer_received_at=80.0)
+    first = policy.decide(snapshot, ControllerCheckpoint(suspect_since=90.0))
+    assert first.action is not None
+    assert first.action.kind is ActionKind.STOP_FORMER_OWNER
+    for now in (111.0, 200.0, 3700.0):
+        unavailable = replace(snapshot, now=now, cloud=_cloud(authoritative=False))
+        waiting = policy.decide(unavailable, first.checkpoint)
+        assert waiting.action is None
+        assert waiting.checkpoint == first.checkpoint
+        assert not waiting.forwarding_enabled
+    recovered = policy.decide(replace(snapshot, now=3701.0), first.checkpoint)
+    assert recovered.action == first.action
+
+
+def test_cloud_outage_does_not_cancel_checkpointed_fence(policy: VMHAController) -> None:
+    snapshot = _snapshot(data_plane_mode=DataPlaneMode.ACTIVE)
+    fenced = policy.decide(snapshot, ControllerCheckpoint())
+    assert fenced.action is not None
+    assert fenced.action.kind is ActionKind.DISABLE_ACTIVE
+    replayed = policy.decide(
+        replace(snapshot, cloud=_cloud(authoritative=False)), fenced.checkpoint
+    )
+    assert replayed.action == fenced.action
+
+
+def test_unavailable_cloud_still_installs_cold_start_guard(policy: VMHAController) -> None:
+    decision = policy.decide(
+        _snapshot(guard_boot_id="old-boot", cloud=_cloud(authoritative=False)),
         ControllerCheckpoint(),
     )
     assert decision.action is not None
-    assert decision.action.kind is ActionKind.DISABLE_ACTIVE
+    assert decision.action.kind is ActionKind.INSTALL_COLD_START_GUARD
 
 
 @pytest.mark.parametrize(
@@ -1560,13 +1608,14 @@ def _local_safety_case(
     elif kind is ActionKind.DISABLE_ACTIVE:
         initial = _snapshot(
             data_plane_mode=DataPlaneMode.ACTIVE,
-            cloud=replace(_cloud(), authoritative=False),
+            cloud=_cloud(),
         )
         completed = replace(
             initial,
             data_plane_mode=DataPlaneMode.BLOCKED,
             cloud=replace(
                 initial.cloud,
+                authoritative=False,
                 allocation_id="replacement-allocation",
                 ownership_epoch="ownership-epoch-2",
             ),
@@ -2085,7 +2134,11 @@ def test_attach_completion_rejects_incomplete_or_stale_observation(
 
     assert decision.state is HAState.BLOCKED
     assert decision.action is None
-    assert decision.reasons == ("checkpointed-action-prerequisites-changed",)
+    if changes.get("authoritative") is False:
+        assert decision.reasons == ("cloud-ownership-unavailable",)
+        assert decision.checkpoint == attach.checkpoint
+    else:
+        assert decision.reasons == ("checkpointed-action-prerequisites-changed",)
     assert not decision.forwarding_enabled
 
 

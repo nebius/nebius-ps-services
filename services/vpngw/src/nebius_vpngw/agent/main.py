@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import yaml
 
+from nebius_vpngw.deploy.vm_ha_cloud import RetryableHACloudError
 from nebius_vpngw.schema import VMHARuntimeBinding
 
 from .firewall_manager import update_firewall_from_config
@@ -788,6 +789,10 @@ def _typed_transfer_intent_provider(
     return intent
 
 
+class VMHACloudObservationUnavailable(RuntimeError):
+    """A retryable read failed before the controller could authorize any effect."""
+
+
 class VMHASnapshotAdapter:
     """Build exact policy input from immutable binding and live adapters."""
 
@@ -879,7 +884,7 @@ class VMHASnapshotAdapter:
                 config=self.config,
                 apply_operation_id=current_operation,
             )
-            cloud = self.providers.cloud()
+            cloud = self._observe_cloud()
             if not (
                 current_operation == operation_id
                 and current_adoption == adoption
@@ -906,8 +911,18 @@ class VMHASnapshotAdapter:
         finally:
             os.close(descriptor)
 
+    def _observe_cloud(self) -> CloudObservation:
+        try:
+            return self.providers.cloud()
+        except RetryableHACloudError as error:
+            # Scope the exception to observations. The same SDK error from a
+            # mutation must retain the guarded, journal-based recovery path.
+            raise VMHACloudObservationUnavailable(
+                "cloud observation unavailable; retrying"
+            ) from error
+
     def observe(self) -> ControllerSnapshot:
-        cloud = self.providers.cloud()
+        cloud = self._observe_cloud()
         if cloud.allocation_id != self.allocation_id:
             raise ValueError("VM-HA cloud observation has the wrong allocation identity")
         guard_path = self.state_dir / VM_HA_GUARD_PATH.name
@@ -1866,7 +1881,9 @@ class VMHAControllerRuntime:
         snapshot = self.snapshots.last_snapshot
         if snapshot is None:
             raise RuntimeError("VM-HA controller has no observed snapshot")
-        ready = bool(result.forwarding_enabled and result.action is None)
+        ready = bool(
+            snapshot.cloud.authoritative and result.forwarding_enabled and result.action is None
+        )
         route_context = snapshot.routes_reconciled_context
         cold_standby = bool(
             snapshot.data_plane_mode is DataPlaneMode.PASSIVE
@@ -2171,6 +2188,11 @@ class VMHAControllerRuntime:
     def step(self) -> dict[str, Any]:
         try:
             return self._write_status(self.controller.step())
+        except VMHACloudObservationUnavailable:
+            # No cloud truth or effect was obtained. Leave the existing guard,
+            # forwarding, checkpoints and last-successful observation intact.
+            # Independent workers continue reporting current local health.
+            raise
         except Exception as error:
             self.guard()
             try:
@@ -4792,6 +4814,16 @@ def _run_vm_ha_controller(
         while True:
             try:
                 status = runtime.step()
+            except VMHACloudObservationUnavailable:
+                if not (
+                    isinstance(runtime, DefaultVMHAControllerRuntime)
+                    and ready_notified
+                    and not once
+                ):
+                    raise
+                print("[VM-HA] Cloud observation unavailable; retrying in 5 seconds", flush=True)
+                time.sleep(5)
+                continue
             except RuntimeError as error:
                 if not (
                     isinstance(runtime, DefaultVMHAControllerRuntime)

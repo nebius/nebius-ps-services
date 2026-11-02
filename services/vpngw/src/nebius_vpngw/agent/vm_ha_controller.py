@@ -561,6 +561,12 @@ class VMHAController:
                     replace(checkpoint, state=HAState.BLOCKED, pending_action=None),
                     guard_action,
                 )
+            if (
+                not snapshot.cloud.authoritative
+                and snapshot.guard_boot_id == snapshot.boot_id
+                and pending.kind not in _LOCAL_SAFETY_ACTIONS
+            ):
+                return self._wait_for_cloud(snapshot, checkpoint)
             postcondition_met = self.pending_action_postcondition(
                 pending,
                 snapshot,
@@ -657,7 +663,7 @@ class VMHAController:
             )
 
         if not snapshot.cloud.authoritative:
-            return self._block_or_disable("cloud-ownership-unavailable", snapshot, checkpoint)
+            return self._wait_for_cloud(snapshot, checkpoint)
 
         checkpoint = self._invalidate_ownership_if_lost(snapshot, checkpoint)
         cloud_reasons = self._cloud_consistency_reasons(snapshot)
@@ -1267,6 +1273,21 @@ class VMHAController:
         if cloud.ownership_re_read_exact and not cloud.candidate_attachment_exact:
             reasons.append("ownership-confirmation-without-exact-attachment")
         return tuple(reasons)
+
+    @staticmethod
+    def _wait_for_cloud(
+        snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> ControllerResult:
+        # Absence of evidence cannot authorize new effects or invalidate
+        # existing forwarding. Durable safety actions still replay above.
+        active = snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+        return ControllerResult(
+            state=HAState.DEGRADED if active else HAState.BLOCKED,
+            reasons=("cloud-ownership-unavailable",),
+            forwarding_enabled=active,
+            action=None,
+            checkpoint=checkpoint,
+        )
 
     def _block_or_disable(
         self,

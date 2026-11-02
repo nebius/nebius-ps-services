@@ -7225,3 +7225,21 @@ protocol. Existing generation-bound advisory-cache resets preserve replay state,
 ownership journals, and pending operations. Activation verifies the running
 independent-heartbeat capability and fresh authenticated v4 evidence on both
 nodes. mTLS proof does not require a successful routing-health sample.
+
+Retryable failures at the controller's cloud observation boundary abort that
+iteration before policy evaluation or effects. The service retries after five
+seconds without installing a new guard, rewriting the checkpoint, or refreshing
+the last-successful cloud observation. Heartbeats continue to expose fresh local
+health and the increasing age of the last successful ownership observation.
+An API outage has no automatic fencing deadline. Persisted status remains the
+last completed controller iteration during an exception, rather than claiming
+fresh cloud authority. Retry messages identify observation unavailability.
+
+A non-authoritative policy snapshot also pauses cloud-dependent effects and
+their replay. It preserves existing forwarding, reports unknown cloud authority,
+and cannot report activation readiness. Already checkpointed local safety
+actions and cold-start guarding remain enforceable. A successful authoritative
+read showing ownership loss still schedules fencing. Errors from mutations,
+including retryable SDK errors, retain the existing guarded recovery behavior.
+Availability handling does not weaken the former-owner Stopped proof or exact
+candidate attachment required for takeover and activation.

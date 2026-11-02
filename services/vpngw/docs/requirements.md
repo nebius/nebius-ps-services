@@ -2778,4 +2778,19 @@ be classified as unready solely because tunnels are intentionally absent.
 Validation must cover concurrent blocking calls, aggregate sampling deadlines,
 mutation overlap, delayed receipt persistence, conservative freshness, recovery
 boundaries, worker failure/shutdown, replay protection, cache reset, and guarded
-same-generation protocol upgrade. Existing cloud-error fencing is not changed.
+same-generation protocol upgrade.
+
+### VM-HA cloud observation availability
+
+Retryable cloud read failures, including timeouts and temporary unavailability,
+must not disable established forwarding or invalidate ownership continuity.
+After bounded SDK retries, the controller waits five seconds and retries the
+observation. There is no outage-duration threshold that authorizes fencing.
+Independent local-health sampling and heartbeat publication continue.
+
+Unavailable cloud observations cannot authorize takeover, activation, route
+reconciliation, or replay of cloud-dependent effects. Pending operations retain
+their exact durable identity until fresh observations permit recovery. Cold
+starts remain guarded. Positive authoritative evidence of ownership loss still
+fences, as do existing local safety failures and uncertain mutation outcomes.
+Cloud read recovery must use fresh evidence, never cached ownership authority.

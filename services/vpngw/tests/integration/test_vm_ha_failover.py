@@ -411,19 +411,49 @@ def test_stale_passive_generation_blocks_before_fencing() -> None:
     assert scenario.trace == []
 
 
-def test_cloud_api_outage_fails_closed_and_active_owner_disables() -> None:
+@pytest.mark.parametrize("unavailable_nodes", [("node-a",), ("node-b",), ("node-a", "node-b")])
+def test_cloud_api_outage_preserves_forwarding_and_blocks_new_authority(
+    unavailable_nodes: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
     scenario = TwoNodeScenario()
-    scenario.cloud.authoritative = False
+    observe = scenario.cloud.observe
 
-    passive = scenario.runtimes["node-b"].step()
-    active = scenario.runtimes["node-a"].step()
+    def observe_with_outage(*, local: str, peer: str) -> CloudObservation:
+        observed = observe(local=local, peer=peer)
+        return replace(observed, authoritative=local not in unavailable_nodes)
 
-    assert passive.state is HAState.BLOCKED
-    assert passive.action is None
-    assert passive.reasons == ("cloud-ownership-unavailable",)
-    assert active.action is not None
-    assert active.action.kind is ActionKind.DISABLE_ACTIVE
-    assert scenario.trace == [ActionKind.DISABLE_ACTIVE]
+    monkeypatch.setattr(scenario.cloud, "observe", observe_with_outage)
+    for elapsed in (0, 60, 3600):
+        scenario.clock.now = 100.0 + elapsed
+        for node in scenario.nodes.values():
+            node.peer_received_at = scenario.clock.now
+        passive = scenario.runtimes["node-b"].step()
+        active = scenario.runtimes["node-a"].step()
+        assert passive.action is None
+        assert active.action is None
+        assert active.forwarding_enabled
+        assert scenario.nodes["node-a"].mode is DataPlaneMode.ACTIVE
+        assert scenario.nodes["node-b"].mode is DataPlaneMode.PASSIVE
+        assert scenario.nodes["node-b"].checkpoint.suspect_since is None
+        assert scenario.trace == []
+        if "node-b" in unavailable_nodes:
+            assert passive.reasons == ("cloud-ownership-unavailable",)
+        if "node-a" in unavailable_nodes:
+            assert active.reasons == ("cloud-ownership-unavailable",)
+
+    monkeypatch.setattr(scenario.cloud, "observe", observe)
+    assert scenario.runtimes["node-a"].step().forwarding_enabled
+    assert scenario.runtimes["node-b"].step().state is HAState.NORMAL
+    assert scenario.trace == []
+
+    # Fresh evidence of lost ownership after the outage must still fence.
+    scenario.cloud.attachment = "node-b"
+    scenario.cloud.confirmed_owner = "node-b"
+    scenario.cloud.ownership_revision += 1
+    lost = scenario.runtimes["node-a"].step()
+    assert lost.action is not None
+    assert lost.action.kind is ActionKind.DISABLE_ACTIVE
+    assert scenario.nodes["node-a"].mode is DataPlaneMode.BLOCKED
 
 
 def test_fencing_failure_never_reaches_allocation_routes_or_forwarding() -> None:
