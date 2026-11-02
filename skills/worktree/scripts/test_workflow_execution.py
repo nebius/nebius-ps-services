@@ -1310,7 +1310,7 @@ class GitLifecycleTests(unittest.TestCase):
         git(self.project, "add", "services")
         git(self.project, "commit", "-m", "add monorepo scopes")
         self.base_head = git(self.project, "rev-parse", "HEAD")
-        seed_objective_impact(self.run_dir, self.project)
+        seed_objective_impact(self.run_dir, selected)
         scoped_plan = PLAN.replace("exact: src/", "exact: services/a/src/")
         self.plan.write_text(scoped_plan, encoding="utf-8")
         coordinator = prepare_execution(
@@ -1355,6 +1355,7 @@ class GitLifecycleTests(unittest.TestCase):
         (sibling / ".keep").write_text("b\n", encoding="utf-8")
         git(self.project, "add", "services")
         git(self.project, "commit", "-m", "add monorepo scopes")
+        seed_objective_impact(self.run_dir, selected)
         scoped_plan = PLAN.replace("exact: src/", "exact: services/a/src/")
         self.plan.write_text(scoped_plan, encoding="utf-8")
         coordinator = prepare_execution(
@@ -2381,6 +2382,7 @@ class GitLifecycleTests(unittest.TestCase):
 
     def test_prepare_on_default_creates_and_uses_promotion_branch(self) -> None:
         git(self.project, "switch", "main")
+        seed_objective_impact(self.run_dir, self.project)
         coordinator = self.prepare()
         self.assertTrue(coordinator["base_branch"].startswith("feature/sdlc-"))
         self.assertNotEqual(coordinator["base_branch"], coordinator["default_branch"])

@@ -2672,6 +2672,7 @@ def check_capability_regressions(ctx: Context) -> None:
                 # Do not run those expensive real-Git suites twice.
                 *(str(ctx.skills_root / "worktree/scripts" / name) for name in (
                     "test_workflow_execution.py", "test_workflow_objectives.py",
+                    "test_workflow_spec_bootstrap.py",
                     "test_workflow_program.py", "test_workflow_qualification.py",
                     "test_workflow_delivery.py", "test_workflow_handoffs.py",
                     "test_workflow_security.py", "test_workflow_fixture.py",
@@ -2838,7 +2839,16 @@ def check_capability_regressions(ctx: Context) -> None:
         ),
         "program.source-admission": (
             "Exact portable source and canonical pair admission",
-            (("execution", "test_fresh_input_admission_stages_exact_snapshot_and_pair"),),
+            tuple(("execution", test) for test in (
+                "test_fresh_input_admission_stages_exact_snapshot_and_pair",
+                "test_initial_pair_is_committed_once_before_execution",
+                "test_document_program_contract_includes_exact_admitted_bundle",
+                "test_contract_recovers_commit_before_state_write",
+                "test_managed_commit_recovery_records_head_before_reconciliation",
+                "test_managed_intake_owns_source_before_authoring",
+                "test_publication_race_cannot_commit_unpublished_bytes",
+                "test_clean_unjournaled_contract_commit_is_rejected",
+            )),
         ),
         "program.completion-freshness": (
             "Immutable delivered slices and current obligation evidence",

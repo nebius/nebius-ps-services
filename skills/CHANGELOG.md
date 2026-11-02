@@ -10,6 +10,8 @@ All notable changes to the reusable Agent Skills are tracked here.
   exact admitted document inputs, publication provenance and interrupted-commit
   recovery. Acquire managed ownership at clean intake before authoring, retain
   clean promotion guards, and reject unrelated changes or unjournaled commits.
+  Exercise this owner in three-tier composition fixtures instead of committing
+  the canonical pair manually during test setup.
 
 - Repair execution command dispatch after the execution-identity rename:
   preparation, worker transitions and failure classification now consume the

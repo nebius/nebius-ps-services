@@ -204,10 +204,18 @@ class ThreeTierTargetTests(unittest.TestCase):
         plan.chmod(0o600)
         plan.with_suffix(".md.lock").write_text("locked\n")
         plan.with_suffix(".md.lock").chmod(0o600)
-        # The prepare phase owns this commit; design admission above did not commit.
-        self.git("commit", "-qm", "Record canonical contract")
+        # Exercise the preparation owner; a fixture commit would pre-satisfy
+        # the exact product transition this composition test must observe.
         refinement.settle(self.run, self.claim)
-        return execution.prepare_execution(self.run, self.project, "FEAT-001", plan, 1)
+        coordinator = execution.prepare_execution(self.run, self.project, "FEAT-001", plan, 1)
+        contract = self.git("rev-parse", "HEAD")
+        self.assertEqual(self.git("rev-list", "--parents", "-n", "1", contract).split(),
+                         [contract, self.base])
+        self.assertEqual(coordinator["base_head"], contract)
+        intent = json.loads((self.run / "contract-commits/FEAT-001.json").read_text())
+        self.assertEqual(intent["parent"], self.base)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        return coordinator
 
     def resolve(self, **kwargs):
         return target.resolve_target(

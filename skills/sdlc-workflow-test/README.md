@@ -99,6 +99,11 @@ proof; invalid ownership, publication or image identity cannot produce new proof
   Dedicated capability rows require full document coverage, exact source
   admission, phase/slice barriers, current completion evidence, 2,100-task
   graphs, indexed handoffs and the real-Git four-worktree retention limit.
+  Source admission also requires actual first canonical publication from a
+  committed baseline, exact contract-commit recovery, managed lease ordering,
+  publication-race rejection and rejection of unjournaled commits. Three-tier
+  composition fixtures invoke preparation for the contract commit and inspect
+  its journal; fixture setup must not pre-satisfy that product transition.
   Lightweight profile evidence uses the current accepted-objective schema;
   the objective alone is insufficient for a live PASS.
 - Compares configured hook payloads against their authoritative source: SDLC
