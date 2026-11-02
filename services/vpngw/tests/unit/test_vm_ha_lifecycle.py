@@ -31,6 +31,24 @@ def _digest(character: str) -> str:
     return character * 64
 
 
+def test_observation_sorts_list_paths_without_changing_indices() -> None:
+    observation = {"routes": list(range(12))}
+
+    leaves = normalize_vm_ha_observation(observation)
+
+    assert leaves == tuple(sorted(leaves))
+    assert dict(leaves) == {f"/routes/{index}": str(index) for index in range(12)}
+    assert leaves[2] == ("/routes/10", "10")
+
+
+def test_observation_sorts_escaped_keys_and_preserves_their_identity() -> None:
+    observation = {"/": "slash", "a": "letter", "~": "tilde"}
+
+    leaves = normalize_vm_ha_observation(observation)
+
+    assert leaves == (("/a", '"letter"'), ("/~0", '"tilde"'), ("/~1", '"slash"'))
+
+
 def test_pre_compute_member_resource_binding_is_not_claimed_as_observed() -> None:
     expected = {"disk:gateway-1": "disk-1"}
 
