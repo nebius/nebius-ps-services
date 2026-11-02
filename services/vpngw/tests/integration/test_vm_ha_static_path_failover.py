@@ -130,7 +130,8 @@ def test_active_owner_moves_static_route_after_neighbor_sa_switch(
         decision.checkpoint,
     )
     assert acknowledged.action is None
-    assert acknowledged.state is HAState.REPAIRING
+    assert acknowledged.state is HAState.ACTIVE
+    assert acknowledged.checkpoint.repair_attempt is None
     verified = policy.decide(
         replace(
             observed,
@@ -142,6 +143,196 @@ def test_active_owner_moves_static_route_after_neighbor_sa_switch(
     )
     assert verified.state is HAState.ACTIVE
     assert verified.forwarding_enabled
+
+
+def test_preferred_tunnel_recovery_repairs_route_while_forwarding_is_healthy(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0", "xfrm1"}
+    kernel.routes = {PREFIX: "xfrm1"}
+    data_plane = simulated_runtime(tmp_path, kernel, config())
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    observed, checkpoint = owner_snapshot(data_plane)
+    assert observed.readiness.promotion_ready
+    assert observed.readiness.blocked_reasons == ()
+    assert observed.readiness.static_route_repair_required
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+
+    decision = policy.decide(observed, checkpoint)
+
+    assert decision.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    assert "static-route-repair-required" in decision.action.repair_reasons
+    kernel.calls.clear()
+    data_plane.repair_local(decision.action)
+    assert kernel.routes == {PREFIX: "xfrm0"}
+    assert kernel.forwarding == "1"
+    assert data_plane.mode() is DataPlaneMode.ACTIVE
+    assert not any("restart" in command or "reload" in command for command in kernel.calls)
+    completed = policy.decide(
+        replace(
+            observed,
+            now=101.0,
+            readiness=readiness(data_plane),
+            completed_effect_operation_id=decision.action.operation_id,
+        ),
+        decision.checkpoint,
+    )
+    assert completed.state is HAState.ACTIVE
+    assert completed.forwarding_enabled
+    assert completed.action is None
+    assert completed.checkpoint.repair_attempt is None
+
+
+def test_successive_remote_tunnel_switches_do_not_consume_a_gateway_failure_budget(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0"}
+    kernel.routes = {PREFIX: "xfrm0"}
+    data_plane = simulated_runtime(tmp_path, kernel, config())
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    observed, checkpoint = owner_snapshot(data_plane)
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    now = 100.0
+    for device in ("xfrm1", "xfrm0", "xfrm1"):
+        kernel.usable = {device}
+        observed = replace(observed, now=now, readiness=readiness(data_plane))
+        decision = policy.decide(observed, checkpoint)
+        assert decision.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+        data_plane.repair_local(decision.action)
+        completed = policy.decide(
+            replace(
+                observed,
+                now=now + 0.25,
+                readiness=readiness(data_plane),
+                completed_effect_operation_id=decision.action.operation_id,
+            ),
+            decision.checkpoint,
+        )
+        assert completed.action is None
+        assert completed.state is HAState.ACTIVE
+        assert completed.checkpoint.repair_attempt is None
+        assert kernel.routes[PREFIX] == device
+        assert kernel.forwarding == "1"
+        checkpoint = completed.checkpoint
+        now += 1.0
+    assert not any("restart" in command or "reload" in command for command in kernel.calls)
+
+
+def test_new_route_target_gets_its_own_attempt_before_previous_repair_is_observed(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm1"}
+    kernel.routes = {PREFIX: "xfrm0"}
+    data_plane = simulated_runtime(tmp_path, kernel, config())
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    observed, checkpoint = owner_snapshot(data_plane)
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    first = policy.decide(observed, checkpoint)
+    data_plane.repair_local(first.action)
+    # The neighbor changes back before the controller observes the first repair.
+    kernel.usable = {"xfrm0"}
+    second = policy.decide(
+        replace(
+            observed,
+            now=101.0,
+            readiness=readiness(data_plane),
+            completed_effect_operation_id=first.action.operation_id,
+        ),
+        first.checkpoint,
+    )
+    assert second.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    assert second.action.operation_id != first.action.operation_id
+    assert second.checkpoint.repair_attempt.failure_fingerprint != (
+        first.checkpoint.repair_attempt.failure_fingerprint
+    )
+    data_plane.repair_local(second.action)
+    assert kernel.routes[PREFIX] == "xfrm0"
+    assert kernel.forwarding == "1"
+
+
+def test_failed_preference_update_retries_without_stopping_working_backup(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0", "xfrm1"}
+    kernel.routes = {PREFIX: "xfrm1"}
+    data_plane = simulated_runtime(tmp_path, kernel, config())
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    observed, checkpoint = owner_snapshot(data_plane)
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    kernel.fail_write = True
+    decision = policy.decide(observed, checkpoint)
+    for now in (101.0, 106.0, 111.0):
+        assert decision.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+        data_plane.repair_local(decision.action)
+        acknowledged = policy.decide(
+            replace(
+                observed,
+                now=now,
+                readiness=readiness(data_plane),
+                completed_effect_operation_id=decision.action.operation_id,
+            ),
+            decision.checkpoint,
+        )
+        assert kernel.forwarding == "1"
+        assert kernel.routes[PREFIX] == "xfrm1"
+        assert data_plane.mode() is DataPlaneMode.ACTIVE
+        # A successful route write is still required before retiring this goal.
+        assert acknowledged.checkpoint.repair_attempt is not None
+        if acknowledged.action is None:
+            decision = policy.decide(
+                replace(observed, now=now + 5.0, readiness=readiness(data_plane)),
+                acknowledged.checkpoint,
+            )
+        else:
+            decision = acknowledged
+    kernel.fail_write = False
+    data_plane.repair_local(decision.action)
+    assert kernel.routes[PREFIX] == "xfrm0"
+    assert kernel.forwarding == "1"
+    assert not any("restart" in command or "reload" in command for command in kernel.calls)
+
+
+def test_remote_tunnel_switch_recovers_before_standby_suspicion_expires(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm1"}
+    kernel.routes = {PREFIX: "xfrm0"}
+    data_plane = simulated_runtime(tmp_path, kernel, config())
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    observed, checkpoint = owner_snapshot(data_plane)
+    owner = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    standby = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    suspicion = standby.decide(
+        _snapshot(peer_heartbeat=replace(_peer(), local_forwarding_ready=False)),
+        ControllerCheckpoint(),
+    )
+    assert suspicion.state is HAState.SUSPECT
+    decision = owner.decide(observed, checkpoint)
+    data_plane.repair_local(decision.action)
+    ports = SimpleNamespace(
+        data_plane=data_plane,
+        routes=connection_routes(data_plane),
+        monotonic_clock=lambda: 101.0,
+        heartbeat_snapshots=HeartbeatSnapshots(),
+    )
+    # This fixture has only the one configured static destination.
+    ports.routes.static_manifest = SimpleNamespace(prefixes=frozenset({PREFIX}))
+    ports.routes.connection_prefixes = {"uk-us": {PREFIX}}
+    VMHARuntimePorts.sample_local_health(ports, cancelled=lambda: False)
+    health, _ownership = ports.heartbeat_snapshots.read()
+    assert health.local_forwarding_ready is True
+    recovered = standby.decide(
+        _snapshot(
+            now=101.0,
+            peer_received_at=101.0,
+            peer_heartbeat=replace(_peer(), sequence=2, local_forwarding_ready=True),
+        ),
+        suspicion.checkpoint,
+    )
+    assert recovered.state is HAState.NORMAL
+    assert recovered.checkpoint.suspect_since is None
+    assert recovered.action is None
+    assert kernel.forwarding == "1"
 
 
 def test_owner_without_a_replacement_path_reaches_forwarding_fence(tmp_path):

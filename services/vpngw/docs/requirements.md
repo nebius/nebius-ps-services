@@ -2834,6 +2834,17 @@ service. Failed scoped route repair does not fence healthy connections and may
 retry within bounded attempts. Complete path loss retains the existing repair
 budget and takeover policy.
 
+Static-route correction has explicit repair reasons and deterministic destination
+and interface targets, even when all general readiness checks pass. A fresh
+observation of the installed selected route retires that scoped attempt. A new
+selected target receives a separate bounded attempt so successive remote tunnel
+switches do not inherit an exhausted gateway-failure budget. Service or policy
+failures retain their existing repair budget. Failed corrections preserve usable
+forwarding and retry without restarting protocol services or requesting an
+ordinary-agent reload. Ownership loss, writer fencing and invalid route authority
+retain their safety gates. This does not infer a remote gateway's forwarding
+authority from the existence of an IPsec SA.
+
 During observation grace or repair, an ordinary agent reload may defer without
 changing services, routes, exports or forwarding. Deferral requires the current
 boot, generation, active guard and controller-granted forwarding continuity.

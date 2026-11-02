@@ -2658,7 +2658,7 @@ class DefaultVMHAControllerRuntime:
                             )
                     finally:
                         os.close(descriptor)
-        else:
+        elif status.get("forwarding_continuity") is not True:
             self.active_reconcile_requested = False
         if self.promotion_receipt_path is not None:
             _advance_standby_restoration_under_writer_lock(

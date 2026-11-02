@@ -14,6 +14,7 @@ from tests.unit.test_vm_ha_controller import _peer, _snapshot
 
 from nebius_vpngw.agent import main as agent_main
 from nebius_vpngw.agent.main import (
+    DefaultVMHAControllerRuntime,
     VMHACheckpointFileStore,
     VMHACloudObservationUnavailable,
     VMHAControllerRuntime,
@@ -62,6 +63,41 @@ def test_grace_requires_both_consecutive_failures_and_elapsed_time() -> None:
         "consecutive_failures": 0,
         "failure_age_seconds": 0.0,
     }
+
+
+def test_route_repair_continuity_does_not_request_another_agent_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    statuses = iter(
+        (
+            {"promotion_ready": True, "forwarding_continuity": True},
+            {"promotion_ready": False, "forwarding_continuity": True},
+            {"promotion_ready": True, "forwarding_continuity": True},
+            {"promotion_ready": False, "forwarding_continuity": False},
+            {"promotion_ready": True, "forwarding_continuity": True},
+        )
+    )
+    reconcile = Mock()
+    ports = SimpleNamespace(
+        local=SimpleNamespace(role=SimpleNamespace(value="active"), node_id="node-a"),
+        data_plane=SimpleNamespace(request_agent_reconcile=reconcile),
+    )
+    runtime = DefaultVMHAControllerRuntime(
+        SimpleNamespace(step=lambda: next(statuses)),
+        ports,
+        boot_id="boot-a",
+        sequence_path=tmp_path / "sequence.json",
+        guard_path=tmp_path / "guard.json",
+    )
+    runtime.started_guarded = True
+    monkeypatch.setattr(runtime, "_start_peer_listener", lambda: None)
+    monkeypatch.setattr(runtime, "_start_heartbeat_workers", lambda: None)
+    for _ in range(3):
+        runtime.step()
+    reconcile.assert_called_once()
+    runtime.step()
+    runtime.step()
+    assert reconcile.call_count == 2
 
 
 def owner_runtime(tmp_path: Path):

@@ -602,6 +602,88 @@ def test_exact_owner_gets_one_bounded_local_repair_before_fencing(
     assert fenced.state is HAState.REPAIR_EXHAUSTED
 
 
+@pytest.mark.parametrize("authority_change", ["ownership", "apply-lock", "route-context"])
+def test_route_repair_still_fences_when_activation_authority_is_lost(
+    policy: VMHAController, authority_change: str
+) -> None:
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(
+            True,
+            True,
+            True,
+            True,
+            static_route_repair_required=True,
+            static_route_repair_targets=(("10.80.1.0/24", "xfrm1"),),
+        ),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned, state=HAState.ACTIVE)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
+    started = policy.decide(owned, checkpoint)
+    assert started.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    changed = replace(owned, now=101.0)
+    if authority_change == "ownership":
+        changed = replace(
+            changed,
+            cloud=replace(
+                owned.cloud,
+                observed_owner_node_id="node-a",
+                candidate_attachment_exact=False,
+            ),
+        )
+    elif authority_change == "apply-lock":
+        changed = replace(changed, apply_locked=True)
+    else:
+        changed = replace(changed, routes_reconciled_context=None)
+
+    decision = policy.decide(changed, started.checkpoint)
+
+    assert decision.action.kind is ActionKind.DISABLE_ACTIVE
+    assert not decision.forwarding_enabled
+
+
+def test_completed_route_correction_does_not_reactivate_a_fenced_repair(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(True, True, True, True, static_route_repair_required=True),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned, state=HAState.ACTIVE)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
+    started = policy.decide(owned, checkpoint)
+
+    fenced = policy.decide(
+        replace(
+            owned,
+            now=101.0,
+            data_plane_mode=DataPlaneMode.BLOCKED,
+            readiness=LocalReadiness(True, True, True, True),
+            completed_effect_operation_id=started.action.operation_id,
+        ),
+        started.checkpoint,
+    )
+
+    assert fenced.state is HAState.REPAIRING
+    assert fenced.checkpoint.repair_attempt is not None
+    assert fenced.action is None
+    assert not fenced.forwarding_enabled
+    exhausted = policy.decide(
+        replace(
+            owned,
+            now=102.0,
+            data_plane_mode=DataPlaneMode.BLOCKED,
+            readiness=LocalReadiness(True, True, True, True),
+        ),
+        fenced.checkpoint,
+    )
+    assert exhausted.state is HAState.REPAIR_EXHAUSTED
+    assert exhausted.action is None
+    assert not exhausted.forwarding_enabled
+
+
 def test_unhealthy_fresh_owner_heartbeat_starts_suspicion_without_skipping_stop(
     policy: VMHAController,
 ) -> None:

@@ -7288,6 +7288,17 @@ Automatic repair no longer restarts running strongSwan/FRR or reloads all tunnel
 It starts only confirmed stopped services. Complete path loss keeps the existing
 repair/fencing budget, and ownership or route-authority violations remain strict.
 
+Local observations expose each pending static correction as a sorted
+`(destination, interface)` pair. Repair reasons include an explicit static repair
+tag and these targets rather than depending on promotion blockers being present.
+The executor recomputes current usable selections under the routing lock and
+replaces only stale destinations. A route-only attempt is retired after fresh
+readiness proves its correction complete, or when a different nonempty target
+set supersedes it. Other failure reasons keep the existing gateway repair budget.
+The controller retains its active reconciliation marker during forwarding
+continuity, avoiding redundant ordinary-agent reloads after scoped repair or
+observation grace. Checkpoint field names and heartbeat format are unchanged.
+
 Status exposes observation streaks, degraded connections and forwarding
 continuity. The ordinary agent may defer a reload when current-boot and generation
 evidence proves that continuity. It performs no activation or data-plane writes

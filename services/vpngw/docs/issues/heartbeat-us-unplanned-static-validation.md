@@ -47,6 +47,18 @@ Private evidence and the full report are in
 Fix the repair crash and investigate static-path readiness before repeating
 the prerequisite and resuming deliberate takeover faults.
 
+An offline correction now gives scoped repairs explicit reasons and sorted route
+targets, dispatches healthy-readiness corrections to the route writer, retires
+verified corrections and separates subsequent targets from the previous repair
+budget. Forwarding continuity also avoids a redundant ordinary-agent reload.
+Regression tests cover preferred-path recovery, rapid successive tunnel switches,
+failed writes with a usable backup, peer suspicion recovery, authority loss and
+an already-fenced repair. All 3,026 unit/integration tests passed, including wheel
+packaging. Another 31 require disposable Linux/systemd fixtures, and the frozen
+binary test was excluded because PyInstaller is unavailable. Lint and type checks
+passed. This correction has not been deployed or live-qualified. Remote forwarding
+authority cannot be inferred from an SA, so the UK return-path issue remains.
+
 ## November 2 restarted observation-fault campaign
 
 Seven isolated no-disruption cases passed from 13:34:57 to 14:02:08 EST on

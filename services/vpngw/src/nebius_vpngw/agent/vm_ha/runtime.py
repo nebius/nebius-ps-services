@@ -51,6 +51,7 @@ from nebius_vpngw.agent.vm_ha.transport import (
     ReplayStateStore,
 )
 from nebius_vpngw.agent.vm_ha_controller import (
+    STATIC_ROUTE_REPAIR_REQUIRED,
     ActionKind,
     CloudObservation,
     ComputeState,
@@ -871,6 +872,7 @@ class LocalDataPlaneObservation:
     static_route_repair_required: bool = False
     available_static_prefixes: frozenset[str] = frozenset()
     established_bgp_exports_ready: bool = False
+    static_route_repair_targets: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1366,11 +1368,14 @@ class LocalDataPlaneObserver:
             for route in routes:
                 if isinstance(route, Mapping):
                     installed.add((route.get("dst"), route.get("dev")))
-        repair_required = any(
-            (prefix, selected[prefix]) not in installed for prefix in available_static
-        )
+        repair_targets = []
+        for prefix in sorted(available_static):
+            device = selected[prefix]
+            if (prefix, device) not in installed:
+                repair_targets.append((prefix, device))
         return LocalDataPlaneObservation(
-            static_route_repair_required=repair_required,
+            static_route_repair_required=bool(repair_targets),
+            static_route_repair_targets=tuple(repair_targets),
             available_static_prefixes=available_static,
             service_healthy=services,
             forwarding_enabled=self._forwarding(),
@@ -1895,7 +1900,10 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
             reasons = set(action.repair_reasons)
             if self.monotonic_clock() >= repair_deadline:
                 raise TimeoutError
-            if "static-routes-not-ready" in reasons and self.static_candidates:
+            route_repair_requested = bool(
+                {"static-routes-not-ready", STATIC_ROUTE_REPAIR_REQUIRED} & reasons
+            )
+            if route_repair_requested and self.static_candidates:
                 self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
                 lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
                 try:
@@ -2455,6 +2463,7 @@ class BoundRouteRuntime:
             observation_available=observation_available,
             partial_path_available=partial_path_available,
             static_route_repair_required=observed.static_route_repair_required,
+            static_route_repair_targets=observed.static_route_repair_targets,
             degraded_connections=tuple(sorted(degraded_connections)),
         )
         static_only = bool(self.static_manifest.prefixes) and not self.bgp_policies

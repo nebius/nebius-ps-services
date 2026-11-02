@@ -105,6 +105,8 @@ _LOCAL_SAFETY_ACTIONS = frozenset(
 _REPAIR_BUDGET_SECONDS = 5.0
 _REPAIR_FENCE_RESERVE_SECONDS = 1.0
 _REPAIR_HEALTHY_RESET_SECONDS = 60.0
+STATIC_ROUTE_REPAIR_REQUIRED = "static-route-repair-required"
+_STATIC_ROUTE_TARGET_PREFIX = "static-route-target:"
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class LocalReadiness:
     partial_path_available: bool = False
     static_route_repair_required: bool = False
     degraded_connections: tuple[str, ...] = ()
+    static_route_repair_targets: tuple[tuple[str, str], ...] = ()
 
     @property
     def observation_grace_expired(self) -> bool:
@@ -184,6 +187,15 @@ class LocalReadiness:
             (self.routing_hygiene_ready, "routing-hygiene-not-ready"),
         )
         return tuple(reason for ready, reason in checks if not ready)
+
+    @property
+    def repair_reasons(self) -> tuple[str, ...]:
+        reasons = list(self.blocked_reasons)
+        if self.static_route_repair_required:
+            reasons.append(STATIC_ROUTE_REPAIR_REQUIRED)
+            for prefix, device in self.static_route_repair_targets:
+                reasons.append(f"{_STATIC_ROUTE_TARGET_PREFIX}{prefix}:{device}")
+        return tuple(sorted(set(reasons)))
 
 
 @dataclass(frozen=True)
@@ -900,6 +912,16 @@ class VMHAController:
 
         if not parity_reasons and routes_current:
             if (
+                repair is not None
+                and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                and self._static_repair_goal_resolved_or_changed(repair, snapshot.readiness)
+            ):
+                # A verified route correction is complete local work. A new
+                # selected tunnel gets a separate bounded attempt, even when
+                # the neighbor switches again before the next observation.
+                checkpoint = replace(checkpoint, repair_attempt=None)
+                repair = None
+            if (
                 snapshot.data_plane_mode is DataPlaneMode.ACTIVE
                 and snapshot.readiness.static_route_repair_required
                 and (
@@ -1035,7 +1057,7 @@ class VMHAController:
     def _repair_action(
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> ControllerResult:
-        reasons = tuple(sorted(snapshot.readiness.blocked_reasons))
+        reasons = snapshot.readiness.repair_reasons
         deadline = snapshot.now + _REPAIR_BUDGET_SECONDS
         sequence = checkpoint.sequence + 1
         operation_id = (
@@ -1081,6 +1103,26 @@ class VMHAController:
             next_checkpoint,
             action,
         )
+
+    @staticmethod
+    def _static_repair_goal_resolved_or_changed(
+        repair: RepairAttempt, readiness: LocalReadiness
+    ) -> bool:
+        if STATIC_ROUTE_REPAIR_REQUIRED not in repair.failure_fingerprint:
+            return False
+        route_reasons = {STATIC_ROUTE_REPAIR_REQUIRED, "static-routes-not-ready", "xfrm-not-ready"}
+        previous_targets = set()
+        for reason in repair.failure_fingerprint:
+            if reason.startswith(_STATIC_ROUTE_TARGET_PREFIX):
+                previous_targets.add(reason)
+            elif reason not in route_reasons:
+                return False
+        if not readiness.static_route_repair_required:
+            return readiness.static_ready and readiness.xfrm_ready
+        current_targets = set()
+        for prefix, device in readiness.static_route_repair_targets:
+            current_targets.add(f"{_STATIC_ROUTE_TARGET_PREFIX}{prefix}:{device}")
+        return bool(previous_targets and current_targets and previous_targets != current_targets)
 
     def _existing_repair_decision(
         self,
