@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import yaml
 
+from nebius_vpngw import ingress_policy
 from nebius_vpngw.schema import VMHARuntimeBinding
 
 from .firewall_manager import update_firewall_from_config
@@ -887,12 +888,36 @@ class VMHASnapshotAdapter:
                 and self.providers.transfer_inhibition_operation_id() is None
                 and not (self.state_dir / "accepted-cloud-operation.json").exists()
                 and not (self.state_dir / "rearm-cloud-operation.json").exists()
-                and VMHACheckpointFileStore(self.state_dir / VM_HA_CHECKPOINT_PATH.name)
-                .load()
-                .pending_action
-                is None
             ):
                 raise RuntimeError("generation adoption retirement authority changed")
+            checkpoint = VMHACheckpointFileStore(self.state_dir / VM_HA_CHECKPOINT_PATH.name).load()
+            pending = checkpoint.pending_action
+            if pending is not None:
+                guard_path = self.state_dir / VM_HA_GUARD_PATH.name
+                guard = json.loads(guard_path.read_text(encoding="utf-8"))
+                boot_id = self.boot_id()
+                if not (
+                    isinstance(pending, ControllerAction)
+                    and pending.kind is ActionKind.ENTER_PASSIVE
+                    and pending.boot_id == boot_id
+                    and pending.target_node_id == self.local_node_id
+                    and pending.allocation_id == self.allocation_id
+                    and pending.ownership_epoch == cloud.ownership_epoch
+                    and pending.ownership_incarnation == checkpoint.ownership_incarnation
+                    and checkpoint.sequence > 0
+                    and pending.operation_id
+                    == f"{boot_id}:{checkpoint.sequence}:enter-passive:{self.local_node_id}"
+                    and isinstance(guard, Mapping)
+                    and guard.get("guard_boot_id") == boot_id
+                    and guard.get("data_plane_mode") in {"blocked", "passive"}
+                    and self.providers.data_plane()
+                    in {DataPlaneMode.BLOCKED, DataPlaneMode.PASSIVE}
+                ):
+                    raise RuntimeError("generation adoption retirement authority changed")
+                # An interrupted materialization must reach the controller's
+                # ordinary local-safety replay before retirement can proceed.
+                # Keep both old proof records intact until that effect clears.
+                return
             restoration.retire_terminal_for_generation_adoption(
                 cluster_id=self.cluster_id,
                 owner_node_id=self.local_node_id,
@@ -4791,6 +4816,7 @@ class Agent:
             cfg = yaml.safe_load(raw_config)
             if not isinstance(cfg, dict):
                 raise RuntimeError("resolved gateway configuration is malformed")
+            ingress_policy.from_config(cfg)
             vm_ha_config = _read_vm_ha_config(CONFIG_PATH)
             if lock_fd is None and (force_reconcile or vm_ha_config is not None):
                 raise RuntimeError("VM-HA and forced reconciliation require the routing lock")
@@ -4891,10 +4917,7 @@ class Agent:
                     CURRENT.reset(token)
                 return
 
-            try:
-                update_firewall_from_config(cfg)
-            except Exception as e:
-                print(f"[Agent] WARNING: Firewall update failed: {e}")
+            update_firewall_from_config(cfg, require_reload=True)
 
             interface_endpoints = self.ss.build_interface_endpoints(cfg)
             self.frr.ensure_local_prefix_routes(cfg)
@@ -5043,6 +5066,7 @@ def main() -> None:
                 {
                     "features": [
                         "ordinary-apply-v1",
+                        "managed-ingress-v1",
                         "ipsec-replay-window-v1",
                         "force-reconcile-v1",
                         "vm-ha-authority-bound-force-reconcile-v1",

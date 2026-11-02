@@ -69,7 +69,7 @@ def test_previous_release_state_is_read_without_migration(tmp_path):
 
 
 def test_previous_capability_absence_plans_approved_upgrade(release_wheel, monkeypatch):
-    config = "gateway: {}\nconnections: []\n"
+    config = "gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n"
     manifest = ordinary_apply.artifact(release_wheel, config)
     fixture = json.loads(
         (Path(__file__).parents[1] / "fixtures/previous_release_0_6_0.json").read_text()
@@ -170,9 +170,10 @@ def transaction(release_wheel, tmp_path, monkeypatch, ordinary_operation_guest):
         ("ROUTING_LOCK", "routing.lock"),
     ):
         monkeypatch.setattr(ordinary_remote, name, root / basename)
+    monkeypatch.setenv("VPNGW_DEPLOY_SSH_CONNECTION", "203.0.113.4 4567 10.0.0.1 22")
     ordinary_remote.BOOT.write_text("12345678-1234-1234-1234-123456789012")
     ordinary_remote.CONFIG.write_text("gateway: {}\nconnections: []\n# previous release\n")
-    config = "gateway: {}\nconnections: []\n"
+    config = "gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n"
     manifest = ordinary_apply.artifact(release_wheel, config)
     manifest["assets"] = {
         str(root / Path(path).name): item for path, item in manifest["assets"].items()
@@ -494,8 +495,10 @@ def test_selected_wheel_must_implement_the_approved_route_contract(release_wheel
             if name == "nebius_vpngw/" + member:
                 raw = b"# previous route behavior\n"
             target.writestr(name, raw)
-    with pytest.raises(RuntimeError, match="route ownership"):
-        ordinary_apply.artifact(selected, "connections: []\n")
+    with pytest.raises(RuntimeError, match="route ownership|mandatory managed ingress"):
+        ordinary_apply.artifact(
+            selected, "gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n"
+        )
 
 
 def test_quiescence_drift_prevents_install_and_publication(transaction, monkeypatch):
@@ -565,12 +568,31 @@ def test_local_timeout_also_joins_descendants(tmp_path):
 
 
 @pytest.mark.parametrize("drift", [False, True])
-def test_ha_noop_requires_both_member_artifacts_and_fresh_health(release_wheel, monkeypatch, drift):
+@pytest.mark.parametrize(
+    "failure", [None, "timeout", "authentication", "host identity", "reboot", "policy drift"]
+)
+def test_ha_noop_requires_both_member_artifacts_and_fresh_health(
+    release_wheel, monkeypatch, drift, failure
+):
     instances = tuple(
         SimpleNamespace(
-            hostname=f"gateway-{i}", config_yaml="gateway: {}\nconnections: []\nvm_ha: {}\n"
+            hostname=f"gateway-{i}",
+            config_yaml="gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\nvm_ha: {}\n",
         )
         for i in range(2)
+    )
+    monkeypatch.setattr(
+        ordinary_apply.ingress_ssh,
+        "verify_fresh",
+        Mock(
+            side_effect=(
+                ordinary_apply.ingress_ssh.IngressVerificationDrift("confirmed drift")
+                if failure == "policy drift"
+                else RuntimeError(f"fresh SSH verification: {failure}")
+            )
+            if failure
+            else None
+        ),
     )
     artifact = SimpleNamespace(path=release_wheel, verify_current=Mock())
     calls = []
@@ -586,8 +608,13 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(release_wheel, 
                     path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()
                 },
                 "ha_config_digest": ordinary_apply.digest(
-                    {"gateway": {}, "connections": [], "vm_ha": {}}
+                    {
+                        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+                        "connections": [],
+                        "vm_ha": {},
+                    }
                 ),
+                "config_sha256": manifest["config_sha256"],
                 "boot_id": "changed" if drift and len(calls) == 3 else "boot",
                 "requirements": {},
                 "dependencies": {},
@@ -602,8 +629,9 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(release_wheel, 
     monkeypatch.setattr(cli, "_confirm_vm_ha_healthy", confirm)
     ssh = Mock()
     monkeypatch.setattr(cli, "SSHPush", lambda **kwargs: ssh)
-    assert (
-        cli._unchanged_vm_ha_apply(
+
+    def check():
+        return cli._unchanged_vm_ha_apply(
             Path("generic.yaml"),
             instances=instances,
             local={},
@@ -612,8 +640,12 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(release_wheel, 
             artifact=artifact,
             region=None,
         )
-        is not drift
-    )
+
+    if failure and failure != "policy drift" and not drift:
+        with pytest.raises(RuntimeError, match=f"fresh SSH verification: {failure}"):
+            check()
+    else:
+        assert check() is (not drift and failure != "policy drift")
     confirm.assert_called_once()
     assert calls[:2] == [i.hostname for i in instances]
     assert not ssh.mock_calls
@@ -673,6 +705,7 @@ def test_selected_extra_keeps_direct_url_dependency_blocking():
 
 @pytest.mark.parametrize("slow_upload", [False, True])
 def test_client_deadline_includes_upload_and_always_closes(monkeypatch, slow_upload):
+    monkeypatch.setattr(ordinary_apply.ingress_ssh, "preflight", lambda *args: "boot")
     now = [0.0]
     sent = bytearray()
     channel = Mock()
@@ -706,13 +739,27 @@ def test_client_deadline_includes_upload_and_always_closes(monkeypatch, slow_upl
     if slow_upload:
         with pytest.raises(RuntimeError, match="during upload"):
             ordinary_apply.remote(
-                ssh, "203.0.113.10", SimpleNamespace(hostname="gateway-0"), {}, request
+                ssh,
+                "203.0.113.10",
+                SimpleNamespace(
+                    hostname="gateway-0",
+                    config_yaml="gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}",
+                ),
+                {},
+                request,
             )
         channel.shutdown_write.assert_not_called()
     else:
         assert (
             ordinary_apply.remote(
-                ssh, "203.0.113.10", SimpleNamespace(hostname="gateway-0"), {}, request
+                ssh,
+                "203.0.113.10",
+                SimpleNamespace(
+                    hostname="gateway-0",
+                    config_yaml="gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}",
+                ),
+                {},
+                request,
             )["status"]
             == "inspected"
         )
@@ -740,7 +787,10 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
     monkeypatch.setattr(frr_renderer, "run", effect)
     monkeypatch.setattr(strongswan_renderer, "run", effect)
     files = ordinary.managed_files(
-        {"gateway": {"local_prefixes": ["10.0.0.0/24"]}, "connections": []}
+        {
+            "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
+            "connections": [],
+        }
     )
     assert files[ordinary.SWANCTL_CONF] and files[ordinary.FRR_CONF]
     effect.assert_not_called()
@@ -770,7 +820,7 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
 )
 def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, monkeypatch, fault):
     cfg = {
-        "gateway": {"local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
         "connections": [
             {
                 "tunnels": [
@@ -809,6 +859,11 @@ def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, mon
 
     def output(args):
         observed_commands.append(args)
+        if args[0] == "nft":
+            from nebius_vpngw import ingress_policy
+
+            objects = ingress_policy.objects(ingress_policy.from_config(cfg))
+            return json.dumps({"nftables": objects[:1] if "tables" in args else objects})
         if args[0] == "systemctl":
             return "active"
         if args[0] == "ufw":
@@ -900,7 +955,7 @@ def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, mon
 def guest(monkeypatch, tmp_path, ordinary_operation_guest):
     for name in ("CONFIG", "PROOF", "STATE", "BOOT"):
         monkeypatch.setattr(ordinary, name, tmp_path / name)
-    ordinary.CONFIG.write_text("gateway: {}\nconnections: []\n")
+    ordinary.CONFIG.write_text("gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n")
     ordinary.BOOT.write_text("12345678-1234-1234-1234-123456789012")
     monkeypatch.setattr(ordinary, "package_identity", lambda: "a" * 64)
     monkeypatch.setattr(
@@ -1077,9 +1132,12 @@ def test_remote_stale_predecessor_has_no_command_or_config_effects(monkeypatch, 
     monkeypatch.setattr(ordinary_remote, "inspect", lambda manifest: {"changed": True})
     command = Mock(side_effect=AssertionError("effect"))
     monkeypatch.setattr(ordinary_remote, "command", command)
+    monkeypatch.setenv("VPNGW_DEPLOY_SSH_CONNECTION", "203.0.113.4 4567 10.0.0.1 22")
     result = ordinary_remote.execute(
         {
-            "manifest": {},
+            "manifest": {
+                "ingress_policy": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}
+            },
             "noop": False,
             "approval": "approved",
             "plan_digest": "approved",
@@ -1133,7 +1191,9 @@ def test_real_060_nonempty_state_and_tunnel_identity_remain_compatible(tmp_path,
     assert not store.is_changed(old_state["resolved_config"])
     assert path.read_bytes() == before
     config = tmp_path / "ordinary.yaml"
-    config.write_text(yaml.safe_dump(fixture["local_config"]))
+    migrated = copy.deepcopy(fixture["local_config"])
+    migrated["gateway"]["ssh_allowed_cidrs"] = ["203.0.113.4/32"]
+    config.write_text(yaml.safe_dump(migrated))
     plan = merge_with_peer_configs(load_local_config(config), [])
     plan.validate()
     assert len(plan.per_instance) == 1

@@ -136,6 +136,7 @@ def _static_wizard_input() -> str:
         "",  # subnet CIDR
         "",  # subnet prefix
         "10.20.0.0/16",
+        "203.0.113.4/32",  # deployment and administrator SSH source
         "1",  # connection count
         "onprem-static",
         "cisco",
@@ -182,6 +183,7 @@ def _vm_ha_wizard_input() -> str:
         "",  # subnet CIDR
         "",  # subnet prefix
         "10.30.0.0/16",
+        "203.0.113.4/32",  # deployment and administrator SSH source
         "1",  # connection count
         "ha-static",
         "generic",

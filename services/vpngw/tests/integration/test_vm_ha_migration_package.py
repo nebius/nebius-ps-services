@@ -25,6 +25,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest):
+    monkeypatch.setenv("VPNGW_DEPLOY_SSH_CONNECTION", "203.0.113.4 1234 10.0.0.1 22")
     root = tmp_path / "guest"
     root.mkdir()
     config = root / "resolved.yaml"
@@ -180,6 +181,14 @@ def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest):
     forwarding.write_text("0")
     monkeypatch.setattr(ha_repair, "FORWARDING", forwarding)
     original_exact, original_evidence = ha_repair.exact_lock, ha_repair.evidence
+    original_fencing = ha_repair.fencing_evidence
+    monkeypatch.setattr(
+        ha_repair,
+        "fencing_evidence",
+        lambda expected, **kwargs: original_fencing(
+            expected, state_dir=kwargs.pop("state_dir", ha_state), **kwargs
+        ),
+    )
     original_initialize, original_guard = (
         ha_repair.initialize_unstarted_checkpoint,
         ha_repair.cold_guard,
@@ -260,6 +269,7 @@ def requests(fixture):
     return [
         dict(
             action="reserve",
+            ingress_policy={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []},
             observed=guest.inspect(fixture.ha),
             ha=fixture.ha,
             binding="2" * 64,
@@ -402,15 +412,17 @@ def test_staged_bytes_are_rechecked_before_any_installer(monkeypatch, migration_
 
 
 @pytest.mark.parametrize(
-    "damage", ["none", "broken-product", "peer-drift", "post-start-disconnect"]
+    "damage", ["none", "broken-product", "peer-drift", "checkpoint-disconnect"]
 )
-def test_post_publication_retry_runs_real_ha_repair(monkeypatch, migration_guest, damage):
+def test_post_publication_repair_stays_stopped_until_desired_activation(
+    monkeypatch, migration_guest, damage
+):
     fixture = migration_guest
-    # Disconnect after activate is durable but before the first controller start.
+    # Predecessor intentionally lacks the new required field. No agent materialization
+    # may run against it during package repair, including after a retry.
+    assert "ssh_allowed_cidrs" not in fixture.config.read_text()
     with pytest.raises(RuntimeError, match="disconnect"):
         run_protocol(monkeypatch, requests(fixture)[:3])
-    assert ops.Journal().read()["phase"] == "activate"
-    assert (fixture.ha_state / "controller-checkpoint.json").exists()
     fresh_owner(monkeypatch)
     if damage == "broken-product":
         fixture.package_file.write_bytes(b"raise ImportError('damaged installation')")
@@ -418,61 +430,48 @@ def test_post_publication_retry_runs_real_ha_repair(monkeypatch, migration_guest
     fixture.plan = vm_ha_package.inspect_plan(
         fixture.ssh, "203.0.113.10", fixture.instance, {}, target_identity="compute-a"
     )
-    if damage == "none":
-        assert not fixture.plan.effects
     expected = dict(fixture.ha, compute_id="compute-a", operation_id="b" * 64)
-    local = ha_repair.evidence(expected)
-    peer = copy.deepcopy(local)
+    peer = copy.deepcopy(ha_repair.evidence(expected))
     peer["lock"]["node_id"] = "node-b"
     peer["mtls"].update(node_id="node-b", compute_id="compute-b")
-    messages = requests(fixture)
-    assert messages[0]["observed"]["pending"] is True
-    messages[0].update(repair=expected, peer=peer)
-    messages[1]["peer"] = copy.deepcopy(peer)
-    messages[2] = dict(action="resume-repair", peer=peer)
-    previous_command = ordinary_remote.command
 
-    def command(args, **kwargs):
-        if "--vm-ha-status" in args:
-            return 0, json.dumps(
-                dict(
-                    fixture.ha,
-                    data_plane_mode="passive",
-                    apply_locked=True,
-                    apply_operation_id="b" * 64,
-                    pending_operation_id=None,
-                    guard_boot_id=ops.BOOT.read_text().strip(),
-                )
-            )
-        return previous_command(args, **kwargs)
+    def repair_requests():
+        messages = requests(fixture)
+        messages[0].update(repair=expected, peer=peer)
+        messages[1]["peer"] = copy.deepcopy(peer)
+        checkpoint = dict(action="verify-prepared", peer=peer)
+        # Activation carries fresh fencing proof rather than the pre-mTLS snapshot.
+        messages[2]["activation_peer"] = {
+            k: v for k, v in peer.items() if k not in {"mtls", "transactions"}
+        }
+        return [*messages[:2], checkpoint, *messages[2:]]
 
-    monkeypatch.setattr(ordinary_remote, "command", command)
+    messages = repair_requests()
     if damage == "peer-drift":
         messages[1]["peer"]["lock"]["generation_id"] = "f" * 64
         before = fixture.state["installs"]
         with pytest.raises(RuntimeError, match="peer repair admission changed"):
             run_protocol(monkeypatch, messages)
         assert fixture.state["installs"] == before
-    else:
-        if damage == "post-start-disconnect":
-            with pytest.raises(RuntimeError, match="disconnect"):
-                run_protocol(monkeypatch, messages[:3])
-            assert any(e["kind"] == "reload" for e in ops.Journal().read()["effects"])
-            assert all(fixture.units[name] == "active" for name in ops.HA_WRITERS)
-            fresh_owner(monkeypatch, start="3")
-            fixture.plan.close()
-            fixture.plan = vm_ha_package.inspect_plan(
-                fixture.ssh, "203.0.113.10", fixture.instance, {}, target_identity="compute-a"
-            )
-            messages = requests(fixture)
-            messages[0].update(repair=expected, peer=peer)
-            messages[1]["peer"] = peer
-            messages[2] = dict(action="resume-repair", peer=peer)
-        assert run_protocol(monkeypatch, messages)[-1] == {"complete": True}
-        assert fixture.package_file.read_bytes() == b"approved new package\n"
-        assert all(fixture.units[name] == "active" for name in ops.HA_WRITERS)
-        assert ops.Journal().read()["state"] == "complete"
-        assert ha_repair.evidence(expected)["forwarding"] is False
+        return
+    if damage == "checkpoint-disconnect":
+        with pytest.raises(RuntimeError, match="disconnect"):
+            run_protocol(monkeypatch, messages[:3])
+        assert ops.Journal().read()["phase"] == "publish"
+        assert all(fixture.units[name] == "inactive" for name in ops.HA_WRITERS)
+        fresh_owner(monkeypatch, start="3")
+        fixture.plan.close()
+        fixture.plan = vm_ha_package.inspect_plan(
+            fixture.ssh, "203.0.113.10", fixture.instance, {}, target_identity="compute-a"
+        )
+        messages = repair_requests()
+    result = run_protocol(monkeypatch, messages)
+    assert result[-1] == {"complete": True}
+    assert result[2] == result[1]  # exact package receipt reverified under exclusion
+    assert fixture.package_file.read_bytes() == b"approved new package\n"
+    assert all(fixture.units[name] == "inactive" for name in ops.HA_WRITERS)
+    assert ops.Journal().read()["state"] == "complete"
+    assert ha_repair.evidence(expected)["forwarding"] is False
 
 
 def test_credential_drift_rejects_before_marker(monkeypatch, migration_guest):

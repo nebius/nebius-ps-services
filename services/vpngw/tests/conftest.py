@@ -17,6 +17,7 @@ def ordinary_static_observer(monkeypatch, tmp_path):
     import json
     from types import SimpleNamespace
 
+    from nebius_vpngw import ingress_policy
     from nebius_vpngw import ordinary_operations as ops
     from nebius_vpngw.agent import ordinary
     from nebius_vpngw.tunnel_state import collect_tunnel_state
@@ -82,6 +83,9 @@ def ordinary_static_observer(monkeypatch, tmp_path):
             raise AssertionError(args)
 
         def output(args):
+            if args[0] == "nft":
+                objects = ingress_policy.objects(ingress_policy.from_config(cfg))
+                return json.dumps({"nftables": objects[:1] if "tables" in args else objects})
             if args[0] == "ip":
                 return json.dumps((state.ip_reader or ip_rows)(args))
             if args[0] == "systemctl":
@@ -222,6 +226,7 @@ def sample_config() -> dict:
             },
         },
         "gateway": {
+            "ssh_allowed_cidrs": ["203.0.113.4/32"],
             "local_asn": 65010,
             "local_prefixes": ["10.0.0.0/16"],
             "quotas": {

@@ -286,6 +286,7 @@ class Holder:
         self.directory = STAGING / ops.digest(self.plan)
         if repair.read_json(self.directory / "plan.json") != self.plan:
             raise RuntimeError("HA staged package plan changed")
+        remote.command(["apt-get", "install", "-y", "nftables"], limit=120)
         self.operation.phase("install")
         remote.OPERATION = self.operation
         remote.DEADLINE = time.monotonic() + 600
@@ -374,72 +375,18 @@ class Holder:
         ):
             raise RuntimeError("HA peer repair admission changed")
 
-    def resume_repair(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Finish target repair before the lifecycle may update the untouched peer."""
+    def verify_prepared(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Keep old-config writers stopped until canonical desired activation."""
         self.check()
-        if not self.repairing or not self.prepared or self.plan is None:
+        if not self.prepared or self.plan is None:
             raise RuntimeError("HA package repair is not prepared")
-        self.require_repair(payload)
-        remote.OPERATION = self.operation
-        remote.DEADLINE = time.monotonic() + 600
-        self.operation.manager.deadline = remote.DEADLINE - 60
-        try:
-            with repair.writer_locks(deadline=time.monotonic() + 30):
+        with repair.writer_locks(deadline=time.monotonic() + 30):
+            if self.repairing:
                 self.require_repair(payload)
-                self.verify_prepared_predecessor()
-                if (
-                    remote.sha(remote.CONFIG.read_bytes())
-                    != self.plan["predecessor"]["config_sha256"]
-                ):
-                    raise RuntimeError("HA repair configuration changed")
-                verify_package(self.plan["desired"])
-                self.publish_assets(self.plan["desired"]["assets"])
-                repair.initialize_unstarted_checkpoint(
-                    unstarted=self.request["observed"].get("unstarted", False)
-                )
-                self.operation.phase("activate")
-            # Canonical service startup owns HA reconciliation; no lock needed by
-            # its hooks is held while the manager runs those hooks.
-            self.operation.reload_manager()
-            self.operation.service("restart", ops.HA_GUARD)
-            remote.command(
-                [
-                    sys.executable,
-                    "-B",
-                    "-m",
-                    "nebius_vpngw.agent.main",
-                    "--vm-ha-auto-healing-action",
-                    "initialize",
-                ],
-                limit=60,
-            )
-            for name in reversed(ops.HA_WRITERS):
-                self.operation.service("start", name)
-            deadline = time.monotonic() + 120
-            while time.monotonic() < deadline:
-                _, raw = remote.command(
-                    [sys.executable, "-B", "-m", "nebius_vpngw.agent.main", "--vm-ha-status"],
-                    limit=30,
-                )
-                status = json.loads(raw)
-                expected = self.request["repair"]
-                if (
-                    all(
-                        status.get(k) == expected[k]
-                        for k in ("cluster_id", "node_id", "generation_id")
-                    )
-                    and status.get("data_plane_mode") == "passive"
-                    and status.get("apply_locked") is True
-                    and status.get("apply_operation_id") == expected["operation_id"]
-                    and status.get("pending_operation_id") is None
-                    and status.get("guard_boot_id") == ops.BOOT.read_text().strip()
-                ):
-                    repair.evidence(expected)
-                    return status
-                time.sleep(0.1)
-            raise RuntimeError("HA repair locked-passive status was not confirmed")
-        finally:
-            remote.OPERATION = None
+            if not all(self.operation.manager.stopped(name) for name in ops.HA_WRITERS):
+                raise RuntimeError("HA package repair writer is not stopped")
+            self.verify_prepared_predecessor()
+            return verify_package(self.plan["desired"])
 
     def publish_assets(self, assets: dict[str, Any]) -> None:
         assert self.directory is not None and self.plan is not None
@@ -459,7 +406,22 @@ class Holder:
         if not self.prepared or self.plan is None:
             raise RuntimeError("HA package preparation is incomplete")
         if self.repairing:
-            self.require_repair(payload)
+            # Package repair froze mTLS before installation. Canonical activation
+            # follows managed mTLS preparation, so reprove the fence/lock identity
+            # independently instead of requiring obsolete mTLS bytes.
+            local = repair.fencing_evidence(
+                self.request["repair"], unstarted=self.request["observed"].get("unstarted", False)
+            )
+            peer = payload.get("activation_peer")
+            if (
+                not isinstance(peer, dict)
+                or peer.get("lock") != self.request["peer"]["lock"]
+                or peer.get("boot_id") != self.request["peer"]["boot_id"]
+                or peer.get("guard_boot_id") != peer.get("boot_id")
+                or peer.get("forwarding") is not False
+                or peer["lock"]["node_id"] == local["lock"]["node_id"]
+            ):
+                raise RuntimeError("HA activation peer fencing changed")
         manifest = self.plan["desired"]
         expected = dict(self.request["ha"], operation_id=payload["operation_id"])
         repair.exact_lock(expected)
@@ -521,6 +483,12 @@ def main() -> None:
     if request["action"] == "repair-evidence":
         reply(repair.evidence(request["repair"]))
         return
+    if request["action"] == "activation-evidence":
+        reply(repair.fencing_evidence(request["repair"]))
+        return
+    remote.ingress.require_source(
+        request["ingress_policy"], os.environ.get("VPNGW_DEPLOY_SSH_CONNECTION", "")
+    )
     lock = os.open(remote.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     operation = None
     try:
@@ -607,8 +575,8 @@ def main() -> None:
             elif action["action"] == "publish-activation":
                 holder.activate(action)
                 reply({"published": True})
-            elif action["action"] == "resume-repair":
-                reply(holder.resume_repair(action))
+            elif action["action"] == "verify-prepared":
+                reply(holder.verify_prepared(action))
             elif action["action"] == "complete":
                 if (
                     not holder.prepared

@@ -14,6 +14,28 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- **Breaking:** require nonempty `gateway.ssh_allowed_cidrs` for ordinary and HA
+  configurations. Collect it in the wizard and require `--ssh-allowed-cidr` when
+  importing peer configuration; document existing-customer migration and SSH recovery.
+- Document in-place ingress upgrades that preserve existing VPN settings and cloud
+  resources, with a possible brief traffic interruption and automatic recovery.
+  Add post-upgrade HA and workload checks to the migration instructions.
+- Install management and configured VPN peer ingress policy through cloud-init before
+  the first SSH push. Deny empty peer sets, preserve established SSH, reject excluded
+  deployment sources and require a fresh authenticated connection after activation.
+- Replace whole-firewall resets with a validated atomic product-owned nftables policy,
+  preserving customer/UFW rules and HA fencing. Security groups remain customer-owned.
+- Keep expected missing-policy probes out of ordinary apply's failed-command ledger.
+  Preserve HA no-op SSH verification failures and reconcile only confirmed policy
+  drift; malformed gateway blocks report the required-source validation error.
+- Use UFW's complete source/destination syntax for the ESP permit so native
+  gateway upgrades can finish firewall reconciliation. Validate packaged permits
+  with the real UFW parser in the isolated Linux lane.
+- Resume interrupted HA passive materialization before retiring prior-generation
+  adoption records. Keep exact fencing and old proof intact while the controller
+  checkpoints the local safety action for the installed generation; preserve
+  strict runtime identity checks and reject other pending effects.
+
 - Define product packet-loss acceptance as strictly below 0.2% per tested direction,
   without a fixed ten-minute observation requirement. Preserve declared sample scope,
   original trial evidence and separate BGP/HA, outage and compatibility checks.

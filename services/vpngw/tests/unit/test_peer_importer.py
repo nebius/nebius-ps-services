@@ -131,6 +131,8 @@ def test_create_from_peer_config_generates_bgp_config_from_csv(tmp_path: Path) -
         app,
         [
             "create-from-peer-config",
+            "--ssh-allowed-cidr",
+            "203.0.113.4/32",
             str(output_file),
             "--peer-config-file",
             str(peer_file),
@@ -183,6 +185,8 @@ def test_create_from_peer_config_defaults_output_path(tmp_path: Path, monkeypatc
         app,
         [
             "create-from-peer-config",
+            "--ssh-allowed-cidr",
+            "203.0.113.4/32",
             "--peer-config-file",
             str(peer_file),
         ],
@@ -228,6 +232,8 @@ def test_create_from_peer_config_accepts_local_config_file_alias(tmp_path: Path)
         app,
         [
             "create-from-peer-config",
+            "--ssh-allowed-cidr",
+            "203.0.113.4/32",
             "--peer-config-file",
             str(peer_file),
             "--local-config-file",
@@ -265,6 +271,8 @@ def test_create_from_peer_config_rejects_conflicting_output_paths(tmp_path: Path
         app,
         [
             "create-from-peer-config",
+            "--ssh-allowed-cidr",
+            "203.0.113.4/32",
             str(positional_output),
             "--peer-config-file",
             str(peer_file),

@@ -38,6 +38,9 @@ from nebius_vpngw.schema import validate_config
 
 def _gateway_group_spec(subnet: dict | None = None) -> GatewayGroupSpec:
     return GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="nebius-vpn-gw",
         instance_count=1,
         region="eu-west1",
@@ -310,6 +313,7 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     manager = VMManager(project_id="project-test", region="eu-west1")
 
     rendered = manager._build_cloud_init(
+        ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []},
         ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey",
         local_prefixes=["10.0.0.0/16", "172.16.0.0/24"],
     )
@@ -321,7 +325,9 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     assert "/usr/local/bin/nebius-vpngw-esp4-preflight.sh" in rendered
     assert "/etc/systemd/system/nebius-vpngw-esp4-preflight.service" in rendered
     assert "/var/lib/nebius-vpngw/esp4-reboot-pending" in rendered
-    assert "systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr" in rendered
+    assert "systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr" in " ".join(
+        rendered.split()
+    )
     assert "  - [ systemctl, start, strongswan-starter ]" not in rendered
     assert "/usr/sbin/sshd -t" in rendered
     assert "systemctl restart ssh.socket" in rendered
@@ -705,6 +711,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
     assert json.loads(capsys.readouterr().out) == {
         "features": [
             "ordinary-apply-v1",
+            "managed-ingress-v1",
             "ipsec-replay-window-v1",
             "force-reconcile-v1",
             "vm-ha-authority-bound-force-reconcile-v1",
@@ -776,7 +783,7 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     assert "CapabilityBoundingSet=" not in rearm
     assert "ReadWritePaths=/var/lib/nebius-vpngw" in rearm
     assert (
-        "ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock "
+        "ReadWritePaths=/etc/nebius-vpngw /var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock "
         "/proc/sys/net/ipv4/ip_forward /etc/vpngw_peer_ips "
         "/etc/vpngw_mgmt_cidrs /etc/vpngw_local_prefixes /etc/ufw "
         "/etc/default/ufw /etc/frr" in controller

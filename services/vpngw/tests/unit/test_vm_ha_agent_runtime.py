@@ -93,7 +93,7 @@ from nebius_vpngw.agent.vm_ha.restoration import (
     StandbyRestorationError,
     StandbyRestorationStore,
 )
-from nebius_vpngw.agent.vm_ha.runtime import _expected_bgp_exports
+from nebius_vpngw.agent.vm_ha.runtime import VMHARuntimePorts, _expected_bgp_exports
 from nebius_vpngw.agent.vm_ha.transport import PeerTransportError
 from nebius_vpngw.agent.vm_ha_controller import (
     ActionKind,
@@ -110,6 +110,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     RecoverableController,
     RouteReconciliationContext,
     TransferIntent,
+    VMHAController,
 )
 from nebius_vpngw.agent.vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
 from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
@@ -453,7 +454,10 @@ def test_runtime_config_includes_resolved_top_level_bgp_export_policy(tmp_path: 
     path.write_text(
         yaml.safe_dump(
             {
-                "gateway": {"local_prefixes": ["10.96.0.0/13"]},
+                "gateway": {
+                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
+                    "local_prefixes": ["10.96.0.0/13"],
+                },
                 "connections": [
                     {
                         "name": "peer-a",
@@ -475,7 +479,10 @@ def test_runtime_config_includes_resolved_top_level_bgp_export_policy(tmp_path: 
     config = _read_vm_ha_config(path)
 
     assert config is not None
-    assert config["gateway"] == {"local_prefixes": ["10.96.0.0/13"]}
+    assert config["gateway"] == {
+        "ssh_allowed_cidrs": ["203.0.113.4/32"],
+        "local_prefixes": ["10.96.0.0/13"],
+    }
     assert _expected_bgp_exports(config, [{"connection": "peer-a"}]) == {
         "169.254.10.2": frozenset({"10.96.0.0/13"})
     }
@@ -1665,6 +1672,126 @@ def test_apply_owner_adoption_retires_exact_prior_generation_promotion_receipt(
     assert snapshot.transfer_effect_started is False
     assert not receipt_path.exists()
     assert not (tmp_path / "transfer-lineage.json").exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "blocked",
+        "passive",
+        "active",
+        "old-boot",
+        "foreign-node",
+        "cloud-effect",
+        "wrong-operation",
+        "wrong-allocation",
+        "wrong-epoch",
+        "wrong-incarnation",
+        "old-guard",
+    ],
+)
+def test_generation_adoption_defers_retirement_until_local_passive_replay_finishes(
+    tmp_path: Path, case: str
+) -> None:
+    config = _passive_runtime_config()
+    guard_mode = "active" if case == "active" else "blocked"
+    (tmp_path / "guard.json").write_text(
+        json.dumps(
+            {
+                "guard_boot_id": "boot-old" if case == "old-guard" else "boot-a",
+                "data_plane_mode": guard_mode,
+            }
+        )
+    )
+    receipt = _promotion_receipt()
+    receipt["generation_id"] = "d" * 64
+    receipt["digests"] = {
+        "configuration": "d" * 64,
+        "static_routes": "e" * 64,
+        "bgp_policy": "f" * 64,
+    }
+    receipt_path = tmp_path / "promotion-receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+    (tmp_path / "apply-owner-adoption.json").write_text(json.dumps(_apply_owner_adoption()))
+    action = ControllerAction(
+        kind=ActionKind.STOP_FORMER_OWNER if case == "cloud-effect" else ActionKind.ENTER_PASSIVE,
+        operation_id="boot-a:1:enter-passive:node-b" if case != "wrong-operation" else "foreign",
+        boot_id="boot-old" if case == "old-boot" else "boot-a",
+        target_node_id="node-a" if case == "foreign-node" else "node-b",
+        allocation_id="allocation-other" if case == "wrong-allocation" else "allocation-a",
+        ownership_epoch="10" if case == "wrong-epoch" else "9",
+        generation_id="d" * 64,
+        digests=DigestSet("d" * 64, "e" * 64, "f" * 64),
+        ownership_incarnation=1 if case == "wrong-incarnation" else 0,
+    )
+    checkpoints = VMHACheckpointFileStore(tmp_path / "controller-checkpoint.json")
+    checkpoint = ControllerCheckpoint(sequence=1, pending_action=action)
+    checkpoints.save(checkpoint)
+    mode = DataPlaneMode(case) if case in {"active", "passive"} else DataPlaneMode.BLOCKED
+    cloud = CloudObservation(
+        True, "allocation-a", "node-b", "node-a", ComputeState.RUNNING, True, True, True, "9"
+    )
+    adapter = VMHASnapshotAdapter(
+        config=config,
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, None),
+            readiness=lambda: LocalReadiness(True, True, True, True),
+            cloud=lambda: cloud,
+            data_plane=lambda: mode,
+            routes=lambda: None,
+            apply_lock_operation_id=lambda: "f" * 64,
+        ),
+        state_dir=tmp_path,
+        clock=lambda: 30.0,
+        boot_id=lambda: "boot-a",
+    )
+    original_receipt = receipt_path.read_bytes()
+    if case not in {"blocked", "passive"}:
+        with pytest.raises(RuntimeError, match="authority changed"):
+            adapter.observe()
+        assert receipt_path.read_bytes() == original_receipt
+        assert checkpoints.load() == checkpoint
+        return
+    # The snapshot must reach the pure controller without retiring any old proof.
+    snapshot = adapter.observe()
+    assert snapshot.apply_owner_adoption and snapshot.apply_locked
+    assert receipt_path.read_bytes() == original_receipt
+    assert checkpoints.load() == checkpoint
+    binding = SimpleNamespace(
+        shared_allocation_id=snapshot.cloud.allocation_id,
+        generation_id=snapshot.local_generation_id,
+        configuration_digest=snapshot.local_digests.configuration,
+        static_routes_digest=snapshot.local_digests.static_routes,
+        bgp_policy_digest=snapshot.local_digests.bgp_policy,
+    )
+
+    def enter_passive(current: ControllerAction) -> None:
+        nonlocal mode
+        assert checkpoints.load().pending_action == current
+        VMHARuntimePorts._require_action_identity(SimpleNamespace(binding=binding), current)
+        mode = DataPlaneMode.PASSIVE
+
+    controller = RecoverableController(
+        policy=VMHAController(peer_timeout_seconds=5, suspicion_seconds=1),
+        snapshots=adapter,
+        checkpoints=checkpoints,
+        effects=SimpleNamespace(apply=enter_passive),
+    )
+    decision = controller.step()
+    if case == "blocked":
+        assert decision.action is not None and decision.action.kind is ActionKind.ENTER_PASSIVE
+        assert decision.action.generation_id == snapshot.local_generation_id
+        assert decision.action.digests == snapshot.local_digests
+        assert decision.action.operation_id != action.operation_id
+        assert decision.checkpoint.sequence == checkpoint.sequence + 1
+        assert receipt_path.read_bytes() == original_receipt
+        assert controller.step().checkpoint.pending_action is None
+    else:
+        assert decision.action is None
+        assert decision.checkpoint.pending_action is None
+    # Only after the controller completes/clears that local effect may retirement run.
+    assert adapter.observe().apply_owner_adoption
+    assert not receipt_path.exists()
 
 
 @pytest.mark.parametrize("apply_locked", [False, True])

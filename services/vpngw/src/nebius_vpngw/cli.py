@@ -135,11 +135,11 @@ from .deploy.vm_ha_lifecycle import (
 )
 from .deploy.vm_ha_package import VMHAAgentPackageError
 from .deploy.vm_manager import PublicAllocationCandidate, VMManager
+from .ingress_policy import IngressCapabilityError, IngressPolicyError
 from .nebius_auth import error_chain_has_cli_authentication_failure
 from .nebius_pagination import collect_nebius_pages, nebius_resource_id
 from .replay_window import (
     ReplayWindowCapabilityError,
-    has_replay_window,
     require_replay_window_capability,
 )
 from .vm_ha_command import (
@@ -273,7 +273,7 @@ _COMMAND_EXAMPLES: t.Mapping[tuple[str, ...], tuple[str, ...]] = MappingProxyTyp
         ),
         ("create-from-peer-config",): (
             "nebius-vpngw create-from-peer-config gateway.config.yaml "
-            "--peer-config-file peer-vpn.txt",
+            "--peer-config-file peer-vpn.txt --ssh-allowed-cidr 203.0.113.4/32",
         ),
         ("destroy",): ("nebius-vpngw destroy --local-config-file nebius-vpngw.config.yaml",),
     }
@@ -4877,6 +4877,9 @@ def _serialize_explicit_vm_ha_apply(function: t.Callable[..., t.Any]):
         )
         try:
             config = load_local_config(config_path)
+        except IngressPolicyError as error:
+            typer.echo(f"Configuration error: {error}")
+            raise typer.Exit(code=1) from None
         except MissingEnvironmentVariablesError as error:
             print(f"[red]Configuration error: {error}[/red]")
             print(
@@ -5805,6 +5808,20 @@ def _unchanged_vm_ha_apply(
         )["observation"]
         if digest(current) != digest(previous):
             return False
+    from .deploy.ingress_ssh import IngressVerificationDrift, verify_fresh
+
+    for instance, _manifest, observed in observations:
+        try:
+            verify_fresh(
+                ssh,
+                targets[instance.hostname],
+                instance,
+                local,
+                boot_id=observed["boot_id"],
+                config_sha256=observed["config_sha256"],
+            )
+        except IngressVerificationDrift:
+            return False
     artifact.verify_current()
     return True
 
@@ -6013,14 +6030,14 @@ def _apply_impl(
     raw_management_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
     management_key_path = Path(raw_management_key).expanduser() if raw_management_key else None
     planned_instances = tuple(plan.iter_instance_configs())
-    ordinary_replay_wheel: Path | None = None
-    if plan.vm_ha is None and has_replay_window(local_cfg):
-        from .deploy.ordinary_apply import pin_replay_window_artifact
+    ordinary_agent_wheel: Path | None = None
+    if plan.vm_ha is None:
+        from .deploy.ordinary_apply import pin_agent_artifact
 
         lifetimes = _VM_MANAGER_LIFETIMES.get()
         assert lifetimes is not None
         # Purely local admission precedes even optional --sa provisioning.
-        ordinary_replay_wheel = pin_replay_window_artifact(
+        ordinary_agent_wheel = pin_agent_artifact(
             SSHPush(), planned_instances, local_cfg, lifetimes
         )
     vm_ha_node_ids = tuple(
@@ -7105,10 +7122,10 @@ def _apply_impl(
     ordinary_targets: dict = {}
     ordinary_approved = False
     ordinary_ssh: SSHPush | None = None
-    if plan.vm_ha is None and (not former_vm_ha_members or ordinary_replay_wheel is not None):
+    if plan.vm_ha is None and (not former_vm_ha_members or ordinary_agent_wheel is not None):
         ordinary_ssh = SSHPush(ssh_policy=ssh_policy)
-        if ordinary_replay_wheel is not None:
-            ordinary_ssh._wheel_path = ordinary_replay_wheel
+        if ordinary_agent_wheel is not None:
+            ordinary_ssh._wheel_path = ordinary_agent_wheel
             ordinary_ssh._wheel_is_installed_fallback = False
         if not former_vm_ha_members:
             ordinary_plans, ordinary_targets, ordinary_approved = _prepare_ordinary_apply(
@@ -7294,9 +7311,10 @@ def _apply_impl(
                         continue
                     peer_context = handoff_repair_peers.get(instance.hostname)
                     peer_observer = None
+                    activation_peer_observer = None
                     if peer_context is not None:
 
-                        def peer_observer(context=peer_context):
+                        def peer_observer(context=peer_context, *, activation=False):
                             peer_instance, peer_target, expected, _previous = context
                             return ordinary_handoff.inspect_repair(
                                 SSHPush(ssh_policy=ssh_policy),
@@ -7304,7 +7322,10 @@ def _apply_impl(
                                 peer_instance,
                                 local_cfg,
                                 expected=expected,
+                                activation=activation,
                             )
+
+                        activation_peer_observer = functools.partial(peer_observer, activation=True)
 
                     ordinary_handoffs[instance.hostname] = lifetimes.enter_context(
                         ordinary_handoff.reserve(
@@ -7317,15 +7338,14 @@ def _apply_impl(
                             artifact=apply_report.artifact.sha256,
                             package=package,
                             peer_observer=peer_observer,
+                            activation_peer_observer=activation_peer_observer,
                             peer=None if peer_context is None else peer_context[3],
                         )
                     )
                     if peer_context is not None:
                         repair_holder = ordinary_handoffs[instance.hostname]
                         repair_holder.prepare_package(package)
-                        repair_holder.finish_repair(
-                            operation_id=admission_observed["lock"]["operation_id"]
-                        )
+                        repair_holder.checkpoint_repair()
         try:
             managed_result = ensure_managed_vm_ha_credentials(
                 vm_ha_credential_plan,
@@ -9374,6 +9394,9 @@ def apply(
             recover_vm_ha_migration=recover_vm_ha_migration,
             replace_failed_vm_ha_passive=replace_failed_vm_ha_passive,
         )
+    except IngressCapabilityError as error:
+        typer.echo(str(error))
+        raise typer.Exit(code=1) from None
     except _VMHAAgentPackagePreparationFailed as error:
         typer.echo(str(error))
         raise typer.Exit(code=1) from None
@@ -10504,6 +10527,11 @@ def create_from_peer_config(
         readable=True,
         help="Peer config file(s). Supported formats: .txt, .csv, .json, .yaml, .yml",
     ),
+    ssh_allowed_cidr: list[str] = typer.Option(
+        ...,
+        "--ssh-allowed-cidr",
+        help="Required local administrator/apply source CIDR; repeat for additional IPv4/IPv6 sources.",
+    ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing file if it exists"),
 ):
     """Create a schema-aligned configuration from keyword-imported peer inputs.
@@ -10578,6 +10606,12 @@ def create_from_peer_config(
     try:
         base_cfg = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE) or {}
         merged_cfg = build_config_from_peer_files(base_cfg, peer_config_file)
+        from .ingress_policy import normalize_cidrs
+
+        # Peer-supplied documents never authorize local management access.
+        merged_cfg.setdefault("gateway", {})["ssh_allowed_cidrs"] = normalize_cidrs(
+            ssh_allowed_cidr
+        )
         from .schema import validate_config
 
         validate_config(merged_cfg)

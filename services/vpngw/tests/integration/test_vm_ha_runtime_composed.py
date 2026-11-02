@@ -362,9 +362,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         agent_main,
         "update_firewall_from_config",
-        lambda cfg, **kwargs: passive_effects.append(
-            f"firewall:{kwargs.get('require_reload')}"
-        ),
+        lambda cfg, **kwargs: passive_effects.append(f"firewall:{kwargs.get('require_reload')}"),
     )
 
     def enforce_passive_hygiene(cfg):

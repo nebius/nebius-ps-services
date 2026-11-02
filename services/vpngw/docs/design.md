@@ -4849,7 +4849,7 @@ binary startup and embedded-source verification. The full local gate passed
 on macOS and remain separate CI evidence. No project dependencies were changed.
 
 <!-- /FEATURE: FEAT-017 -->
-<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=verified priority=P1 version=1 -->
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=verified priority=P1 version=2 -->
 ### FEAT-018: Per-tunnel replay window and sampled receive health
 
 #### Requirements Covered
@@ -4960,6 +4960,17 @@ The package is installed before admission; subsequent fenced adoption owns retir
 Once obsolete records are absent, retirement is a no-op: its writer/pending-action
 guards must not prevent the controller from completing ordinary materialization.
 Recheck retirement necessity under the writer lock before any record mutation.
+
+An interrupted fenced apply can retain an old-generation local passive action. If
+its current-boot checkpoint, operation, target, allocation, ownership epoch and
+incarnation are exact, and both guard and kernel mode prove nonforwarding, defer
+retirement without deleting either proof record. The controller checkpoints a new
+operation for the installed generation before executing that local transition.
+Keep runtime binding validation strict. Retire the old records only after the
+pending effect clears; reject cloud effects, foreign identity and active forwarding.
+Composition tests cover durable ordering and the real runtime identity validator.
+Live supported apply resume completed both BGP members, with independently verified
+package/policy identity, healthy HA and all four IPsec/BGP sessions established.
 
 #### Implementation Boundaries
 
@@ -5595,6 +5606,198 @@ unexecuted. The packet-loss cause remains unresolved and no universal loss guara
 or product fix is inferred from these samples.
 
 <!-- /FEATURE: FEAT-021 -->
+<!-- FEATURE: FEAT-022 reqs=REQ-024 status=ready delivery=verified priority=P0 version=5 -->
+### FEAT-022: Required SSH sources and persistent managed ingress policy
+
+#### Requirements Covered
+
+- REQ-024: Management ingress, derived VPN peers, safe deployment and migration.
+
+#### Context Evidence
+
+Before this change, GatewayConfig lacked source policy, bootstrap created empty
+management/peer files and setup reset UFW with unrestricted empty-source behavior.
+Broad VPC/XFRM accepts and UFW established rules require earlier admission checks.
+This feature supersedes the historical unmanaged firewall notes below that describe
+optional management CIDRs, unrestricted SSH, unrestricted XFRM SSH or empty-peer VPN
+admission. Those historical notes are not the current security contract.
+SDK instance creation accepts cloud-init; existing deployments use authenticated SSH.
+
+#### Design Details
+
+Use one stdlib policy validator/renderer for schema, per-VM bootstrap and runtime.
+A dedicated nftables inet table hooks INPUT before UFW. It constrains TCP/22 across
+all nonloopback paths, preserves established SSH and filters outer UDP/500, UDP/4500
+and ESP against derived peers without a generic established VPN bypass. Recognized
+IPsec-decrypted payload bypasses only outer-VPN filtering, never SSH source checks.
+Use bounded serialization and native check followed by a single atomic dual-family
+transaction that replaces only the owned table. Persist validated intent before
+kernel activation so interruption cannot restore an older policy on reboot; failed
+activation remains incomplete. Load it through an ordered product systemd service. UFW retains its own/customer
+rules, broad permits are subordinate to ingress drops, and reload cannot erase the
+independent table. Preserve the existing saved tunnel-host-chain repair contract.
+Observe table absence through a successful native inventory command so it does not
+poison ordinary command accounting. Only confirmed absence or rule drift authorizes
+repair; failed or malformed native observations remain failures.
+
+Validate required sources before authentication/cloud operations. The normal wizard
+asks for nonempty sources and the draft template has an unresolved required input.
+Peer import takes explicit repeatable local --ssh-allowed-cidr values. Per-VM resolved
+configuration supplies both SSH CIDRs and VPN peers to cloud-init before first push.
+Do not add a second user-maintained peer source list.
+
+For existing updates, obtain SSH_CONNECTION from the authenticated server before sudo,
+validate the observed source against desired policy, repeat on the mutation connection,
+and bind receiver validation to its actual transport. After activation use a new
+pinned/authenticated client to verify config/boot/policy identity. HA no-op checks
+propagate transport, authentication, identity and observation failures; only confirmed
+policy drift continues to the normal reconciliation workflow. Reject source
+removal from the deployment connection; document add, switch source, then remove.
+Replacement wheel admission is mandatory before provisioning; old installed agents
+remain upgradeable. HA package repair keeps writers stopped through a verified
+package checkpoint; it never starts the new agent against predecessor YAML lacking
+the required source list. Desired activation retains exact local/peer current-boot
+forwarding fences and apply-lock identities, while allowing canonical mTLS preparation
+to advance after package inspection. Final completion requires desired config and
+fresh effective-policy proof. HA management policy does not grant forwarding authority.
+
+#### Selected Option
+
+A product-owned nftables admission table alongside preserved UFW policy provides
+atomic IPv4/IPv6 changes and precedence without rewriting customer UFW chains.
+
+#### Alternatives Considered
+
+Whole UFW reset loses customer rules; UFW user-chain SSH permits alone cannot constrain
+before-chain established accepts or broad VPC/XFRM permits. Security-group management,
+optional omission fallback and timed rollback are excluded by the accepted contract.
+
+#### Implementation Boundaries
+
+Schema/loader, wizard/template/importer, bootstrap provisioning, runtime firewall and
+readiness, package capability, ordinary/HA SSH transports and their receipts, systemd
+assets and docs/tests. Security groups and cloud-side recovery stay customer-owned.
+
+#### Test-First Success Criteria
+
+- Required-source rejection occurs before effects; first bootstrap is reachable from an
+allowed source; existing apply rejects its excluded source; fresh reconnect is required;
+SSH and VPN policy survives UFW/tunnel repair while unrelated rules remain intact.
+
+#### Validation Plan
+
+Run focused unit suites, static gates/build, isolated integration and Linux systemd
+packet/SSH lanes where available. Check packaged bootstrap/runtime source parity.
+
+#### Test Plan
+
+Cover invalid YAML, wizard/importer, artifact mismatch, ordinary/HA bootstrap, observed
+source, both address families/all ingress paths, retained established SSH, removed
+VPN peers, fresh reconnect failures, persistence and unrelated firewall ordering.
+
+#### Evaluation Plan
+
+Report source, local tests, native packet execution and live-cloud evidence separately.
+
+#### Rollout And Rollback
+
+Document CLI-only upgrade as inert remotely. Existing customers add the required list,
+validate, preview the selected artifact and apply from an included source. Preserve
+existing resources, peer settings, credentials and routing unless explicitly changed.
+A brief documented traffic interruption during activation is accepted; the supported
+apply workflow must automatically recover the previously working VPN without manual
+state cleanup. Verify baseline and post-upgrade HA health and workload traffic. Keep
+the existing disruption approval; do not describe the upgrade as zero downtime.
+Recover SSH via an allowed session/source or customer-approved out-of-band infrastructure
+recovery. Do not automatically broaden or roll back policy. Customer automation owns
+external firewall and replacement NICs.
+
+#### Done Definition
+
+Implementation, docs and regression gates satisfy the mapped criteria; remaining
+runtime evidence gaps are explicit and do not imply live verification.
+
+#### Implementation Evidence
+
+Implemented in ingress_policy.py and deploy/ingress_ssh.py, with schema/loader,
+wizard/template/peer-import authoring, per-instance cloud-init and pinned enrollment,
+ordinary and HA transport/activation, firewall/readiness and systemd boot integration.
+Selected wheel and frozen-binary source/asset parity includes the new admission code.
+UFW is no longer reset; only exact product-tagged withdrawn VPC permits are removed.
+README, examples and Unreleased changelog document the breaking migration and recovery.
+Security-group ownership remains entirely external.
+Live migration exposed and repaired UFW ESP permit syntax and interrupted HA
+passive-action ordering. The UFW permit now supplies explicit source/destination
+clauses and is exercised through the native parser. HA recovery keeps the existing
+fencing and runtime identity checks; see the generation-retirement correction in
+FEAT-018. README migration steps include artifact-bound preview/approval and explain
+that a desired-generation mismatch after editing YAML does not imply a firewall change.
+
+#### Verification Evidence
+
+The final alignment run passed Ruff, mypy (81 source files), shell syntax/ShellCheck,
+Markdown lint, paired-spec validation, 2,935 unit tests, 101 integration tests,
+wheel/source parity and the standalone PyInstaller binary check. The latter required
+adding the existing virtualenv bin directory to PATH after an environment-only failure;
+no product change was needed. The host selection skipped 50 guarded cases. The separate
+native ingress lane passed all 17 selected tests, including the real UFW ESP parser. Focused composition checks cover package repair
+without old-config startup and exact fencing after mTLS changes. The isolated Linux
+ingress lane passed real OpenSSH IPv4/IPv6 allowed/denied-source checks, established
+SSH preservation, new-session rejection, removed VPN peer conntrack rejection, UFW
+reload/tunnel-host repair and persisted-policy entrypoint restoration while preserving
+customer rules. Bootstrap tests cover ordinary/HA policy plus exact pinned host-key
+rendering. Source admission and fresh boot/config/kernel identity failure cases pass.
+Negative controls reproduced and focused regressions resolved missing-table poisoning
+of ordinary command accounting, swallowed HA no-op SSH failures, and nonmapping
+gateway validation exceptions. The native lane also exercised initial policy creation
+through the real bounded ordinary subprocess runner. Read-only final code/security
+review found no further concrete defect in the reviewed changes.
+
+Separately authorized live trials upgraded existing BGP and static HA pairs in
+place, with no VM or disk recreation or security-group management. The first BGP
+attempts failed and remained guarded; supported apply resume with the repaired
+artifact succeeded. Static upgraded from its untouched older baseline. Independent
+checks verified all 97 installed package files and native/persisted ingress policy
+on each member, fresh pinned SSH, healthy current-boot identity/mTLS, ready redundancy,
+healthy routing and enabled auto-healing. GCP confirmed all four BGP tunnels and
+the serving static tunnel established; the static standby remained deliberately cold.
+
+Real GCP-to-Nebius workload traffic returned 20/20 BGP replies with increasing ESP
+counters on real XFRM interfaces. On the static gateway, VPN ping remained usable;
+a fresh SSH connection from the same excluded GCP source changed from a successful
+banner before upgrade to a timeout afterward, while the included operator source
+retained fresh authenticated access. Three decrypted UDP/500 probes reached the
+IKE daemon despite that source being outside the outer VPN peer set. These are
+live ESP/XFRM observations, separate from the isolated veth tests.
+
+Native reboot trials completed one member at a time on both pairs, with new boot
+identities on all four VMs. On every boot, the persisted policy verified successfully
+before the SSH socket and service became active; the HA guard preceded the controller
+and agent. Rebooting each serving owner triggered product-owned failover: independent
+Compute observation confirmed the former owner Stopped before shared-allocation
+transfer, and the candidate remained nonforwarding until ownership confirmation and
+route reconciliation. The product automatically restarted and restored each former
+owner as standby. No manual start, transfer, receipt removal or guard modification
+was used. Final checks found both pairs healthy, identities/mTLS verified, redundancy
+ready, auto-healing enabled, exact installed package/policy identity and no pending
+apply actions. Traffic and excluded-source SSH checks passed on the new serving owner.
+
+After both pairs recovered, unchanged previews and real apply runs reported no
+infrastructure changes or deployment effects. The real no-op runs completed in 39.6
+seconds for BGP and 40.6 seconds for static. Independent GCP-to-Nebius ICMP samples
+covered both runs: each target received all 600 of 600 packets with 56-byte payloads
+at a 0.2-second interval, over 120.27 seconds (BGP workload) and 120.34 seconds (active
+static gateway). This proves the sampled unchanged re-apply continuity, not zero-loss
+traffic during the earlier version-changing upgrade or owner reboot.
+
+The repaired BGP resume completed in 180.3 seconds and the clean older-version static
+upgrade in 224.6 seconds. These are complete apply durations, not measured packet-outage
+intervals. No recreation or GCP repair was needed. The local Docker kernel still cannot
+create XFRM interfaces; live proof does not turn that unavailable local lane into a
+passing test. Live coverage is existing BGP/static HA upgrades and reboots; ordinary
+and newly provisioned bootstrap paths retain their separate source/native-fixture proof.
+
+<!-- /FEATURE: FEAT-022 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 

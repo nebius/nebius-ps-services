@@ -603,6 +603,31 @@ class VMHAController:
                     replace(checkpoint, pending_action=None),
                     passive_action,
                 )
+            elif (
+                pending.kind is ActionKind.ENTER_PASSIVE
+                and snapshot.apply_locked
+                and snapshot.apply_owner_adoption
+                and not snapshot.transfer_inhibited
+                and snapshot.guard_boot_id == snapshot.boot_id
+                and snapshot.data_plane_mode is DataPlaneMode.BLOCKED
+                and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+                and pending.allocation_id == snapshot.cloud.allocation_id
+                and pending.ownership_epoch == snapshot.cloud.ownership_epoch
+                and (
+                    pending.generation_id != snapshot.local_generation_id
+                    or pending.digests != snapshot.local_digests
+                )
+            ):
+                # Runtime handlers require the installed generation even for
+                # local safety effects. Checkpoint a new operation instead of
+                # replaying old intent against a different runtime binding.
+                return self._action(
+                    HAState.BLOCKED,
+                    ("apply-adoption-requires-current-generation-passive-action",),
+                    snapshot,
+                    replace(checkpoint, pending_action=None),
+                    ActionKind.ENTER_PASSIVE,
+                )
             elif not self._pending_action_safe(pending, snapshot, checkpoint):
                 retire_locked_repair = bool(
                     pending.kind is ActionKind.REPAIR_LOCAL_DATAPLANE and snapshot.apply_locked

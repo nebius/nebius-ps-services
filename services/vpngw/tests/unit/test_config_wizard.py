@@ -42,6 +42,7 @@ def _bgp_wizard_input(
         subnet_cidr,
         subnet_prefix_length,
         "",  # local prefixes
+        "203.0.113.4/32",  # required SSH source
         "",  # connection count
         "",  # connection name -> site-1
         "",  # vendor -> generic
@@ -75,6 +76,7 @@ def _static_wizard_input(*, psk: str = "literal-secret-123") -> str:
         "",  # subnet CIDR
         "",  # subnet prefix length
         "",  # local prefixes
+        "203.0.113.4/32",  # required SSH source
         "",  # connection count
         "",  # connection name
         "",  # vendor
@@ -194,6 +196,7 @@ def test_mixed_connection_phase_asks_local_asn_once_at_first_bgp() -> None:
             return True
 
     candidate = _base_candidate()
+    candidate["gateway"]["ssh_allowed_cidrs"] = ["203.0.113.4/32"]
     prompt = ScriptedPrompt()
 
     _connection_phase(candidate, prompt)  # type: ignore[arg-type]

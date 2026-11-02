@@ -21,16 +21,25 @@ def run(*args: str, **kwargs) -> subprocess.CompletedProcess:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ssh-bootstrap-only", action="store_true")
+    parser.add_argument("--ingress-only", action="store_true")
     args = parser.parse_args()
     project = Path(__file__).resolve().parents[2]
     tests = ["/workspace/tests/integration/test_ssh_bootstrap.py"]
-    if not args.ssh_bootstrap_only:
+    if args.ingress_only:
+        tests.extend(
+            [
+                "/workspace/tests/integration/test_tunnel_host_packets.py",
+                "/workspace/tests/integration/test_ingress_packets.py",
+            ]
+        )
+    elif not args.ssh_bootstrap_only:
         tests.extend(
             [
                 "/workspace/tests/integration/test_ordinary_systemd_jobs.py",
                 "/workspace/tests/integration/test_ordinary_transport.py",
                 "/workspace/tests/integration/test_strongswan_sessions.py",
                 "/workspace/tests/integration/test_tunnel_host_packets.py",
+                "/workspace/tests/integration/test_ingress_packets.py",
             ]
         )
     name = "vpngw-systemd-test-" + uuid.uuid4().hex[:12]

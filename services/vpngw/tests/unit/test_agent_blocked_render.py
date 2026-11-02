@@ -29,7 +29,10 @@ def test_vm_ha_blocked_boot_renders_without_data_plane_effects(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[tuple[str, bool]] = []
 
     class Renderer:
@@ -72,7 +75,10 @@ def test_vm_ha_force_reconcile_without_routing_lock_has_no_effects(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[str] = []
 
     class Renderer:
@@ -111,7 +117,10 @@ def test_vm_ha_force_reconcile_serializes_with_rearm_writer(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     state_dir = tmp_path / "vm-ha"
     rearm_lock_path = state_dir / "rearm.lock"
     mtls_lock_path = _prepare_mtls_writer_lock(state_dir)
@@ -170,7 +179,10 @@ def test_vm_ha_force_reconcile_fails_closed_when_rearm_writer_is_busy(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     state_dir = tmp_path / "vm-ha"
     state_dir.mkdir()
     rearm_lock = os.open(state_dir / "rearm.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -206,7 +218,10 @@ def test_vm_ha_force_reconcile_fails_closed_when_mtls_writer_is_busy(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     state_dir = tmp_path / "vm-ha"
     mtls_lock_path = _prepare_mtls_writer_lock(state_dir)
     mtls_lock = os.open(mtls_lock_path, os.O_RDWR)
@@ -248,7 +263,10 @@ def test_vm_ha_force_reconcile_requires_complete_authority_tuple(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[str] = []
 
     monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
@@ -276,7 +294,10 @@ def test_passive_authority_materializes_locally_without_active_effects(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     vm_ha = {
         "node": {"node_id": "node-a"},
         "generation": {"generation_id": "a" * 64},
@@ -353,11 +374,18 @@ def test_passive_authority_materializes_locally_without_active_effects(
     agent.reload()
 
     assert calls == [
-        ("firewall", {"version": 1, "connections": []}, {"require_reload": True}),
+        (
+            "firewall",
+            {"version": 1, "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]}, "connections": []},
+            {"require_reload": True},
+        ),
         ("strongswan", True, True, False, False),
         ("xfrm", [{"name": "xfrm0"}]),
         ("frr", True, False, True, True),
-        ("hygiene", {"version": 1, "connections": []}),
+        (
+            "hygiene",
+            {"version": 1, "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]}, "connections": []},
+        ),
     ]
     assert json.loads((tmp_path / "material.json").read_text()) == {
         "schema": "nebius-vpngw/vm-ha-materialization-v1",
@@ -372,7 +400,10 @@ def test_active_vm_ha_preparation_restores_bgp_origination_before_forwarding(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("gateway:\n  local_prefixes: [10.0.0.0/24]\n", encoding="utf-8")
+    config_path.write_text(
+        "gateway:\n  ssh_allowed_cidrs: [203.0.113.4/32]\n  local_prefixes: [10.0.0.0/24]\n",
+        encoding="utf-8",
+    )
     calls: list[tuple[str, object]] = []
 
     class Renderer:
@@ -391,14 +422,24 @@ def test_active_vm_ha_preparation_restores_bgp_origination_before_forwarding(
     assert calls[0] == (
         "firewall",
         {
-            "cfg": {"gateway": {"local_prefixes": ["10.0.0.0/24"]}},
+            "cfg": {
+                "gateway": {
+                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
+                    "local_prefixes": ["10.0.0.0/24"],
+                }
+            },
             "require_reload": True,
         },
     )
     assert calls[1] == (
         "frr",
         {
-            "cfg": {"gateway": {"local_prefixes": ["10.0.0.0/24"]}},
+            "cfg": {
+                "gateway": {
+                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
+                    "local_prefixes": ["10.0.0.0/24"],
+                }
+            },
             "advertise_local_prefixes": True,
             "require_reload": True,
         },
@@ -410,7 +451,10 @@ def test_blocked_vm_ha_preparation_installs_required_deny_all_exports(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("gateway:\n  local_prefixes: [10.0.0.0/24]\n", encoding="utf-8")
+    config_path.write_text(
+        "gateway:\n  ssh_allowed_cidrs: [203.0.113.4/32]\n  local_prefixes: [10.0.0.0/24]\n",
+        encoding="utf-8",
+    )
     calls: list[dict[str, object]] = []
 
     class Renderer:
@@ -423,7 +467,12 @@ def test_blocked_vm_ha_preparation_installs_required_deny_all_exports(
 
     assert calls == [
         {
-            "cfg": {"gateway": {"local_prefixes": ["10.0.0.0/24"]}},
+            "cfg": {
+                "gateway": {
+                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
+                    "local_prefixes": ["10.0.0.0/24"],
+                }
+            },
             "advertise_local_prefixes": False,
             "require_reload": True,
             "prepare_vm_ha_controller_access": True,
@@ -437,7 +486,10 @@ def test_force_reconcile_bypasses_unchanged_config_short_circuit(
     ordinary_operation_guest,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[str] = []
 
     class StrongSwan:
@@ -623,11 +675,18 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
 ) -> None:
     config_path = tmp_path / "config.yaml"
     state_path = tmp_path / "last-applied.json"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     from nebius_vpngw.agent.state_store import StateStore
 
     StateStore(state_path).save_last_applied(
-        {"version": 1, "connections": [], "gateway": {"local_prefixes": []}}
+        {
+            "version": 1,
+            "connections": [],
+            "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": []},
+        }
     )
     previous_state = state_path.read_bytes()
 
@@ -676,7 +735,9 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
         agent.reload()
 
     assert state_path.read_bytes() == previous_state
-    assert agent.state.is_changed({"version": 1, "connections": []})
+    assert agent.state.is_changed(
+        {"version": 1, "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]}, "connections": []}
+    )
 
 
 def test_passive_materialization_hygiene_failure_does_not_write_receipt(
@@ -684,7 +745,10 @@ def test_passive_materialization_hygiene_failure_does_not_write_receipt(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n",
+        encoding="utf-8",
+    )
     materialization_path = tmp_path / "material.json"
     lock_fd = os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
 
@@ -756,7 +820,10 @@ def test_blocked_frr_render_does_not_install_kernel_routes(
     monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.FRR_CONF", tmp_path / "frr.conf")
 
     renderer.render_and_apply(
-        {"gateway": {"local_prefixes": ["10.0.0.0/24"]}, "connections": []},
+        {
+            "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
+            "connections": [],
+        },
         activate=False,
     )
 
@@ -822,7 +889,11 @@ def _bgp_config() -> dict:
                 },
             }
         },
-        "gateway": {"local_asn": 65010, "local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {
+            "ssh_allowed_cidrs": ["203.0.113.4/32"],
+            "local_asn": 65010,
+            "local_prefixes": ["10.0.0.0/24"],
+        },
         "connections": [
             {
                 "name": "peer",

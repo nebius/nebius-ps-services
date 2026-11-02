@@ -6,7 +6,7 @@ import base64
 import shlex
 from pathlib import Path
 
-from . import ordinary_operations, ordinary_routes
+from . import ingress_policy, ordinary_operations, ordinary_routes
 
 SOURCE_LIMIT = 4 * 1024 * 1024
 LOADER = (
@@ -17,7 +17,10 @@ LOADER = (
     "\n raise RuntimeError('ordinary_source_limit')\n"
     "exec(compile(base64.b64decode(_source[:-1],validate=True),'<ordinary-bootstrap>','exec'))"
 )
-COMMAND = "sudo -n env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -c " + shlex.quote(LOADER)
+COMMAND = (
+    'sudo -n env VPNGW_DEPLOY_SSH_CONNECTION="$SSH_CONNECTION" '
+    "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -c " + shlex.quote(LOADER)
+)
 
 
 def source_frame() -> bytes:
@@ -25,7 +28,8 @@ def source_frame() -> bytes:
         (Path(__file__).parent / "deploy" / "ordinary_remote.py").read_bytes()
     ).decode()
     code = (
-        ordinary_operations.streamed_bootstrap()
+        ingress_policy.streamed_bootstrap()
+        + ordinary_operations.streamed_bootstrap()
         + ordinary_routes.streamed_bootstrap()
         + f"exec(compile(base64.b64decode({source!r}),'<ordinary-transaction>','exec'))"
     )

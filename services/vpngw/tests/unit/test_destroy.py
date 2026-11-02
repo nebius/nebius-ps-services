@@ -1276,11 +1276,7 @@ def _ordinary_build_plan_backend(*, route_name: str) -> NebiusDestroyBackend:
         "allocation-public": public,
     }
     backend._get_allocation_by_name = lambda name: next(
-        (
-            allocation
-            for allocation in allocations.values()
-            if allocation.metadata.name == name
-        ),
+        (allocation for allocation in allocations.values() if allocation.metadata.name == name),
         None,
     )
     backend._get_allocation_by_id = lambda resource_id: allocations.get(resource_id)
@@ -1292,12 +1288,8 @@ def test_ordinary_destroy_build_plan_selects_only_exact_owned_resources() -> Non
     plan = _ordinary_build_plan_backend(route_name="vpngw-remote-prefix").build_plan("a" * 64)
 
     assert plan.blockers == ()
-    assert [(item.name, item.resource_id) for item in plan.compute] == [
-        ("gateway-0", "compute-0")
-    ]
-    assert [(item.name, item.resource_id) for item in plan.disks] == [
-        ("gateway-0-boot", "disk-0")
-    ]
+    assert [(item.name, item.resource_id) for item in plan.compute] == [("gateway-0", "compute-0")]
+    assert [(item.name, item.resource_id) for item in plan.disks] == [("gateway-0-boot", "disk-0")]
     assert [(item.name, item.resource_id) for item in plan.allocations] == [
         ("gateway-0-eth0-private-ip", "allocation-private")
     ]
@@ -1314,9 +1306,7 @@ def test_ordinary_destroy_build_plan_blocks_a_foreign_route_to_its_private_alloc
     plan = _ordinary_build_plan_backend(route_name="foreign-route").build_plan("a" * 64)
 
     assert plan.routes == ()
-    assert plan.blockers == (
-        "foreign route foreign-route references a gateway allocation",
-    )
+    assert plan.blockers == ("foreign route foreign-route references a gateway allocation",)
 
 
 @pytest.mark.parametrize(

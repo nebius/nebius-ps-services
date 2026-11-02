@@ -15,8 +15,10 @@ import shlex
 from collections.abc import Iterator
 from typing import Any
 
+from .. import ingress_policy
 from ..handoff_bootstrap import streamed_source
 from ..ordinary_operations import digest
+from . import ingress_ssh
 from .ssh_policy import configure_paramiko_host_verification
 from .vm_ha_package import VMHAAgentPackageError
 
@@ -43,6 +45,7 @@ def _connection(ssh: Any, target: str, instance: Any, local: dict) -> Iterator[A
             username=spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
             vm_spec=spec,
         )
+        ingress_ssh.preflight(client, instance.config_yaml)
         yield client
     finally:
         client.close()
@@ -50,7 +53,7 @@ def _connection(ssh: Any, target: str, instance: Any, local: dict) -> Iterator[A
 
 def _start(client: Any, request: dict) -> tuple[Any, Any]:
     stdin, stdout, _stderr = client.exec_command(
-        "sudo -n /usr/bin/python3 -B -c "
+        'sudo -n env VPNGW_DEPLOY_SSH_CONNECTION="$SSH_CONNECTION" /usr/bin/python3 -B -c '
         + shlex.quote(
             "import base64,sys; raw=sys.stdin.readline(4194305); "
             "assert len(raw)<=4194304 and raw.endswith('\\n'); "
@@ -111,9 +114,23 @@ def inspect(ssh: Any, target: str, instance: Any, local: dict) -> dict:
         return value
 
 
-def inspect_repair(ssh: Any, target: str, instance: Any, local: dict, *, expected: dict) -> dict:
+def inspect_repair(
+    ssh: Any,
+    target: str,
+    instance: Any,
+    local: dict,
+    *,
+    expected: dict,
+    activation: bool = False,
+) -> dict:
     with _connection(ssh, target, instance, local) as client:
-        _stdin, stdout = _start(client, {"action": "repair-evidence", "repair": expected})
+        _stdin, stdout = _start(
+            client,
+            {
+                "action": "activation-evidence" if activation else "repair-evidence",
+                "repair": expected,
+            },
+        )
         value = _receive(stdout)
         if value.get("forwarding") is not False or any(
             value.get("lock", {}).get(k) != expected[k]
@@ -133,11 +150,16 @@ class Handoff:
         package: Any = None,
         peer_observer: Any = None,
         peer: dict | None = None,
+        activation_peer_observer: Any = None,
     ):
         self.stdin, self.stdout, self.ha = stdin, stdout, ha
         self.finished = False
         self.package, self.peer_observer, self.peer = package, peer_observer, peer
         self.package_receipt: dict | None = None
+        self.fresh_verifier: Any = None
+        self.activated_config_sha256: str | None = None
+        self.repair_verifier: Any = None
+        self.activation_peer_observer = activation_peer_observer
 
     def _peer_request(self) -> dict:
         if self.peer_observer is None:
@@ -170,11 +192,21 @@ class Handoff:
         self.package_receipt = receipt
         return receipt
 
-    def finish_repair(self, *, operation_id: str) -> None:
-        _send(self.stdin, dict(action="resume-repair", **self._peer_request()))
-        status = _receive(self.stdout)
+    def verify_prepared(self) -> dict:
+        _send(self.stdin, dict(action="verify-prepared", **self._peer_request()))
+        receipt = _receive(self.stdout)
+        if receipt != self.package_receipt:
+            raise RuntimeError("HA prepared package identity changed")
+        return receipt
+
+    def checkpoint_repair(self) -> None:
+        self.verify_prepared()
         self._peer_request()
-        self.complete(status, operation_id=operation_id)
+        if self.repair_verifier is None:
+            raise RuntimeError("HA package repair has no fresh checkpoint verifier")
+        self.repair_verifier()
+        # Keep the holder, cold guard and stopped writers until desired config is
+        # published. The new agent must never run against the predecessor YAML.
 
     def publish_activation(self, *, receipt: Any, operation_id: str) -> None:
         from dataclasses import asdict
@@ -185,9 +217,14 @@ class Handoff:
                 action="publish-activation",
                 receipt=asdict(receipt),
                 operation_id=operation_id,
-                **self._peer_request(),
+                **(
+                    {"activation_peer": self.activation_peer_observer()}
+                    if self.activation_peer_observer is not None
+                    else {}
+                ),
             ),
         )
+        self.activated_config_sha256 = receipt.staged_file_sha256
         if _receive(self.stdout) != {"published": True}:
             raise RuntimeError("HA handoff activation publication is unverified")
 
@@ -199,6 +236,9 @@ class Handoff:
             or payload.get("apply_operation_id") != operation_id
         ):
             raise RuntimeError("Ordinary-to-HA takeover status is not exact and locked-passive")
+        if self.activated_config_sha256 is None or self.fresh_verifier is None:
+            raise RuntimeError("HA handoff has no activated configuration or fresh SSH verifier")
+        self.fresh_verifier()
         self.stdin.write(json.dumps({"action": "complete", "operation": operation_id}) + "\n")
         self.stdin.flush()
         if _receive(self.stdout) != {"complete": True}:
@@ -219,6 +259,7 @@ def reserve(
     package: Any = None,
     peer_observer: Any = None,
     peer: dict | None = None,
+    activation_peer_observer: Any = None,
 ) -> Iterator[Handoff]:
     if ssh._ssh_policy is None or instance.vm_ha_node is None or instance.vm_ha_generation is None:
         raise RuntimeError("Ordinary-to-HA admission requires the existing pinned migration plan")
@@ -234,6 +275,7 @@ def reserve(
             client,
             dict(
                 action="reserve",
+                ingress_policy=ingress_policy.from_config(config),
                 observed=observed,
                 binding=binding,
                 approval=approval,
@@ -262,7 +304,30 @@ def reserve(
         if _receive(stdout) != {"ready": True}:
             raise RuntimeError("Ordinary-to-HA admission failed before migration effects")
         holder = Handoff(
-            stdin, stdout, ha=ha, package=package, peer_observer=peer_observer, peer=peer
+            stdin,
+            stdout,
+            ha=ha,
+            package=package,
+            peer_observer=peer_observer,
+            peer=peer,
+            activation_peer_observer=activation_peer_observer,
+        )
+        boot_id = ingress_ssh.preflight(client, instance.config_yaml)
+        holder.repair_verifier = lambda: ingress_ssh.verify_repair_checkpoint(
+            ssh,
+            target,
+            instance,
+            local,
+            boot_id=boot_id,
+            config_sha256=observed["config_sha256"],
+        )
+        holder.fresh_verifier = lambda: ingress_ssh.verify_fresh(
+            ssh,
+            target,
+            instance,
+            local,
+            boot_id=boot_id,
+            config_sha256=holder.activated_config_sha256,
         )
         try:
             yield holder

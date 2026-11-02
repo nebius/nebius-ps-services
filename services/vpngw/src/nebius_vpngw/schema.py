@@ -438,6 +438,17 @@ class GatewayConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    ssh_allowed_cidrs: list[str] = Field(
+        ..., min_length=1, description="Required SSH source CIDRs for administrators and deployment"
+    )
+
+    @field_validator("ssh_allowed_cidrs", mode="before")
+    @classmethod
+    def validate_ssh_allowed_cidrs(cls, value: object) -> list[str]:
+        from .ingress_policy import normalize_cidrs
+
+        return normalize_cidrs(value)
+
     local_asn: int = Field(..., description="Local BGP ASN (private: 64512-65534, public: 1-64511)")
     local_prefixes: list[str] = Field(
         ...,

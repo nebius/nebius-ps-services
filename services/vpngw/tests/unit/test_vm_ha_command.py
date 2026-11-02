@@ -146,6 +146,12 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
         "setup-vpngw-firewall.sh",
     ):
         members[f"nebius_vpngw/systemd/{asset_name}"] = f"fixture:{asset_name}\n".encode()
+    source_root = Path(__file__).parents[2] / "src/nebius_vpngw"
+    for source in source_root.rglob("*"):
+        if source.is_file() and "__pycache__" not in source.parts:
+            members["nebius_vpngw/" + source.relative_to(source_root).as_posix()] = (
+                source.read_bytes()
+            )
     record_path = f"{dist_info}/RECORD"
     record_lines = []
     for name, payload in members.items():

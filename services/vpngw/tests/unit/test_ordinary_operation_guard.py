@@ -520,7 +520,7 @@ def test_pending_guard_leaves_daemon_waiting_and_rejects_forced_reload(
     from nebius_vpngw.agent import ordinary
 
     path = tmp_path / "config.yaml"
-    path.write_text("version: 1\nconnections: []\n")
+    path.write_text("version: 1\ngateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n")
     monkeypatch.setattr(agent_main, "CONFIG_PATH", path)
     monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path: None)

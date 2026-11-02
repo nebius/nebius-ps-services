@@ -539,6 +539,9 @@ def test_invalid_enrollment_anchors_block_before_recreate_or_allocation() -> Non
     policy = SimpleNamespace(identity_for=lambda hostname: identity)
     manager = VMManager(project_id="project-test", region="eu-west1", ssh_policy=policy)
     spec = SimpleNamespace(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="gateway",
         instance_count=2,
         region="eu-west1",

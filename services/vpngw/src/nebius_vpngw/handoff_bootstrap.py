@@ -7,6 +7,7 @@ from pathlib import Path
 
 # Exact canonical readers, loaded in dependency order into a fresh guest process.
 SOURCES = (
+    ("_vpngw_ingress", "ingress_policy.py"),
     ("_vpngw_ordinary_operations", "ordinary_operations.py"),
     ("_vpngw_tunnel_state", "tunnel_state.py"),
     ("_vpngw_ordinary_routes", "ordinary_routes.py"),

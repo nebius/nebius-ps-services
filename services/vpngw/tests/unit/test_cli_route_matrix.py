@@ -30,6 +30,9 @@ from nebius_vpngw.deploy.route_manager import (
 def _plan(*, vm_ha: bool) -> ResolvedDeploymentPlan:
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="gateway",
             instance_count=1,
             region="region-a",
@@ -54,7 +57,7 @@ def _config(mode: str) -> dict:
     return {
         "project_id": "project-a",
         "defaults": {"routing": {"mode": mode}},
-        "gateway": {"local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
         "connections": [
             {
                 "name": "connection-a",
@@ -813,6 +816,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("config_file",),
             ("--local-config-file", "-c"),
             ("--peer-config-file",),
+            ("--ssh-allowed-cidr",),
             ("--force", "-f"),
         ),
         ("destroy",): (

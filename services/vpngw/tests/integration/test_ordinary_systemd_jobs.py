@@ -173,7 +173,7 @@ def test_shared_static_prefix_real_kernel_verification(
     from nebius_vpngw.tunnel_state import collect_tunnel_state
 
     cfg = {
-        "gateway": {},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
         "connections": [
             {
                 "routing_mode": "static",
@@ -825,7 +825,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         return run(list(args), check=True, capture_output=True, text=True)
 
     old = {
-        "gateway": {},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
         "connections": [
             {
                 "routing_mode": "static",
@@ -845,7 +845,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         ],
     }
     desired = {
-        "gateway": {},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
         "connections": [
             {
                 "routing_mode": "static",

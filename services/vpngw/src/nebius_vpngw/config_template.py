@@ -70,6 +70,12 @@ gateway_group:
     ssh_private_key_path: "~/.ssh/id_ed25519"
 
 gateway:
+  # REQUIRED after CLI upgrade: add SSH administrator AND apply-runner source CIDRs.
+  # Use the source seen by the gateway (NAT/bastion egress), not its destination IP.
+  # Missing/empty values fail validation; CLI upgrade alone does not change the VM.
+  # Existing customers: fill this list, validate-config, then apply from an allowed source.
+  ssh_allowed_cidrs:
+    - "${{SSH_ALLOWED_CIDR}}"  # e.g. your actual administrator/runner IPv4 /32 or IPv6 /128
   local_asn: 65010
   local_prefixes:
     - "10.0.0.0/16"

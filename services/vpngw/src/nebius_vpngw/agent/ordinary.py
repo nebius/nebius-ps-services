@@ -11,13 +11,14 @@ import json
 import os
 import re
 import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .. import ordinary_routes
+from .. import ingress_policy, ordinary_routes
 from ..ordinary_operations import Journal, Manager, Operation, require_idle
 from . import firewall_manager as firewall
 from .frr_renderer import FRR_CONF, FRRRenderer
@@ -111,6 +112,17 @@ def managed_files(cfg: dict[str, Any]) -> dict[Path, str | None]:
         )
         + "\n"
     )
+    policy = ingress_policy.from_config(cfg)
+    files[ingress_policy.POLICY_FILE] = ingress_policy.serialized(policy)
+    files[firewall.MGMT_CIDRS_FILE] = "\n".join(
+        [
+            "# Management CIDRs allowed for SSH (auto-generated)",
+            "# One CIDR per line",
+            "",
+            *policy["ssh_allowed_cidrs"],
+            "",
+        ]
+    )
     return files
 
 
@@ -142,6 +154,10 @@ def frr_policy_rows(text: str) -> set[tuple[str, str]]:
 
 def observe_local(cfg: dict[str, Any]) -> str:
     """Verify local invariants and fingerprint loaded config, excluding peer liveness."""
+    ingress_policy.verify(
+        ingress_policy.from_config(cfg),
+        run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, _output(argv)),
+    )
     files = managed_files(cfg)
     for path, expected in files.items():
         if expected is None:

@@ -250,7 +250,7 @@ class UnavailableDataPlane(FakeDataPlane):
 
 def test_expected_bgp_exports_are_exact_per_connection_and_peer() -> None:
     config = {
-        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "name": "site-a",
@@ -472,7 +472,7 @@ def test_bgp_readiness_rejects_empty_frr_bgp_summary(tmp_path: Path) -> None:
 
 def test_disabled_tunnels_are_absent_from_runtime_bgp_sessions_and_exports() -> None:
     config = {
-        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "name": "site-a",

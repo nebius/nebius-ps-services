@@ -14,7 +14,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from . import schema
+from . import ingress_policy, schema
 from .peer_parsers.common import detect_vendor as _detect_vendor_common
 from .peer_parsers.importer import (
     build_connection_config,
@@ -43,6 +43,7 @@ class GatewayGroupSpec:
     network_id: str | None = None
     subnet: dict = field(default_factory=dict)
     vm_ha: VMHAProvisioningSpec | None = None
+    ingress_policies: dict[int, dict[str, t.Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -450,6 +451,11 @@ def load_local_config(
         raw["region_id"] = normalized_region_override
     missing: set[str] = set()
     expanded = _expand_env(raw, missing)
+    # Admission remains mandatory even for network preparation's partial schema path.
+    gateway = expanded.get("gateway") if isinstance(expanded, dict) else None
+    ingress_policy.normalize_cidrs(
+        gateway.get("ssh_allowed_cidrs") if isinstance(gateway, dict) else None
+    )
     vm_ha_was_provided = "vm_ha" in (expanded.get("gateway_group") or {})
     # Allow optional placeholders: if NETWORK_ID is missing and the value
     # is an unresolved placeholder, drop the field to fall back to default network.
@@ -1178,6 +1184,11 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
                 vm_ha_readiness=(vm_ha_cluster.readiness if vm_ha_cluster is not None else None),
             )
         )
+
+    gateway_group.ingress_policies = {
+        item.instance_index: ingress_policy.from_config(yaml.safe_load(item.config_yaml))
+        for item in per_instance
+    }
 
     # Determine if we should manage routes: enable if any connection/tunnel uses static routing
     manage_routes = False

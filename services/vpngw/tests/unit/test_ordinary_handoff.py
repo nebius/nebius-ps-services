@@ -29,6 +29,8 @@ def test_handoff_release_requires_exact_locked_passive_status():
         assert not handoff.finished
     stdin = io.StringIO()
     handoff = Handoff(stdin, io.StringIO('{"complete": true}\n'), ha=expected)
+    handoff.activated_config_sha256 = "a" * 64
+    handoff.fresh_verifier = Mock()
     handoff.complete(status, operation_id="1" * 64)
     assert json.loads(stdin.getvalue()) == {"action": "complete", "operation": "1" * 64}
     assert handoff.finished
@@ -37,6 +39,8 @@ def test_handoff_release_requires_exact_locked_passive_status():
 def test_lost_handoff_retirement_reply_is_not_success():
     expected = {"node_id": "node", "cluster_id": "cluster", "generation_id": "generation"}
     handoff = Handoff(io.StringIO(), io.StringIO(""), ha=expected)
+    handoff.activated_config_sha256 = "a" * 64
+    handoff.fresh_verifier = Mock()
     with pytest.raises(ValueError):
         handoff.complete(
             dict(
@@ -68,7 +72,7 @@ def test_streamed_bootstrap_uses_small_command_and_preserves_request_framing(mon
     assert len(client.exec_command.call_args.args[0]) < 1024
     assert len(stdin.getvalue()) > 128 * 1024
     result = subprocess.run(
-        [sys.executable, *command[3:]],
+        [sys.executable, *command[command.index("/usr/bin/python3") + 1 :]],
         input=stdin.getvalue(),
         capture_output=True,
         text=True,

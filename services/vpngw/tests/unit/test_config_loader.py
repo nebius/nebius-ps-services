@@ -206,7 +206,11 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 def test_template_and_vm_ha_example_match_the_schema() -> None:
     example_path = Path(__file__).parents[2] / "examples" / "vm-ha-bgp-example.yaml"
 
-    template = validate_config(yaml.safe_load(DEFAULT_CONFIG_TEMPLATE))
+    draft = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE)
+    with pytest.raises(ValueError, match="ssh_allowed_cidrs"):
+        validate_config(draft)
+    draft["gateway"]["ssh_allowed_cidrs"] = ["203.0.113.4/32"]
+    template = validate_config(draft)
     example = validate_config(yaml.safe_load(example_path.read_text(encoding="utf-8")))
 
     assert template.gateway_group.vm_ha is not None

@@ -213,7 +213,7 @@ def exact_lock(expected: dict[str, Any], state_dir: Path = STATE) -> dict[str, A
     return value
 
 
-def evidence(
+def fencing_evidence(
     expected: dict[str, Any], *, state_dir: Path = STATE, unstarted: bool = False
 ) -> dict[str, Any]:
     """Observe underlying authority, never boot-filtered status projections."""
@@ -241,7 +241,6 @@ def evidence(
         path = state_dir / name
         if path.exists() or path.is_symlink():
             raise RuntimeError("HA repair conflicts with durable writer authority")
-    from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, PeerLeaf
     from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_from_dict
 
     checkpoint_path = state_dir / "controller-checkpoint.json"
@@ -256,6 +255,22 @@ def evidence(
         decoded = controller_checkpoint_from_dict(checkpoint)
         if decoded.transfer_continuity is not None or decoded.repair_attempt is not None:
             raise RuntimeError("HA repair controller continuity is unresolved")
+    return {
+        "lock": lock,
+        "boot_id": boot,
+        "forwarding": False,
+        "guard_boot_id": guard["guard_boot_id"],
+        "checkpoint_schema": None if checkpoint is None else checkpoint["schema"],
+    }
+
+
+def evidence(
+    expected: dict[str, Any], *, state_dir: Path = STATE, unstarted: bool = False
+) -> dict[str, Any]:
+    """Freeze package-repair fencing plus mTLS identity before package effects."""
+    from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, PeerLeaf
+
+    fence = fencing_evidence(expected, state_dir=state_dir, unstarted=unstarted)
     store = ManagedMTLSStore(state_dir / "mtls", create=False)
     status = store.status()
     active = store._load_active()
@@ -300,15 +315,11 @@ def evidence(
             raise RuntimeError("HA repair conflicts with mTLS transaction")
         transactions[path.name] = dict(record)
     return {
-        "lock": lock,
-        "boot_id": boot,
-        "forwarding": False,
-        "guard_boot_id": guard["guard_boot_id"],
+        **fence,
         "mtls": active,
         "transactions": transactions,
         # Sequence changes under an inhibited controller are harmless; the raw
         # no-pending assertions above must be made afresh at every boundary.
-        "checkpoint_schema": None if checkpoint is None else checkpoint["schema"],
     }
 
 

@@ -88,24 +88,20 @@ def _write_vm_ha_agent_wheel(
         f"{dist_info}/METADATA": b"Metadata-Version: 2.4\nName: nebius-vpngw\nVersion: 1.2.3\n",
         f"{dist_info}/WHEEL": (b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
     }
-    for asset_name in (
-        "nebius-vpngw-agent.service",
-        "nebius-vpngw-agent-ordering.conf",
-        "nebius-vpngw-esp4-preflight.sh",
-        "nebius-vpngw-fix-routes.service",
-        "nebius-vpngw-fix-routes.timer",
-        "nebius-vpngw-health-monitor.service",
-        "nebius-vpngw-ufw-lock.conf",
-        "nebius-vpngw-vm-ha-guard.service",
-        "nebius-vpngw-vm-ha-ordering.conf",
-        "nebius-vpngw-vm-ha-peer-firewall.sh",
-        "nebius-vpngw-vm-ha-rearm.service",
-        "nebius-vpngw-vm-ha.service",
-        "setup-vpngw-firewall.sh",
+    source_root = Path(__file__).parents[2] / "src/nebius_vpngw"
+    for source in (
+        "ingress_policy.py",
+        "schema.py",
+        "config_loader.py",
+        "agent/firewall_manager.py",
+        "agent/ordinary.py",
     ):
-        if asset_name == omit_service_asset:
-            continue
-        members[f"nebius_vpngw/systemd/{asset_name}"] = f"fixture:{asset_name}\n".encode()
+        members["nebius_vpngw/" + source] = (source_root / source).read_bytes()
+    for asset_name in {name for name, _path, _mode in _VM_HA_SERVICE_ASSET_DESTINATIONS}:
+        if asset_name != omit_service_asset:
+            members[f"nebius_vpngw/systemd/{asset_name}"] = (
+                source_root / "systemd" / asset_name
+            ).read_bytes()
     if include_agent_main:
         if dead_capability_handler:
             members["nebius_vpngw/agent/main.py"] = (
@@ -137,6 +133,8 @@ def _write_vm_ha_agent_wheel(
                     else b""
                 )
             )
+    if include_agent_main and not dead_capability_handler and include_module_entrypoint:
+        members["nebius_vpngw/agent/main.py"] = (source_root / "agent/main.py").read_bytes()
     record_path = f"{dist_info}/RECORD"
     record_lines = []
     for name, payload in members.items():
@@ -302,6 +300,7 @@ def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBi
         external_ip="203.0.113.10",
         config_yaml=yaml.safe_dump(
             {
+                "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
                 "vm_ha": {
                     "cluster_id": "cluster-a",
                     "node": {"node_id": "node-a", "instance_index": 0, "role": "active"},
@@ -313,7 +312,7 @@ def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBi
                             "bgp_policy_json": "[]",
                         },
                     },
-                }
+                },
             },
             sort_keys=False,
         ),
@@ -601,6 +600,20 @@ class _StageClient:
         )
 
     def exec_command(self, command: str, **kwargs):
+        if "SSH_CONNECTION" in command and "boot_id" in command:
+            return (
+                BytesIO(),
+                _CommandStream(
+                    json.dumps(
+                        {
+                            "connection": "203.0.113.4 4567 10.0.0.1 22",
+                            "boot_id": "test-boot",
+                        }
+                    ).encode(),
+                    0,
+                ),
+                BytesIO(),
+            )
         index = len(self.commands)
         self.commands.append(command)
         return_code = int(
@@ -694,6 +707,20 @@ class _ManagedMTLSClient:
         return self.sftp
 
     def exec_command(self, command: str, **kwargs):
+        if "SSH_CONNECTION" in command and "boot_id" in command:
+            return (
+                BytesIO(),
+                _CommandStream(
+                    json.dumps(
+                        {
+                            "connection": "203.0.113.4 4567 10.0.0.1 22",
+                            "boot_id": "test-boot",
+                        }
+                    ).encode(),
+                    0,
+                ),
+                BytesIO(),
+            )
         self.commands.append(command)
         if "--vm-ha-mtls-action" in command:
             output = json.dumps(self.action_response).encode()
@@ -712,6 +739,7 @@ class _ManagedMTLSClient:
             output = json.dumps(
                 {
                     "features": [
+                        "managed-ingress-v1",
                         "vm-ha-live-peer-replacement-v4",
                         "vm-ha-standby-restoration-v2",
                     ],
@@ -919,6 +947,7 @@ def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkey
     assert receipt["cffi_version"] == "1.17.0"
     assert receipt["artifact_sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
     assert receipt["capabilities"] == [
+        "managed-ingress-v1",
         "vm-ha-live-peer-replacement-v4",
         "vm-ha-standby-restoration-v2",
     ]
@@ -2346,6 +2375,7 @@ def test_vm_ha_activation_reuses_approved_artifact_without_rebuild(
     monkeypatch,
     tmp_path,
 ) -> None:
+    monkeypatch.setattr("nebius_vpngw.deploy.ingress_ssh.verify_fresh", Mock())
     manifest, binding = _vm_ha_manifest_and_binding()
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     _write_vm_ha_agent_wheel(wheel)

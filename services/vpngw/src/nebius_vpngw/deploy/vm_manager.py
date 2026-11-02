@@ -16,6 +16,9 @@ import typing as t
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import yaml
+
+from .. import ingress_policy
 from ..config_loader import GatewayGroupSpec
 from ..nebius_auth import (
     build_operator_sdk_client,
@@ -3942,16 +3945,17 @@ class VMManager:
     ) -> dict[str, str]:
         if self._ssh_policy is None:
             raise RuntimeError("Gateway provisioning requires a validated immutable SSH policy")
-        base = self._build_cloud_init(
-            ssh_key=spec.vm_spec.get("ssh_public_key"),
-            local_prefixes=local_prefixes,
-            vm_ha=spec.vm_ha is not None,
-        )
         rendered: dict[str, str] = {}
         for index in range(spec.instance_count):
             name = f"{spec.name}-{index}"
             if name in existing_names and not recreate:
                 continue
+            base = self._build_cloud_init(
+                ssh_key=spec.vm_spec.get("ssh_public_key"),
+                local_prefixes=local_prefixes,
+                vm_ha=spec.vm_ha is not None,
+                ingress=spec.ingress_policies[index],
+            )
             rendered[name] = self._render_gateway_ssh_enrollment_cloud_init(
                 base,
                 self._ssh_policy.identity_for(name),
@@ -4151,7 +4155,10 @@ class VMManager:
 
         ssh_key = spec.vm_spec.get("ssh_public_key")
         cloud_init = self._build_cloud_init(
-            ssh_key=ssh_key, local_prefixes=local_prefixes, vm_ha=spec.vm_ha is not None
+            ssh_key=ssh_key,
+            local_prefixes=local_prefixes,
+            vm_ha=spec.vm_ha is not None,
+            ingress=spec.ingress_policies[0],
         )
 
         return VMProvisioningConfig(
@@ -8088,6 +8095,7 @@ class VMManager:
         local_prefixes: list[str] | None = None,
         *,
         vm_ha: bool = False,
+        ingress: dict[str, t.Any],
     ) -> str:
         """Return a hardened cloud-init to install deps, configure security, and setup the gateway.
 
@@ -8156,6 +8164,7 @@ class VMManager:
             "  - python3-pip\n"
             "  - python3-yaml\n"
             "  - ufw\n"
+            "  - nftables\n"
             "  - fail2ban\n"
             "  - unattended-upgrades\n"
             "  - auditd\n"
@@ -8460,4 +8469,60 @@ class VMManager:
             "  # Log completion\n"
             "  - [ bash, -c, \"logger -t vpngw 'Cloud-init hardening complete for VPN gateway'\" ]\n"
         )
-        return cloud
+        # Project one canonical policy into boot files. YAML serialization keeps the
+        # standalone Python executable byte-identical to the selected product source.
+        policy = ingress_policy.validate(ingress)
+        document = yaml.safe_load(cloud)
+        for entry in document["write_files"]:
+            if entry["path"] == "/etc/vpngw_mgmt_cidrs":
+                entry["content"] = "\n".join(policy["ssh_allowed_cidrs"]) + "\n"
+            elif entry["path"] == "/etc/vpngw_peer_ips":
+                entry["content"] = "\n".join(policy["peer_ips"]) + "\n"
+        for path, content, mode in (
+            (str(ingress_policy.POLICY_FILE), ingress_policy.serialized(policy), "0600"),
+            (str(ingress_policy.EXECUTABLE), Path(ingress_policy.__file__).read_text(), "0644"),
+            (
+                "/etc/systemd/system/nebius-vpngw-ingress.service",
+                resources.files("nebius_vpngw")
+                .joinpath("systemd/nebius-vpngw-ingress.service")
+                .read_text(),
+                "0644",
+            ),
+        ):
+            document["write_files"].append(
+                {"path": path, "content": content, "permissions": mode, "owner": "root:root"}
+            )
+        for unit in ("ssh.service", "ssh.socket"):
+            document["write_files"].append(
+                {
+                    "path": f"/etc/systemd/system/{unit}.d/40-vpngw-ingress.conf",
+                    "content": resources.files("nebius_vpngw")
+                    .joinpath("systemd/nebius-vpngw-ssh-ingress.conf")
+                    .read_text(),
+                    "permissions": "0644",
+                    "owner": "root:root",
+                }
+            )
+        # Retain the canonical literal-block layout consumed by pinned host-key
+        # enrollment. Re-serializing all YAML changes its admission anchors.
+        entries = "write_files:\n"
+        for entry in document["write_files"]:
+            if set(entry) != {"path", "content", "permissions", "owner"}:
+                raise RuntimeError("Unsupported cloud-init file entry")
+            entries += (
+                f"  - path: {entry['path']}\n"
+                f"    permissions: {json.dumps(entry['permissions'])}\n"
+                f"    owner: {entry['owner']}\n"
+                "    content: |\n" + textwrap.indent(entry["content"].rstrip("\n") + "\n", " " * 12)
+            )
+        start = cloud.index("write_files:\n")
+        end = cloud.index("runcmd:\n")
+        cloud = cloud[:start] + entries + cloud[end:]
+        # Keep fail-fast shell setup first; ingress precedes UFW and first SSH push.
+        return cloud.replace(
+            "runcmd:\n  - set -eu\n",
+            "runcmd:\n  - set -eu\n"
+            "  - [ systemctl, daemon-reload ]\n"
+            "  - [ systemctl, enable, --now, nebius-vpngw-ingress.service ]\n",
+            1,
+        )

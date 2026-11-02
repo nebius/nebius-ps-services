@@ -398,7 +398,7 @@ def test_list_routes_uses_public_sdk_clients_and_reads_all_pages(
 
     plan = _three_vm_plan()
     local_cfg: _LocalConfig = {
-        "gateway": {"local_prefixes": ["10.20.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.20.0.0/16"]},
         "gateway_group": {
             "subnet": {"name": "vpngw-subnet"},
         },
@@ -512,7 +512,10 @@ def test_list_routes_buffers_all_nebius_route_tables_before_rendering(
         route_manager.list_routes(
             _three_vm_plan(),
             {
-                "gateway": {"local_prefixes": ["10.20.0.0/16", "10.30.0.0/16"]},
+                "gateway": {
+                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
+                    "local_prefixes": ["10.20.0.0/16", "10.30.0.0/16"],
+                },
                 "gateway_group": {"subnet": {"name": "vpngw-subnet"}},
             },
         )
@@ -569,6 +572,9 @@ def test_vm_ha_route_selection_requires_explicit_route_id_ownership() -> None:
 def _three_vm_plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=3,
             region="eu-north1",

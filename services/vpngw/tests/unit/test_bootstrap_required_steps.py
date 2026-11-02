@@ -6,11 +6,43 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from nebius_vpngw import ingress_policy
 from nebius_vpngw.deploy.vm_manager import VMManager
+
+
+@pytest.mark.parametrize("vm_ha", [False, True])
+def test_bootstrap_ingress_survives_pinned_host_key_enrollment(vm_ha):
+    policy = {"ssh_allowed_cidrs": ["203.0.113.4/32", "2001:db8::/64"], "peer_ips": []}
+    manager = VMManager(project_id="test", region="eu-west1")
+    base = manager._build_cloud_init(ssh_key="ssh-ed25519 AAAAtest", vm_ha=vm_ha, ingress=policy)
+    identity = SimpleNamespace(
+        cloud_init_entries=lambda: (
+            "  - path: /etc/ssh/vpngw_host_key\n"
+            "    permissions: '0600'\n"
+            "    content: |\n"
+            "      synthetic-test-key\n"
+        )
+    )
+    rendered = manager._render_gateway_ssh_enrollment_cloud_init(base, identity, None)
+    document = yaml.safe_load(rendered)
+    files = {item["path"]: item for item in document["write_files"]}
+    assert files["/etc/ssh/vpngw_host_key"]["content"] == "synthetic-test-key\n"
+    assert any("HostKey /etc/ssh/vpngw_host_key" in f["content"] for f in files.values())
+    assert (
+        files[str(ingress_policy.EXECUTABLE)]["content"]
+        == Path(ingress_policy.__file__).read_text()
+    )
+    assert files[str(ingress_policy.POLICY_FILE)]["content"] == ingress_policy.serialized(policy)
+    assert "nftables" in document["packages"]
+    assert document["runcmd"][1:3] == [
+        ["systemctl", "daemon-reload"],
+        ["systemctl", "enable", "--now", "nebius-vpngw-ingress.service"],
+    ]
 
 
 @pytest.mark.parametrize("vm_ha", [False, True])
@@ -19,6 +51,7 @@ def test_cloud_init_preserves_authorized_key_as_a_yaml_string(vm_ha: bool, comme
     key = f"ssh-ed25519 AAAAfirst {comment}"
     config = yaml.safe_load(
         VMManager(project_id="test", region="eu-west1")._build_cloud_init(
+            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []},
             ssh_key=key,
             vm_ha=vm_ha,
         )
@@ -29,7 +62,9 @@ def test_cloud_init_preserves_authorized_key_as_a_yaml_string(vm_ha: bool, comme
 @pytest.mark.parametrize("failure", ["", "curl", "lsb_release", "apt-get", "install"])
 def test_generated_frr_shell_stops_on_required_failure(tmp_path: Path, failure: str) -> None:
     config = yaml.safe_load(
-        VMManager(project_id="test", region="eu-west1")._build_cloud_init(ssh_key="test")
+        VMManager(project_id="test", region="eu-west1")._build_cloud_init(
+            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, ssh_key="test"
+        )
     )
     files = {item["path"]: item for item in config["write_files"]}
     assert "/etc/frr/daemons" not in files
@@ -85,7 +120,9 @@ def test_generated_frr_shell_stops_on_required_failure(tmp_path: Path, failure: 
 
 def test_required_firewall_is_not_masked_and_esp4_deferral_is_preserved() -> None:
     config = yaml.safe_load(
-        VMManager(project_id="test", region="eu-west1")._build_cloud_init(ssh_key="test")
+        VMManager(project_id="test", region="eu-west1")._build_cloud_init(
+            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, ssh_key="test"
+        )
     )
     commands = config["runcmd"]
     firewall = next(item[-1] for item in commands if "setup-vpngw-firewall.sh >" in str(item))
@@ -114,4 +151,39 @@ logger() { :; }
         "allow out on xfrm0",
         "allow in on xfrm1",
         "allow out on xfrm1",
+    ]
+
+
+def test_firewall_retires_only_withdrawn_product_prefix_rules(tmp_path, monkeypatch):
+    source = (
+        Path(__file__).parents[2] / "src/nebius_vpngw/systemd/setup-vpngw-firewall.sh"
+    ).read_text()
+    start = source.index("import ipaddress\n")
+    code = source[start : source.index("\nPY\n", start)]
+    prefixes = tmp_path / "prefixes"
+    prefixes.write_text("10.1.0.0/16\n")
+    code = code.replace("/etc/vpngw_local_prefixes", str(prefixes))
+    deleted = []
+
+    def run(argv, **kwargs):
+        if argv == ["ufw", "show", "added"]:
+            return SimpleNamespace(
+                stdout="\n".join(
+                    [
+                        "Added user rules (see 'ufw status' for running firewall):",
+                        "ufw allow from 10.1.0.0/16 comment 'Local VPC subnet'",
+                        "ufw allow from 10.2.0.0/16 comment 'Local VPC subnet'",
+                        "ufw allow from 10.3.0.0/16 comment 'Customer access'",
+                        "ufw deny from 10.4.0.0/16 comment 'Local VPC subnet'",
+                        "ufw allow from 10.5.0.0/16 to any port 443 comment 'Local VPC subnet'",
+                    ]
+                )
+            )
+        deleted.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    exec(compile(code, "<firewall-prefix-reconciliation>", "exec"), {})
+    assert deleted == [
+        ["ufw", "--force", "delete", "allow", "from", "10.2.0.0/16", "comment", "Local VPC subnet"]
     ]

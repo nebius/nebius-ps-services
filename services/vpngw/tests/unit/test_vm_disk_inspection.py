@@ -14,6 +14,9 @@ from nebius_vpngw.deploy.vm_manager import VMManager
 @pytest.fixture(params=[False, True], ids=["ordinary", "ha"])
 def disk_inspection(request):
     spec = GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="gateway",
         instance_count=1,
         region="eu-north1",

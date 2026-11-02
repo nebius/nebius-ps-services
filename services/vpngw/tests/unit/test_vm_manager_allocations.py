@@ -918,6 +918,9 @@ def test_strict_preparation_does_not_create_after_transitional_inventory_read_fa
 
     allocation_client = SimpleNamespace(list=list_allocations)
     spec = GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="gateway",
         instance_count=1,
         region="eu-north1",
@@ -956,6 +959,9 @@ def test_interactive_allocation_inventory_filters_and_binds_exact_gateway_attach
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     vm_mgr._sdk_client = object()
     spec = GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="gateway",
         instance_count=2,
         region="eu-north1",
@@ -1040,6 +1046,9 @@ def test_interactive_allocation_inventory_fails_closed_on_list_error() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     vm_mgr._sdk_client = object()
     spec = GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="gateway",
         instance_count=1,
         region="eu-north1",
@@ -1304,6 +1313,9 @@ def test_resolve_prepared_public_allocation_rejects_named_allocation_with_differ
 def test_prepare_public_allocations_selects_only_passive_and_reuses_on_retry() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     spec = GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="nebius-vpn-gw",
         instance_count=2,
         region="eu-north1",
@@ -1369,6 +1381,9 @@ def test_prepare_public_allocations_selects_only_passive_and_reuses_on_retry() -
 def test_passive_allocation_retry_reuses_create_accepted_before_resolution_failure() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     spec = GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="nebius-vpn-gw",
         instance_count=2,
         region="eu-north1",
@@ -1571,6 +1586,9 @@ def _ha_spec() -> GatewayGroupSpec:
         ),
     )
     return GatewayGroupSpec(
+        ingress_policies={
+            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+        },
         name="gateway",
         instance_count=2,
         region="eu-north1",

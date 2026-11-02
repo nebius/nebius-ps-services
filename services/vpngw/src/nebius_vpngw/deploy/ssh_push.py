@@ -31,6 +31,7 @@ from urllib.request import url2pathname, urlopen
 
 import yaml
 
+from .. import ingress_policy
 from ..agent.vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -53,6 +54,7 @@ from ..vm_ha_credentials import (
     installed_vm_ha_credential_path,
     read_vm_ha_credential_source,
 )
+from . import ingress_ssh
 from .ssh_client_auth import SSHClientAuth, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
@@ -214,6 +216,18 @@ _VM_HA_SERVICE_ASSET_DESTINATIONS = (
         "/etc/systemd/system/nebius-vpngw-health-monitor.service",
         0o644,
     ),
+    (
+        "nebius-vpngw-ssh-ingress.conf",
+        "/etc/systemd/system/ssh.service.d/40-vpngw-ingress.conf",
+        0o644,
+    ),
+    (
+        "nebius-vpngw-ssh-ingress.conf",
+        "/etc/systemd/system/ssh.socket.d/40-vpngw-ingress.conf",
+        0o644,
+    ),
+    ("nebius-vpngw-ingress.service", "/etc/systemd/system/nebius-vpngw-ingress.service", 0o644),
+    ("nebius-vpngw-ingress.py", "/usr/local/lib/nebius-vpngw-ingress.py", 0o644),
     ("setup-vpngw-firewall.sh", "/usr/local/bin/setup-vpngw-firewall.sh", 0o755),
     (
         "nebius-vpngw-vm-ha-peer-firewall.sh",
@@ -639,6 +653,12 @@ class VMHAAgentArtifact:
                     required["nebius_vpngw/agent/vm_ha/inhibition.py"],
                     required["nebius_vpngw/agent/main.py"],
                 )
+                try:
+                    ingress_policy.require_wheel(wheel)
+                except ingress_policy.IngressCapabilityError as error:
+                    raise VMHAAgentArtifactError(
+                        VMHAAgentArtifactProblem.INCOMPATIBLE, str(error)
+                    ) from error
                 replay_supported = wheel_supports_replay_window(wheel)
                 if replay_supported:
                     for source_name in REPLAY_WINDOW_SOURCES:
@@ -677,6 +697,7 @@ class VMHAAgentArtifact:
             sha256=after_sha256,
             source=source,
             capabilities=(
+                ingress_policy.CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
                 *((REPLAY_WINDOW_CAPABILITY,) if replay_supported else ()),
@@ -710,6 +731,7 @@ class VMHAAgentArtifact:
                     "approved VM-HA agent artifact changed after planning",
                 )
             if not {
+                ingress_policy.CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
             }.issubset(self.capabilities):
@@ -1739,6 +1761,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
                 username=username,
                 vm_spec=vm_spec,
             )
+            ingress_ssh.preflight(client, inst_cfg.config_yaml)
             connected = True
             temporary = f"{upload_directory}/config.yaml"
             destination = f"/etc/nebius-vpngw/vm-ha-staged/{receipt.generation_id}.yaml"
@@ -2074,37 +2097,11 @@ printf "VM_HA_DEACTIVATED=1\\n"
         if handoff is not None:
             if dependency_plan is None:
                 raise VMHAAgentPackageError("HA handoff requires its approved package plan")
-            if handoff.finished:
-                from .ordinary_apply import remote
-                from .vm_ha_package import package_predecessor
-
-                current = package_predecessor(
-                    remote(
-                        self,
-                        ssh_target,
-                        inst_cfg,
-                        local_cfg,
-                        {"action": "inspect-package", "manifest": dependency_plan.manifest},
-                    )["observation"]
-                )
-                expected = dict(
-                    dependency_plan.observation,
-                    files=dependency_plan.manifest["files"],
-                    package_version=dependency_plan.manifest["version"],
-                    dependencies=dependency_plan.manifest["expected_dependencies"],
-                    assets={p: a["sha256"] for p, a in dependency_plan.manifest["assets"].items()},
-                    asset_modes={
-                        p: [a["mode"], 0, 0] for p, a in dependency_plan.manifest["assets"].items()
-                    },
-                )
-                # Dependency metadata changes are approved along with their exact
-                # wheel bytes and were verified before repair completion.
-                expected["requirements"] = dependency_plan.manifest["expected_requirements"]
-                if current != expected or handoff.package_receipt is None:
-                    raise VMHAAgentPackageError("HA repaired package predecessor changed")
-                receipt = handoff.package_receipt
-            else:
-                receipt = handoff.prepare_package(dependency_plan)
+            receipt = (
+                handoff.verify_prepared()
+                if handoff.package_receipt is not None
+                else handoff.prepare_package(dependency_plan)
+            )
             if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
                 raise VMHAAgentPackageError("HA handoff package capabilities changed")
             return receipt
@@ -2141,6 +2138,7 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 username=username,
                 vm_spec=vm_spec,
             )
+            ingress_ssh.preflight(client, inst_cfg.config_yaml)
             _stdin, stdout, _stderr = client.exec_command(
                 "umask 077 && mktemp -d /tmp/nebius-vpngw-agent.XXXXXXXXXX",
                 timeout=10,
@@ -2206,6 +2204,7 @@ printf "VM_HA_DEACTIVATED=1\\n"
                         + " && "
                         + install_command
                     )
+            install_command = "sudo -n apt-get install -y nftables && " + install_command
             _stdin, stdout, stderr = client.exec_command(install_command, get_pty=True, timeout=180)
             safe_stdout = self._read_bounded_remote_output(stdout)
             safe_stderr = self._read_bounded_remote_output(stderr)
@@ -3097,6 +3096,8 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     raise identity_failure from error
                 raise RuntimeError("VM-HA activation SSH connection failed") from error
 
+            ingress_boot_id = ingress_ssh.preflight(client, inst_cfg.config_yaml)
+
             # Package bytes and service assets were proved during approved HA
             # preparation. Activation must reuse that exact artifact.
             print("[SSHPush] Reusing the verified VM-HA agent artifact...")
@@ -3140,6 +3141,13 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 if staged_receipt is None or apply_operation_id is None:
                     raise RuntimeError("HA handoff activation requires its exact apply lock")
                 handoff.publish_activation(receipt=staged_receipt, operation_id=apply_operation_id)
+            ingress_activation = (
+                "import os,yaml;from pathlib import Path;"
+                "from nebius_vpngw import ingress_policy as p;"
+                "policy=p.from_config(yaml.safe_load(Path('/etc/nebius-vpngw/config-resolved.yaml').read_text()));"
+                "p.require_source(policy,os.environ.get('VPNGW_DEPLOY_SSH_CONNECTION',''));"
+                "p.install(policy)"
+            )
             cmds = [
                 "sudo mkdir -p /etc/nebius-vpngw",
                 *(
@@ -3150,6 +3158,8 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 *([] if handoff is not None else [config_install_cmd]),
                 "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
                 f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",
+                'sudo -n env VPNGW_DEPLOY_SSH_CONNECTION="$SSH_CONNECTION" /usr/bin/python3 -c '
+                + shlex.quote(ingress_activation),
                 *self._vm_ha_peer_firewall_commands(vm_ha=staged_receipt is not None),
                 *vm_ha_service_asset_commands,
                 "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-fix-routes.service; fi",
@@ -3159,6 +3169,7 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
                 "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
                 "sudo systemctl daemon-reload",
+                "sudo systemctl enable nebius-vpngw-ingress.service",
                 *self._vm_ha_reset_failed_commands(vm_ha=staged_receipt is not None),
                 *(
                     [
@@ -3210,6 +3221,18 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     client.close()
                     raise
 
+            if had_failures:
+                raise RuntimeError("HA activation is incomplete; no rollback was performed")
+            ingress_ssh.verify_fresh(
+                self,
+                ssh_target,
+                inst_cfg,
+                local_cfg,
+                boot_id=ingress_boot_id,
+                config_sha256=staged_receipt.staged_file_sha256
+                if staged_receipt is not None
+                else None,
+            )
             if not had_failures:
                 print("[SSHPush] HA configuration materialized and verified")
 

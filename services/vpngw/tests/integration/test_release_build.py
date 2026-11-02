@@ -255,9 +255,13 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     from nebius_vpngw import ordinary_routes
 
     reader = CArchiveReader(str(binary_path))
-    from nebius_vpngw import packet_health, replay_window
+    from nebius_vpngw import ingress_policy, packet_health, replay_window
 
-    for source in (*replay_window.REPLAY_WINDOW_SOURCES, "packet_health.py"):
+    for source in (
+        *replay_window.REPLAY_WINDOW_SOURCES,
+        *ingress_policy.INGRESS_SOURCES,
+        "packet_health.py",
+    ):
         assert (
             reader.extract("nebius_vpngw/" + source)
             == (Path(packet_health.__file__).parent / source).read_bytes()
@@ -278,6 +282,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     extracted = tmp_path / "frozen-sources"
     for relative in (
         "ordinary_bootstrap.py",
+        "ingress_policy.py",
         "ordinary_operations.py",
         "ordinary_routes.py",
         "tunnel_state.py",

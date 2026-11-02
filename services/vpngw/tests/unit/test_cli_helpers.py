@@ -769,6 +769,21 @@ def ordinary_deployment_boundary(monkeypatch):
     from nebius_vpngw import cli
     from nebius_vpngw.deploy import ordinary_apply
 
+    original_pin = ordinary_apply.pin_agent_artifact
+    monkeypatch.setattr(
+        ordinary_apply,
+        "pin_agent_artifact",
+        lambda ssh, instances, local, lifetimes: (
+            original_pin(ssh, instances, local, lifetimes)
+            if any(
+                "replay_window" in t
+                for c in local.get("connections", [])
+                for t in c.get("tunnels", [])
+            )
+            else None
+        ),
+    )
+
     monkeypatch.setattr(cli, "_prepare_ordinary_apply", lambda *args, **kwargs: ({}, {}, False))
     monkeypatch.setattr(
         ordinary_apply,
@@ -802,6 +817,9 @@ def approved_disruption(monkeypatch):
 def _static_route_plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -1142,7 +1160,7 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -1223,7 +1241,7 @@ def test_apply_missing_attached_disk_stops_before_deployment(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     manager = VMManager(project_id="project-test", region="eu-west1")
@@ -1262,7 +1280,7 @@ def test_apply_missing_attached_disk_stops_before_deployment(
     assert "Apply completed successfully" not in result.stdout
     assert "VM does not exist" not in result.stdout
     FakeVMManager.ensure_group.assert_not_called()
-    push.assert_not_called()
+    push.assert_called_once_with()  # local artifact admission only; no connection
     publish.assert_not_called()
     service.create.assert_not_called()
     manager.close()
@@ -1285,7 +1303,7 @@ def test_ordinary_apply_publishes_prepinned_trust_before_compute_mutation(
                 "ssh_public_key": "ssh-ed25519 fixture",
             }
         },
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -1366,7 +1384,7 @@ def test_ordinary_dry_run_runs_trust_preflight_without_effects(
                 "ssh_public_key": "ssh-ed25519 fixture",
             }
         },
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     trace: list[str] = []
@@ -1405,10 +1423,11 @@ def test_ordinary_dry_run_runs_trust_preflight_without_effects(
     assert trace == ["construct", "preflight", "check-changes"]
     assert "Dry-run complete" in result.stdout
     publish_trust.assert_not_called()
-    ssh_push.assert_called_once()  # constructed for read-only deployment inspection
+    assert ssh_push.call_count == 2  # local artifact admission and read-only SSH inspection
 
 
 def test_ordinary_dry_run_reports_required_enrollment_without_learning(
+    ordinary_deployment_boundary,
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
@@ -1418,7 +1437,7 @@ def test_ordinary_dry_run_reports_required_enrollment_without_learning(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {"ssh_public_key": "ssh-ed25519 fixture"}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     enroll = Mock(side_effect=AssertionError("dry-run learned network trust"))
@@ -1464,7 +1483,7 @@ def test_ordinary_apply_enrolls_then_repreflights_before_publication(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {"ssh_public_key": "ssh-ed25519 fixture"}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -1544,7 +1563,7 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     requests: list[object] = []
@@ -1640,7 +1659,7 @@ def test_unmarked_resources_do_not_trigger_implicit_ha_discovery_or_teardown(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     former = {
@@ -1796,7 +1815,7 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -1979,6 +1998,7 @@ def test_ha_to_non_ha_deactivates_and_verifies_every_former_member_before_ensure
 
 @pytest.mark.parametrize("service_account_error", [None, RuntimeError("setup failed")])
 def test_ha_to_non_ha_requested_sa_fails_closed_before_discovery(
+    ordinary_deployment_boundary,
     tmp_path: Path,
     service_account_error: RuntimeError | None,
 ) -> None:
@@ -2034,7 +2054,7 @@ def test_removed_tombstone_makes_consecutive_ordinary_sa_apply_teardown_free(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -2149,7 +2169,7 @@ def test_removed_tombstone_makes_consecutive_ordinary_sa_apply_teardown_free(
 
 @pytest.mark.parametrize("failure_stage", ["recheck", "deactivate", "verify"])
 def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
-    tmp_path: Path, failure_stage: str
+    ordinary_deployment_boundary, tmp_path: Path, failure_stage: str
 ) -> None:
     config_path = tmp_path / "ordinary.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -2159,7 +2179,7 @@ def test_ha_to_non_ha_failure_blocks_all_ordinary_provisioning(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -2264,7 +2284,7 @@ def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -2346,7 +2366,7 @@ def test_apply_waits_for_readiness_but_not_identity_failure(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {"ssh_username": "operator"}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
     }
     plan = _static_route_plan()
@@ -8594,7 +8614,10 @@ def test_status_skips_all_vm_ha_work_for_non_ha_plan(tmp_path: Path) -> None:
         patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
         patch(
             "nebius_vpngw.cli.load_local_config",
-            return_value={"gateway": {}, "gateway_group": {}},
+            return_value={
+                "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+                "gateway_group": {},
+            },
         ),
         patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
         patch("nebius_vpngw.cli._ensure_authentication", return_value=None),
@@ -8981,7 +9004,10 @@ def test_status_collects_read_only_vm_ha_evidence_and_renders_one_view(
             "nebius_vpngw.cli.load_local_config",
             return_value={
                 "project_id": "project-test",
-                "gateway": {"local_prefixes": ["10.0.0.0/8"]},
+                "gateway": {
+                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
+                    "local_prefixes": ["10.0.0.0/8"],
+                },
                 "gateway_group": {
                     "vm_spec": {
                         "ssh_username": "operator",
@@ -13417,6 +13443,9 @@ def test_restart_tunnel_uses_inline_remote_python_and_shows_real_failure_output(
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -13470,7 +13499,7 @@ def test_restart_tunnel_full_reset_also_bounces_matching_bgp_neighbor(tmp_path: 
     config_path.write_text("version: 1\n", encoding="utf-8")
 
     local_cfg = {
-        "gateway": {"local_asn": 65010},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_asn": 65010},
         "defaults": {"routing": {"mode": RoutingMode.BGP}},
         "gateway_group": {
             "name": "nebius-vpn-gw",
@@ -13493,6 +13522,9 @@ def test_restart_tunnel_full_reset_also_bounces_matching_bgp_neighbor(tmp_path: 
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -13597,6 +13629,9 @@ def test_restart_tunnel_static_restarts_ipsec_without_bgp_commands(tmp_path: Pat
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -13642,7 +13677,7 @@ def test_restart_tunnel_targets_only_owning_gateway_instance(tmp_path: Path) -> 
     config_path.write_text("version: 1\n", encoding="utf-8")
 
     local_cfg = {
-        "gateway": {"local_asn": 65010},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_asn": 65010},
         "defaults": {"routing": {"mode": RoutingMode.BGP}},
         "gateway_group": {
             "name": "nebius-vpn-gw",
@@ -13676,6 +13711,9 @@ def test_restart_tunnel_targets_only_owning_gateway_instance(tmp_path: Path) -> 
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=2,
             region="eu-west1",
@@ -13747,6 +13785,9 @@ def test_restart_tunnel_fails_fast_when_tunnel_name_is_unknown(tmp_path: Path) -
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -13784,7 +13825,7 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
     config_path.write_text("version: 1\n", encoding="utf-8")
 
     local_cfg = {
-        "gateway": {"local_asn": 65010},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_asn": 65010},
         "defaults": {"routing": {"mode": RoutingMode.BGP}},
         "gateway_group": {
             "name": "nebius-vpn-gw",
@@ -13816,6 +13857,9 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -13868,7 +13912,7 @@ def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
     config_path.write_text("version: 1\n", encoding="utf-8")
 
     local_cfg = {
-        "gateway": {"local_asn": 65010},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_asn": 65010},
         "defaults": {"routing": {"mode": RoutingMode.BGP}},
         "gateway_group": {
             "name": "nebius-vpn-gw",
@@ -13916,6 +13960,9 @@ def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=2,
             region="eu-west1",
@@ -13981,7 +14028,7 @@ def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
     config_path.write_text("version: 1\n", encoding="utf-8")
 
     local_cfg = {
-        "gateway": {"local_asn": 65010},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_asn": 65010},
         "defaults": {"routing": {"mode": RoutingMode.BGP}},
         "gateway_group": {
             "name": "nebius-vpn-gw",
@@ -14011,6 +14058,9 @@ def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=1,
             region="eu-west1",
@@ -14061,7 +14111,7 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
     config_path.write_text("version: 1\n", encoding="utf-8")
 
     local_cfg = {
-        "gateway": {"local_asn": 65010},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_asn": 65010},
         "defaults": {"routing": {"mode": RoutingMode.BGP}},
         "gateway_group": {
             "name": "nebius-vpn-gw",
@@ -14109,6 +14159,9 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
     }
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={
+                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
+            },
             name="nebius-vpn-gw",
             instance_count=2,
             region="eu-west1",
@@ -14280,7 +14333,7 @@ def test_pending_handoff_without_package_effects_repairs_before_credentials(
         events.append("reserve")
         yield SimpleNamespace(
             prepare_package=lambda *args: events.append("prepare"),
-            finish_repair=lambda **kwargs: events.append("finish"),
+            checkpoint_repair=lambda **kwargs: events.append("checkpoint"),
         )
 
     monkeypatch.setattr(ordinary_handoff, "reserve", reserve)
@@ -14295,7 +14348,7 @@ def test_pending_handoff_without_package_effects_repairs_before_credentials(
         ["apply", "--local-config-file", str(config_path), "--recover-vm-ha-migration", "c" * 64],
     )
     assert events == (
-        ["peer", "reserve", "prepare", "finish", "credentials"] if pending else ["credentials"]
+        ["peer", "reserve", "prepare", "checkpoint", "credentials"] if pending else ["credentials"]
     ), (result.stdout, result.exception)
     assert "boundary reached" in result.stdout
 
@@ -14315,7 +14368,7 @@ def test_replay_window_rejects_unusable_wheel_before_ordinary_provisioning(
         "project_id": "project-test",
         "region_id": "eu-west1",
         "gateway_group": {"vm_spec": {}},
-        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/16"]},
         "defaults": {"routing": {"mode": "static"}},
         "connections": [{"tunnels": [{"name": "sample", "replay_window": 1024}]}],
     }
@@ -14370,7 +14423,7 @@ def test_replay_window_rejects_unusable_wheel_before_ordinary_provisioning(
         )
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "replay_window" in result.stdout
+    assert "managed ingress" in result.stdout.lower() or "replay_window" in result.stdout
     assert "VPNGW_AGENT_WHEEL" in result.stdout
     assert "Traceback" not in result.output
     assert effects == []

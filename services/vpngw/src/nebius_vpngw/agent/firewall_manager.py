@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .. import ingress_policy
 from ..tunnel_state import collect_tunnel_state
 from .local_commands import run
 
@@ -257,7 +258,7 @@ def update_management_cidrs(cidrs: list[str]) -> bool:
         "# One CIDR per line",
         "",
     ]
-    lines.extend(sorted(set(cidrs)))
+    lines.extend(ingress_policy.normalize_cidrs(cidrs))
     new_content = "\n".join(lines) + "\n"
 
     # Update if changed
@@ -329,7 +330,6 @@ def reload_firewall() -> bool:
 
 def update_firewall_from_config(
     cfg: dict[str, Any],
-    mgmt_cidrs: list[str] | None = None,
     *,
     require_reload: bool = False,
 ) -> None:
@@ -338,21 +338,21 @@ def update_firewall_from_config(
     This is the main entry point for firewall management. It:
     1. Extracts peer IPs from config
     2. Updates peer IPs file
-    3. Updates management CIDRs file (if provided)
+    3. Updates required management CIDRs and effective ingress policy
     4. Updates local prefix rules
     5. Reloads firewall rules if anything changed
 
     Args:
         cfg: Gateway configuration
-        mgmt_cidrs: Optional list of management CIDRs for SSH access
     """
+    policy = ingress_policy.from_config(cfg)
+    # Validate every path before files or rules change, including passive HA.
+    ingress_policy.install(policy, run=run)
     peer_ips_changed = update_peer_ips(cfg)
     local_prefixes = (cfg.get("gateway", {}) or {}).get("local_prefixes", []) or []
     local_prefixes_changed = update_local_prefixes(local_prefixes)
 
-    mgmt_cidrs_changed = False
-    if mgmt_cidrs is not None:
-        mgmt_cidrs_changed = update_management_cidrs(mgmt_cidrs)
+    mgmt_cidrs_changed = update_management_cidrs(policy["ssh_allowed_cidrs"])
 
     # Reload firewall if anything changed
     if peer_ips_changed or mgmt_cidrs_changed or local_prefixes_changed or require_reload:
@@ -362,3 +362,4 @@ def update_firewall_from_config(
         print("[FirewallMgr] No firewall changes needed")
 
     ensure_tunnel_host_rules(cfg)
+    ingress_policy.verify(policy, run=run)

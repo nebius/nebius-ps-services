@@ -524,6 +524,21 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
         required=True,
         validator=_validate_cidr,
     )
+    from .ingress_policy import normalize_cidrs
+
+    existing_sources = gateway.get("ssh_allowed_cidrs") or []
+    gateway["ssh_allowed_cidrs"] = _csv_values(
+        prompt,
+        "SSH allowed source CIDRs (comma-separated, required)",
+        default=[c for c in existing_sources if "${" not in c],
+        help_text=(
+            "Include administrators AND the machine running apply; use the source seen "
+            "by the gateway after NAT or a bastion. This protects ordinary and both HA nodes. "
+            "At least one IPv4/IPv6 CIDR is required; there is no allow-all fallback."
+        ),
+        required=True,
+        validator=lambda value: normalize_cidrs([value])[0],
+    )
     try:
         GatewayGroup.model_validate(group)
         GatewayConfig.model_validate(gateway)

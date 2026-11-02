@@ -4,6 +4,12 @@ Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS
 
 This project is an open source, self-service, VM-based Nebius VPN gateway. It is not a managed Nebius VPN service.
 
+**Upgrade requirement:** ordinary and HA configurations now require
+`gateway.ssh_allowed_cidrs`, including the source used by `apply`. Existing customers
+must update their YAML before applying. Installing the CLI alone does not change
+gateway SSH access. Read the [SSH allowlist migration](#ssh-allowlist-migration)
+before upgrading a deployed gateway.
+
 ## Table of Contents
 
 - [Quick Start Guide](#quick-start-guide)
@@ -20,6 +26,7 @@ This project is an open source, self-service, VM-based Nebius VPN gateway. It is
 - [VM Management](#vm-management)
 - [System Monitoring](#system-monitoring)
 - [Security](#security)
+- [SSH allowlist migration](#ssh-allowlist-migration)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Release & Versioning](#release--versioning)
@@ -1606,6 +1613,13 @@ lock over exact completed residue without granting restoration authority or
 changing the residue; other writer admission checks remain strict. After apply, run `status` and
 confirm healthy HA, established tunnels/BGP, and the intended receive windows.
 
+If an interrupted apply left a current-boot passive transition pending, the
+controller checkpoints a fresh action for the installed generation and finishes
+that local safety transition before retiring old generation records. Runtime
+identity checks stay strict; forwarding stays disabled and apply fencing stays in place.
+Retry through a fresh `apply --dry-run` and its exact approval digest; do not
+delete checkpoints, receipts or apply locks manually.
+
 Every normal `status` includes a fresh three-second receive observation after
 the main tunnel table:
 
@@ -1784,6 +1798,7 @@ gateway_group:
     ssh_private_key_path: "~/.ssh/id_ed25519"
 
 gateway:
+  ssh_allowed_cidrs: ["203.0.113.4/32"]  # Replace with actual admin/apply source CIDRs
   local_asn: 65010
   local_prefixes:
     - "10.0.0.0/16"
@@ -2101,6 +2116,7 @@ Safe to rerun. This public command remains available independently of the
 
 ```bash
 nebius-vpngw create-from-peer-config my-vpn.config.yaml \
+  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt \
   --peer-config-file branch-office.csv
 ```
@@ -2109,6 +2125,7 @@ Or use the output-path flag form:
 
 ```bash
 nebius-vpngw create-from-peer-config \
+  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt \
   --local-config-file my-vpn.config.yaml
 ```
@@ -2516,6 +2533,7 @@ defaults:
     mode: bgp
 
 gateway:
+  ssh_allowed_cidrs: ["203.0.113.4/32"]  # Replace with actual admin/apply source CIDRs
   local_asn: 64512
   local_prefixes:
     - "10.0.0.0/16"
@@ -2734,6 +2752,7 @@ Vendor detection is best-effort and currently recognizes **GCP**, **AWS**, **Azu
 
 ```bash
 nebius-vpngw create-from-peer-config nebius-vpn.config.yaml \
+  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt
 ```
 
@@ -2794,6 +2813,7 @@ gcloud compute routers describe my-router \
 
 ```bash
 nebius-vpngw create-from-peer-config gcp-ha-vpn.config.yaml \
+  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt
 ```
 
@@ -2801,6 +2821,7 @@ Equivalent flag form:
 
 ```bash
 nebius-vpngw create-from-peer-config \
+  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt \
   --local-config-file gcp-ha-vpn.config.yaml
 ```
@@ -3031,6 +3052,140 @@ Per-VM checks:
 
 ## Security
 
+### SSH allowlist migration
+
+**Breaking configuration change:** every ordinary or HA configuration must contain
+nonempty `gateway.ssh_allowed_cidrs`. Missing, null, empty, malformed and unresolved
+values fail before authentication, deployment locks or cloud operations. There is no
+implicit unrestricted mode. The interactive wizard asks for this list; the generated
+noninteractive template remains a draft until its required placeholder is replaced.
+
+Upgrading the CLI **does not change the running VM or its firewall**. Editing or
+validating YAML also has no remote effect. Plain `ssh` does not read `config.yaml`.
+An old configuration rejected by the upgraded CLI therefore does not, by itself,
+explain an OpenSSH connection failure.
+
+For an existing gateway:
+
+Use the normal in-place `apply` upgrade. Adding the SSH allowlist does not require
+recreating the gateway, changing VPN peers, PSKs or routing settings, or rebuilding
+customer security groups. Keep the existing tunnel and routing settings in the YAML.
+An actual update may briefly interrupt VPN traffic; plan a maintenance window and
+review the disruption preview. The upgrade must restore the existing VPN service
+automatically. This is not a zero-downtime upgrade guarantee.
+
+1. Add the sources of administrators and the machine that runs `apply` to the YAML.
+   Use the address the gateway sees after NAT or a bastion, rather than the gateway's
+   destination address. Include the deployment source used to reach **each HA member**.
+   Use IPv4 `/32` or IPv6 `/128` for individual addresses, or deliberate network ranges.
+
+   ```yaml
+   gateway:
+     # Required: replace these documentation addresses with your actual sources.
+     ssh_allowed_cidrs:
+       - "203.0.113.4/32"
+       - "2001:db8:1234::/64"
+     # Keep your existing local_asn, local_prefixes and other gateway settings.
+   ```
+
+2. Validate, then apply from an included source using the existing SSH key and pinned
+   host identity:
+
+   ```bash
+   nebius-vpngw validate-config config.yaml
+   nebius-vpngw apply --local-config-file config.yaml --dry-run
+   nebius-vpngw apply --local-config-file config.yaml \
+     --approve-disruption DIGEST_FROM_PREVIEW
+   ```
+
+   Replace `DIGEST_FROM_PREVIEW` with the exact digest printed by the preview.
+   Run a new preview if the YAML or selected deployment artifact changes.
+
+3. `apply` connects using current access, checks the source reported by the authenticated
+   SSH server, upgrades the selected agent, and activates the new policy. It requires a
+   **fresh authenticated SSH connection** and checks the installed config and effective
+   kernel policy before reporting completion. An excluded deployment source is rejected
+   before policy changes. The selected wheel must match the CLI's ingress implementation;
+   an old installed agent need not support the feature before it is upgraded.
+
+4. Run `nebius-vpngw status --local-config-file config.yaml --packet-details` and
+   verify traffic over the existing VPN path. For HA, confirm current-boot identity,
+   ready redundancy and the expected routing mode: a static standby is deliberately
+   cold. An apply that exits nonzero or leaves the prior working VPN unavailable is
+   incomplete; retain the configuration and use the supported recovery workflow.
+
+An unchanged HA apply performs the same fresh SSH verification. Confirmed policy
+drift follows the normal repair workflow; a timeout, authentication failure, changed
+boot/config identity or unreadable firewall state stops verification instead of
+being treated as a reason to change the gateway.
+
+To change deployment sources, first add the new source while retaining the current
+source and apply. Run the next apply from the new source, then remove the old source.
+Established SSH sessions survive policy changes; new sessions from removed sources
+are blocked. Both HA nodes enforce the list even when passive or not forwarding VPN
+traffic. The rule applies to public, private/VPC and tunnel ingress, not just `eth0`.
+IPv4 and IPv6 are separate: permitting one family does not permit the other.
+
+New or recreated gateways receive the same per-VM policy through Nebius SDK cloud-init
+user data **before the first SSH push**. This avoids an SSH bootstrap dependency and
+never temporarily opens ingress to discover the operator address. A wrong source can
+prevent that first connection; it must be corrected through an allowed path or the
+customer's approved out-of-band recovery procedure. Guest policy cannot protect the
+interval before cloud-init executes.
+
+`create-from-peer-config` requires repeatable `--ssh-allowed-cidr CIDR` arguments.
+Peer documents cannot choose local management access. Examples in this README use
+reserved documentation addresses; replace them before deployment.
+
+Troubleshooting:
+
+- **CLI says `gateway.ssh_allowed_cidrs` is missing/invalid:** add the required list,
+  validate, then apply. Validation made no gateway changes.
+- **CLI reports an excluded observed SSH source:** include that actual source or use
+  the add/switch/remove procedure above. No policy activation was attempted.
+- **HA status reports a generation mismatch after editing YAML:** status compares the
+  requested configuration with the installed generation. Complete the reviewed apply
+  before expecting them to match. This message alone does not mean SSH was blocked or
+  the running gateway was changed by the edit.
+- **SSH times out:** check the current egress/bastion address, the deployed allowlist,
+  customer security group/firewall, routes, VM state and SSH service. A timeout alone
+  does not identify which layer blocked access.
+- **Authentication or host-key verification fails:** correct the key, username or
+  pinned identity through the existing trust workflow; an allowlist does not fix these.
+- **Activation may have completed but fresh SSH verification failed:** treat deployment
+  as incomplete. Policy may already be installed; no automatic rollback occurred.
+  Recover from an existing allowed source/session or customer-approved out-of-band
+  infrastructure access. The product does not widen the list, execute recovery through
+  the SDK, or automatically recreate the gateway.
+- **HA activation stops during firewall reconciliation:** inspect the agent journal
+  before retrying. An interrupted upgrade can leave members guarded with apply locks;
+  preserve those guards and use a fresh artifact-bound preview and apply after fixing
+  the reported cause. Do not clear HA state or manually enable forwarding.
+
+### Firewall ownership and VPN sources
+
+Security groups are customer-owned external firewalls. The product does not create,
+attach, adopt, inspect or reconcile them. Customer automation must keep them aligned
+with required SSH and VPN traffic, including attachment to replacement VM NICs.
+Guest permits cannot override an external deny.
+
+The host uses a dedicated nftables `inet nebius_vpngw_ingress` INPUT table ahead of
+UFW's broad accepts. Updates replace only that table in a validated atomic transaction
+for both address families; unrelated customer tables, UFW rules and fail2ban remain.
+The validated policy is persisted before kernel activation, so a crash cannot restore
+an older policy on reboot. An interrupted activation remains incomplete; retry from
+an allowed source. The boot service loads the policy before SSH, and the independent
+table survives UFW reload and tunnel host-rule repair. Do not flush nftables globally
+or edit product-owned policy files.
+
+Outer IKE UDP/500, NAT-T UDP/4500 and ESP are restricted to the resolved configured
+peer addresses. An empty peer set denies unsolicited VPN ingress; removed peers do
+not bypass this through existing connection tracking. Decrypted tunnel payload is
+handled separately, while SSH restrictions still apply to SSH arriving over a tunnel.
+The peer list is derived from tunnel configuration, not a second user-maintained list.
+StrongSwan peer-address/identity matching and PSK authentication remain required. Source
+filtering reduces exposure if a PSK leaks; it does not make a leaked PSK safe.
+
 ### Cloud-Init Hardening
 
 Applied at VM creation:
@@ -3046,12 +3201,12 @@ Applied at VM creation:
 
 ### Dynamic Firewall
 
-Agent synchronizes UFW rules with active tunnels:
+The agent synchronizes the managed ingress table and product-owned UFW permits:
 
-- Adds peer IPs when tunnels configured
-- Removes stale peer IPs when tunnels deleted
+- Derives allowed VPN peer IPs from configured tunnels
+- Removes stale peers from effective VPN admission when tunnels are deleted
 - Keeps local prefix rules in sync with `gateway.local_prefixes`
-- XFRM interfaces not filtered by UFW (allows BGP/encrypted traffic to flow)
+- Keeps XFRM BGP/payload permits subordinate to the SSH source restriction
 
 Host INPUT and OUTPUT permits are installed for configured tunnel interfaces before
 the interfaces exist. Unchanged reconciliation also repairs kernel-only permit
@@ -3061,9 +3216,8 @@ edits inside those UFW-owned chains are replaced. Other chains, forwarding state
 MSS handling and HA fencing remain unchanged. Invalid or unavailable saved policy
 fails reconciliation instead of triggering a firewall reset or reload.
 
-Existing customers use the normal artifact-bound `apply` workflow with their
-existing configuration. Apply may temporarily interrupt traffic; this fix adds
-no configuration migration or new CLI options. Established IPsec and successful
+Existing customers use the normal artifact-bound `apply` workflow after completing
+the required SSH allowlist migration above. Apply may temporarily interrupt traffic. Established IPsec and successful
 ping alone do not prove that new BGP TCP connections are admitted.
 
 ### IPsec Session Recovery
@@ -3439,12 +3593,13 @@ sudo journalctl | grep ufw | tail -20
 
 # Check current UFW rules
 sudo ufw status verbose
-# Expected posture (no management CIDRs):
-# - SSH allowed from anywhere (or from management CIDRs if configured)
+# The independent admission table constrains these subordinate UFW permits:
+sudo nft list table inet nebius_vpngw_ingress
+# - New SSH connections require gateway.ssh_allowed_cidrs on every nonloopback path
 # - ICMP allowed from anywhere on eth0
-# - IPsec (UDP 500/4500, ESP) allowed from peers (or anywhere until peers known)
+# - Outer IPsec (UDP 500/4500, ESP) allowed only from resolved peers; no peers denies all
 # - TCP 179 not exposed on eth0 (BGP runs over xfrm*)
-# - All traffic allowed on xfrm* tunnel interfaces
+# - XFRM payload remains subject to the same SSH source restriction
 # - Default deny inbound on eth0 for other ports
 ```
 

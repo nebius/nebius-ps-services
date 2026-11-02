@@ -104,7 +104,10 @@ def _private_config_document(
                 ],
             },
         },
-        "gateway": {"local_prefixes": list(plan.nebius_prefixes)},
+        "gateway": {
+            "ssh_allowed_cidrs": ["203.0.113.4/32"],
+            "local_prefixes": list(plan.nebius_prefixes),
+        },
         "connections": [
             {
                 "name": plan.connection,

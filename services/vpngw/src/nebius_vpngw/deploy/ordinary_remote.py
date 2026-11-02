@@ -27,9 +27,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import _vpngw_ingress as ingress  # type: ignore[import-not-found]
     import _vpngw_ordinary_operations as operations  # type: ignore[import-not-found]
     import _vpngw_ordinary_routes as routes  # type: ignore[import-not-found]
 except ModuleNotFoundError:
+    from .. import ingress_policy as ingress
     from .. import ordinary_operations as operations
     from .. import ordinary_routes as routes
 
@@ -438,6 +440,9 @@ def publish(path: Path, raw: bytes, mode: int) -> None:
 def execute(request: dict[str, Any]) -> dict[str, Any]:
     global OPERATION
     manifest = request["manifest"]
+    ingress.require_source(
+        manifest["ingress_policy"], os.environ.get("VPNGW_DEPLOY_SSH_CONNECTION", "")
+    )
     if not request["noop"] and request.get("approval") != request["plan_digest"]:
         return {"status": "failed", "stage": "predecessor", "error_code": "approval_required"}
     fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -476,6 +481,8 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
         import yaml
 
         desired = yaml.safe_load(config)
+        if ingress.from_config(desired) != manifest["ingress_policy"]:
+            raise RuntimeError("ingress_policy_identity_changed")
         previous = yaml.safe_load(CONFIG.read_bytes()) if CONFIG.exists() else None
         if (
             not isinstance(desired, dict)
@@ -542,6 +549,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 if not manager.stopped(name):
                     raise RuntimeError("quiescence")
             stage = "install"
+            command(["apt-get", "install", "-y", "nftables"], limit=120)
             OPERATION.phase("install")
             with routing_lock():
                 quiescent = inspect(manifest, verify_runtime=False, route_locked=True)
@@ -591,6 +599,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 if current["config_sha256"] != manifest["config_sha256"]:
                     publish(CONFIG, config, 0o644)
                 OPERATION.reload_manager()
+                command(["systemctl", "enable", "nebius-vpngw-ingress.service"])
                 if not manager.management_admitted():
                     raise RuntimeError("ordinary_service_scope_unknown")
             stage = "reconcile"

@@ -42,11 +42,18 @@ def build_binary() -> None:
             f"{remote_runner}{os.pathsep}nebius_vpngw/deploy",
         ]
     )
+    from .ingress_policy import INGRESS_SOURCES
     from .ordinary_routes import OWNERSHIP_SOURCES
     from .replay_window import REPLAY_WINDOW_SOURCES
 
     for source_name in dict.fromkeys(
-        (*OWNERSHIP_SOURCES, *REPLAY_WINDOW_SOURCES, "ordinary_bootstrap.py", "packet_health.py")
+        (
+            *OWNERSHIP_SOURCES,
+            *REPLAY_WINDOW_SOURCES,
+            *INGRESS_SOURCES,
+            "ordinary_bootstrap.py",
+            "packet_health.py",
+        )
     ):
         source_path = Path(__file__).parent / source_name
         destination = str(Path("nebius_vpngw") / Path(source_name).parent)

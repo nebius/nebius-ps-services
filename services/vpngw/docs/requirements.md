@@ -5,7 +5,7 @@
 
 #### User Story
 
-Maintain the existing Python package, CLI, test, build, and release contracts while applying conservative project hardening for current users. Constraints: Preserve supported public import paths, console scripts, CLI syntax and exit behavior, Python 3.10 through 3.12 support, configuration schemas and defaults, persisted formats, packaged systemd assets, SCM-derived versions, release tags, and upgrade paths, except for the explicitly approved VM-HA clean break in REQ-008 and the explicitly approved region-terminology and pre-adoption VM-HA command cleanup in REQ-015. Keep one canonical implementation rather than adding compatibility shims. Non-goals: Replacing the established project scaffold, changing runtime cloud or networking behavior, raising the Python floor, adopting a new framework or build backend, or performing broad dependency upgrades.
+Maintain the existing Python package, CLI, test, build, and release contracts while applying conservative project hardening for current users. Constraints: Preserve supported public import paths, console scripts, CLI syntax and exit behavior, Python 3.10 through 3.12 support, configuration schemas and defaults, persisted formats, packaged systemd assets, SCM-derived versions, release tags, and upgrade paths, except for the explicitly approved VM-HA clean break in REQ-008 and the explicitly approved region-terminology and pre-adoption VM-HA command cleanup in REQ-015, and mandatory ingress policy in REQ-024. Keep one canonical implementation rather than adding compatibility shims. Non-goals: Replacing the established project scaffold, changing runtime cloud or networking behavior, raising the Python floor, adopting a new framework or build backend, or performing broad dependency upgrades.
 
 #### Acceptance Criteria
 
@@ -74,7 +74,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Make interactive `nebius-vpngw create-config CONFIG_FILE` use a guided wizard that produces an ordered, schema-valid VPN gateway configuration and explains each required input, while preserving the current deterministic template generator for existing automation. Constraints: Preserve the positional output path, `--force`, non-`.config.yaml` warning, exact-template no-op, noninteractive output and exit behavior, configuration schema v1, public `prep-network` command, and explicit default-disabled VM-HA semantics. A non-TTY invocation or explicit `--no-interactive` uses the current template path; `--interactive` forces the wizard. The wizard may collect a literal PSK only through hidden input and a mode-`0600` output file; it must never echo or render that value, write an incomplete candidate, infer VM-HA, or perform cloud mutation before a separate explicit confirmation. Non-goals: Removing or deprecating `prep-network`; introducing a second configuration schema, resumable draft format, live provider-discovery dependency, new prompt framework, or implicit network/IAM mutation; changing apply, deployment, tunnel-HA, or VM-HA runtime behavior.
+Make interactive `nebius-vpngw create-config CONFIG_FILE` use a guided wizard that produces an ordered, schema-valid VPN gateway configuration and explains each required input, while preserving the deterministic template generator for automation; REQ-024 adds a required management-source placeholder and prompt. Constraints: Preserve the positional output path, `--force`, non-`.config.yaml` warning, exact-template no-op, noninteractive output and exit behavior, configuration schema v1, public `prep-network` command, and explicit default-disabled VM-HA semantics. A non-TTY invocation or explicit `--no-interactive` uses the current template path; `--interactive` forces the wizard. The wizard may collect a literal PSK only through hidden input and a mode-`0600` output file; it must never echo or render that value, write an incomplete candidate, infer VM-HA, or perform cloud mutation before a separate explicit confirmation. Non-goals: Removing or deprecating `prep-network`; introducing a second configuration schema, resumable draft format, live provider-discovery dependency, new prompt framework, or implicit network/IAM mutation; changing apply, deployment, tunnel-HA, or VM-HA runtime behavior.
 
 #### Acceptance Criteria
 
@@ -2935,5 +2935,69 @@ Test duration is evidence, not a universal qualification gate. Broader release o
 operation acceptance still requires its independently specified checks.
 
 <!-- /REQUIREMENT: REQ-023 -->
+<!-- REQUIREMENT: REQ-024 status=satisfied priority=P0 type=security -->
+### REQ-024: Mandatory management ingress and configured VPN peer admission
+
+#### User Story
+
+As an operator, restrict SSH and outer VPN ingress on ordinary and HA gateways,
+including deployment and replacement, without product-managed security groups.
+This explicitly approved breaking change requires existing YAML to be amended.
+
+#### Acceptance Criteria
+
+- Every configuration requires nonempty normalized IPv4/IPv6 `gateway.ssh_allowed_cidrs`.
+  Missing, null, empty, malformed and unresolved entries fail before operational effects.
+  The normal wizard collects sources; peer import requires explicit local sources.
+- Cloud-init installs the resolved per-VM policy before the first deployment SSH push.
+  Existing gateways are updated over their existing authenticated SSH path. Upgrading
+  the operator CLI or editing YAML alone never changes deployed rules.
+- Apply rejects an excluded authenticated server-observed source before policy effects.
+  Success requires a fresh authenticated connection and installed-policy identity on
+  every affected member. Partial activation/reconnect failure is reported accurately.
+- SSH filtering covers all nonloopback interfaces and both HA roles, while retaining
+  established SSH sessions. New connections from removed sources are blocked.
+- Outer IKE, NAT-T and ESP admit only configured resolved peers; no peers means deny.
+  Removed peers cannot bypass admission through established-flow rules. Decrypted
+  payload remains distinct from outer VPN admission.
+- Serialized validated atomic policy replacement preserves unrelated customer rules,
+  fail2ban, forwarding, BGP, ICMP/MSS and exact HA mTLS/fencing. Boot, UFW reload and
+  tunnel-host repair retain policy; effective kernel state is verified.
+- Selected replacement artifacts prove ingress capability before provisioning; an old
+  deployed agent can be upgraded without already supporting the new contract.
+- Existing-customer ingress upgrades use the supported in-place apply path and retain
+  cloud resources, VPN peer settings, credentials and routing unless the operator
+  explicitly changes them. A brief documented VPN interruption is acceptable, with
+  automatic recovery of the previously working connections and no manual state repair.
+  Validate baseline and post-upgrade VPN health and traffic; do not promise zero downtime.
+- README and generated comments explain mandatory migration, actual deployment source,
+  two-step source movement, ordinary/HA handling and recovery. Timeouts are not proof
+  of allowlist exclusion; authentication/host-key failures retain their diagnosis.
+
+#### Negative Criteria
+
+- No security-group management, empty-list allow-all, temporary opening, timed rollback,
+legacy reader, SDK guest-execution recovery, automatic recreation or guarantee of
+network protection before cloud-init runs. Plain OpenSSH does not inspect local YAML.
+
+#### Validation Method
+
+Focused schema, authoring, bootstrap, transport, artifact and effective-policy checks,
+then existing project gates and isolated Linux packet/SSH tests. Separate local,
+container and live-cloud evidence. Live trials require separate authorization for
+the exact targets and disruptive actions.
+
+#### Test Method
+
+Test every invalid form before effects; ordinary/HA and IPv4/IPv6 admission, excluded
+sources, established sessions, fresh reconnection, empty/removed peers, reload/reboot,
+unrelated rule preservation and old-agent upgrade with a supported candidate.
+
+#### Evaluation Method
+
+Record implementation and verification independently; unavailable native execution
+remains a limitation and cannot count as packet or deployed-runtime proof.
+
+<!-- /REQUIREMENT: REQ-024 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

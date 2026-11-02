@@ -475,9 +475,7 @@ def test_every_transfer_intent_crash_after_each_effect_replays_exactly_once(
     effect = scenario.effects[local]
     assert len(effect.crashed_operation_ids) == 1
     crash_attempts = [
-        operation_id
-        for kind, operation_id in effect.attempted_operations
-        if kind is crash_after
+        operation_id for kind, operation_id in effect.attempted_operations if kind is crash_after
     ]
     assert crash_attempts == list(effect.crashed_operation_ids)
     assert crash_attempts[0] in effect.applied_operation_ids
@@ -574,9 +572,7 @@ def test_reverse_automatic_takeover_replays_each_effect_exactly_once(
     assert scenario.trace == list(TAKEOVER_EFFECTS)
     effect = scenario.effects["node-a"]
     crash_attempts = [
-        operation_id
-        for kind, operation_id in effect.attempted_operations
-        if kind is crash_after
+        operation_id for kind, operation_id in effect.attempted_operations if kind is crash_after
     ]
     assert crash_attempts == list(effect.crashed_operation_ids)
     assert len(crash_attempts) == 1
