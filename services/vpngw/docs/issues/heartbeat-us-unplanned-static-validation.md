@@ -1,5 +1,52 @@
 # VM-HA validation summary
 
+## November 2 restarted observation-fault campaign
+
+Seven isolated no-disruption cases passed from 13:34:57 to 14:02:08 EST on
+November 2, 2026. This restart used the already-deployed `0.6.3.dev34` wheel
+from integration commit `5bb3ef29`. No code or configuration changes were
+deployed during the restart. All four nodes matched the package version and
+five critical module hashes. Wheel SHA256:
+`294e76693e81d8ec432497679118691cb883c44190ea48cd75b8d36d8ed931a1`.
+
+Every injection expired independently. Each case included at least three
+minutes of recovery monitoring before the next injection. API faults dropped
+controller-cgroup TCP 443 traffic. Local faults terminated only controller-owned
+read-only `vtysh show` queries. Counters, failed-query logs and unknown-health
+heartbeats proved the faults occurred.
+
+| Case | Successful US–UK probes | Lost probes |
+|---|---:|---:|
+| US owner local query, 4 seconds | 937 | 0 |
+| US standby local query, 4 seconds | 939 | 0 |
+| All four cloud APIs, 180 seconds | 1,867 | 0 |
+| US owner API 60 seconds plus local query 4 seconds | 1,293 | 0 |
+| US owner repeated local query, 6 seconds | 943 | 0 |
+| UK owner local query, 4 seconds | 946 | 0 |
+| UK cold standby local query, 4 seconds | 949 | 0 |
+
+There were 7,874 successful probes and zero losses within the case windows.
+Ownership, guards, daemon identities, IKE SAs and Home pfSense BGP sessions
+remained stable. No controller repair or takeover occurred. Heartbeats continued
+while cloud-dependent controller status became stale. Both regions finished
+with gateway-a active and gateway-b passive and ready. No active injector or
+fault chain remained, and the workload probe was stopped.
+
+These passing repeats do not explain the earlier dev34 campaign's delayed US
+fencing and UK cascade. That failure remains unresolved. Restart preflight also
+found UK selecting the passive US gateway as its static return path despite
+healthy controller status. Supported US failback restored traffic, although
+the CLI reported failure before controller recovery completed. Transient query
+recovery also requested redundant ordinary-agent reloads. Those reported no
+configuration changes and did not restart strongSwan or FRR.
+
+US–UK routing was static. Home BGP was observed only. These cases do not qualify
+US–UK BGP failover, TCP survival, prolonged local-observation loss or all
+unplanned takeover modes. Private receipts, traffic, effect logs and the full
+report are in `/private/tmp/vpngw-observation-tests-20261102/restart-r3/`.
+
+## Historical October 30 campaign
+
 These are historical October 30, 2026 observations, not current gateway status.
 The US-to-UK fault campaign used static routing. It did not validate US-to-UK
 BGP failover or TCP connection survival. No faults were injected into UK.
