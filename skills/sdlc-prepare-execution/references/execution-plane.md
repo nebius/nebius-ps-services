@@ -142,8 +142,14 @@ that intent, and may reuse a result file only when every result field matches
 the same finish request. A moved `HEAD` without an exact intent, or any intent,
 commit, result, or evidence drift, fails closed.
 
-When execution starts inside an ordinary managed outer worktree, acquire the shared v4
-lease as owner `agentic-sdlc`, register integration/worker resources, and record
+SDLC intake acquires the shared v4 lease in a clean managed outer worktree
+before canonical authoring. Preparation checks the existing ownership while
+validating the complete admitted contract diff. Its private contract intent binds
+parent, branch, common directory, objective, plan, publication receipt, files and
+staged tree. Recovery adopts only its exact clean direct-child commit, records
+that head in the outer lease before ordinary reconciliation, and creates the
+integration from that contract head. Unrelated dirt and unjournaled commits fail
+closed. Register integration/worker resources and record
 each promoted feature head. Promotion ordering is Git fast-forward, exact lease
 compare-and-set, local interop write, then coordinator `promoted` persistence.
 Resume reconciles `promoted`, `cleanup`, and `done` coordinators against the

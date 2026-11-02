@@ -43,6 +43,15 @@ integration checkout before initial specification publication. The following
 execution and creates worker waves. This preserves the accepted source and
 keeps initial spec changes out of uncommitted worker inputs. These are internal
 workflow transitions, not additional public Worktree actions.
+SDLC's `prepare` owns the initial source contract commit after objective impact
+and plan validation. It admits only the published canonical pair and exact
+validated document inputs, rejects unrelated changes, and journals the parent,
+branch, objective, plan, file hashes and tree before committing. Recovery accepts
+only the matching clean direct child. Managed SDLC intake acquires ownership
+before authoring; preparation records the contract head in that lease before
+creating integration. Clean sources must match accepted or completed workflow
+checkpoints; arbitrary commits cannot substitute for this transaction.
+
 The transition helper consistently selects the private execution with
 `--execution`, including worker reconciliation. Ordinary feature executions
 and document delivery slices use the same argument; it does not change task

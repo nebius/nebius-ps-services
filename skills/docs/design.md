@@ -10046,6 +10046,10 @@ Deterministic tests pass for 2,100-task forward/backward chains, fan-out/fan-in,
 
 Final execution validation: 91 real-Git/execution tests, 31 ordinary workflow contract tests, 15 dispatch tests and the 2,100-predecessor handoff test passed. The four-retained-worktree test verifies batch cleanup and the next validated base.
 
+SDLC preparation now owns the initial source contract commit after current objective-impact and locked-plan validation. The transaction admits only the selected canonical pair and exact validated document inputs, verifies paired-publication provenance, and binds the accepted source checkpoint, branch, common directory, objective, plan, file hashes and staged tree. A retry adopts only the exact journaled clean direct child; arbitrary clean commits and unrelated changes fail closed. Managed SDLC intake reserves its clean source before authoring. Preparation validates that existing lease, records the contract head before normal reconciliation, and then creates integration. Repeated preparation preserves an existing resource's state and never recreates a missing resource recorded as present.
+
+Deterministic first-publication and recovery tests cover ordinary and nested managed sources, admitted document bundles, publication races, missing receipts, changed plans, invalid paths and unjournaled commits. Native end-to-end qualification of this repair remains pending.
+
 Execution CLI dispatch consistently consumes `--execution`, including worker reconciliation and repair-control classification, dispatch, completion and route refresh. Command-level regression tests exercise real preparation, wave allocation, status and recorded-failure classification, in addition to direct owner tests. Native qualification remains separate from these deterministic checks.
 
 <!-- /FEATURE: FEAT-055 -->

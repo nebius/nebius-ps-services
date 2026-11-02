@@ -6,6 +6,11 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ### Changed
 
+- Make SDLC preparation own the initial canonical contract commit, including
+  exact admitted document inputs, publication provenance and interrupted-commit
+  recovery. Acquire managed ownership at clean intake before authoring, retain
+  clean promotion guards, and reject unrelated changes or unjournaled commits.
+
 - Repair execution command dispatch after the execution-identity rename:
   preparation, worker transitions and failure classification now consume the
   canonical `--execution` argument. Align worker reconciliation with that

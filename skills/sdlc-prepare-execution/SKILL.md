@@ -98,31 +98,29 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 
 ## Process
 
-1. Require a clean named checkout. In unmanaged mode, resolve and verify the
-   actual `origin` default; if on it, create and switch to the deterministic run
-   promotion branch, otherwise reuse the current non-default branch. In a
-   managed child, keep the exact local branch and `HEAD` without fetching or
-   resolving a remote default. Reject unrelated dirt or private state inside
-   the repository.
-2. For document programs, use private `admit-inputs` to validate the exact
-   snapshot/manifest plus canonical pair. If these admitted paths are the only
-   repository changes, stage
-   from the repository root with `git add -A`, create one authorized contract
-   commit, then require a clean checkout. Read the already-effective
-   instruction chain, but never create, refresh, retire, or reload project
-   instructions here. Historical lifecycle or project-instruction status is
-   advisory and cannot prevent preparation; the canonical v2 spec pair itself
-   must validate before a spec-dependent plan proceeds. Never make a partial
-   mixed commit.
-3. Invoke the private execution helper `prepare`. It parses stable `TASK-*`
-   records, validates dependencies/claims/domains, builds deterministic logical
-   waves, records intent, and creates the integration branch/worktree from the
-   exact contract `HEAD`. Git operations use the repository root, but every
-   claim and worker `scope_cwd` must remain inside the initialized folder.
-   Acquire the Agentic SDLC owner lease first when the checkout is managed by
-   `worktree`; require lease schema v4 and register integration and worker
-   resource intent before creation. Persist a canonical full-definition digest
-   with every task record.
+1. Require the accepted named source checkout or an exact completed workflow
+   checkpoint. Only the selected canonical pair and, for document programs,
+   the validated portable manifest/snapshot may be dirty. Reject unrelated
+   repository changes and private state inside the repository.
+2. Invoke the private execution helper `prepare`. Before freezing the base it
+   validates current objective impact, the locked plan, paired-publication
+   provenance and every admitted path. It stages from the repository root with
+   `git add -A` and journals one contract commit bound to the exact parent,
+   branch, common directory, objective, plan, published file hashes and tree.
+   Never make a partial mixed commit or perform a separate raw Git commit.
+   Recovery accepts only the exact clean direct child of that journal. An
+   already-clean source must match an accepted or completed workflow checkpoint.
+   Read the effective instruction chain; do not create or refresh project
+   instructions here. Historical instruction status remains advisory.
+3. The same helper requires the resulting clean checkout, verifies the unmanaged
+   remote default or exact managed-local identity, parses stable `TASK-*`
+   records, validates dependencies/claims/domains, builds logical waves and
+   creates integration from the exact contract `HEAD`. Claims and worker cwd
+   remain inside the initialized folder. Managed SDLC intake acquires its v4
+   lease while clean, before canonical authoring; preparation verifies that
+   existing lease, records the contract head, and reuses ownership. A dirty
+   unleased child cannot acquire ownership. Register integration/worker resource
+   intent before creation and retain each full task-definition digest.
 4. Re-observe branch, `HEAD`, Git common directory, worktree registration,
    cleanliness, plan digest, and private state before recording completion.
 5. Return the integration cwd and route the next phase to `sdlc-tdd` there.

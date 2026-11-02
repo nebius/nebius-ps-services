@@ -27,6 +27,7 @@ from workflow_interop import (
     reconcile_promotion as reconcile_outer_promotion,
     record_promotion as record_outer_promotion,
     record_resource as record_outer_resource,
+    record_integration_intent as record_outer_integration_intent,
 )
 from workflow_security import contains_sensitive as _contains_sensitive
 
@@ -1152,6 +1153,13 @@ def _prepare_execution(
     anchor = _interop(
         "outer worktree inspection", inspect_outer_anchor, selected_project_root
     )
+    if accepted_run["owner"] == "agentic-sdlc" and not coordinator_path(run_dir, execution_id).exists():
+        if anchor.get("status") == "unmanaged":
+            from workflow_delivery import prepare_source
+            prepare_source(run_dir, selected_project_root, execution_id)
+        from workflow_spec_bootstrap import seal_sdlc_contract
+        seal_sdlc_contract(run_dir, selected_project_root, execution_id, plan_digest, anchor)
+        anchor = _interop("outer worktree inspection", inspect_outer_anchor, selected_project_root)
     if anchor.get("status") == "managed":
         promotion: dict[str, object] = {
             "promotion_branch": str(anchor["branch"]),
@@ -1197,9 +1205,6 @@ def _prepare_execution(
             if any(_path_allowed(path, inputs + writes) for path in dirty_paths):
                 raise ExecutionError("UNCOMMITTED_INPUT", "requested task depends on uncommitted source content")
     elif anchor.get("status") == "unmanaged":
-        if not coordinator_path(run_dir, execution_id).exists():
-            from workflow_delivery import prepare_source
-            prepare_source(run_dir, selected_project_root, execution_id)
         try:
             promotion = ensure_promotion_branch(
                 project_root,
@@ -1369,18 +1374,20 @@ def _prepare_execution(
         project_scope,
         base_head,
     )
-    _interop(
+    resource_state = _interop(
         "integration resource registration",
-        record_outer_resource,
+        record_outer_integration_intent,
         run_dir,
         selected_project_root,
-        kind="integration",
         path=integration_worktree,
         branch=integration_branch,
-        state="planned",
     )
     registration = worktrees(project_root).get(integration_worktree)
     branch_exists = local_branch_exists(project_root, integration_branch)
+    if resource_state == "present" and (
+        registration is None or not branch_exists or not integration_worktree.is_dir()
+    ):
+        raise ExecutionError("WORKTREE_CONFLICT", "recorded integration resource is missing; do not recreate it")
     try:
         if not branch_exists:
             if registration is not None or integration_worktree.exists():

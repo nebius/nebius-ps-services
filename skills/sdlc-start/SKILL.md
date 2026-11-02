@@ -110,6 +110,10 @@ the registered checkout and expected revision. Workers never publish them.
    project and candidate. Bare bound continuation uses `observe`; explicit
    cross-session continuation uses `continue`. These are private helper actions.
    Observation restores an existing binding after compaction and starts no work.
+   Managed-child intake acquires the exact SDLC lease while the source is clean,
+   before any canonical authoring. Resume reuses that ownership; an interrupted
+   contract commit is reconciled by preparation before ordinary clean-lease
+   checks. Never acquire a missing lease from a dirty child.
 3. Accept material steering with `accept --revise`, which fences dispatch and
    promotion before recording the adjacent objective revision. Stop affected
    native writers, record termination, reconcile them without admitting stale

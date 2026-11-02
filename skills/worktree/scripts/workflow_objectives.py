@@ -216,6 +216,23 @@ def _revision(run_dir, objective, value):
     write(run_dir / "objective.json", objective)
 
 
+def _acquire_intake_lease(run_dir, run):
+    """Reserve a managed SDLC source while it is still clean, before authoring."""
+    if run["owner"] != "agentic-sdlc" or run["status"] in TERMINAL:
+        return
+    from workflow_interop import acquire, inspect_anchor, load, ExecutionInteropError
+    project = Path(run["project_root"])
+    try:
+        existing = load(run_dir)
+        if existing is not None:
+            return  # Preparation reconciles contract commits before the clean gate.
+        if inspect_anchor(project).get("status") == "managed":
+            acquire(run_dir, project, project.relative_to(Path(run["git_root"])).as_posix(),
+                    run["source_head"])
+    except ExecutionInteropError as error:
+        raise WorkflowError("OWNERSHIP_INVALID", str(error)) from error
+
+
 def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, revise: bool = False):
     value = normalize(value)
     root, context, branch, head = project_context(project, home, owner)
@@ -231,6 +248,7 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
             read(run_dir / objective["revisions"][-1]["snapshot"])
             intent = {key: value[key] for key in FIELDS - {"provenance"}}
             if digest(intent) == objective["revisions"][-1]["intent_sha256"]:
+                _acquire_intake_lease(run_dir, run)
                 return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
             if run["status"] not in TERMINAL:
                 if not revise:
@@ -277,6 +295,7 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
         write(run_dir / "run.json", run)
         write(active, {"schema": "workflow/active-run-v1", "run_id": run_dir.name})
         _bind(home, owner, session, run_dir, run, objective)
+        _acquire_intake_lease(run_dir, run)
         return result(run_dir, run, objective, "ACCEPTED")
 
 
@@ -320,6 +339,7 @@ def continue_run(project: Path, home: Path, owner: str, session: str, *, takeove
                 run["continuation_windows"] = int(run.get("continuation_windows", 1)) + 1
                 write(run_dir / "run.json", run)
         _bind(home, owner, session, run_dir, run, objective)
+        _acquire_intake_lease(run_dir, run)
         return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
 
 
