@@ -1,9 +1,0 @@
-{
-  "action": "failover",
-  "label": "05-a-to-b",
-  "started": 1793391493.7260811,
-  "started_utc": "2026-10-30T20:18:13.726083+00:00",
-  "finished": 1793391688.913117,
-  "elapsed_seconds": 195.1870367527008,
-  "returncode": 0
-}

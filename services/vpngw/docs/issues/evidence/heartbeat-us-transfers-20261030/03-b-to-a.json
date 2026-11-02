@@ -1,9 +1,0 @@
-{
-  "action": "failback",
-  "label": "03-b-to-a",
-  "started": 1793390760.057299,
-  "started_utc": "2026-10-30T20:06:00.057301+00:00",
-  "finished": 1793390801.764904,
-  "elapsed_seconds": 41.707606077194214,
-  "returncode": 1
-}

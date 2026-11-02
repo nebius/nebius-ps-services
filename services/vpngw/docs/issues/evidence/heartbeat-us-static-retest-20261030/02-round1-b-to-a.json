@@ -1,9 +1,0 @@
-{
-  "action": "failback",
-  "label": "02-round1-b-to-a",
-  "started": 1793394004.656427,
-  "started_utc": "2026-10-30T21:00:04.656429+00:00",
-  "finished": 1793394146.4332108,
-  "elapsed_seconds": 141.7767848968506,
-  "returncode": 0
-}

@@ -1,9 +1,0 @@
-{
-  "node": "us-a",
-  "result": {
-    "backup": "/var/lib/nebius-vpngw/vm-ha/operator-backups/us-transfer-preflight-20261030T200547Z",
-    "archived_authorization": "a4366ed0e6c12c8f58d54a76557b4c370d2bb1517ec95e423dac4ce900b4b161",
-    "cloud_owner": "gateway-b",
-    "cloud_mutations": false
-  }
-}

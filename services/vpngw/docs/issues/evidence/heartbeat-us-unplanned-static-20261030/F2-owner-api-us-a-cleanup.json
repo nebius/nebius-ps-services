@@ -1,8 +1,0 @@
-{
-  "node": "us-a",
-  "result": {
-    "chain_absent": true,
-    "rules": "",
-    "counters_path": "/run/vpngw-fault-counters-F2-owner-api.txt"
-  }
-}
