@@ -1,5 +1,41 @@
 # VM-HA validation summary
 
+## November 2 dev35 live repeat
+
+The scoped static-route repair correction was deployed to all four gateways as
+`0.6.3.dev35`, integration commit `a8167085`, with five installed module hashes
+verified against wheel SHA256
+`d96a5606a35ac80cdf61cceb66577f2eb20fb5e045a10bb67aaa9e956d8d500b`.
+The integration suite passed 3,101 tests, with 35 skipped and the unavailable
+PyInstaller test deselected. Both supported applies completed successfully.
+
+The 15:17:56–15:29:26 EST controlled-transfer repeat again stopped at its
+prerequisite. US A→B returned CLI failure after 71.5 seconds. B briefly enabled
+forwarding, fenced with `local-ownership-lacks-establishment-proof`, then
+recovered automatically. The exact cause of that transient fence remains open.
+The previous repair-identity exception did not recur.
+
+UK B performed local route repairs and stayed owner during this transfer. After
+US A returned as passive, UK B selected xfrm0 toward A despite US B owning the
+allocation. Both pairs reported healthy, but workload ICMP failed for over
+30 seconds. An established SA does not prove remote forwarding authority.
+
+Supported US B→A recovery passed in 143.5 seconds, including a 73.0-second
+cutover and standby restoration. A final three-minute healthy traffic baseline
+passed. US finished owner A and UK owner B, with both standbys ready and both
+pfSense sessions Established. The transfer/recovery window contained 320 failed
+ICMP attempts and approximate reply gaps of 59.8, 69.7, and 224.2 seconds.
+No manual route, allocation, or ledger changes were made. Probes and monitors
+stopped, with no remaining fault rules, active injectors, or service masks.
+
+The eight deliberate takeover faults were not injected. Static return-path
+selection and the establishment-proof fence block qualification. US–UK routing
+was static. BGP failover between those regions and TCP survival remain untested.
+The deployment itself caused a UK A→B transfer before UK was upgraded, and the
+previously approved stopped-standby recovery was used before supported UK apply.
+Private report and evidence:
+`/private/tmp/vpngw-observation-tests-20261102/takeover-r5/results.md`.
+
 ## November 2 takeover prerequisite failure
 
 The subsequent deliberate-fault campaign stopped at its planned-transfer
