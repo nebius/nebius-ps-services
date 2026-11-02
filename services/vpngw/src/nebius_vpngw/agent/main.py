@@ -845,6 +845,7 @@ class VMHASnapshotAdapter:
         self.clock = clock
         self.boot_id = boot_id
         self.last_snapshot: ControllerSnapshot | None = None
+        self.observation_observer: Callable[[ControllerSnapshot], None] = lambda _snapshot: None
         self.last_apply_operation_id: str | None = None
         self.last_transfer_inhibition_operation_id: str | None = None
 
@@ -1031,10 +1032,30 @@ class VMHASnapshotAdapter:
             apply_owner_adoption=adoption_authorized,
             transfer_inhibited=transfer_inhibition_operation_id is not None,
             standby_replacement_inhibited=(standby_replacement_inhibition_operation_id is not None),
+            wall_time=time.time(),
         )
+        from .vm_ha.tunnels import STATE_NAME, read_state
+
+        if (self.state_dir / STATE_NAME).exists():
+            selection = read_state(self.state_dir / STATE_NAME)
+            episode = selection["episode"]
+            checkpoint = VMHACheckpointFileStore(self.state_dir / VM_HA_CHECKPOINT_PATH.name).load()
+            if episode is not None and episode["owner"] == {
+                "cluster": snapshot.cluster_id,
+                "owner": snapshot.local_node_id,
+                "allocation": cloud.allocation_id,
+                "incarnation": checkpoint.ownership_incarnation,
+            }:
+                snapshot = replace(
+                    snapshot,
+                    tunnel_recovery_remaining=(
+                        0 if episode["exhausted"] else episode["deadline"] - time.time()
+                    ),
+                )
         self.last_apply_operation_id = apply_operation_id
         self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
         self.last_snapshot = snapshot
+        self.observation_observer(snapshot)
         return snapshot
 
 
@@ -1069,7 +1090,10 @@ def _vm_ha_transfer_effect_guard(
 ) -> Iterator[bool]:
     """Serialize transfer effects and re-check mutable authority at dispatch."""
 
-    if action.kind not in _TRANSFER_EFFECT_ACTIONS:
+    if (
+        action.kind not in _TRANSFER_EFFECT_ACTIONS
+        and action.kind is not ActionKind.REPAIR_LOCAL_DATAPLANE
+    ):
         yield True
         return
     from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
@@ -1875,6 +1899,8 @@ class VMHAControllerRuntime:
         self.snapshots = snapshots
         self.status_path = status_path
         self.guard = guard
+        self.tunnel_step: Callable[[], None] = lambda: None
+        self.tunnel_runtime: Any = None
         policy = VMHAController(
             peer_timeout_seconds=peer_timeout_seconds,
             suspicion_seconds=suspicion_seconds,
@@ -1909,7 +1935,25 @@ class VMHAControllerRuntime:
             checkpoints=checkpoints,
             effects=effects,
             decision_observer=observe_decision,
+            decision_preflight=self._before_local_repair,
         )
+
+    def _before_local_repair(
+        self,
+        snapshot: ControllerSnapshot,
+        checkpoint: ControllerCheckpoint,
+        decision: ControllerResult,
+    ) -> bool:
+        if (
+            self.tunnel_runtime is None
+            or (snapshot.readiness.static_ready and snapshot.readiness.bgp_ready)
+            or checkpoint.pending_action is not None
+            or checkpoint.repair_attempt is not None
+            or decision.action is None
+            or decision.action.kind is not ActionKind.REPAIR_LOCAL_DATAPLANE
+        ):
+            return False
+        return bool(self.tunnel_runtime.before_owner_repair())
 
     def _write_status(self, result: ControllerResult) -> dict[str, Any]:
         snapshot = self.snapshots.last_snapshot
@@ -2098,6 +2142,7 @@ class VMHAControllerRuntime:
         payload = {
             "schema": _STATUS_SCHEMA,
             "controller_capabilities": [
+                "connection-tunnel-selection-v1",
                 _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -2199,6 +2244,7 @@ class VMHAControllerRuntime:
 
     def step(self) -> dict[str, Any]:
         try:
+            self.tunnel_step()
             return self._write_status(self.controller.step())
         except Exception as error:
             self.guard()
@@ -2273,6 +2319,7 @@ class DefaultVMHAControllerRuntime:
         self.listener_stop = threading.Event()
         self.listener_thread: threading.Thread | None = None
         self.listener_error: BaseException | None = None
+        self.controller.snapshots.observation_observer = self._exchange_peer_state
 
     def _reserve_heartbeat_sequence(self) -> int:
         sequence = 0
@@ -2327,13 +2374,14 @@ class DefaultVMHAControllerRuntime:
         self.listener_thread.start()
         self.sleeper(self.peer_retry_seconds)
 
-    def _exchange_peer_state(self) -> None:
+    def _exchange_peer_state(self, snapshot: ControllerSnapshot) -> None:
         if self.listener_error is not None:
             raise RuntimeError("VM-HA peer listener failed") from self.listener_error
         heartbeat = self.ports.heartbeat(
             boot_id=self.boot_id,
             sequence=self._reserve_heartbeat_sequence(),
             clock=self.clock(),
+            snapshot=snapshot,
         )
 
         for attempt in range(self.peer_send_attempts):
@@ -2349,7 +2397,6 @@ class DefaultVMHAControllerRuntime:
             self.ports.install_shutdown_guard(boot_id=self.boot_id)
             self.started_guarded = True
         self._start_peer_listener()
-        self._exchange_peer_state()
         if self.config is not None and self.promotion_receipt_path is not None:
             _refresh_standby_restoration_agreement(
                 config=self.config,
@@ -2440,6 +2487,9 @@ class DefaultVMHAControllerRuntime:
     def close(self, *, restore_guard: bool = True) -> None:
         if self.closed:
             return
+        tunnel_runtime = getattr(self.controller, "tunnel_runtime", None)
+        if tunnel_runtime is not None:
+            tunnel_runtime.close()
         self.listener_stop.set()
         try:
             if restore_guard:
@@ -2459,7 +2509,9 @@ def _resolved_vm_ha_data_plane_config(config_path: Path) -> dict[str, Any]:
     resolved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(resolved, dict):
         raise RuntimeError("VM-HA resolved configuration is malformed")
-    return resolved
+    from .vm_ha.tunnel_runtime import load_effective_config
+
+    return load_effective_config(resolved, VM_HA_STATE_DIR)
 
 
 def _prepare_vm_ha_active_data_plane(config_path: Path) -> None:
@@ -2471,6 +2523,24 @@ def _prepare_vm_ha_active_data_plane(config_path: Path) -> None:
         resolved,
         advertise_local_prefixes=True,
         require_reload=True,
+    )
+
+
+def _prepare_vm_ha_static_tunnels(config_path: Path) -> None:
+    """Materialize the effective owner policy while forwarding remains fenced."""
+    from .strongswan_renderer import SWANCTL_CONF, _write_secret_file
+
+    resolved = _resolved_vm_ha_data_plane_config(config_path)
+    files: dict[Path, str | None] = {}
+    StrongSwanRenderer().render_and_apply(resolved, rendered_files=files)
+    content = files[SWANCTL_CONF]
+    if content is None:
+        raise RuntimeError("candidate tunnel configuration is absent")
+    _write_secret_file(SWANCTL_CONF, content)
+    # Preparation is already under the routing lock, exact owner and forwarding
+    # fence. Cold passive materialization deliberately installed no Static routes.
+    XFRMManager().setup_interfaces(
+        StrongSwanRenderer().build_interface_endpoints(resolved), persist_sysctl=False
     )
 
 
@@ -2522,6 +2592,7 @@ def build_default_vm_ha_controller_runtime(
         systemd_invocation_id=systemd_invocation_id,
         active_preparer=lambda: _prepare_vm_ha_active_data_plane(config_path),
         blocked_preparer=lambda: _prepare_vm_ha_blocked_bgp(config_path),
+        candidate_preparer=lambda: _prepare_vm_ha_static_tunnels(config_path),
     )
     try:
         transfer_intent = _typed_transfer_intent_provider(state_dir=state_dir, config=config)
@@ -2567,6 +2638,12 @@ def build_default_vm_ha_controller_runtime(
             clock=effective_monotonic_clock,
             boot_id=lambda: current_boot_id,
         )
+        from .vm_ha.tunnel_runtime import ControllerTunnelRuntime
+
+        tunnel_runtime = ControllerTunnelRuntime(config_path, state_dir, controller, ports, clock)
+        ports = replace(ports, tunnel_recovery_provider=tunnel_runtime.recovery_claim)
+        controller.tunnel_step = tunnel_runtime.step
+        controller.tunnel_runtime = tunnel_runtime
         return DefaultVMHAControllerRuntime(
             controller,
             ports,
@@ -2688,6 +2765,7 @@ def _blocked_vm_ha_status(
     return {
         "schema": _STATUS_SCHEMA,
         "controller_capabilities": [
+            "connection-tunnel-selection-v1",
             _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
             LIVE_PEER_REPLACEMENT_CAPABILITY,
             STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -3896,6 +3974,10 @@ def verify_vm_ha_apply_lock_quiescent(
 ) -> None:
     """Check apply-only admission while the deploy caller holds the rearm lock."""
 
+    from .vm_ha.tunnels import require_tunnel_quiescent
+
+    require_tunnel_quiescent(state_dir)
+
     payload = json.loads(lock_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("VM-HA apply-lock record is invalid")
@@ -4567,6 +4649,9 @@ def _request_manual_transfer(
     if descriptor is None:
         raise RuntimeError(f"manual VM-HA {operation} request writer did not quiesce")
     try:
+        from .vm_ha.tunnels import require_tunnel_quiescent
+
+        require_tunnel_quiescent(state_dir)
         matching, started = _matching_manual_transfer_request(
             state_dir=state_dir,
             config=config,
@@ -4774,19 +4859,26 @@ class Agent:
 
         rearm_lock_fd = None
         mtls_lock_fd = None
-        if force_reconcile and CONFIG_PATH.exists():
+        if CONFIG_PATH.exists():
             preflight_vm_ha = _read_vm_ha_config(CONFIG_PATH)
             if preflight_vm_ha is not None:
-                if not all(isinstance(value, str) and value for value in expected_authority):
+                if force_reconcile and not all(
+                    isinstance(value, str) and value for value in expected_authority
+                ):
                     raise RuntimeError("VM-HA force-reconcile requires complete authority")
                 from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
 
                 rearm_lock_fd = _acquire_rearm_lock(
                     VM_HA_STATE_DIR / REARM_LOCK_PATH.name,
-                    timeout_seconds=0.0,
+                    timeout_seconds=0.0 if force_reconcile else 10.0,
                 )
                 if rearm_lock_fd is None:
-                    raise RuntimeError("VM-HA force-reconcile requires the rearm writer lock")
+                    if force_reconcile:
+                        raise RuntimeError("VM-HA force-reconcile requires the rearm writer lock")
+                    print("[Agent] Deferred VM-HA reload while another writer is active")
+                    return
+            if preflight_vm_ha is not None and force_reconcile:
+                assert rearm_lock_fd is not None
                 try:
                     mtls_lock_fd = ManagedMTLSStore(
                         VM_HA_STATE_DIR / "mtls", create=False
@@ -4804,11 +4896,11 @@ class Agent:
 
         lock_fd = None
         try:
-            lock_fd = acquire_routing_lock(blocking=True)
-        except Exception as e:
-            print(f"[Agent] WARNING: Failed to acquire routing lock: {e}")
+            try:
+                lock_fd = acquire_routing_lock(blocking=True)
+            except Exception as e:
+                print(f"[Agent] WARNING: Failed to acquire routing lock: {e}")
 
-        try:
             if not CONFIG_PATH.exists():
                 print(f"[Agent] Config not found: {CONFIG_PATH}")
                 return
@@ -4816,8 +4908,15 @@ class Agent:
             cfg = yaml.safe_load(raw_config)
             if not isinstance(cfg, dict):
                 raise RuntimeError("resolved gateway configuration is malformed")
+            configured = cfg
             ingress_policy.from_config(cfg)
             vm_ha_config = _read_vm_ha_config(CONFIG_PATH)
+            if vm_ha_config is not None:
+                from .vm_ha.tunnel_runtime import load_effective_config, tunnel_operation_pending
+
+                if rearm_lock_fd is None:
+                    raise RuntimeError("VM-HA configuration changed before writer serialization")
+                cfg = load_effective_config(cfg, VM_HA_STATE_DIR)
             if lock_fd is None and (force_reconcile or vm_ha_config is not None):
                 raise RuntimeError("VM-HA and forced reconciliation require the routing lock")
             if force_reconcile and vm_ha_config is not None and rearm_lock_fd is None:
@@ -4868,6 +4967,7 @@ class Agent:
                 if vm_ha_config is None:
                     raise RuntimeError("passive materialization lost VM-HA configuration")
                 update_firewall_from_config(cfg, require_reload=True)
+                cfg = {**cfg, "_ha_static_passive": True}
                 interface_endpoints = self.ss.render_and_apply(cfg)
                 if interface_endpoints:
                     self.xfrm.setup_interfaces(interface_endpoints)
@@ -4878,7 +4978,7 @@ class Agent:
                     prepare_vm_ha_controller_access=True,
                 )
                 enforce_vm_ha_passive_routing_hygiene_locked(cfg)
-                self.state.save_last_applied(cfg)
+                self.state.save_last_applied(configured)
                 _atomic_write_json(
                     VM_HA_MATERIALIZATION_PATH,
                     {
@@ -4917,12 +5017,18 @@ class Agent:
                     CURRENT.reset(token)
                 return
 
+            if tunnel_operation_pending(configured, VM_HA_STATE_DIR):
+                if force_reconcile:
+                    raise RuntimeError("VM-HA tunnel operation is outstanding")
+                print("[Agent] Deferred VM-HA reload until the tunnel operation completes")
+                return
+
             update_firewall_from_config(cfg, require_reload=True)
 
             interface_endpoints = self.ss.build_interface_endpoints(cfg)
             self.frr.ensure_local_prefix_routes(cfg)
 
-            if not force_reconcile and not self.state.is_changed(cfg):
+            if not force_reconcile and not self.state.is_changed(configured):
                 print("[Agent] No changes detected; skipping config render")
                 if interface_endpoints:
                     print("[Agent] Ensuring XFRM interfaces are present...")
@@ -4938,7 +5044,7 @@ class Agent:
                 print("[Agent] Setting up XFRM interfaces...")
                 self.xfrm.setup_interfaces(interface_endpoints)
             self.frr.render_and_apply(cfg)
-            self.state.save_last_applied(cfg)
+            self.state.save_last_applied(configured)
             print("[Agent] Applied and persisted new configuration")
 
             if lock_fd is not None:
@@ -4991,6 +5097,8 @@ def main() -> None:
     group.add_argument("--vm-ha-controller", action="store_true")
     group.add_argument("--vm-ha-preflight", action="store_true")
     group.add_argument("--vm-ha-status", action="store_true")
+    group.add_argument("--vm-ha-tunnel-status", action="store_true")
+    group.add_argument("--vm-ha-tunnel-request", metavar="BASE64_JSON")
     group.add_argument("--vm-ha-ready", action="store_true")
     group.add_argument("--vm-ha-route-maintenance-ready", action="store_true")
     group.add_argument("--vm-ha-materialized", action="store_true")
@@ -5065,6 +5173,7 @@ def main() -> None:
             json.dumps(
                 {
                     "features": [
+                        "connection-tunnel-selection-v1",
                         "ordinary-apply-v1",
                         "managed-ingress-v1",
                         "ipsec-replay-window-v1",
@@ -5083,6 +5192,32 @@ def main() -> None:
                 separators=(",", ":"),
             )
         )
+        return
+
+    if args.vm_ha_tunnel_status:
+        from .vm_ha.tunnel_requests import tunnel_status
+
+        print(json.dumps(tunnel_status(VM_HA_STATE_DIR), sort_keys=True))
+        return
+    if args.vm_ha_tunnel_request:
+        import base64
+        import contextlib
+        import io
+
+        try:
+            if len(args.vm_ha_tunnel_request) > 16384:
+                raise ValueError("request too large")
+            payload = json.loads(base64.b64decode(args.vm_ha_tunnel_request, validate=True))
+            from .vm_ha.tunnel_requests import submit_request
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                cfg = yaml.safe_load(CONFIG_PATH.read_text())
+                result = submit_request(cfg, VM_HA_STATE_DIR, payload)
+            print(json.dumps(result, sort_keys=True))
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+            parser.exit(
+                2, "HA tunnel request rejected; inspect status and retry with current authority\n"
+            )
         return
 
     if args.vm_ha_apply_lock_quiescent:

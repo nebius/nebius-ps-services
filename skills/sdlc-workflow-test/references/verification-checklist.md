@@ -88,9 +88,8 @@ Verify `docs/agentic-sdlc-design.md` includes:
   query per provider call, and pass/fail/inconclusive outcomes
 - publication-only `create-pr` and findings-and-readiness-only `review-pr`
   modes that preserve the clean exact promoted SHA
-- exact-head `sdlc-merge-pr` authorization for one explicit
-  `gh pr merge --match-head-commit` command with a specific PR target and no
-  extra action or bypass flag
+- accepted run-level conditional merge scope, owner-produced qualification,
+  protected broker admission and independently verified merged results
 
 ## Static Discovery
 
@@ -167,9 +166,8 @@ Deny cases:
 - Push without PR authorization.
 - `gh pr create` or a GitHub PR-creation MCP call without PR authorization.
 - Force push.
-- Merge or PR merge without merge authorization.
-- PR merge whose command, PR target, local/promoted head, explicit user request,
-  or `--match-head-commit` guard differs from its authorization.
+- Every raw PR merge, approval or workflow-dispatch command during active SDLC,
+  even with caller-written status or command authorization labels.
 - PR merge with implicit PR selection, admin bypass, branch deletion,
   repository override, another unsupported flag, a shell operator, or an
   appended command.
@@ -180,17 +178,20 @@ Deny cases:
 
 Authorization handoff:
 
-- Commit, PR, and merge authorization files allow only the matching guarded
-  action while valid.
+- Commit and PR-creation authorization files allow only their matching guarded
+  action while valid. Merge authority comes from accepted run scope and the
+  protected delivery adapter, never a command authorization file.
 - PR authorization binds `phase: "create-pr"`, the exact branch, current
   promoted HEAD, passing UAT status, and expiry. GitHub PR reads remain allowed
   without PR-creation authorization. Pushes allow exactly `origin` plus one
   `HEAD:<branch>` refspec, and CLI/MCP PR creation must use the same explicit
   head.
-- Merge authorization binds `phase: "sdlc-merge-pr"`, the exact branch, current
-  promoted/reviewed HEAD, explicit PR number or URL, explicit user request,
-  passing checks/review/UAT, expiry, and entire canonical single-action
-  head-matched CLI command. Active-run GitHub merge MCP writes are denied.
+- Merge authority derives from the accepted run completion policy and binds
+  repository, branch, objective revision, delivery scope and live-operation
+  authority. Require producer-admitted qualification, exact promoted/reviewed
+  HEAD, current base and protected intent. Reconcile ambiguous submission before
+  retry; a merged result with failed verification must never submit again.
+  Direct CLI and GitHub merge MCP writes remain denied in an active run.
 - Quoted documentation searches that mention guarded commands remain
   read-only and allowed.
 - Expired or removed authorization files must deny again.
@@ -522,8 +523,9 @@ the verification identity and Git heads, declare its exact evidence profiles,
 and use owner-local digest-backed assertion artifacts. Cross-layer GUI/API/
 database and restart claims require `three-tier` provenance; lightweight
 terminal and objective-bound claims require `lightweight` provenance.
-`sdlc-merge-pr` uses the deterministic explicit-authorization hook result plus
-safety evidence and never performs a real merge. `sdlc-tui-test` requires its
+`sdlc-merge-pr` uses deterministic qualification, protected-admission and recovery
+regressions plus raw-bypass denial checks. This safety profile never performs a
+real merge and cannot establish unattended remote readiness. `sdlc-tui-test` requires its
 own disposable terminal evidence and is not inferred from continuation state.
 
 ### Owned local Git admission
@@ -533,7 +535,7 @@ own disposable terminal evidence and is not inferred from continuation state.
   owner, project, baseline and default branch; no other remote or push URL is
   accepted. The origin stays frozen as local implementation advances.
 - Public direct intake and managed worktree admission must pass without mocking
-  Git promotion. Check inherited command configuration before staging or
+  Git promotion. Use the sealed owned profile before staging or
   transport; reject redirects, borrowed objects, unsafe paths and changed guards.
 - Creation, evidence recording, resume and cleanup share the same validator.
   Interrupted unreceipted origins remain preserved and rejected.

@@ -81,6 +81,9 @@ def manager(monkeypatch, tmp_path):
     monkeypatch.setattr(ops, "JOURNAL", tmp_path / "ordinary/operation.json")
     monkeypatch.setattr(ops, "ROUTING_LOCK", tmp_path / "routing.lock")
     manager = ops.Manager(time.monotonic() + 30)
+    # A distro FRR service may already be running at container boot. Quiesce
+    # that writer before replacing its unit with the test's controlled writer.
+    command("systemctl", "stop", "frr.service")
     unit = Path("/etc/systemd/system/frr.service")
     unit.write_text(
         "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\nExecReload=/bin/true\n"
@@ -597,6 +600,10 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env={
+                **os.environ,
+                "VPNGW_DEPLOY_SSH_CONNECTION": "192.0.2.10 12345 192.0.2.20 22",
+            },
         )
         processes.append(child)
         child.stdin.write(code.encode().hex() + "\n")
@@ -609,6 +616,7 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
                     artifact="3" * 64,
                     approval="4" * 64,
                     ha=ha,
+                    ingress_policy={"ssh_allowed_cidrs": ["192.0.2.0/24"], "peer_ips": []},
                 )
             )
             + "\n"
@@ -620,6 +628,8 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
         first = reserve(inspect())
 
         def accepted():
+            if first.poll() is not None:
+                raise AssertionError("handoff holder exited: " + first.stderr.read())
             value = ops.Journal().read()
             return value and any(e["state"] == "accepted" for e in value["effects"])
 

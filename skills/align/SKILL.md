@@ -60,6 +60,17 @@ focused, reviewable changes and finishes with a changed-scope quality gate.
   regression validation, code review, lint or syntax checks, security review,
   focused tests, and residual-risk reporting
 
+## SDLC Caller Contract
+
+When routed by SDLC, use the exact integration scope and immutable basis. Check
+source obligation → REQ → FEAT → delivery slice → task → executed test references,
+stable IDs, vertical flow, claimed delivery status and paired-owner publication.
+Keep historical lifecycle/instruction drift advisory. Route spec gaps to the root
+and `maintain-project-specs` adapters; do not publish canonical specs directly.
+Return changed paths plus affected validation/evaluation/UAT/review gates so the
+root revalidates after fixes. This absorbs the former advisory `sdlc-align-specs`
+responsibility; no alias or second phase coordinator remains.
+
 ## Core Principle
 
 First understand the project contract, then align affected surfaces to that

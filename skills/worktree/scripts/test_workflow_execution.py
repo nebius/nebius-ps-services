@@ -367,19 +367,19 @@ def seed_objective_impact(run_dir: Path, selected_project: Path) -> None:
     )
 
 
-def finish_task(run_dir, feature_id, wave_id, task_id, *args, **kwargs):
+def finish_task(run_dir, execution_id, wave_id, task_id, *args, **kwargs):
     """Fixture helper: product finish plus clearly synthetic termination/admission."""
-    value = product_finish_task(run_dir, feature_id, wave_id, task_id, *args, **kwargs)
-    assignment = json.loads(assignment_path(run_dir, feature_id, wave_id, task_id).read_text())
-    task = json.loads(task_path(run_dir, feature_id, wave_id, task_id).read_text())
+    value = product_finish_task(run_dir, execution_id, wave_id, task_id, *args, **kwargs)
+    assignment = json.loads(assignment_path(run_dir, execution_id, wave_id, task_id).read_text())
+    task = json.loads(task_path(run_dir, execution_id, wave_id, task_id).read_text())
     run = json.loads((run_dir / "run.json").read_text())
-    termination = run_dir / "execution" / feature_id / "terminations" / (task_id + ".json")
+    termination = run_dir / "execution" / execution_id / "terminations" / (task_id + ".json")
     write_private(termination, {"schema": "workflow/worker-termination-v1",
         "assignment_digest": assignment["assignment_digest"],
         "worker_session_hash": task["worker_session_hash"], "status": "terminated",
         "native_handle": "deterministic-test-stub", "observation": "synthetic fixture; not native proof",
         "observer_session_hash": run["coordinator_session_sha256"]})
-    admit_task(run_dir, feature_id, wave_id, task_id, termination)
+    admit_task(run_dir, execution_id, wave_id, task_id, termination)
     return value
 
 
@@ -736,6 +736,37 @@ class GitLifecycleTests(unittest.TestCase):
             self.run_dir, self.project, "FEAT-001", self.plan, capacity=2
         )
 
+    def test_four_retained_worktrees_then_next_batch_uses_validated_tip(self):
+        blocks = []
+        for i, name in enumerate("abcde", 1):
+            blocks.append(PLAN.split("### TASK-001", 1)[1].split("### TASK-002", 1)[0]
+                          .replace("src/a.py", f"src/{name}.py").replace("code:a", f"code:{name}"))
+        self.plan.write_text("# FEAT-001 Plan v1\n\n## Task Graph\n\n" + "".join(
+            f"### TASK-{i:03d}" + body for i, body in enumerate(blocks, 1)))
+        write_private(self.run_dir / "host-capacity.json", {"schema": "workflow/host-capacity-v1",
+                      "native_slots": 4, "evidence": "fixture capacity; not native worker qualification"})
+        prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, capacity=4)
+        seal_tdd_base(self.run_dir, "FEAT-001", "test: frozen batch base")
+        first = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual(len(first), 4)
+        self.assertEqual(len({a["base_head"] for a in first}), 1)
+        for assignment, name in zip(first, "abcd"):
+            self.start_assignment(assignment, "WAVE-001")
+            worker = Path(assignment["worktree"])
+            (worker / "src").mkdir(exist_ok=True)
+            (worker / "src" / (name + ".py")).write_text("VALUE = 1\n")
+            finish_task(self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+                        "test passed", "review passed", "feat: batch task", summary="completed")
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+        second = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")
+        self.assertEqual(len(second), 1)
+        self.assertTrue(all(not Path(a["worktree"]).exists() for a in first))
+        self.assertTrue(all((Path(second[0]["worktree"]) / "src" / (n + ".py")).exists() for n in "abcd"))
+        handoff = json.loads(Path(second[0]["incoming_handoff_path"]).read_text())
+        self.assertEqual(handoff["predecessors"], [])
+        self.assertEqual(handoff["dependency_index"]["count"], 0)
+
     def install_scoped_specs(self, selected: Path) -> None:
         docs = selected / "docs"
         docs.mkdir(parents=True, exist_ok=True)
@@ -801,7 +832,7 @@ class GitLifecycleTests(unittest.TestCase):
         self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): bind specs")
         assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
-        self.assertEqual(assignment["schema"], "workflow/worker-assignment-v1")
+        self.assertEqual(assignment["schema"], "workflow/worker-assignment-v2")
         self.assertEqual(assignment["root_intent_sha256"], json.loads((self.run_dir / "objective.json").read_text())["revisions"][-1]["intent_sha256"])
         self.assertEqual(
             assignment["project_spec_receipt"],
@@ -1121,7 +1152,7 @@ class GitLifecycleTests(unittest.TestCase):
         self.assertEqual(
             execution_core.read_json(claim_path),
             {
-                "feature_id": "FEAT-001",
+                "execution_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",
                 "worker_session_hash": session_hash,
@@ -2584,11 +2615,11 @@ class GitLifecycleTests(unittest.TestCase):
         state_path.write_text(
             json.dumps(
                 {
-                    "schema": "workflow/execution-coordinator-v1",
+                    "schema": "workflow/execution-coordinator-v2",
                     "state_version": 1,
                     "owner": "agentic-sdlc",
                     "coordinator_session_sha256": hashlib.sha256(b"deterministic-coordinator").hexdigest(),
-                    "feature_id": "FEAT-001",
+                    "execution_id": "FEAT-001",
                     "run_id": "run-1",
                     "project_root": str(self.project.resolve()),
                     "git_root": str(self.project.resolve()),
@@ -2947,6 +2978,10 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "workspace with spaces"
             root.mkdir()
+            environment = mock.patch.dict(os.environ, {"CODEX_HOME": str(root / "codex-home"),
+                                                       "CLAUDE_CONFIG_DIR": str(root / "claude-home")})
+            environment.start()
+            self.addCleanup(environment.stop)
             origin = root / "origin.git"
             git(root, "init", "--bare", "-q", str(origin))
             repository = root / "example-monorepo"

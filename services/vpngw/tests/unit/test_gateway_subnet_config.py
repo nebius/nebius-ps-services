@@ -710,6 +710,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
 
     assert json.loads(capsys.readouterr().out) == {
         "features": [
+            "connection-tunnel-selection-v1",
             "ordinary-apply-v1",
             "managed-ingress-v1",
             "ipsec-replay-window-v1",

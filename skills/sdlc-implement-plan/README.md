@@ -8,7 +8,7 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Coordinate dependency waves for one feature. Every safe task uses one fresh
+Coordinate bounded dependency waves for one delivery slice across its eligible features. Every safe task uses one fresh
 agent with its own branch and private worktree. The coordinator verifies one
 task commit, merges workers in stable order, runs combined evidence, and
 non-force-cleans worker resources before advancing.

@@ -235,7 +235,7 @@ class TroubleshootContractTest(unittest.TestCase):
             self.read(TROUBLESHOOT / "references/workflow-handoffs.md").split()
         )
         for field in (
-            "diagnosis-v1",
+            "diagnosis-v2",
             "sdlc-classify-failure",
             "next_recommended_skill",
             "Do not commit product fixes",

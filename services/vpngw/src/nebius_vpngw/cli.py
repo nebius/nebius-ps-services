@@ -29,6 +29,8 @@ import paramiko  # type: ignore[import-untyped]
 import typer
 import yaml
 from rich import print
+from rich.console import Console
+from rich.table import Table
 from typer.core import TyperGroup
 
 from . import __version__, packet_health
@@ -134,6 +136,13 @@ from .deploy.vm_ha_lifecycle import (
     vm_ha_resource_binding_matches_observation,
 )
 from .deploy.vm_ha_package import VMHAAgentPackageError
+from .deploy.vm_ha_prehost import (
+    recover_prehost,
+    validate_prehost_checkpoint,
+    validate_prehost_cloud,
+    validate_prehost_hosts,
+    validate_retained_route_scope,
+)
 from .deploy.vm_manager import PublicAllocationCandidate, VMManager
 from .ingress_policy import IngressCapabilityError, IngressPolicyError
 from .nebius_auth import error_chain_has_cli_authentication_failure
@@ -235,27 +244,23 @@ _COMMAND_EXAMPLES: t.Mapping[tuple[str, ...], tuple[str, ...]] = MappingProxyTyp
         ("status",): ("nebius-vpngw status --local-config-file nebius-vpngw.config.yaml",),
         ("failover",): (
             "nebius-vpngw failover vm --local-config-file nebius-vpngw.config.yaml",
-            "nebius-vpngw failover tunnel PASSIVE_TUNNEL_NAME "
-            "--local-config-file nebius-vpngw.config.yaml",
+            "nebius-vpngw failover tunnel TUNNEL_NAME --local-config-file nebius-vpngw.config.yaml",
         ),
         ("failover", "vm"): (
             "nebius-vpngw failover vm --local-config-file nebius-vpngw.config.yaml",
         ),
         ("failover", "tunnel"): (
-            "nebius-vpngw failover tunnel PASSIVE_TUNNEL_NAME "
-            "--local-config-file nebius-vpngw.config.yaml",
+            "nebius-vpngw failover tunnel TUNNEL_NAME --local-config-file nebius-vpngw.config.yaml",
         ),
         ("failback",): (
             "nebius-vpngw failback vm --local-config-file nebius-vpngw.config.yaml",
-            "nebius-vpngw failback tunnel ACTIVE_TUNNEL_NAME "
-            "--local-config-file nebius-vpngw.config.yaml",
+            "nebius-vpngw failback tunnel TUNNEL_NAME --local-config-file nebius-vpngw.config.yaml",
         ),
         ("failback", "vm"): (
             "nebius-vpngw failback vm --local-config-file nebius-vpngw.config.yaml",
         ),
         ("failback", "tunnel"): (
-            "nebius-vpngw failback tunnel ACTIVE_TUNNEL_NAME "
-            "--local-config-file nebius-vpngw.config.yaml",
+            "nebius-vpngw failback tunnel TUNNEL_NAME --local-config-file nebius-vpngw.config.yaml",
         ),
         ("add-routes-local",): (
             "nebius-vpngw add-routes-local --local-config-file nebius-vpngw.config.yaml",
@@ -295,9 +300,9 @@ _COMMAND_APPLICABILITY: t.Mapping[str, str] = MappingProxyType(
         "create-from-peer-config": "all",
         "destroy": "all",
         "failover vm": "vm-ha",
-        "failover tunnel": "ordinary-bgp",
+        "failover tunnel": "tunnel-policy",
         "failback vm": "vm-ha",
-        "failback tunnel": "ordinary-bgp",
+        "failback tunnel": "tunnel-policy",
     }
 )
 
@@ -381,7 +386,7 @@ def _enforce_command_applicability(
         raise typer.BadParameter(
             f"'{command}' requires an explicit gateway_group.vm_ha configuration."
         )
-    if applicability == "ordinary-bgp" and modes == {"static"}:
+    if applicability == "tunnel-policy" and not is_vm_ha and modes == {"static"}:
         action = command.split(" ", 1)[0]
         raise typer.BadParameter(
             f"Tunnel {action} is not supported for Static routing; it is available "
@@ -2507,6 +2512,32 @@ def _commit_missing_vm_ha_standby_replacement_active(
         checkpoint="missing-standby-replacement-complete",
     )
     lifecycle_journal.transition(active_successor)
+
+
+def _vm_ha_prehost_recovery_approval_state(
+    lifecycle_state: VMHALifecycleState,
+    observation: t.Mapping[str, object],
+    *,
+    credential_bindings: t.Mapping[str, str],
+    hosts: t.Mapping[str, object],
+) -> dict[str, object]:
+    bindings = _vm_ha_initial_resource_bindings(
+        observation, credential_bindings=credential_bindings
+    )
+    bindings["route-runtime-id"] = lifecycle_state.route_runtime_id
+    validate_prehost_cloud(lifecycle_state, observation, bindings)
+    validate_prehost_hosts(lifecycle_state, hosts)
+    # The controller's polling sequence is not authority. All operational and
+    # ownership fields remain in the approval; a healthy tick cannot stale it.
+    stable_hosts = json.loads(json.dumps(hosts))
+    for host in stable_hosts.values():
+        host["checkpoint"].pop("sequence", None)
+    return {
+        "current_observation": dict(observation),
+        "hosts": stable_hosts,
+        "lifecycle_record_sha256": lifecycle_state.record_sha256,
+        "recovery_mode": "unchanged-prehost-reapply",
+    }
 
 
 def _vm_ha_activation_recovery_approval_state(
@@ -6175,6 +6206,8 @@ def _apply_impl(
     vm_ha_migration_active_name: str | None = None
     vm_ha_recovery_required = False
     vm_ha_activation_recovery_required = False
+    vm_ha_prehost_recovery_required = False
+    vm_ha_prehost_hosts: dict[str, object] = {}
     vm_ha_existing_members: dict[str, str] = {}
     vm_ha_passive_replacement: tuple[str, str] | None = None
     vm_ha_missing_standby_replacement: _VMHAMissingStandbyReplacementPlan | None = None
@@ -6515,6 +6548,8 @@ def _apply_impl(
                     vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
                 ),
             )
+            if lifecycle_state is not None and vm_ha_missing_standby_observation is not None:
+                validate_retained_route_scope(lifecycle_state, vm_ha_missing_standby_observation)
         except (RuntimeError, ValueError) as error:
             if _vm_ha_error_chain_has_sdk_code(
                 error, "UNAUTHENTICATED"
@@ -6802,6 +6837,29 @@ def _apply_impl(
         if (
             vm_ha_credentials is not None
             and lifecycle_state is not None
+            and lifecycle_state.status is VMHALifecycleStatus.PROVISIONING
+            and lifecycle_state.transaction is not None
+            and lifecycle_state.transaction.desired_state_digest
+            != _canonical_digest(_vm_ha_desired_approval_state(plan))
+        ):
+            validate_prehost_checkpoint(lifecycle_state)
+            inspector = SSHPush(ssh_policy=ssh_policy)
+            vm_ha_prehost_hosts = {
+                member.instance_name: inspector.inspect_vm_ha_prehost(
+                    vm_ha_existing_members[member.instance_name], member.instance_name, local_cfg
+                )
+                for member in lifecycle_state.members
+            }
+            vm_ha_approval_current_state = _vm_ha_prehost_recovery_approval_state(
+                lifecycle_state,
+                vm_ha_approval_observation,
+                credential_bindings=vm_ha_credentials.resource_bindings(),
+                hosts=vm_ha_prehost_hosts,
+            )
+            vm_ha_prehost_recovery_required = True
+        if (
+            vm_ha_credentials is not None
+            and lifecycle_state is not None
             and lifecycle_state.status is VMHALifecycleStatus.ACTIVATING
             and lifecycle_state.transaction is not None
             and not _vm_ha_observation_matches_bindings(
@@ -6822,7 +6880,9 @@ def _apply_impl(
                 vm_ha_approval_current_state = None
         vm_ha_approval_kind = (
             "recovery"
-            if vm_ha_recovery_required or vm_ha_activation_recovery_required
+            if vm_ha_recovery_required
+            or vm_ha_activation_recovery_required
+            or vm_ha_prehost_recovery_required
             else (
                 lifecycle_state.transaction.approval_kind
                 if lifecycle_state is not None
@@ -6858,9 +6918,17 @@ def _apply_impl(
             )
             raise typer.Exit(code=1)
     elif (
-        vm_ha_recovery_required or vm_ha_activation_recovery_required
+        vm_ha_recovery_required
+        or vm_ha_activation_recovery_required
+        or vm_ha_prehost_recovery_required
     ) and migration_plan_digest is not None:
-        recovery_name = "activation" if vm_ha_activation_recovery_required else "migration"
+        recovery_name = (
+            "pre-host reapply"
+            if vm_ha_prehost_recovery_required
+            else "activation"
+            if vm_ha_activation_recovery_required
+            else "migration"
+        )
         print(f"[bold]Interrupted VM-HA {recovery_name} recovery plan[/bold]")
         print(
             "[yellow]  Recovery is isolated from ordinary migration approval and "
@@ -6919,7 +6987,11 @@ def _apply_impl(
                 "retain-active-owner-allocation-routes-and-forwarding",
                 "resume-passive-first-activation",
             )
-        elif vm_ha_recovery_required or vm_ha_activation_recovery_required:
+        elif (
+            vm_ha_recovery_required
+            or vm_ha_activation_recovery_required
+            or vm_ha_prehost_recovery_required
+        ):
             plan_kind = "recovery"
             engine_digest = migration_plan_digest
             plan_effects = (
@@ -7202,7 +7274,11 @@ def _apply_impl(
         ):
             print("[red]Missing standby replacement approval became stale.[/red]")
             raise typer.Exit(code=1)
-    if vm_ha_recovery_required or vm_ha_activation_recovery_required:
+    if (
+        vm_ha_recovery_required
+        or vm_ha_activation_recovery_required
+        or vm_ha_prehost_recovery_required
+    ):
         if recover_vm_ha_migration != migration_plan_digest:
             print(
                 "[red]Interrupted VM-HA recovery requires the exact "
@@ -7567,6 +7643,8 @@ def _apply_impl(
             if callable(observer)
             else vm_ha_approval_observation
         )
+        if lifecycle_state is not None:
+            validate_retained_route_scope(lifecycle_state, fresh_observation)
         if replace_missing_vm_ha_standby is not None:
             if lifecycle_state is None:
                 print("[red]Missing standby replacement has no lifecycle authority.[/red]")
@@ -7656,6 +7734,52 @@ def _apply_impl(
             ):
                 raise ValueError("VM-HA retained public allocation observation changed")
             initial_bindings.update(retained_public)
+        if vm_ha_prehost_recovery_required:
+            assert lifecycle_state is not None
+            inspector = SSHPush(ssh_policy=ssh_policy)
+            fresh_hosts = {
+                member.instance_name: inspector.inspect_vm_ha_prehost(
+                    vm_ha_existing_members[member.instance_name], member.instance_name, local_cfg
+                )
+                for member in lifecycle_state.members
+            }
+            fresh_recovery = _vm_ha_prehost_recovery_approval_state(
+                lifecycle_state,
+                fresh_observation,
+                credential_bindings=vm_ha_credentials.resource_bindings(),
+                hosts=fresh_hosts,
+            )
+            fresh_digest = _vm_ha_migration_plan_digest(
+                plan,
+                _vm_ha_approval_state_with_managed_credential_plan(
+                    fresh_recovery,
+                    vm_ha_credential_plan,
+                    ordinary_admission=ordinary_handoff_observations,
+                ),
+                approval_kind="recovery",
+            )
+            if fresh_digest != migration_plan_digest:
+                raise ValueError("VM-HA pre-host recovery approval became stale")
+            initial_bindings["route-runtime-id"] = lifecycle_state.route_runtime_id
+            recovery = recover_prehost(
+                lifecycle_state,
+                operation_id=_canonical_digest(
+                    {
+                        "domain": "nebius-vpngw/vm-ha-prehost-recovery-v1",
+                        "approval_digest": migration_plan_digest,
+                        "predecessor_sha256": lifecycle_state.record_sha256,
+                    }
+                ),
+                approval_digest=migration_plan_digest,
+                desired_state_digest=desired_digest,
+                bindings=initial_bindings,
+                observation=fresh_observation,
+                host_evidence=fresh_hosts,
+            )
+            lifecycle_store.write_verified(
+                recovery, predecessor_sha256=lifecycle_state.record_sha256
+            )
+            lifecycle_state = recovery
         if vm_ha_activation_recovery_required:
             if lifecycle_state is None:
                 print("[red]Interrupted VM-HA activation has no lifecycle checkpoint.[/red]")
@@ -7723,6 +7847,7 @@ def _apply_impl(
             )
         resumable = bool(
             not vm_ha_activation_recovery_required
+            and not vm_ha_prehost_recovery_required
             and lifecycle_state is not None
             and lifecycle_state.record_version == 4
             and lifecycle_state.status
@@ -7731,7 +7856,7 @@ def _apply_impl(
                 VMHALifecycleStatus.ACTIVATING,
             }
         )
-        if vm_ha_activation_recovery_required:
+        if vm_ha_activation_recovery_required or vm_ha_prehost_recovery_required:
             pass
         elif resumable:
             assert lifecycle_state is not None and lifecycle_state.transaction is not None
@@ -10850,6 +10975,9 @@ class _VMHACommandInspection:
     snapshot: _VMHAStatusSnapshot
     project_id: str
     gateway_name: str
+    ssh_context: _StatusSSHContext | None = None
+    targets: t.Mapping[str, str] | None = None
+    plan: ResolvedDeploymentPlan | None = None
 
 
 def _dedupe_vm_ha_reasons(values: t.Iterable[str]) -> tuple[str, ...]:
@@ -11955,13 +12083,14 @@ def _inspect_vm_ha_command_status(
     local_config_file: Path,
     *,
     region: str | None = None,
+    require_resolved_config: bool = False,
 ) -> _VMHACommandInspection:
     """Build one strict, non-rendering VM-HA command observation."""
 
     local_cfg = _load_config_with_region_override(
         local_config_file,
         region=region,
-        allow_missing_tunnel_psk_placeholders=True,
+        allow_missing_tunnel_psk_placeholders=not require_resolved_config,
     )
     plan = merge_with_peer_configs(local_cfg, [])
     _enforce_command_applicability("vm-ha", plan, local_cfg)
@@ -12005,6 +12134,9 @@ def _inspect_vm_ha_command_status(
         snapshot=snapshot,
         project_id=project_id,
         gateway_name=plan.gateway_group.name,
+        ssh_context=ssh_context,
+        targets=vm_ips,
+        plan=plan,
     )
 
 
@@ -13704,6 +13836,101 @@ print(json.dumps(health))
                 require_local_generation=require_local_generation,
             )
         _render_vm_ha_status(console, vm_ha_snapshot.view)
+        _render_ha_tunnel_selection(console, vm_ha_snapshot, plan, status_ssh_context, vm_ips)
+
+
+def _render_ha_tunnel_selection(
+    console: Console,
+    snapshot: _VMHAStatusSnapshot,
+    plan: ResolvedDeploymentPlan,
+    ssh_context: _StatusSSHContext,
+    targets: t.Mapping[str, str],
+) -> None:
+    from .agent.vm_ha.tunnels import CAPABILITY, SCHEMA, Authority
+    from .ha_tunnel_policy import connection_policies
+
+    owner = next(
+        (m for m in snapshot.members if m.node_id == snapshot.authority.owner_node_id), None
+    )
+    if (
+        owner is None
+        or owner.record is None
+        or CAPABILITY not in owner.record.get("controller_capabilities", [])
+    ):
+        return
+    table = Table(title="HA tunnel selection", show_lines=True)
+    for column in (
+        "Connection",
+        "Configured",
+        "Selected",
+        "Reason",
+        "Health",
+        "Override",
+        "Recovery",
+        "Result",
+    ):
+        table.add_column(column, overflow="fold")
+    try:
+        prefix = _status_ssh_target_command(
+            ssh_context, hostname=owner.name, target=targets[owner.name]
+        )
+        response = subprocess.run(
+            prefix + ["sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-tunnel-status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if response.returncode:
+            raise ValueError
+        state = json.loads(response.stdout)
+        if state.get("schema") != SCHEMA:
+            raise ValueError
+        authority = state.get("authority")
+        if authority is not None:
+            route = owner.record.get("route_reconciliation")
+            if not isinstance(route, dict):
+                raise ValueError
+            expected = Authority(
+                cluster=owner.record["cluster_id"],
+                owner=owner.record["node_id"],
+                allocation=owner.record["allocation_id"],
+                epoch=owner.record["ownership_epoch"],
+                incarnation=route["ownership_incarnation"],
+                generation=owner.record["generation_id"],
+            )
+            if Authority(**authority) != expected:
+                raise ValueError
+        instance = next(i for i in plan.iter_instance_configs() if i.hostname == owner.name)
+        cfg = yaml.safe_load(instance.config_yaml)
+        episode = state.get("episode")
+        recovery = (
+            "idle"
+            if episode is None
+            else "exhausted"
+            if episode["exhausted"]
+            else f"{max(0, episode['deadline'] - time.time()):.0f}s remaining"
+        )
+        operation = state.get("operation") or {}
+        for policy in connection_policies(cfg):
+            target = state.get("selected", {}).get(policy.name)
+            table.add_row(
+                policy.name,
+                policy.preferred,
+                target
+                or (policy.preferred if policy.mode == "static" and policy.eligible else "native"),
+                policy.unavailable_reason
+                or state.get("reasons", {}).get(policy.name, "configured"),
+                state.get("health", {}).get(policy.name, "unknown"),
+                "yes" if policy.mode == "bgp" and target else "no",
+                recovery if policy.mode == "static" else "idle",
+                str(operation.get("result", "idle"))
+                if operation.get("connection") == policy.name
+                else "idle",
+            )
+        console.print(table)
+    except (OSError, ValueError, KeyError, TypeError, StopIteration, subprocess.TimeoutExpired):
+        console.print("[yellow]HA tunnel selection is unavailable.[/yellow]")
 
 
 @app.command(
@@ -14408,6 +14635,155 @@ def restart_tunnel(
         raise typer.Exit(code=1) from e
 
 
+def _ha_tunnel_command(config_path: Path, verb: str, target: str | None) -> None:
+    """Submit to the exact owner; the CLI never writes routing or VM ownership."""
+    import base64
+
+    from .agent.vm_ha.tunnels import CAPABILITY, SCHEMA
+
+    inspected = _inspect_vm_ha_command_status(config_path, require_resolved_config=True)
+    with VMHAApplyLock(project_id=inspected.project_id, gateway_name=inspected.gateway_name):
+        inspected = _inspect_vm_ha_command_status(config_path, require_resolved_config=True)
+        snapshot = inspected.snapshot
+        lifecycle = snapshot.lifecycle_state
+        if (
+            lifecycle is None
+            or lifecycle.status is not VMHALifecycleStatus.ACTIVE
+            or snapshot.authority.condition != "exact"
+            or snapshot.authority.owner_node_id is None
+            or inspected.ssh_context is None
+            or inspected.targets is None
+            or inspected.plan is None
+        ):
+            raise RuntimeError("HA tunnel selection requires a stable installed owner")
+        transaction = getattr(lifecycle, "transaction", None)
+        if transaction is not None and (
+            getattr(transaction, "pending_effect", None) is not None
+            or getattr(transaction, "accepted_cloud_operation_id", None) is not None
+        ):
+            raise RuntimeError("HA lifecycle operation is outstanding")
+        commands: dict[str, list[str]] = {}
+        owner = None
+        for member in snapshot.members:
+            record = member.record
+            if (
+                member.condition != "exact"
+                or record is None
+                or CAPABILITY not in record.get("controller_capabilities", [])
+                or record.get("apply_locked") is not False
+                or record.get("observed_owner_node_id") != snapshot.authority.owner_node_id
+                or record.get("transfer_inhibition_operation_id") is not None
+            ):
+                raise RuntimeError(
+                    "both HA members must run the tunnel capability; complete non-owner-first apply"
+                )
+            prefix = _status_ssh_target_command(
+                inspected.ssh_context, hostname=member.name, target=inspected.targets[member.name]
+            )
+            probe = subprocess.run(
+                prefix + ["sudo /usr/bin/python3 -m nebius_vpngw.agent.main --agent-capabilities"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if probe.returncode or CAPABILITY not in json.loads(probe.stdout).get("features", []):
+                raise RuntimeError(
+                    "installed HA package lacks tunnel capability; complete supported apply"
+                )
+            commands[member.node_id] = prefix
+            if member.node_id == snapshot.authority.owner_node_id:
+                owner = member
+        if owner is None or owner.record is None or owner.record.get("data_plane_mode") != "active":
+            raise RuntimeError("HA owner is not forwarding")
+        owner_config = next(
+            i
+            for i in inspected.plan.iter_instance_configs()
+            if i.vm_ha_node is not None and i.vm_ha_node.node_id == owner.node_id
+        )
+        cfg = yaml.safe_load(owner_config.config_yaml)
+        if target is not None and target not in {
+            tunnel["name"] for connection in cfg["connections"] for tunnel in connection["tunnels"]
+        }:
+            raise ValueError("tunnel target is not on the current owner VM")
+        record = owner.record
+        route = record.get("route_reconciliation")
+        if not isinstance(route, dict) or type(route.get("ownership_incarnation")) is not int:
+            raise RuntimeError("HA owner incarnation is not proven")
+        authority = {
+            "cluster": record["cluster_id"],
+            "owner": owner.node_id,
+            "allocation": record["allocation_id"],
+            "epoch": record["ownership_epoch"],
+            "incarnation": route["ownership_incarnation"],
+            "generation": record["generation_id"],
+        }
+        request = base64.b64encode(
+            json.dumps({"authority": authority, "verb": verb, "target": target}).encode()
+        ).decode()
+        prefix = commands[owner.node_id]
+        try:
+            response = subprocess.run(
+                prefix
+                + [
+                    "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-tunnel-request "
+                    + shlex.quote(request)
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "HA tunnel request outcome is unknown; inspect tunnel status for the outstanding operation"
+            ) from None
+        if response.returncode:
+            raise RuntimeError(
+                "HA controller rejected the tunnel request; inspect status and retry"
+            )
+        operation_id = json.loads(response.stdout)["operation_id"]
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            try:
+                response = subprocess.run(
+                    prefix
+                    + ["sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-tunnel-status"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                continue  # The durable request/operation remains outstanding.
+            if response.returncode == 0:
+                status = json.loads(response.stdout)
+                queued = status.get("pending_request")
+                if queued is not None and queued.get("id") == operation_id:
+                    if queued.get("result") != "outstanding":
+                        raise RuntimeError(
+                            f"HA tunnel request {operation_id}: {queued.get('result')}"
+                        )
+                    time.sleep(1)
+                    continue
+                if status.get("schema") != SCHEMA or status.get("authority") != authority:
+                    raise RuntimeError("HA tunnel operation authority changed")
+                operation = status.get("operation") or {}
+                if operation.get("id") != operation_id:
+                    raise RuntimeError("HA tunnel operation was superseded")
+                if operation.get("phase") == "succeeded":
+                    print(f"[green]Tunnel {verb} verified[/green] ({operation_id})")
+                    return
+                if operation.get("phase") == "failed":
+                    raise RuntimeError(
+                        f"HA tunnel operation {operation_id}: {operation.get('result')}"
+                    )
+            time.sleep(1)
+        raise RuntimeError(
+            f"HA tunnel operation {operation_id} remains outstanding; timeout did not cancel it"
+        )
+
+
 @failover_app.command(
     name="tunnel",
     epilog=_command_help_epilog("failover", "tunnel"),
@@ -14416,9 +14792,8 @@ def tunnel_failover(
     tunnel_name: str | None = typer.Argument(
         None,
         help=(
-            "Passive tunnel name to fail over to. Required when more than one passive "
-            "candidate exists in the config, which is typical for multi-connection "
-            "topologies."
+            "HA: eligible alternative tunnel on the current owner. Ordinary BGP: passive tunnel. "
+            "Required when selection is ambiguous, as in many multi-connection topologies."
         ),
     ),
     local_config_file: Path = typer.Option(
@@ -14429,7 +14804,7 @@ def tunnel_failover(
         show_default="nebius-vpngw.config.yaml in current directory",
     ),
 ) -> None:
-    """Fail over a tunnel path; supported only on regular gateways (non-HA) using BGP, not Static routing."""
+    """Fail over a tunnel on the HA owner (Static/BGP), or on a regular BGP gateway."""
     try:
         config_path = _resolve_local_config(
             local_config_file, create_if_missing=False, exit_after_create=False
@@ -14444,6 +14819,9 @@ def tunnel_failover(
         except typer.BadParameter as error:
             typer.echo(error.message, err=True)
             raise typer.Exit(code=1) from None
+        if plan.vm_ha is not None:
+            _ha_tunnel_command(config_path, "failover", tunnel_name)
+            return
         print(f"[bold]Loading config from:[/bold] {config_path}")
 
         gateway = local_cfg.get("gateway") or {}
@@ -14711,9 +15089,8 @@ def tunnel_failback(
     tunnel_name: str | None = typer.Argument(
         None,
         help=(
-            "Active tunnel name to restore. Required when more than one active "
-            "candidate exists in the config, which is typical for multi-connection "
-            "topologies."
+            "HA: configured preferred tunnel on the current owner. Ordinary BGP: active tunnel. "
+            "Required when selection is ambiguous, as in many multi-connection topologies."
         ),
     ),
     local_config_file: Path = typer.Option(
@@ -14724,7 +15101,7 @@ def tunnel_failback(
         show_default="nebius-vpngw.config.yaml in current directory",
     ),
 ) -> None:
-    """Restore a tunnel path; supported only on regular gateways (non-HA) using BGP, not Static routing."""
+    """Restore a preferred tunnel on the HA owner (Static/BGP), or on a regular BGP gateway."""
     try:
         config_path = _resolve_local_config(
             local_config_file, create_if_missing=False, exit_after_create=False
@@ -14739,6 +15116,9 @@ def tunnel_failback(
         except typer.BadParameter as error:
             typer.echo(error.message, err=True)
             raise typer.Exit(code=1) from None
+        if plan.vm_ha is not None:
+            _ha_tunnel_command(config_path, "failback", tunnel_name)
+            return
         print(f"[bold]Loading config from:[/bold] {config_path}")
 
         gateway = local_cfg.get("gateway") or {}

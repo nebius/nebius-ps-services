@@ -266,6 +266,15 @@ The isolated Ubuntu systemd/networkd regressions run on PRs and gate release
 publication. They cover delegated work and startup admission; live ordinary and HA
 upgrade canaries still provide separate deployment evidence.
 
+Managed HA reapply preserves the exact workload subnet and route-table scope.
+Changing local prefixes to select different route targets fails before mutation.
+If a previous apply stopped before staging either host, restore the original
+scope and run `apply --dry-run` to inspect recovery. An eligible recovery prints
+an exact `--recover-vm-ha-migration DIGEST`; use it with the normal disruption
+approval. Recovery proves unchanged retained cloud resources and installed host
+identities, keeps the failed transaction's audit lineage, and resumes the normal
+non-owner-first apply. Never edit or delete the lifecycle journal to resume.
+
 The FRR bootstrap ordering fix applies to newly created or explicitly recreated
 VMs. It does not rerun cloud-init on existing gateways. For a VM with failed
 bootstrap, inspect `cloud-init status --long` and `/var/log/cloud-init-output.log`,
@@ -1548,7 +1557,7 @@ until fresh exact parity arrives.
 and the closed rearm phase/failure plus a supported action. Internal preparation,
 detection or repair, common-cutover, and redundancy-restoration durations remain
 available to the controller without exposing raw identity records. The clean-slate
-heartbeat-v2 envelope binds the managed-mTLS epoch and fingerprint actually
+heartbeat-v4 envelope binds the managed-mTLS epoch and fingerprint actually
 authenticated on each fresh connection; mixed or older wire versions fail
 closed. Its `promotion_ready` flag also represents a fresh exact alias-free
 passive standby. The earlier
@@ -2312,68 +2321,140 @@ nebius-vpngw list-routes-remote --local-config-file <file>
 **Tunnel Management:**
 
 ```bash
-# Manually restart a specific tunnel
+# Manually restart a specific tunnel on a regular (non-HA) gateway
 nebius-vpngw restart-tunnel gcp-ha-tunnel-1 --local-config-file <file>
 
-# Restart all tunnels on all gateway VMs
+# Restart all tunnels on regular (non-HA) gateway VMs
 nebius-vpngw restart-tunnel all --local-config-file <file>
 
-# Manual failover to passive tunnel
-# - If exactly two tunnels exist, passive is auto-selected
-# - If more than two tunnels exist, pass the passive tunnel name
+# Select an alternative tunnel
+# - HA: select an eligible alternative on the current owner
+# - Ordinary BGP: select a configured passive tunnel
+# - Omit the name only when selection is unambiguous
 # - In multi-connection configs, this is the normal path: be explicit
 nebius-vpngw failover tunnel --local-config-file <file>
 nebius-vpngw failover tunnel gcp-ha-tunnel-2 --local-config-file <file>
 
-# Manual failback to restore the active tunnel (does not disable passive)
-# - If multiple active tunnels exist, pass the active tunnel name
+# Restore the preferred tunnel
+# - HA: restore the connection's configured preferred path on the current owner
+# - Ordinary BGP: restore a configured active tunnel
+# - HA Static keeps unused alternatives cold; BGP retains backup sessions
 # - In multi-connection configs, this is the normal path: be explicit
 nebius-vpngw failback tunnel --local-config-file <file>
 nebius-vpngw failback tunnel gcp-ha-tunnel-1 --local-config-file <file>
 ```
 
-`restart-tunnel <name>` is supported only on regular gateways (non-HA) and
-targets only the gateway VM(s) that own that tunnel in the resolved deployment
-plan. `failover tunnel` and `failback tunnel` are supported only on regular
-gateways (non-HA) using BGP, not Static routing; they operate on the owning
-connection/instance. All three are rejected before SSH for explicit VM HA.
-Automatic controller-owned tunnel health handling remains active for a
-VM-HA-enabled gateway. Use `status` to inspect its health, and use `apply` only
-when configuration convergence is required;
-`restart-tunnel` has no manual VM-HA equivalent. `failover vm` and `failback vm`
-transfer whole-VM ownership only and do not select a tunnel. `destroy` accepts
-ordinary and explicit VM-HA configurations through the same identity-bound,
-resumable teardown workflow.
+`failover tunnel [TUNNEL_NAME]` and `failback tunnel [TUNNEL_NAME]` select a
+connection's path on the current HA owner in Static or BGP mode. An explicit name
+is required when selection is ambiguous; a standby VM's tunnel is rejected.
+Same-VM switching preserves VM ownership, the shared allocation, VPC routes,
+tunnel identities and configured roles. `failover vm` and `failback vm` retain
+their existing ownership-transfer and Compute-fencing safeguards.
 
-For a VM-HA-enabled gateway, `restart-tunnel` exits `1` with only this stderr
-line, before a loading banner, authentication, SSH, or subprocess execution:
+| Deployment | Routing | Automatic VM | Manual VM | Automatic tunnel | Manual tunnel/failback |
+| --- | --- | --- | --- | --- | --- |
+| SingleVM | Static | No | No | No | No |
+| SingleVM | BGP | No | No | Yes | Yes |
+| HA-VM | Static | Yes | Yes | Yes | Yes |
+| HA-VM | BGP | Yes | Yes | Yes | Yes |
 
-```text
-Tunnel restart is not supported for a VM-HA-enabled gateway. Tunnel recovery is controller-owned; use 'nebius-vpngw status --local-config-file <file>' to inspect health and 'nebius-vpngw apply --local-config-file <file>' only for configuration convergence.
+Tunnel switching requires redundant paths on the **current owner**, each covering
+the connection's complete required destination set, and compatible peer return
+routing. One tunnel per HA member provides VM redundancy only. Connections with
+unequal destination coverage, conflicting route ownership or shared IKE scope
+retain their necessary paths and report switching unavailable.
+An omitted, null or empty destination list also leaves native routing intact and
+reports switching unavailable. Declare the connection's required remote prefixes
+before enabling manual HA BGP selection.
+
+Eligible HA Static connections start on their configured preferred tunnel with
+unused alternatives cold. Confirmed loss triggers connection-scoped suspension,
+activation and verification, trying alternatives in configuration order. A working
+backup remains selected until manual failback or another failure. A failed manual
+target attempts to restore the previous path within the same recovery budget.
+An XFRM interface alone does not establish health: the controller checks exact
+IKE/CHILD, kernel policies and states, interfaces, and destination routes.
+Unavailable evidence remains unknown.
+
+HA BGP retains native automatic route selection and warm backup sessions. The
+existing bounded owner repair clears only a confirmed failed BGP session when a
+healthy encrypted alternative covers all required destinations. Healthy sessions
+stay up; cloud-route authority and actual forwarding readiness are checked
+separately. A ready owner with a failed redundant path remains eligible for ordinary
+agent reconciliation, preserving forwarding through its healthy path.
+A manual override prefers the target's received routes and restricts that
+connection's local-prefix advertisements to the target. It preserves
+`advertise_local_prefixes: false`. Target failure releases the override; failback
+requires a healthy preferred path before restoring normal policy. Both route
+selection and actual advertisements must verify before completion.
+Ongoing manual-override health uses that same route evidence: an Established
+target that withdraws required destinations releases its override. Unavailable
+route observations remain unknown and do not authorize automatic release.
+
+Operational HA selections survive service restart and unchanged apply/package
+refresh. An authoritative owner incarnation or semantic configuration change
+resets selection. Restarting the HA controller engages its startup forwarding
+guard and can trigger the existing automatic VM takeover policy. Persistence
+applies while ownership authority remains unchanged; takeover resets selection
+on the new owner. Apply, VM transfers and tunnel operations serialize through the
+existing HA writer exclusion. Request submission waits up to ten seconds for an
+in-progress controller or standby-rearm writer before reporting busy. A CLI
+timeout leaves an outstanding operation; use `status` to inspect its result before
+retrying. Status adds a tunnel-selection table without changing the existing VM
+status table.
+Concurrent IKE teardown is verified from fresh scoped SA evidence before the
+target is activated; unavailable or shared-SA evidence remains fail-closed.
+Agent reloads use the same writer exclusion and defer while a tunnel operation is
+outstanding. A selection change alone does not restart the gateway daemons.
+VM transfers retain their exact fenced ownership proof until the completion
+receipt can be saved, including when an agent reload temporarily holds the writer
+lock. Fresh ownership checks remain required throughout that wait.
+
+Optional Static probes belong under `gateway_group.vm_ha.tunnel_probes`:
+
+```yaml
+tunnel_probes:
+  site-a-primary:
+    target_ip: 10.20.0.10
+    source_ip: 10.10.0.1
+    interval_seconds: 5
+    timeout_seconds: 1
+    failure_threshold: 3
+    recovery_threshold: 2
 ```
 
-For an ordinary gateway, the command remains supported in both routing modes:
-Static restarts only the selected IPsec tunnel, while BGP also resets the
-matching BGP neighbor.
+Use an assigned source address covered by the tunnel's selectors and a target in
+its inner subnet or configured remote destinations. Probes are bound to that
+tunnel. The defaults shown above
+apply when timing and threshold fields are omitted.
 
-Manual tunnel failover and failback are not supported for a VM-HA-enabled
-gateway, regardless of routing mode. They are also not supported for an ordinary
-Static configuration; the tunnel commands are available only for ordinary BGP.
-An ordinary Static configuration supports neither tunnel nor VM
-failover/failback. Unsupported tunnel transfer exits `1` with one action-specific
-stderr line before the loading banner, authentication, SSH, or other external
-effects, and does not print a traceback.
+Confirmed Static coverage loss receives one persisted recovery episode of at
+most 30 seconds, reserving the final second for local fencing. Connections,
+candidates, retries, restarts and configuration changes cannot extend it or add
+a second repair window. Before starting generic VM repair for Static loss, the
+controller rechecks tunnel recovery and then revalidates VM authority and readiness.
+Eligibility resets after 60 seconds of continuously
+observed health or a new authoritative owner incarnation. Fresh authenticated
+peer evidence can convey only the remaining episode; a missing heartbeat grants
+no additional grace. Exhaustion follows existing readiness and Compute fencing;
+it does not promise promotion to an unready standby.
+Heartbeat publication follows fresh controller observations during tunnel work,
+with the existing peer freshness limits and ownership checks.
 
-The live `--help` output for these commands now reflects that ownership model:
-`restart-tunnel`, `failover tunnel`, and `failback tunnel` explicitly identify
-regular gateways (non-HA) as their supported topology. The transfer commands
-also retain their BGP-only distinction and call out that multi-connection
-configs normally require a tunnel name.
+Upgrade HA through the supported non-owner-first `apply` workflow. Both members
+must run the new tunnel capability before a tunnel operation is admitted; there
+is no mixed-version failover fallback. SingleVM upgrades use ordinary in-place
+`apply`, retain existing routes, preferences, credentials and resources, and need
+no new configuration beyond the already documented `gateway.ssh_allowed_cidrs`
+migration. Healthy unchanged reapply remains non-disruptive. Measure any upgrade
+interruption separately from steady-state loss (less than 0.2% in each tested
+direction); this feature introduces no numerical upgrade-outage limit.
 
-`failover tunnel` is an operational override. It administratively shuts down the
-configured active tunnel's BGP neighbor to move traffic to the passive tunnel,
-but it does not rewrite YAML or swap configured roles. `failback tunnel` clears that
-override and restores traffic to the configured active tunnel.
+`restart-tunnel` remains supported only on ordinary gateways: Static restarts the
+selected IPsec tunnel, and BGP also resets its matching neighbor. For HA, inspect
+`status` and use `apply` for configuration convergence. Ordinary Static has no
+manual tunnel or VM failover. Ordinary BGP keeps its existing operational neighbor
+shutdown override and failback behavior.
 
 Tunnel names must be globally unique across the full config. The schema enforces
 that, and these operator commands rely on it so you do not need to pass a
@@ -3235,12 +3316,17 @@ similarly named connection cannot trigger its repair or supply its health.
 
 ### Packet-loss Acceptance
 
-Product acceptance requires **strictly less than 0.2% steady-state packet loss**
-for each tested direction. Exactly 0.2% fails. There is no fixed ten-minute test
+Normal product acceptance requires **strictly less than 0.2% steady-state packet loss**
+for each tested direction. Exactly 0.2% fails the normal criterion. There is no fixed ten-minute test
 requirement: declare a bounded, representative interval before testing and report
 its actual duration, sent/lost counts, protocol, rate, packet size and tested artifact.
 Use complete receiver evidence and the full declared interval; do not combine
 opposite directions, round a result into a pass or retry until a clean sample appears.
+
+[REQ-025's temporary live qualification exception](docs/requirements.md#req-025-ha-connection-tunnel-selection-and-safe-ordinary-upgrades)
+permits strictly below 1% in each direction after three bounded loss-reduction
+attempts, only when loss is the sole remaining issue. It remains in effect until
+withdrawn; exactly 1% fails, and every other acceptance requirement remains in force.
 
 The criterion also applies to operation baselines and steady-state recovery.
 Operation-specific outage limits, recovery deadlines, BGP/HA health, ownership and
@@ -3716,6 +3802,106 @@ nebius-vpngw apply \
 ```bash
 nebius-vpngw status --local-config-file test.config.yaml
 ```
+
+Run native systemd, strongSwan/XFRM and FRR regressions in the disposable Linux
+fixture with `python3 tests/systemd/run.py`. Its Docker kernel must support XFRM;
+Docker installations without that support cannot qualify tunnel behavior. The
+fixture pins FRR and its matching `frr-pythontools` reload dependency. It exercises
+connection switching, failed targets, repeated reconciliation,
+unrelated connections and actual bidirectional packets. Mixed Static switching
+checks that an unrelated BGP session, its routes and traffic remain intact under
+both owner bindings. Cloud fencing, peer-provider
+return routing and genuine release upgrades require their separate live trials.
+
+CI also runs the composed controller regressions in
+`tests/integration/test_ha_tunnel_repair_order.py`, covering late Static loss,
+authority changes and recovery exhaustion without extending the episode.
+
+An earlier live-qualified candidate passed 3,087 unit tests, all 28 native tunnel
+tests and all six genuine 0.6.0–0.6.2 SingleVM Static/BGP host upgrades. Unchanged
+reapply, interrupted apply, older-peer interoperability and automatic reboot
+recovery passed with zero steady loss. Upgrade reply gaps were 0.204–0.308 seconds.
+These pinned-SSH host tests do not establish public-cloud SingleVM upgrade behavior.
+
+Subsequent local alignment corrected ongoing BGP override health to detect route
+withdrawal while the peer remains Established. Seven production-observer fixture
+cases cover route loss, export drift and unknown observations; nine CLI adapter
+cases cover capability admission, exact completion and timeout handling. This
+source correction is included in the restart-recovery candidate described below;
+its edge-case coverage remains distinct from the targeted live restart trials.
+
+Local review also corrected stale tunnel status across owner incarnations,
+probe coverage validation for CIDR spellings already accepted by the schema,
+and malformed BGP state handling. All 368 focused tests, including 17 new
+regression cases, pass. The probe correction preserves supplied prefixes; it does not
+establish runtime support for noncanonical prefixes. These corrections are also
+included in the restart-recovery candidate; focused fixture proof does not imply
+that every edge case was reproduced live.
+
+HA BGP restart recovery now prepares durable tunnel intent behind the forwarding
+fence. It retains healthy overrides, releases confirmed failed paths, and blocks
+activation when selected-path evidence is unknown. A stale passive import policy
+is refreshed through the existing checkpointed controller transition, so retained
+failed-peer routes cannot block recovery. The cold Static readiness exception
+still requires complete BGP evidence. The VM controller installs and
+verifies active exports before enabling forwarding; tunnel completion then requires
+fresh active route/export verification. Failback rechecks the preferred path, and
+cleanup preserves the original operation identity and deadline. No additional
+configuration or SingleVM migration is required. The complete local suite passed
+3,186 tests, followed by two added crash replay tests; all 27 composed restart
+cases pass. The final native Linux/systemd/strongSwan/FRR lane passed all 86 tests,
+including eight restart cases covering activate, verify, release and a failed
+selected peer with exports enabled and disabled.
+
+Targeted live BGP qualification passed public tunnel failover/failback on both
+owners, controller restarts at pending activate and verify, automatic VM promotion
+and standby restoration, and public VM failback. Independent cloud observations
+confirmed the former Compute owner was Stopped before allocation transfer. The
+live restarts exercised owner changes; native tests prove same-owner replay.
+Seven steady bidirectional windows of 1,200 packets per direction at 20 packets
+per second had maximum loss of 0.50%, meeting the temporary exception below.
+The normal 0.2% target was not met in every window. The package-refresh reply gap
+reached 89.259 seconds; restart/promotion gaps were 249.537 and 215.569 seconds,
+and planned VM failback reached 286.801 seconds. Transition loss remains separate
+from steady acceptance. Both BGP members have the same verified candidate,
+with the preferred owner active, peer ready and normal tunnel policy.
+
+The shorter Static smoke test passed on the same candidate: public failover to
+backup, ordinary non-owner-first package refresh preserving that selection, and
+public failback to preferred. All 103 packaged files matched on both members;
+native path, cold-alternative and standby checks passed. Ownership, configuration,
+Compute instances, boot disks and VPC routes stayed unchanged. This Static smoke
+did not add a workload traffic window or repeat the complete VM lifecycle.
+
+A later alignment pass made malformed BGP summary containers report unknown
+health and clarified HA versus ordinary BGP tunnel selection in command help and
+operator guidance. These narrow source changes have local regression coverage;
+the native and live candidate described above predates this delta.
+
+The earlier complete live Static and BGP failover/failback cycles passed under the
+temporary loss criterion below. Static's 28 completed cases ran on the heartbeat
+correction candidate, with maximum steady loss of 0.417%. BGP's 31 completed cases
+ran on that qualification's final candidate, with maximum steady loss of 0.5%.
+Static then received that candidate through normal non-owner-first apply, resuming
+its exact
+transaction after an authentication rejection during staging; selected-backup
+persistence, public failback and independent native/cloud checks passed without
+another workload traffic window. The BGP package refresh's largest reply gap was
+87.270 seconds; upgrade transition loss remains separate from steady acceptance.
+Temporary cloud test resources and task credentials were removed; the approved
+additional Static redundancy remains.
+
+Earlier failures and one incomplete SSH traffic observation retain their original
+verdicts. The affected observation step passed a bounded replay; no packet-loss
+root-cause fix is claimed. A fresh complete live replay of the earlier pre-host
+apply-recovery sequence remains unverified. See the design's verification evidence
+for the exact scope and artifact lineage.
+
+The normal steady-state packet-loss target is below 0.2% in each direction.
+REQ-025 records a temporary live qualification exception: after three bounded
+attempts to reduce loss, strictly below 1% may be accepted until further notice
+if loss is the only remaining issue. Keep original trial results and label use
+of this exception; all command, recovery, fencing and upgrade checks still apply.
 
 ### Dependency Updates
 

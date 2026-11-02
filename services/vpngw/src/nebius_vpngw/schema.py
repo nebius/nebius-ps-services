@@ -856,6 +856,32 @@ class VMHAMemberConfig(BaseModel):
     role: VMHARole = Field(..., description="Initial VM ownership role")
 
 
+class VMHATunnelProbe(BaseModel):
+    """Optional encrypted-path probe; runtime also proves source assignment."""
+
+    model_config = ConfigDict(extra="forbid")
+    target_ip: str
+    source_ip: str
+    interval_seconds: float = Field(default=5.0, ge=1.0, le=30.0, allow_inf_nan=False)
+    timeout_seconds: float = Field(default=1.0, gt=0.0, le=5.0, allow_inf_nan=False)
+    failure_threshold: int = Field(default=3, ge=1, le=10, strict=True)
+    recovery_threshold: int = Field(default=2, ge=1, le=10, strict=True)
+
+    @field_validator("target_ip", "source_ip")
+    @classmethod
+    def validate_probe_ip(cls, value: str) -> str:
+        address = ipaddress.IPv4Address(value)
+        if address.is_unspecified or address.is_multicast or address.is_loopback:
+            raise ValueError("tunnel probe requires a unicast IPv4 address")
+        return str(address)
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> VMHATunnelProbe:
+        if self.timeout_seconds > self.interval_seconds:
+            raise ValueError("probe timeout must not exceed its interval")
+        return self
+
+
 class VMHAConfig(BaseModel):
     """Explicit, default-disabled two-node VM-level HA configuration."""
 
@@ -873,11 +899,12 @@ class VMHAConfig(BaseModel):
         default_factory=list,
         description="Exactly two stable node records when VM HA is enabled",
     )
+    tunnel_probes: dict[str, VMHATunnelProbe] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_topology(self) -> VMHAConfig:
         if not self.enabled:
-            if self.cluster_id is not None or self.members:
+            if self.cluster_id is not None or self.members or self.tunnel_probes:
                 raise ValueError("vm_ha.cluster_id and vm_ha.members require vm_ha.enabled=true")
             return self
 
@@ -1247,6 +1274,34 @@ class VPNGatewayConfig(BaseModel):
                     "members (gateway_instance_index 0 and 1); VM roles do not replace "
                     "per-tunnel ha_role"
                 )
+
+        tunnels = {
+            tunnel.name: (connection, tunnel)
+            for connection in self.connections
+            for tunnel in connection.tunnels
+        }
+        for name, probe in vm_ha.tunnel_probes.items():
+            if name not in tunnels:
+                raise ValueError("VM-HA probe names an unknown tunnel")
+            connection, tunnel = tunnels[name]
+            if connection.routing_mode != RoutingMode.STATIC or tunnel.ha_role.value == "disable":
+                raise ValueError("VM-HA probes require an enabled Static tunnel")
+            local = [tunnel.inner_cidr, *(self.gateway.local_prefixes or [])]
+            if not any(
+                ipaddress.ip_address(probe.source_ip) in ipaddress.ip_network(p, strict=False)
+                for p in local
+            ):
+                raise ValueError("VM-HA probe source is outside tunnel traffic selectors")
+            remote = (
+                (tunnel.static_routes.remote_prefixes if tunnel.static_routes else [])
+                or connection.remote_prefixes
+                or []
+            )
+            if not any(
+                ipaddress.ip_address(probe.target_ip) in ipaddress.ip_network(p, strict=False)
+                for p in [tunnel.inner_cidr, *remote]
+            ):
+                raise ValueError("VM-HA probe target is outside tunnel destination coverage")
 
         return self
 

@@ -370,3 +370,15 @@ URLs, customer data, raw logs, or one-off local state.
 - `references/migration.md`
 - `assets/templates/requirements.md.template`
 - `assets/templates/design.md.template`
+
+## Source-Package Coverage
+
+For document-driven SDLC, own the pure source inventory and canonical mapping
+validator in `scripts/project_specs_lib/source_bundle.py`. Read the shared
+`../worktree/references/document-delivery.md` contract.
+Portable normative snapshots live under target `docs/contracts`; requirements
+and design stay concise. Preserve original IDs, explicit dispositions and exact
+source digests. Distinguish reviewed prose inventory from mechanically extracted
+catalog completeness, and source coverage from implementation/test completion.
+The SDLC root owns program/slice state and stages only the exact admitted input
+paths. Canonical pair publication remains this skill's sole responsibility.

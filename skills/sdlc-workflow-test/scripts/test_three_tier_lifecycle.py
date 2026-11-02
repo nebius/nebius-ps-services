@@ -211,10 +211,14 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     lifecycle.validate_state(self.root, state)
 
     def setUp(self) -> None:
+        from git_fixture_environment import isolated_git_configuration
+
+        self.enterContext(isolated_git_configuration())
         # macOS maps /var to /private/var through a system symlink. Use the
         # home directory so lifecycle symlink rejection is exercised without
         # weakening production path checks for that platform alias.
         self.temporary = tempfile.TemporaryDirectory(dir=Path.home())
+        self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "verification"
         # Synthetic identities for offline lifecycle tests; real registration is
         # exercised separately by test_three_tier_target with actual Git state.
@@ -249,6 +253,21 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = lifecycle.prepare(self.root)
         lifecycle.update_state(self.root, state)
         return state
+
+    def test_preparation_isolates_inherited_git_filters(self):
+        sentinel = Path(self.temporary.name) / "inherited-filter-executed"
+        attributes = Path.home() / "attributes"
+        attributes.write_text("* filter=ambient\n")
+        executable = Path.home() / "filter.sh"
+        executable.write_text(f'#!/bin/sh\ntouch "{sentinel}"\ncat\n')
+        executable.chmod(0o700)
+        (Path.home() / ".gitconfig").write_text(
+            f'[core]\n attributesFile = {attributes}\n'
+            f'[filter "ambient"]\n clean = {executable}\n'
+        )
+        state = self.prepare()
+        self.assertRegex(state["git"]["baseline_sha"], r"^[0-9a-f]{40}$")
+        self.assertFalse(sentinel.exists())
 
     def reset_prepare_preflight(self) -> None:
         self.require_command.side_effect = ["29.0", "5.0", "git version 2.50"]
@@ -779,9 +798,13 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         active.chmod(0o644)
         self.assertIsNone(claims())
         active.chmod(0o600)
+        configuration = Path(state["project_root"]) / ".git/config"
+        original_configuration = configuration.read_bytes()
         lifecycle.owned_git_origin._git(Path(state["project_root"]), "remote", "add", "foreign", "/unowned.git")
         self.assertIsNone(claims())
-        lifecycle.owned_git_origin._git(Path(state["project_root"]), "remote", "remove", "foreign")
+        # Fixture recovery cannot use a product command that now rejects the
+        # intentionally corrupted repository before invoking Git.
+        configuration.write_bytes(original_configuration)
         active.unlink()
         self.assertIsNone(claims())
 
@@ -1749,7 +1772,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         lifecycle.update_state(self.root, state)
         with (
             mock.patch.object(lifecycle, "inspect_labels") as inspect,
-            self.assertRaisesRegex(lifecycle.LifecycleError, "exactly its one approved origin"),
+            self.assertRaisesRegex(lifecycle.LifecycleError, "UNSAFE_GIT_ENVIRONMENT"),
         ):
             lifecycle.destroy(self.root)
         inspect.assert_not_called()

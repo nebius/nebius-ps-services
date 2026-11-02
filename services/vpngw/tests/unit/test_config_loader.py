@@ -19,6 +19,64 @@ from nebius_vpngw.config_template import DEFAULT_CONFIG_TEMPLATE
 from nebius_vpngw.schema import validate_config
 
 
+@pytest.mark.parametrize(
+    ("local_prefix", "remote_prefix", "source", "target", "error"),
+    [
+        ("10.0.0.1/16", "203.0.113.0/24", "10.0.0.2", "203.0.113.5", None),
+        ("10.0.0.0/16", "203.0.113.1/24", "10.0.0.2", "203.0.113.5", None),
+        ("10.0.0.1/16", "203.0.113.1/24", "10.0.0.2", "203.0.113.5", None),
+        ("10.0.0.1/16", "203.0.113.1/24", "10.1.0.2", "203.0.113.5", "source is outside"),
+        ("10.0.0.1/16", "203.0.113.1/24", "10.0.0.2", "203.0.114.5", "target is outside"),
+    ],
+)
+def test_vm_ha_probe_coverage_preserves_accepted_cidr_spelling(
+    sample_config,
+    local_prefix,
+    remote_prefix,
+    source,
+    target,
+    error,
+):
+    cfg = deepcopy(sample_config)
+    cfg["gateway_group"].update(
+        instance_count=2,
+        external_ips=[["203.0.113.10"], ["203.0.113.20"]],
+        vm_ha={
+            "enabled": True,
+            "cluster_id": "gateway-cluster",
+            "members": [
+                {"node_id": "gateway-a", "instance_index": 0, "role": "active"},
+                {"node_id": "gateway-b", "instance_index": 1, "role": "passive"},
+            ],
+        },
+    )
+    cfg["gateway"]["local_prefixes"] = [local_prefix]
+    connection = cfg["connections"][0]
+    connection["remote_prefixes"] = [remote_prefix]
+    second = deepcopy(connection["tunnels"][0])
+    second.update(
+        name="tunnel-node-b",
+        gateway_instance_index=1,
+        inner_cidr="169.254.19.0/30",
+        inner_local_ip="169.254.19.1",
+        inner_remote_ip="169.254.19.2",
+    )
+    connection["tunnels"].append(second)
+    # Existing CIDR validation accepts host bits without rewriting the config.
+    assert validate_config(cfg).gateway.local_prefixes == [local_prefix]
+    cfg["gateway_group"]["vm_ha"]["tunnel_probes"] = {
+        "tunnel-1": {"source_ip": source, "target_ip": target}
+    }
+    if error:
+        with pytest.raises(ValueError, match=error):
+            validate_config(cfg)
+    else:
+        validated = validate_config(cfg)
+        assert validated.gateway.local_prefixes == [local_prefix]
+        assert validated.connections[0].remote_prefixes == [remote_prefix]
+        assert validated.gateway_group.vm_ha.tunnel_probes["tunnel-1"].source_ip == source
+
+
 def test_load_local_config_reads_ssh_public_key_from_path(
     tmp_path: Path,
     sample_config: dict,
@@ -173,6 +231,10 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 
     first_plan = merge_with_peer_configs(deepcopy(normalized), [])
     second_plan = merge_with_peer_configs(deepcopy(normalized), [])
+    omitted_probes = deepcopy(normalized)
+    omitted_probes["gateway_group"]["vm_ha"].pop("tunnel_probes", None)
+    omitted_plan = merge_with_peer_configs(omitted_probes, [])
+    assert omitted_plan.vm_ha.generation == first_plan.vm_ha.generation
     reordered = deepcopy(normalized)
     reordered["gateway_group"]["vm_ha"]["members"].reverse()
     reordered_plan = merge_with_peer_configs(reordered, [])

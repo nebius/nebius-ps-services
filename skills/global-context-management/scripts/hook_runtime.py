@@ -183,7 +183,7 @@ def payload_files(root: Path) -> dict[str, bytes]:
                 raise ValueError(f"conflicting hook payload: {target}")
             files[target] = data
     support = root / "global-context-management/scripts"
-    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
         files[name] = (support / name).read_bytes()
     return files
 

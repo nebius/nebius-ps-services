@@ -160,6 +160,11 @@ coordinators bind the accepted intent and exact spec receipt before dispatch.
 Workers inherit that evidence, never reclassify user intent or write canonical
 specs, and report typed `spec_gaps` to the coordinator for reconciliation.
 
+When called inside an owned SDLC verification fixture, specification Git reads
+and paired publication use the same sealed Git profile as the workflow. The
+profile changes configuration isolation only; canonical ownership, exact pair
+receipts and publication comparisons remain authoritative.
+
 ## Validation
 
 Focused tests cover:

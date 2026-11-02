@@ -1220,6 +1220,27 @@ class CommitTransactionTest(TransactionFixture):
         result = intent.evaluate({**base, "prompt": "hello", "cwd": str(self.base)})
         self.assert_capture_unavailable(result, "REPOSITORY_UNAVAILABLE")
 
+    def test_sdlc_intake_receipt_keeps_commit_ownership_with_workflow(self) -> None:
+        self.configure_origin()
+        git(self.root, "switch", "-C", "main")
+        head = git(self.root, "rev-parse", "HEAD")
+        result = intent.evaluate({
+            "hook_event_name": "UserPromptSubmit", "cwd": str(self.root),
+            "session_id": "session-1", "turn_id": "turn-1", "agent_type": "root",
+            "prompt": "$sdlc-start Build the fixture through local commit and UAT.",
+        })
+        context = result["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("standalone root commit", context)
+        self.assertIn("Agentic SDLC owns its admission and commits", context)
+        self.assertIn("do not call root begin for its eventual commit phase", context)
+        path = transaction.expected_authorization_path(self.root, "session-1")
+        self.assertTrue(path.with_name("intent.json").is_file())
+        self.assertFalse(path.exists())
+        self.assertFalse(transaction.expected_claim_path(self.root).exists())
+        self.assertEqual(git(self.root, "branch", "--show-current"), "main")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
     def assert_capture_unavailable(self, result, reason):
         self.assertIs(result.get("continue"), True)
         output = result["hookSpecificOutput"]

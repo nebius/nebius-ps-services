@@ -103,6 +103,9 @@ The default report path is:
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `docs/agentic-sdlc-design.md`.
 - `references/verification-checklist.md`.
 - `assets/live-results.schema.json` when producing or ingesting live evidence.
@@ -175,8 +178,14 @@ remotes.
    canonical spec ownership, advisory project-lifecycle independence, direct
    objective/binding regressions, execution and secret gates, Implement and
    managed-worktree interoperability, bounded observability, repair control,
-   exact-SHA publication modes, verifier self-tests, and hook fixtures. The
-   disposable fixture is a nested selected folder in a local
+   exact-SHA publication modes, verifier self-tests, and hook fixtures. Its
+   required capability matrix includes complete document-package coverage,
+   phase/slice ordering, current completion evidence, large task graphs and
+   bounded retained worktrees. Shared semantic and delivery owners participate
+   in installed parity. Missing required tests fail; skipped tests stay partial.
+   Current live profiles do not qualify native multi-slice document delivery
+   or a real remote merge; report those limits explicitly.
+   The disposable fixture is a nested selected folder in a local
    monorepo-shaped Git repository. Obsolete flat fixtures and unknown,
    unowned, dirty, externally connected, or non-canonical directories and repositories
    fail closed without mutation. The script does not edit installed skills or
@@ -226,7 +235,9 @@ remotes.
    machine-semantic validators; never promote a source by relabeling it.
    Deterministic and merge-safety profiles are verifier-derived rather than
    supplied in the live manifest: they become valid only when every mapped
-   deterministic capability or the explicit merge-authorization guard passes.
+   deterministic capability passes. Merge safety also requires executed
+   qualification, protected admission and recovery regressions; hook denials
+   alone are insufficient, and these checks do not qualify a real remote merge.
    Lightweight PASS remains fail-closed until its collector derives exact
    claims from checkpoint, Git, test, steering, document, and repaired-failure
    bytes. Three-tier PASS requires the copied source to byte-match
@@ -348,8 +359,17 @@ marker and have exactly one verifier-owned local bare `origin`. Its private
 receipt binds the project, owner generation, frozen baseline and default branch.
 Creation, evidence recording, resume and cleanup share one validator. Reject
 external or extra remotes, URL overrides, unsafe paths, borrowed objects,
-command-bearing inherited configuration and changed origin refs or push guards. The root, fixture components, and report path must
-be real local directories and files, never symlink redirects.
+repository-local executable configuration, conditional includes and changed
+origin refs or push guards. Every fresh fixture has a private Git configuration
+profile sealed to its generation and origin receipt. The shared validator
+excludes inherited configuration and global/system attributes; only its exact
+owned environment overlay is accepted. Startup, workers, commit admission,
+evidence, resume and cleanup revalidate it without ambient fallback. Launch
+native commands through `scripts/run_with_git_environment.py` with the exact
+owned profile and checkout. It supplies environment only, never SDLC transitions.
+A missing or altered profile requires a failed report, not silent recreation.
+The root, fixture components, and report path must be real local directories
+and files, never symlink redirects.
 
 The three-tier lifecycle helper is additionally limited to private lifecycle
 state, sanitized reports, exact label verification, and deletion of recorded
@@ -422,8 +442,8 @@ not serve concurrent worker tests.
 - The deterministic capability matrix records objective, execution, fallback,
   outer lease, Implement interop, steering, observability, hook, and
   verifier results, including failure-event/diagnosis/repair-control,
-  corrective-plan, explicit-ref/head publication and explicit-PR, canonical
-  single-action merge authorization.
+  corrective-plan, explicit-ref/head publication, owner-produced qualification,
+  protected admission, review drift and ambiguous merge recovery.
 - The private v3 live manifest records digest-backed semantic assertions for
   all seven live lanes and an explicit evidence row for every required Agentic
   SDLC skill. Profile results also bind exact source schemas to collector-made

@@ -250,6 +250,8 @@ jobs:
         run: |
           python -m pytest -n auto \
             tests/integration/test_vm_ha_runtime_composed.py \
+            tests/integration/test_ha_tunnel_repair_order.py \
+            tests/integration/test_ha_bgp_restart_composed.py \
             tests/integration/test_vm_ha_migration_package.py \
             tests/integration/test_vm_ha_failover.py \
             tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key \

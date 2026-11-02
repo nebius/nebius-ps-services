@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ..ha_tunnel_policy import tunnel_exports, tunnel_preferred
 from .local_commands import run
 
 BGPD_CONF = Path("/etc/frr/bgpd.conf")
@@ -222,9 +223,9 @@ class FRRRenderer:
 
                 if remote_ip:
                     # Track tunnel for local-pref route-map
-                    local_pref = 200 if ha_role == "active" else 100
+                    local_pref = 200 if tunnel_preferred(cfg, conn, tun) else 100
                     tunnels_by_localpref[local_pref].append(remote_ip)
-                    if connection_can_advertise:
+                    if connection_can_advertise and tunnel_exports(cfg, conn, tun):
                         outbound_peers_by_localpref[local_pref].append(remote_ip)
                     else:
                         denied_outbound_peers.add(remote_ip)
@@ -427,15 +428,15 @@ class FRRRenderer:
                 remote_ip = tbgp.get("remote_ip") or tun.get("inner_remote_ip")
                 if remote_ip:
                     # Inbound: Set local-preference for THIS router's path preference
-                    local_pref = 200 if ha_role == "active" else 100
+                    local_pref = 200 if tunnel_preferred(cfg, conn, tun) else 100
                     lines.append(f"  neighbor {remote_ip} route-map SET-LOCAL-PREF-{local_pref} in")
 
                     # Every enabled peer receives one explicit outbound policy.
                     # Allowed peers get the local-prefix filter plus MED; every
                     # other peer is fail-closed so learned routes cannot leak.
-                    if connection_can_advertise:
+                    if connection_can_advertise and tunnel_exports(cfg, conn, tun):
                         route_map_name = (
-                            "ADVERTISE-ACTIVE" if ha_role == "active" else "ADVERTISE-PASSIVE"
+                            "ADVERTISE-ACTIVE" if local_pref == 200 else "ADVERTISE-PASSIVE"
                         )
                     else:
                         route_map_name = "ADVERTISE-NONE"

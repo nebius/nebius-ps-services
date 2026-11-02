@@ -60,14 +60,17 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 ## Inputs
 
 - Current feature, phase, exact integration commit, and execution lifecycle.
-- A normalized `failure-event-v1` and optional `diagnosis-v1`.
-- Phase retry counts and `repair-control-v1`.
+- A normalized `failure-event-v2` and optional `diagnosis-v2`.
+- Phase retry counts and `repair-control-v2`.
 - Latest validation, test, evaluation, documentation, UAT, PR, or policy
   output.
 - Execution coordinator, wave/task/result records, Git identity, ancestry, and
   cleanup inventory when the failure is after plan lock.
 
 ## Required Reads
+
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
 
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
@@ -82,8 +85,8 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 
 ## Writes
 
-- Immutable `failure-event-v1`, `diagnosis-v1`, and classification records.
-- Atomic `repair-control-v1`, append-only repair journal, and derived
+- Immutable `failure-event-v2`, `diagnosis-v2`, and classification records.
+- Atomic `repair-control-v2`, append-only repair journal, and derived
   `failure-log.md`.
 - Updated failure class, diagnosis pointer, invalidation set, and next
   recommended skill in state.
@@ -95,13 +98,13 @@ Classify failures and select the correct retry or stop route before any SDLC loo
   `scripts/repair_control.py`; the helper is authoritative for event identity,
   diagnosis validation, taxonomy routing, deduplication, repair budgets,
   invalidation, and transition state.
-- Record one immutable `failure-event-v1`. Its `event_id` binds the exact
+- Record one immutable `failure-event-v2`. Its `event_id` binds the exact
   criterion, commit, fingerprints, and evidence; its `blocker_key` uses only
   stable component, operation, error class, and source boundary.
 - If the event already proves a mechanical owner, route directly to that
   owner. A proven implementation defect bypasses troubleshooting.
 - If an evaluation failure is ambiguous, route exactly once to `troubleshoot`.
-  Require its `diagnosis-v1` to return here before selecting any repair,
+  Require its `diagnosis-v2` to return here before selecting any repair,
   specification, test, evaluator, environment, or design owner.
 - Treat `probable`, incomplete, stale, malformed, tampered, or secret-bearing
   diagnoses as non-authorizing. `UNKNOWN_DEFECT`, missing decisive evidence,
@@ -145,9 +148,9 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 - After a pre-promotion environment block is externally recovered, rerun its
   exact gate on the unchanged clean integrated commit. Use private
   `record-environment-recovery --run-dir <run> --input <receipt>` only with
-  schema `agentic-sdlc/environment-recovery-v1`, the active feature/event/
+  schema `agentic-sdlc/environment-recovery-v2`, the active feature/event/
   classification IDs, original surface/commit/fingerprints, and a digest-bound
-  passing `gate-evidence-v1` source. The helper verifies current Git and
+  passing `gate-evidence-v2` source. The helper verifies current Git and
   fingerprints, then resolves only that environment block. It preserves the
   original failure, history and budgets. It archives the sole resolved gate's
   invalidation in immutable recovery evidence and clears that pending
@@ -200,7 +203,7 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

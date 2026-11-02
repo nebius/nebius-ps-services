@@ -9,6 +9,10 @@ and provides MK8s, Soperator, Grafana, and access-management commands.
 - [Installation](#installation)
   - [Credentials and tools](#credentials-and-tools)
 - [Quick start](#quick-start)
+- [Tailscale Install](#tailscale-install)
+  - [Prepare the gateway infrastructure](#prepare-the-gateway-infrastructure)
+  - [Complete administrator onboarding](#complete-administrator-onboarding)
+  - [Activate and verify access](#activate-and-verify-access)
 - [Core concepts](#core-concepts)
 - [Commands by category](#commands-by-category)
   - [Projects and configuration](#projects-and-configuration)
@@ -144,6 +148,116 @@ After editing `config.yaml`, rerun `validate` and `render` before deployment.
 `deploy` consumes the existing rendered bundle; it does not rerender your edits.
 This differs from recovering an interrupted operation, which requires its
 **original** generation and execution options.
+
+## Tailscale Install
+
+The `tailscale-gw` component creates two persistent Nebius subnet-router VMs by
+default and connects them to your existing Tailscale tailnet. Installation follows
+this order: **prepare infrastructure → obtain administrator approval → record
+onboarding → activate → verify access**. The first deployment installs Tailscale
+on the VMs; onboarding is required before a later deployment joins the tailnet.
+
+Start with the CLI installed and a project configuration from [Quick start](#quick-start).
+Run the examples from the directory containing that project's `config.yaml`.
+You need Nebius access, an SSH key and management source CIDRs for the gateways,
+and a tailnet administrator who can approve the requested access. Install and
+connect the Tailscale client on the computer used to verify private access.
+Each `deploy` applies the project's rendered configuration, including other
+pending changes; review those changes before continuing.
+
+### Prepare the gateway infrastructure
+
+Select `tailscale-gw` in the component wizard and configure the expected tailnet,
+gateway tags, private subnet routes, permitted users/groups, ownership, and
+credential storage. New access rules default to **VPN-style access**: all protocols
+and ports for the explicitly selected sources and private destinations. Clearing
+every destination prompts you to select at least one before continuing. Choose
+**Specific services** for individual protocol/port rules. Management CIDRs are the
+source addresses permitted to SSH to the router VMs on TCP port 22. Prefer a work
+email for the request owner; owner and purpose are contact metadata, granting no permissions.
+Tags are shared router identities proposed for approval before activation;
+include the literal `tag:` prefix, for example `tag:dev-router`, and list each tag
+once. Both setup wizards retry invalid tag entries immediately.
+The wizard does not check name availability. It shows the gateway name default
+`tailscale-gw` and tag-owner default `[]` (administrator-managed), preserving saved values.
+Concise dim guidance explains each credential-storage choice, including an empty linked
+SecretStash container for credentials supplied later. Skip `component add` if the component
+was already selected during project creation.
+
+```bash
+nebius-cxcli component add --config ./config.yaml
+nebius-cxcli validate ./config.yaml
+nebius-cxcli render ./config.yaml
+nebius-cxcli deploy ./config.yaml
+```
+
+New gateways start with `tailscale.stage: infrastructure`. This deployment
+verifies the VMs, SSH identity, Tailscale package and forwarding, and creates a
+metadata-only SecretStash container if selected. It does not enroll the routers
+or read Tailscale credentials. Expect `INFRASTRUCTURE_READY` with
+`gateway_ready: false`; private access is not ready yet.
+
+### Complete administrator onboarding
+
+Generate the administrator request:
+
+```bash
+nebius-cxcli tailscale onboarding request ./config.yaml
+```
+
+Send it to the tailnet administrator for approval of the exact tags, routes and
+access rules, plus a scoped credential delivered through a protected reference.
+The request also identifies any device, route or Tailnet Lock approvals needed.
+Use SecretStash or protected `env:NAME` / `file:PATH` references; never put secret
+values in YAML, chat or command arguments. Optional request exports with `--out`
+must be outside Git.
+
+After receiving approval and the credential reference, run:
+
+```bash
+nebius-cxcli tailscale onboarding configure ./config.yaml
+```
+
+The wizard records the approval reference and fingerprint, saves the credential
+references, and sets `tailscale.stage: active`. It does not enroll the routers;
+the next deployment performs activation.
+
+**When onboarding is needed:** complete it before the first activation. You can
+run `onboarding request` before infrastructure deployment to start approval early;
+running it afterward includes exact resource and secret-container IDs. Incomplete
+requests are marked `DRAFT`. Unchanged deployments reuse the accepted approval.
+If the approved request changes, for example its routes, tags, access rules or
+enrollment mode, generate a new request, obtain renewed approval and rerun
+`onboarding configure`. Changing credential references alone does not invalidate
+the approval fingerprint.
+
+### Activate and verify access
+
+Render the updated configuration, then deploy it:
+
+```bash
+nebius-cxcli render ./config.yaml
+nebius-cxcli deploy ./config.yaml
+nebius-cxcli tailscale doctor ./config.yaml --json
+nebius-cxcli tailscale verify ./config.yaml
+```
+
+Activation requires the completed infrastructure checkpoint and current accepted
+approval. Deployment enrolls the routers, verifies their tailnet identity and
+advertises the configured prefixes. Route approval follows the configured mode:
+delegated API approval or external approval, including approved auto-approvers.
+Permission to use those routes is controlled separately by the tailnet access policy.
+
+If deployment reports `PENDING`, use `doctor` to identify any outstanding device,
+route or Tailnet Lock approval. Have the administrator complete it, then rerun
+`deploy`. Run `verify` from a connected client with configured private HTTPS
+targets to check actual traffic; infrastructure readiness alone is insufficient.
+Failover testing is separate and only runs when explicitly requested.
+
+See the [Tailscale guide](docs/tailscale.md) for configuration, administrator
+prerequisites, credential modes, SecretStash import, recovery and retirement.
+Provisioning uses ordinary `deploy`; there is no `tailscale install` or
+`tailscale deploy` command.
 
 ## Core concepts
 
@@ -362,10 +476,10 @@ They should not be treated as universally side-effect-free.
 | `tailscale doctor` | `CONFIG_YAML` | Diagnose cloud, guest and tailnet prerequisites |
 | `tailscale verify` | `CONFIG_YAML`, optional `--failover` | Prove client HTTPS traffic and optionally bounded failover |
 | `tailscale recover` | `CONFIG_YAML`, exact lock owner or enrollment operation/member | Recover a stopped writer or resume/fence enrollment |
-| `nat status` | `CONFIG_YAML` | Observe gateway, routing and optional trusted-SSH readiness |
-| `nat refresh-routes` | `CONFIG_YAML` | Refresh detached source policy snapshots in configuration |
-| `nat unlock` | `CONFIG_YAML` and exact owner | Release an abandoned shared NAT lock after writers stop |
-| `nat reconcile` | `CONFIG_YAML` | Reconcile settled ambiguous attachments without changing routes |
+| `nat-gateway status` | `CONFIG_YAML` | Observe gateway, routing and optional trusted-SSH readiness |
+| `nat-gateway refresh-routes` | `CONFIG_YAML` | Refresh detached source policy snapshots in configuration |
+| `nat-gateway unlock` | `CONFIG_YAML` and exact owner | Release an abandoned shared NAT lock after writers stop |
+| `nat-gateway reconcile` | `CONFIG_YAML` | Reconcile settled ambiguous attachments without changing routes |
 | `flux apply` | `GENERATED_PATH` | Apply apps directly and wait for readiness |
 | `flux bootstrap` | `GENERATED_PATH` | Establish or reconcile continuous GitOps delivery |
 | `flux destroy` | `GENERATED_PATH` | Remove eligible rendered app resources |
@@ -386,13 +500,9 @@ uninspected. Executed provider checks appear in the required validation report;
 deployment succeeds only when that saved report passes. App, GPU, external, and locally app-bound targets still require
 Kubernetes access; see [private-cluster deployment](docs/mk8s.md#private-cluster-deployment).
 
-The opt-in [Tailscale subnet router](docs/tailscale.md) provisions two persistent
-Nebius VMs by default and connects any customer-owned hosted tailnet. Select
-`tailscale-gw` in the standard wizard, then use ordinary validate/render/deploy
-for infrastructure readiness. `tailscale onboarding request` prints the exact
-administrator request; `onboarding configure` records the approved handoff before
-a second render/deploy activates it. OAuth custody can use direct SDK SecretStash
-access, including renewable Kubernetes workload identity, without requiring ESO.
+For the Tailscale setup sequence and approval timing, see [Tailscale Install](#tailscale-install).
+OAuth custody can use direct SDK SecretStash access, including renewable
+Kubernetes workload identity, without requiring ESO.
 Interrupted enrollment resumes its original operation/key through authenticated
 guest receipts and requires the current approved intent, as does route approval.
 Independent retirement handles partially provisioned members without
@@ -407,6 +517,13 @@ Direct Terraform apply remains blocked while Tailscale resources exist in state,
 even after their component is disabled or removed; use ordinary lifecycle retirement.
 Policy commands resolve linked SecretStash containers from infrastructure outputs
 without modifying the reviewed policy intent.
+
+The `nat-gateway` command group operates on `infra:nat-gateway` configuration and
+retained recovery state. Status and route-policy refresh select enabled components;
+recovery also handles retained state for disabled or removed components and the
+shared project lock. Configure a new
+gateway with `component add infra:nat-gateway --config CONFIG_YAML`, then use
+validate, render, and deploy to provision it and apply routing changes.
 
 The opt-in [custom NAT gateway](docs/nat-gateway.md) also uses `deploy` for staged
 provisioning, trusted guest readiness, route activation and restoration. Its
@@ -607,7 +724,7 @@ belong to `soperator upgrade`.
 
 | Command | Input | Purpose |
 | --- | --- | --- |
-| `grafana install` | `--config CONFIG_YAML --target TARGET_ID` | Configure Grafana/telemetry, render, and deploy |
+| `grafana install` | `--config CONFIG_YAML --target TARGET_ID` | Focused Grafana setup, then render and deploy the project |
 | `grafana show` | `--config CONFIG_YAML --target TARGET_ID` | Print access instructions for deployed Grafana |
 | `grafana import` | Dashboard path and `--config CONFIG_YAML` | Install dashboards and save project intent |
 | `grafana export` | `--url URL` or `--config CONFIG_YAML` | Export dashboard JSON |
@@ -618,8 +735,12 @@ nebius-cxcli grafana install --config "$CONFIG" --target TARGET_ID
 nebius-cxcli grafana show --config "$CONFIG" --target TARGET_ID
 ```
 
-`grafana install` runs the normal deployment workflow, including pending
-project changes. Review those changes first. This explicit installation command
+`grafana install` is the focused Grafana and observability setup command. Both
+`--config` and `--target` are required. It shares the Apps/component-add
+configuration wizard, saves the selected target's settings, renders the current
+configuration, and runs normal whole-project deployment, including other pending
+changes. Review those changes first. `component add` only saves configuration;
+run render and deploy separately afterward. This explicit installation command
 defaults telemetry to local storage; supported routing can select local, remote Nebius services, or both.
 Collectors and datasources follow that routing and the target type.
 
@@ -762,6 +883,7 @@ server certificates and hostnames.
 | --- | --- |
 | [Configuration reference](docs/configuration-reference.md) | Catalogs, schemas, bindings, source profiles, defaults, and secrets configuration |
 | [Project workflows](docs/project-workflows.md) | Authentication, project changes, deploy/recovery, Terraform/Flux, VM access, CI, and reporting |
+| [Tailscale](docs/tailscale.md) | Subnet-router installation, administrator onboarding, credentials, verification, recovery, and retirement |
 | [MK8s](docs/mk8s.md) | Software upgrades, hardware migration, acceptance suites, and deletion |
 | [Soperator](docs/soperator.md) | Create, discover, onboard, status, upgrades, protected storage, and recovery |
 | [Observability](docs/observability.md) | Local/remote routing, Grafana installation, collectors, and access |

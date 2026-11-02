@@ -91,6 +91,10 @@ def request(row: dict[str, Any], *, infrastructure: dict[str, Any] | None = None
                 "Credential delivery and rotation owner",
             ],
             "scope_note": "These scopes do not imply every API operation is restricted to two gateway devices.",
+            "policy_note": (
+                "Requested access does not revoke existing grants. The tailnet administrator "
+                "must remove earlier broader grants when restricting access."
+            ),
         },
         "credential_delivery": {
             "storage": "SecretStash" if ref else "protected environment/file reference",

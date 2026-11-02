@@ -75,6 +75,9 @@ and feature designs in `docs/design.md`.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
   Before preparation, bind evidence to the accepted objective and applicable
@@ -97,6 +100,11 @@ and feature designs in `docs/design.md`.
   staged-scope guard below. The preparation phase retains commit ownership.
 
 ## Process
+
+- Reconcile the supplied design against extracted requirements; preserve accepted
+  decisions. Invoke `design` in advisory mode with the frozen source manifest,
+  selected REQ/FEAT scope and unresolved questions. It returns decisions/conflicts;
+  this adapter retains planning and canonical publication ownership.
 
 - Use `assets/templates/design.md.template` when creating the file.
 - A shared-owner draft-pair bootstrap may already supply inert mapped draft
@@ -163,14 +171,15 @@ applies only before execution preparation; subsequent changes follow the current
 integration/replan owner.
 
 1. Inspect the complete repository's staged, unstaged and untracked paths with
-   rename folding disabled. Only the selected project's `docs/requirements.md`
-   and `docs/design.md` may be dirty. Reject unrelated changes, deletion,
+   rename folding disabled. Only the selected project's canonical pair and the exact source paths
+   returned by private `admit-inputs` may be dirty. This helper validates the
+   accepted manifest and stages only after the complete repository scope check. Reject unrelated changes, deletion,
    symlinks, ignored canonical files or paths outside the selected project.
 2. If either canonical file is untracked, run `git add -A` from the repository
    root only after that guard passes. If both are already tracked, no admission
    staging is needed.
 3. After admission staging, recheck that the staged set contains only those
-   canonical paths, both are tracked, their index bytes equal the published
+   admitted canonical and source paths, both are tracked, their index bytes equal the published
    files, and HEAD is unchanged. When both files were already tracked, preserve
    their existing staged/unstaged state; preparation owns later staging.
    Stop on any mismatch; do not commit, reset, stash or absorb unrelated work.
@@ -244,7 +253,7 @@ integration/replan owner.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

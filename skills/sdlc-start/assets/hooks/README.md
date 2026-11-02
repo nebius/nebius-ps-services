@@ -23,7 +23,7 @@ local Codex home.
   recommended skill.
 - When `current-state.json` has an
   `agentic-sdlc/repair-state-pointer-v1`, the Stop hook validates that its
-  `failure-event-v1`, optional `diagnosis-v1`, and `repair-control-v1` remain
+  `failure-event-v2`, optional `diagnosis-v2`, and `repair-control-v2` remain
   inside the run and agree on feature, event, and stable blocker identity. It
   stops on exhausted budgets or semantic-cycle status, requires
   diagnosis-required work to route to `troubleshoot`, and requires a recorded
@@ -79,14 +79,16 @@ local Codex home.
   through variable expansion, command substitution, an interpreter, or another
   generated program. Workflow skills must issue only the canonical direct
   commands and must not construct guarded actions indirectly.
-- Active-run PR merge requires one exact, expiring `sdlc-merge-pr`
-  authorization bound to the branch, current promoted/reviewed HEAD, explicit
-  user request, passing checks/review/UAT, explicit PR number or URL, and
-  complete `gh pr merge ... --match-head-commit <HEAD>` command. The canonical
-  command permits only an optional long-form merge strategy; admin bypass,
-  branch deletion, repository override, implicit PR selection, shell operators,
-  and appended actions are denied. GitHub merge MCP writes are denied in favor
-  of this race-safe canonical path.
+- Active-run raw merge, approval and workflow-dispatch commands are denied,
+  including CLI wrappers, REST/GraphQL and MCP variants. Caller-written passed
+  labels and legacy command authorization files cannot permit them.
+- `sdlc-merge-pr` uses the SDLC-owned protected delivery adapter. Accepted run
+  intent scopes repository, default branch, delivery slice and live/merge effects;
+  independent qualification and exact review admission precede broker dispatch.
+  Queues are unsupported. Ambiguous submissions reconcile without resubmission;
+  dependent slices wait for independently verified merge results.
+- Stop follows the coordinator's recorded phase. Aggregate feature-status labels
+  must not select UAT or override that route.
 
 ## Validate
 

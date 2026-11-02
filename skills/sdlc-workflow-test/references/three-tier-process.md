@@ -30,6 +30,12 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    boundary and recorded resources without creating replacements. Use the
    private root's isolated agent home for all accepted objective and phase state;
    never reuse or delete the user's ordinary Agentic SDLC run directory.
+   Preparation also creates and seals `<run-root>/.sdlc-git-environment/context.json`.
+   Launch native coordinator commands through `scripts/run_with_git_environment.py`
+   with that profile and the owned checkout. The runtime propagates the same
+   validated context to workers; every Git owner rechecks scope and integrity.
+   Keep current runtime/hook installation inside the selected disposable native
+   home. Do not overwrite ordinary hooks or substitute manual Git overrides.
 3. Render the disposable request with `scripts/render_three_tier_objective.py`
    and invoke `$sdlc-start <rendered fixture objective>` from the owned project.
    Resume another native session with `$sdlc-start continue <project-folder>`.

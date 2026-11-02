@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from nebius_vpngw.agent.routing_guard import (
     has_table_220_rule,
@@ -44,6 +44,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     CloudObservation,
     ComputeState,
     ControllerAction,
+    ControllerSnapshot,
     DataPlaneMode,
     LocalReadiness,
 )
@@ -79,6 +80,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
 )
+from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, covers
 from nebius_vpngw.schema import (
     VMHAMigrationRouteBinding,
     VMHARouteTarget,
@@ -660,6 +662,13 @@ class BoundCloudRuntime:
             ownership_epoch=epoch,
             former_attachment_exact=observed.former_attachment_exact,
             candidate_attachment_absent=observed.candidate_attachment_absent,
+            observed_owner_epoch=(
+                epoch
+                if owner_id == self.local.node_id
+                else observed.former.resource_version
+                if owner_id == peer.node_id
+                else ""
+            ),
         )
 
     def stop_former(self, action: ControllerAction) -> None:
@@ -994,6 +1003,20 @@ def _configured_bgp_summary_sessions(value: object) -> frozenset[str] | None:
     return frozenset(configured)
 
 
+def _confirmed_down_bgp_sessions(value: object) -> frozenset[str]:
+    """Only explicit FRR FSM states prove down; absence/malformed is unknown."""
+    configured = _configured_bgp_summary_sessions(value)
+    if not configured or not isinstance(value, Mapping):
+        return frozenset()
+    peers = value["ipv4Unicast"]["peers"]
+    down = {"Idle", "Connect", "Active", "OpenSent", "OpenConfirm", "Clearing", "Deleted"}
+    return frozenset(
+        peer
+        for peer in configured
+        if isinstance(peers[peer].get("state"), str) and peers[peer]["state"] in down
+    )
+
+
 def _learned_bgp_prefixes(value: object) -> set[str]:
     if not isinstance(value, Mapping) or not isinstance(value.get("routes"), Mapping):
         return set()
@@ -1132,15 +1155,21 @@ def _bgp_export_state(
     observed: Mapping[str, frozenset[str]],
     *,
     configured_peers: Iterable[str] | None = None,
+    confirmed_down: Iterable[str] = (),
 ) -> BGPExportState:
     expected_peers = set(expected)
     live_peers = set(observed) if configured_peers is None else set(configured_peers)
     if live_peers - expected_peers:
         return BGPExportState.DRIFT
-    if expected_peers - live_peers or set(observed) != expected_peers:
+    down = set(confirmed_down) & expected_peers
+    if expected_peers - live_peers or set(observed) != expected_peers - down:
         return BGPExportState.UNKNOWN
-    if any(observed[peer] != prefixes for peer, prefixes in expected.items()):
+    if any(observed[peer] != expected[peer] for peer in observed):
         return BGPExportState.DRIFT
+    required = frozenset().union(*expected.values())
+    actual = frozenset().union(*observed.values())
+    if not required.issubset(actual):
+        return BGPExportState.UNKNOWN
     return BGPExportState.MATCH
 
 
@@ -1215,7 +1244,10 @@ class SystemDataPlaneRuntime:
         routing_lock_path: Path = Path("/run/nebius-vpngw/fix-routes.lock"),
         active_preparer: Callable[[], None] | None = None,
         blocked_preparer: Callable[[], None] | None = None,
+        candidate_preparer: Callable[[], None] | None = None,
+        static_tunnel_names: tuple[str, ...] | None = None,
         tunnel_cold_passive: bool = False,
+        bgp_path_policies: tuple[ConnectionPolicy, ...] = (),
         passive_materialization_attempts: int = 12,
         passive_materialization_interval: float = 0.5,
         bgp_export_attempts: int = 60,
@@ -1266,13 +1298,18 @@ class SystemDataPlaneRuntime:
         self.routing_lock_path = routing_lock_path
         self.active_preparer = active_preparer
         self.blocked_preparer = blocked_preparer
+        self.candidate_preparer = candidate_preparer
+        self.static_tunnel_names = static_tunnel_names
         self.tunnel_cold_passive = tunnel_cold_passive
+        self.bgp_path_policies = bgp_path_policies
         self.passive_materialization_attempts = passive_materialization_attempts
         self.passive_materialization_interval = passive_materialization_interval
         self.bgp_export_attempts = bgp_export_attempts
         self.bgp_export_interval = bgp_export_interval
         self.sleeper = sleeper
         self.monotonic_clock = monotonic_clock
+        self.confirmed_down_bgp_sessions: frozenset[str] = frozenset()
+        self.effective_export_provider: Callable[[], dict[str, frozenset[str]]] | None = None
 
     def _write_guard(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         _atomic_write_json(
@@ -1322,7 +1359,9 @@ class SystemDataPlaneRuntime:
         *,
         configured_sessions: Iterable[str] | None = None,
         established_sessions: Iterable[str] | None = None,
+        confirmed_down: Iterable[str] = (),
     ) -> tuple[frozenset[str], dict[str, frozenset[str]]] | None:
+        self.confirmed_down_bgp_sessions = frozenset(confirmed_down)
         if not self.expected_bgp_exports and not self.bgp_export_observation_required:
             return frozenset(), {}
         configured = (
@@ -1348,6 +1387,7 @@ class SystemDataPlaneRuntime:
                 return None
             configured = configured_summary
             established = frozenset(_established_bgp_sessions(summary)) & configured
+            self.confirmed_down_bgp_sessions = _confirmed_down_bgp_sessions(summary)
         observed: dict[str, frozenset[str]] = {}
         for peer in sorted(established):
             result = self._run(
@@ -1367,7 +1407,11 @@ class SystemDataPlaneRuntime:
 
     def _expected_exports_for_mode(self, mode: DataPlaneMode) -> dict[str, frozenset[str]]:
         if mode is DataPlaneMode.ACTIVE:
-            return dict(self.expected_bgp_exports)
+            return (
+                self.effective_export_provider()
+                if self.effective_export_provider is not None
+                else dict(self.expected_bgp_exports)
+            )
         return {peer: frozenset() for peer in self.expected_bgp_exports}
 
     def _passive_bgp_exports_proven(self) -> bool:
@@ -1394,6 +1438,8 @@ class SystemDataPlaneRuntime:
         ):
             return False
         established = frozenset(_established_bgp_sessions(summary)) & configured
+        if configured - established != _confirmed_down_bgp_sessions(summary):
+            return False
         for peer in sorted(established):
             result = self._run(
                 self.commands.vtysh,
@@ -1423,6 +1469,7 @@ class SystemDataPlaneRuntime:
                     expected,
                     evidence[1],
                     configured_peers=evidence[0],
+                    confirmed_down=self.confirmed_down_bgp_sessions,
                 )
             )
             if state is BGPExportState.MATCH:
@@ -1485,6 +1532,7 @@ class SystemDataPlaneRuntime:
         export_evidence = self._observe_bgp_exports(
             configured_sessions=configured,
             established_sessions=established,
+            confirmed_down=_confirmed_down_bgp_sessions(summary),
         )
         advertised = {} if export_evidence is None else export_evidence[1]
         established_ike_sa_count = 0
@@ -1531,6 +1579,7 @@ class SystemDataPlaneRuntime:
                 self._expected_exports_for_mode(self.mode()),
                 advertised,
                 configured_peers=configured,
+                confirmed_down=self.confirmed_down_bgp_sessions,
             ),
             routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
         )
@@ -1732,7 +1781,24 @@ class SystemDataPlaneRuntime:
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("cold static standby lost its passive forwarding fence")
-            self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
+            if self.static_tunnel_names is None:
+                self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
+            else:
+                from .tunnel_observation import scoped_ike_ids
+
+                listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+                if listed.returncode:
+                    raise RuntimeError("static standby SA state unavailable")
+                names = set(self.static_tunnel_names)
+                for uniqueid in scoped_ike_ids(listed.stdout, names):
+                    result = self._run(
+                        self.commands.swanctl, "--terminate", "--ike-id", uniqueid, "--timeout", "1"
+                    )
+                    if result.returncode:
+                        raise RuntimeError("static standby suspension failed")
+                listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+                if listed.returncode or scoped_ike_ids(listed.stdout, names):
+                    raise RuntimeError("static standby suspension is incomplete")
             self._write_state(action, DataPlaneMode.PASSIVE)
             self._write_guard(action, DataPlaneMode.PASSIVE)
         finally:
@@ -1748,6 +1814,8 @@ class SystemDataPlaneRuntime:
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("candidate tunnel preparation requires passive fenced mode")
+            if self.candidate_preparer is not None:
+                self.candidate_preparer()
             load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
             if load.returncode != 0:
                 raise RuntimeError("candidate tunnel configuration could not be loaded")
@@ -1783,11 +1851,107 @@ class SystemDataPlaneRuntime:
         self._write_state(action, DataPlaneMode.BLOCKED)
         self._write_guard(action, DataPlaneMode.BLOCKED)
 
+    def _repair_failed_bgp_paths(self, action: ControllerAction, deadline: float) -> bool:
+        """Give FRR an authoritative path-loss signal without restarting healthy paths.
+
+        This is an effect of the existing persisted owner repair, not a new
+        recovery episode. Native selection and actual selected-route readiness
+        remain FRR's and the observer's responsibilities respectively.
+        """
+        from .tunnel_observation import path_health
+        from .tunnels import Health
+
+        reasons = set(action.repair_reasons)
+        if (
+            "bgp-not-ready" not in reasons
+            or reasons - {"bgp-not-ready", "xfrm-not-ready"}
+            or not self.bgp_path_policies
+        ):
+            return False
+
+        def run(*argv: str) -> str:
+            result = self._run_before(deadline, *argv)
+            if result.returncode:
+                raise RuntimeError("bounded BGP repair evidence is unavailable")
+            return result.stdout
+
+        descriptor = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            sas = run(self.commands.swanctl, "--list-sas", "--raw")
+            states = run(self.commands.ip, "-j", "xfrm", "state")
+            policies = run(self.commands.ip, "-j", "xfrm", "policy")
+            links = json.loads(run(self.commands.ip, "-d", "-j", "link", "show", "type", "xfrm"))
+            summary = json.loads(run(self.commands.vtysh, "-c", "show bgp summary json"))
+            configured = _configured_bgp_summary_sessions(summary)
+            established = frozenset(_established_bgp_sessions(summary))
+            down = _confirmed_down_bgp_sessions(summary)
+            if (
+                configured is None
+                or configured != self.configured_bgp_sessions
+                or configured - established - down
+            ):
+                raise RuntimeError("BGP repair peer evidence is unknown")
+            targets: list[str] = []
+            peers = [path.peer for policy in self.bgp_path_policies for path in policy.paths]
+            if len(peers) != len(set(peers)):
+                return False
+            for policy in self.bgp_path_policies:
+                health = {
+                    path.name: path_health(
+                        path,
+                        policy,
+                        sas=sas,
+                        states=states,
+                        policies=policies,
+                        links=links,
+                        routes=[],
+                        require_routes=False,
+                    )
+                    for path in policy.paths
+                }
+                if Health.UNKNOWN in health.values():
+                    raise RuntimeError("BGP repair encrypted-path evidence is unknown")
+                failed = [path for path in policy.paths if health[path.name] is Health.DOWN]
+                if not failed:
+                    continue
+                if not policy.eligible:
+                    return False
+                alternatives = []
+                for path in policy.paths:
+                    if health[path.name] is not Health.HEALTHY or path.peer not in established:
+                        continue
+                    rib = json.loads(
+                        run(
+                            self.commands.vtysh,
+                            "-c",
+                            f"show bgp ipv4 unicast neighbors {path.peer} routes json",
+                        )
+                    )
+                    if covers(frozenset(_learned_bgp_prefixes(rib)), policy.destinations):
+                        alternatives.append(path)
+                if not alternatives:
+                    return False
+                targets.extend(path.peer for path in failed)
+            if not targets:
+                return False
+            for peer in targets:
+                run(self.commands.vtysh, "-c", f"clear bgp ipv4 unicast {peer}")
+            return True
+        except (OSError, ValueError, TypeError) as error:
+            raise RuntimeError("bounded BGP path repair could not be proven") from error
+        finally:
+            os.close(descriptor)
+
     def repair_local(self, action: ControllerAction) -> None:
         if action.repair_deadline_at is None or not action.repair_reasons:
             raise RuntimeError("local repair action has no bounded authority")
         repair_deadline = action.repair_deadline_at - 1.0
         try:
+            if self._repair_failed_bgp_paths(action, repair_deadline):
+                if self.monotonic_clock() >= repair_deadline:
+                    raise TimeoutError
+                return
             reasons = set(action.repair_reasons)
             encrypted_path_unhealthy = bool({"local-service-unhealthy", "xfrm-not-ready"} & reasons)
             if encrypted_path_unhealthy:
@@ -2231,6 +2395,9 @@ class BoundRouteRuntime:
             raise ValueError("Committed BGP policy manifest must be a list")
         self.expected_import_policy_digest = expected_import_policy_digest
         self.clock = clock
+        self.static_readiness_provider: Callable[[], bool] | None = None
+        self.bgp_override_readiness_provider: Callable[[], bool] | None = None
+        self.passive_bgp_policy_provider: Callable[[], bool | None] | None = None
         self.reconciler = VMHARouteReconciler(
             cluster_id=binding.cluster_id,
             node_id=local_node_id,
@@ -2279,6 +2446,8 @@ class BoundRouteRuntime:
             return LocalReadiness(False, False, False, False)
         bgp = self._bgp(observed)
         static_ready = self.static_manifest.prefixes.issubset(observed.usable_xfrm_prefixes)
+        if self.static_readiness_provider is not None:
+            static_ready = static_ready and self.static_readiness_provider()
         required_xfrm_prefixes = self.static_manifest.prefixes | bgp.required_prefixes
         missing_redundant_sessions = (
             bgp.configured_sessions - bgp.established_sessions
@@ -2286,6 +2455,14 @@ class BoundRouteRuntime:
             else frozenset()
         )
         export_ready = observed.bgp_export_state is BGPExportState.MATCH
+        passive_policy = (
+            self.passive_bgp_policy_provider()
+            if self.passive_bgp_policy_provider is not None
+            else True
+        )
+        override_ready = (
+            self.bgp_override_readiness_provider is None or self.bgp_override_readiness_provider()
+        )
         export_reason = {
             BGPExportState.DRIFT: "bgp-export-drift",
             BGPExportState.UNKNOWN: "bgp-export-unavailable",
@@ -2296,9 +2473,15 @@ class BoundRouteRuntime:
         readiness = LocalReadiness(
             service_healthy=observed.service_healthy,
             static_ready=static_ready,
-            bgp_ready=bgp.promotion_ready and export_ready,
-            xfrm_ready=required_xfrm_prefixes.issubset(observed.usable_xfrm_prefixes),
-            path_degraded=bool(missing_redundant_sessions or export_reason or hygiene_reason),
+            bgp_ready=bgp.promotion_ready
+            and export_ready
+            and override_ready
+            and passive_policy is True,
+            xfrm_ready=static_ready
+            and required_xfrm_prefixes.issubset(observed.usable_xfrm_prefixes),
+            path_degraded=bool(
+                missing_redundant_sessions or export_reason or hygiene_reason or not override_ready
+            ),
             degraded_reasons=tuple(
                 reason
                 for condition, reason in (
@@ -2307,22 +2490,26 @@ class BoundRouteRuntime:
                         "redundant-bgp-session-unavailable",
                     ),
                     (export_reason is not None, export_reason or ""),
+                    (not override_ready, "bgp-override-coverage-unavailable"),
                     (hygiene_reason is not None, hygiene_reason or ""),
                 )
                 if condition
             ),
             routing_hygiene_ready=routing_hygiene_ready,
+            passive_policy_refresh_required=passive_policy is False
+            and override_ready
+            and export_ready,
         )
         static_only = bool(self.static_manifest.prefixes) and not self.bgp_policies
         candidate_preparation_required = bool(
-            static_only and passive_mode and not readiness.promotion_ready
+            self.static_manifest.prefixes and passive_mode and not readiness.static_ready
         )
         cold_standby_ready = bool(
             candidate_preparation_required
             and observed.service_healthy
-            and bgp.promotion_ready
-            and observed.established_ike_sa_count == 0
-            and not observed.usable_xfrm_prefixes
+            and readiness.bgp_ready
+            and (not static_only or observed.established_ike_sa_count == 0)
+            and not (self.static_manifest.prefixes & observed.usable_xfrm_prefixes)
             and routing_hygiene_ready
         )
         return replace(
@@ -2719,7 +2906,12 @@ class BoundRouteRuntime:
             return None
         current_plan = self._plan(ownership, state, observed=observed)
         if (
-            current_plan.blocked_reasons
+            set(current_plan.blocked_reasons)
+            - {
+                "configured-bgp-sessions-not-established",
+                "required-bgp-prefixes-not-learned",
+                "required-bgp-prefixes-lack-usable-xfrm-next-hop",
+            }
             or current_plan.mutations
             or not receipt.context.matches(ownership)
             or receipt.plan_digest != self._plan_digest(current_plan)
@@ -2810,6 +3002,7 @@ class VMHARuntimePorts:
     credential_bundle: CredentialBundle
     mtls_snapshot_provider: Callable[[], MTLSSnapshot]
     auto_healing_policy_provider: Callable[[], tuple[str, str]]
+    tunnel_recovery_provider: Callable[[], dict[str, Any] | None] = lambda: None
 
     def providers(self) -> dict[str, Callable[..., object]]:
         return {
@@ -2952,14 +3145,33 @@ class VMHARuntimePorts:
             ActionKind.ENABLE_ACTIVE: checked(ActionKind.ENABLE_ACTIVE, enable),
         }
 
-    def heartbeat(self, *, boot_id: str, sequence: int, clock: float) -> PeerHeartbeat:
-        """Build one secret-free advisory heartbeat from fresh local truth."""
+    def heartbeat(
+        self, *, boot_id: str, sequence: int, clock: float, snapshot: ControllerSnapshot
+    ) -> PeerHeartbeat:
+        """Publish one fresh controller observation without another cloud read."""
+
+        digests = DigestSet(
+            self.binding.configuration_digest,
+            self.binding.static_routes_digest,
+            self.binding.bgp_policy_digest,
+        )
+        if not (
+            snapshot.boot_id == boot_id
+            and snapshot.cluster_id == self.binding.cluster_id
+            and snapshot.local_node_id == self.local.node_id
+            and snapshot.peer_node_id == self.peer.node_id
+            and snapshot.configured_role.value == self.local.role.value
+            and snapshot.local_generation_id == self.binding.generation_id
+            and snapshot.local_digests == digests
+            and snapshot.cloud.allocation_id == self.binding.shared_allocation_id
+        ):
+            raise RuntimeError("heartbeat observation does not match the local runtime binding")
 
         mtls = self.mtls_snapshot_provider()
         auto_healing_state, auto_healing_digest = self.auto_healing_policy_provider()
-        cloud = self.cloud.observe()
-        readiness = self.routes.readiness()
-        data_plane_mode = self.data_plane.mode()
+        cloud = snapshot.cloud
+        readiness = snapshot.readiness
+        data_plane_mode = snapshot.data_plane_mode
         active_ready = bool(
             data_plane_mode is DataPlaneMode.ACTIVE
             and cloud.local_attachment_exact(self.local.node_id)
@@ -2985,11 +3197,7 @@ class VMHARuntimePorts:
             generation_id=self.binding.generation_id,
             mtls_epoch=mtls.epoch,
             certificate_fingerprint=mtls.certificate_fingerprint,
-            digests=DigestSet(
-                self.binding.configuration_digest,
-                self.binding.static_routes_digest,
-                self.binding.bgp_policy_digest,
-            ),
+            digests=digests,
             service_healthy=readiness.service_healthy,
             route_ready=readiness.transfer_ready,
             promotion_ready=bool(
@@ -2998,6 +3206,7 @@ class VMHARuntimePorts:
             ),
             auto_healing_policy_state=auto_healing_state,
             auto_healing_policy_digest=auto_healing_digest,
+            tunnel_recovery=self.tunnel_recovery_provider(),
         )
 
     def install_shutdown_guard(self, *, boot_id: str) -> None:
@@ -3206,6 +3415,7 @@ def build_runtime_ports(
     systemd_invocation_id: str | None = None,
     active_preparer: Callable[[], None] | None = None,
     blocked_preparer: Callable[[], None] | None = None,
+    candidate_preparer: Callable[[], None] | None = None,
 ) -> VMHARuntimePorts:
     """Construct every runtime port without connecting it to the default service."""
 
@@ -3333,12 +3543,21 @@ def build_runtime_ports(
             "bgp_export_observation_required": bool(bgp_records),
             "runner": runner,
             "monotonic_clock": effective_monotonic_clock,
-            "tunnel_cold_passive": bool(static_records) and not bgp_records,
+            "tunnel_cold_passive": bool(static_records),
         }
         if active_preparer is not None:
             data_plane_kwargs["active_preparer"] = active_preparer
         if blocked_preparer is not None:
             data_plane_kwargs["blocked_preparer"] = blocked_preparer
+        if candidate_preparer is not None:
+            data_plane_kwargs["candidate_preparer"] = candidate_preparer
+            data_plane_kwargs["static_tunnel_names"] = tuple(
+                str(t["name"])
+                for c in cast(list[dict[str, Any]], config.get("connections", []))
+                if c.get("routing_mode") == "static"
+                for t in c.get("tunnels", [])
+                if t.get("ha_role") != "disable"
+            )
         data_plane = data_plane_factory(
             **data_plane_kwargs,
         )

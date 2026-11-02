@@ -163,7 +163,7 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
 from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
 from nebius_vpngw.deploy.vm_manager import PublicAllocationCandidate
 from nebius_vpngw.nebius_auth import NebiusCLIAuthenticationError
-from nebius_vpngw.schema import HARole, RoutingMode, VMHARouteTarget
+from nebius_vpngw.schema import HARole, RoutingMode, VMHARouteTarget, VMHARuntimeBinding
 from nebius_vpngw.vm_ha_credentials import VMHACredentialIdentityError
 
 
@@ -4484,6 +4484,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             ),
         ),
     )
+    binding.route_runtime_id = VMHARuntimeBinding.derive_route_runtime_id(
+        binding.cluster_id, binding.shared_allocation_id, binding.route_targets
+    )
     generation = SimpleNamespace(
         generation_id="a" * 64,
         digests=SimpleNamespace(
@@ -4580,7 +4583,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 return {
                     "members": [],
                     "project_id": "project-test",
-                    "route_targets": [],
+                    "route_targets": [
+                        target.model_dump(mode="json") for target in binding.route_targets
+                    ],
                     "routes": [],
                     "shared_allocation": {
                         "allocation_name": "gateway-cluster-a-shared-private-ip",
@@ -4590,7 +4595,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             return {
                 "members": [],
                 "project_id": "project-test",
-                "route_targets": [],
+                "route_targets": [
+                    target.model_dump(mode="json") for target in binding.route_targets
+                ],
                 "routes": [],
                 "shared_allocation": {
                     "allocation_id": "shared-private",
@@ -4822,7 +4829,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 "owner_node_id": "node-a",
                 "ownership_epoch": "7",
                 "ownership_incarnation": 0,
-                "route_runtime_id": "route-runtime-a",
+                "route_runtime_id": binding.route_runtime_id,
             },
         }
         role = inst_cfg.vm_ha_node.role.value
@@ -5316,6 +5323,15 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
             "public-1",
         ),
     )
+    route_target = VMHARouteTarget(
+        project_id="project-test",
+        network_id="network-a",
+        workload_subnet_id="subnet-a",
+        route_table_id="route-table-a",
+    )
+    route_runtime_id = VMHARuntimeBinding.derive_route_runtime_id(
+        "cluster-a", "shared-private", (route_target,)
+    )
     before_observation = {
         "members": [
             {
@@ -5346,7 +5362,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
             },
         ],
         "project_id": "project-test",
-        "route_targets": [],
+        "route_targets": [route_target.model_dump(mode="json")],
         "routes": [],
         "shared_allocation": {
             "allocation_id": "shared-private",
@@ -5395,17 +5411,11 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
         ),
         current_observation=before_observation,
     )
-    route_target = VMHARouteTarget(
-        project_id="project-test",
-        network_id="network-a",
-        workload_subnet_id="subnet-a",
-        route_table_id="route-table-a",
-    )
     active_state = replace(
         active_state,
         status=VMHALifecycleStatus.ACTIVE,
         allocation_id="shared-private",
-        route_runtime_id="route-runtime-a",
+        route_runtime_id=route_runtime_id,
         route_targets=(
             json.dumps(
                 route_target.model_dump(mode="json"),
@@ -5463,7 +5473,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
     runtime_binding = SimpleNamespace(
         cluster_id="cluster-a",
         shared_allocation_id="shared-private",
-        route_runtime_id="route-runtime-a",
+        route_runtime_id=route_runtime_id,
         generation_id="a" * 64,
         configuration_digest="a" * 64,
         static_routes_digest="b" * 64,
@@ -5634,7 +5644,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
                     "owner_node_id": "node-a",
                     "ownership_epoch": "7",
                     "ownership_incarnation": 0,
-                    "route_runtime_id": "route-runtime-a",
+                    "route_runtime_id": route_runtime_id,
                 }
                 if owner
                 else None
@@ -12957,10 +12967,16 @@ def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     assert "--swap-route-table" in option_help_by_name["yes"]
 
     assert "multi-connection topologies" in failover_help
+    assert "HA: eligible alternative tunnel on the current owner" in failover_help
+    assert "Ordinary BGP: passive tunnel" in failover_help
+    failback_help = failback_command.params[0].help or ""
+    assert "HA: configured preferred tunnel on the current owner" in failback_help
+    assert "Ordinary BGP: active tunnel" in failback_help
     for command in (failover_command, failback_command):
+        assert "Required when selection is ambiguous" in command.params[0].help
         command_help = command.help or ""
-        assert "supported only on regular gateways (non-HA)" in command_help
-        assert "using BGP, not Static routing" in command_help
+        assert "HA owner (Static/BGP)" in command_help
+        assert "regular BGP gateway" in command_help
     assert "only the owning gateway VM" in restart_help
     normalized_restart_command_help = " ".join((restart_command.help or "").split())
     assert "supported only on regular gateways (non-HA)" in normalized_restart_command_help

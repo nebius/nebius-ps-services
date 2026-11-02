@@ -347,6 +347,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     lock_fd = os.open(state_dir / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
     monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: lock_fd)
     monkeypatch.setattr(agent_main, "_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", state_dir)
     monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path=config_path: vm_ha)
     monkeypatch.setattr(
         agent_main,

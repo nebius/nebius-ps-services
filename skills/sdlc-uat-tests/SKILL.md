@@ -1,6 +1,6 @@
 ---
 name: sdlc-uat-tests
-description: "Use only as part of the Agentic SDLC workflow; after all feature commits, run whole-system product-level acceptance testing in any confirmed safe live experiment environment before PR creation."
+description: "Use only as part of the Agentic SDLC workflow; qualify the promoted delivery slice and inherited product regression obligations before PR creation, using a confirmed safe live target when applicable."
 user-invocable: false
 ---
 
@@ -43,11 +43,11 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
-Validate the full product, not just individual features, before PR creation.
+Validate the promoted delivery slice against every mandatory acceptance criterion and inherited product regression obligation before its PR is created. Keep future slices pending; a passing slice does not complete its parent features or phases.
 
 ## When To Use
 
-- All feature commits are complete.
+- The current delivery slice is sealed and promoted.
 - Cross-feature user journeys need acceptance evidence.
 - The SDLC loop reaches UAT before PR creation.
 
@@ -59,14 +59,17 @@ Validate the full product, not just individual features, before PR creation.
 
 ## Inputs
 
-- All requirements.
-- All feature designs.
-- All feature evidence.
+- The frozen slice criteria, inherited regression obligations and source mappings.
+- The canonical requirements and designs relevant to those obligations.
+- The current slice and dependency evidence.
 - Current branch.
 - Product startup instructions.
 - Live Experiment Environment section from `docs/requirements.md`, when present.
 
 ## Required Reads
+
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
 
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
@@ -90,7 +93,8 @@ Validate the full product, not just individual features, before PR creation.
 ## Process
 
 - Use `assets/templates/uat-report.md.template` for the report.
-- Build a UAT matrix from acceptance criteria.
+- Build a UAT matrix from every frozen slice and inherited regression criterion.
+  Distinguish scoped package checks from complete source acceptance scenarios.
 - Select GUI, TUI, API, service, or mixed harness.
 - Default web GUI rows to `sdlc-gui-test` with `harness: playwright-test`,
   `headless: true`, a fresh owned Chrome process/context and repeatable
@@ -103,12 +107,18 @@ Validate the full product, not just individual features, before PR creation.
   explicit non-production or disposable confirmation, and the UAT actions fit
   the recorded allowed operations and reset process. If unavailable or unsafe,
   classify the blocker instead of improvising against production.
+- For an accepted non-runtime slice, use the reviewed live-test-not-applicable
+  path and its committed qualification harness; do not require a live cluster.
+  Runtime, deployment, security and data slices require applicable live evidence.
 - Run end-to-end user journeys and negative criteria.
 - For data-backed GUI journeys, use an independent API, database, or service
   oracle when required by the acceptance plan; screenshots alone are not PASS
   evidence.
 - Validate cross-feature interactions.
-- Record evidence and classify failures.
+- Execute the frozen repository qualification harness through private `qualify`;
+  use its owner-produced receipt for PR/merge admission. Reports alone are not
+  passing evidence. Record independent artifact/configuration and trial/reset
+  observations for all harness types, then classify failures.
 
 ## Idempotency
 
@@ -138,8 +148,9 @@ Validate the full product, not just individual features, before PR creation.
 
 ## Completion Criteria
 
-- Full UAT report exists.
-- All P0 acceptance criteria pass or blockers are classified.
+- A complete UAT report for the current slice exists.
+- Every mandatory slice criterion and inherited regression obligation passes;
+  missing, skipped, stale or intervened evidence blocks delivery.
 - Cross-feature flows pass.
 - Product is ready for publication-only `create-pr` only on pass and only for
   the clean exact promoted SHA tested by UAT.
@@ -157,7 +168,7 @@ Validate the full product, not just individual features, before PR creation.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

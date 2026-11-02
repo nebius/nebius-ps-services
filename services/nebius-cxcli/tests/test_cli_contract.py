@@ -133,6 +133,70 @@ def test_complete_cli_tree_matches_canonical_contract() -> None:
     assert len(contract["public_paths"]) == len(set(contract["public_paths"]))
 
 
+def test_nat_gateway_is_the_only_public_gateway_command_group() -> None:
+    root = get_command(cli.app)
+    assert "nat" not in root.commands
+    gateway = root.commands["nat-gateway"]
+    assert not gateway.hidden
+    assert isinstance(gateway, click.Group)
+    assert set(gateway.commands) == {"status", "refresh-routes", "unlock", "reconcile"}
+    assert all(not command.hidden for command in gateway.commands.values())
+
+    result = CliRunner().invoke(cli.app, ["nat", "--help"])
+    assert result.exit_code == 2
+    assert "No such command 'nat'" in Text.from_ansi(result.output).plain
+
+
+@pytest.mark.parametrize(
+    ("path", "clauses"),
+    [
+        (
+            "nat-gateway",
+            (
+                "enabled infra:nat-gateway components in CONFIG_YAML",
+                "Recovery also handles retained state for disabled or removed components",
+                "shared project lock",
+                "component add infra:nat-gateway --config CONFIG_YAML",
+                "validate, render, and deploy",
+                "provision the gateway and apply routing changes",
+            ),
+        ),
+        (
+            "nat-gateway reconcile",
+            ("without resource mutations",),
+        ),
+        (
+            "grafana",
+            (
+                "focused setup using the shared Apps/component-add wizard",
+                "saves settings, renders, and deploys the whole project",
+                "including other pending changes",
+                "--config CONFIG_YAML and --target CLUSTER_TARGET",
+                "component add only saves configuration for later render/deploy",
+            ),
+        ),
+        (
+            "grafana install",
+            (
+                "Configure Grafana, then render and deploy the project",
+                "shared Apps/component-add configuration wizard",
+                "Both --config CONFIG_YAML and --target CLUSTER_TARGET are required",
+                "component add only saves configuration for later render/deploy",
+                "normal whole-project deploy can apply other pending project changes",
+                "usual deployment approvals",
+            ),
+        ),
+    ],
+)
+def test_gateway_and_grafana_help_explain_configuration_and_deployment(path, clauses) -> None:
+    result = CliRunner().invoke(cli.app, [*path.split(), "--help"])
+    assert result.exit_code == 0, result.output
+    rendered = Text.from_ansi(result.output).plain
+    rendered = " ".join(re.sub(r"[\u2500-\u257f]", " ", rendered).split())
+    for clause in clauses:
+        assert clause in rendered, (path, clause, rendered)
+
+
 def test_every_public_help_surface_renders() -> None:
     contract = load_cli_contract(_contract_path())
     runner = CliRunner()

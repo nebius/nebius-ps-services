@@ -175,7 +175,6 @@ support for ambiguous failure diagnosis.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `sdlc-align-specs` | Explicit only | Report advisory SDLC spec-alignment context outside the required phase sequence; normal workflow alignment uses `align`. |
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
 | `sdlc-classify-failure` | Explicit only | Validate normalized failure/diagnosis records, enforce repair budgets and design admission, and route proven causes or conditional troubleshooting. |
 | `sdlc-commit` | Explicit only | Seal final integration changes, ff-only promote the exact verified tip to the unchanged project branch, and non-force-clean integration resources; never pushes. |
@@ -186,13 +185,13 @@ support for ambiguous failure diagnosis.
 | `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
 | `sdlc-gui-test` | Explicit only | Evaluate web GUI acceptance with owned headless Playwright Test and optional isolated headless MCP exploration; honor explicit native-desktop requirements separately. |
 | `sdlc-implement-plan` | Explicit only | Coordinate immutable dependency/corrective waves, preserve diagnosis/oracle bindings, integrate in order, rerun invalidated evidence, and clean without force. |
-| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request, final readiness checks, and exact promoted/reviewed head verification. |
+| `sdlc-merge-pr` | Coordinator only | Complete an opted-in delivery slice through protected admission, direct merge and independent result verification. |
 | `sdlc-prepare-execution` | Explicit only | Prepare or resume the persistent feature integration worktree and deterministic task waves after plan lock and before TDD. |
 | `sdlc-start` | Explicit only | Coordinate accepted objectives, explicit session bindings, authoritative repair-control pointers, conditional diagnosis, and exactly one next phase. |
 | `sdlc-tdd` | Explicit only | Convert acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests before implementation. |
 | `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
 | `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented and evaluated SDLC evidence without editing requirements or design. |
-| `sdlc-uat-tests` | Explicit only | Run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before PR creation. |
+| `sdlc-uat-tests` | Explicit only | Qualify each promoted delivery slice and inherited product regressions, using authorized live tests or reviewed non-runtime N/A, before PR creation. |
 | `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature and planned slice. |
 | `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation for the current feature, then use `code-review` as a review-only quality gate. |
 
@@ -829,6 +828,18 @@ private evidence, the exact complete skill matrix, and clean in-scope paths
 across every commit in the supplied history. It writes under
 `<agent-home>/sdlc-verification/` and must not change real projects, installed
 skills, hooks, hook trust, or agent configuration.
+
+Required deterministic coverage includes portable document obligations,
+phase/slice barriers, source freshness, large task graphs, indexed handoffs and
+bounded worktree retention. Parity includes shared specification and protected
+delivery owners. Missing tests fail; skipped tests remain partial. Current live
+profiles do not qualify native multi-slice document delivery or remote merging.
+
+Disposable Git fixtures use one sealed configuration profile bound to their
+owned origin and generation. Startup, workers, commits, evidence and cleanup
+validate that same profile; personal/system settings and global attributes do
+not enter the fixture. Local executable settings, foreign repositories and
+altered profiles fail closed. Ordinary Git configuration and hooks are unchanged.
 
 The rename is an intentional ownership hard cut. Destroy retained live
 verifier environments before installing it; the renamed skill does not read or
@@ -1505,12 +1516,12 @@ and `next_recommended_skill`, the coordinator routes to the recorded owner.
 In that diagnostic mode, `troubleshoot` preserves the failed integration commit
 and accepted criteria, may use only reversible uncommitted instrumentation in
 the private integration worktree, removes it before handoff, commits no product
-repair, invokes no design phase, and returns one `diagnosis-v1` to
+repair, invokes no design phase, and returns one `diagnosis-v2` to
 classification. A known mechanical owner bypasses this branch. Missing
 decisive evidence, competing hypotheses, and “no implementation bug found”
 stop without speculative redesign.
 
-Agentic SDLC uses its own authoritative `repair-control-v1`: two localized
+Agentic SDLC uses its own authoritative `repair-control-v2`: two localized
 attempts, one design-scale attempt, three total attempts and 60 active minutes
 per stable blocker tranche, plus four repair dispatches per feature. A failed
 first direct repair requires troubleshooting before attempt two. Each retry
@@ -1865,3 +1876,34 @@ existence alone is not success.
 
 The Nebius skill includes an [SDK-first Kubernetes workload identity workflow](nebius/references/kubernetes-workload-identity.md)
 for direct SecretStash and other IAM APIs, with optional ESO synchronization.
+
+### Document programs and bounded delivery
+
+The shared [document delivery contract](worktree/references/document-delivery.md)
+defines portable source coverage, private phase/slice plans, cross-feature tasks,
+four-worker/four-retained-worktree bounds and explicit completion policy. Extract
+requirements before reconciling supplied designs; preserve accepted contracts.
+The default stops at a reviewed PR. Opted-in protected direct merge additionally
+requires executed qualification, exact review/CI identity and merged-result checks.
+A cluster alone grants no merge authority. Queue configurations are unsupported.
+
+```mermaid
+flowchart LR
+  A[Source manifest and obligations] --> B[REQ and FEAT reconciliation]
+  B --> C[Phase barriers and frozen slice]
+  C --> D[Bounded parallel task worktrees]
+  D --> E[Task reviews and commits]
+  E --> F[Batch integration and checks]
+  F --> G[Slice review and align]
+  G --> H[Seal and promote]
+  H --> I[Qualification and reviewed PR]
+  I --> J{Accepted merge opt-in}
+  J -->|No| K[Reviewed PR checkpoint]
+  J -->|Yes| L[Protected broker and result verification]
+  L --> C
+```
+
+`sdlc-align-specs` is retired without an alias; its advisory traceability checks
+belong to `align`. Reinstall through the existing source-owned installer cleanup;
+unmanaged or other-source installations require explicit owner reconciliation.
+Old active workflow schemas remain on disk and require explicit recovery.

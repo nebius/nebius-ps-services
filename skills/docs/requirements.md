@@ -897,7 +897,7 @@ causal proof, safe repair and independent verification.
   subprocess lifetimes, and emits explicit incomplete statuses without partial
   hashes. Trial schema 2 separates attempted, launched, completed, interrupted
   and launch-error counts, with null rates when no execution completes.
-- AC-011: Preserve public budget flags and schemas, diagnosis-v1, SDLC routing,
+- AC-011: Preserve public budget flags and schemas, versioned SDLC diagnosis and routing,
   trusted-loader and shared Stop ownership, and provider admission/query budgets.
 - AC-012: Compare frozen baseline/candidate payloads with twelve qualification
   cases, real local/service fixtures in each core domain and separately labeled
@@ -991,7 +991,10 @@ Agentic SDLC, or transaction-owned safety.
   their exact delegated claims, and interrupted exact-child adoption revalidates
   that delegated ownership before completing the claim. Dirty Implement
   source checkouts direct the user to a separate explicit `$commit`, and active
-  Agentic SDLC continues to require `sdlc-commit`. Task start and base-state
+  Agentic SDLC continues to require `sdlc-commit`. An SDLC objective mentioning
+  its eventual commit does not request root `begin` before admission or branch
+  preparation; prompt-hook guidance preserves that ownership distinction.
+  Task start and base-state
   recovery return one transient canonical commit context with the exact
   PATH-canonical Python-family executable, helper, exact scope cwd, worker
   root, raw session ID, authorization, claim, and prepare argv; persisted
@@ -2894,6 +2897,15 @@ weakening ownership checks during validation and cleanup.
   transport, browser cleanup or Docker mutation.
 - AC-005: Three-tier fixture preparation establishes its clean Git baseline and
   owned origin before phase execution. Cleanup removes only exact owned state.
+- AC-006: Each fresh fixture uses one verifier-owned Git configuration profile,
+  sealed to its generation and immutable owned-origin receipt. Ambient user and
+  system configuration and attributes do not affect fixture Git operations.
+- AC-007: Startup, coordinator and worker operations, commit admission, evidence,
+  resume and cleanup share validation of the profile and exact repository scope.
+  Malformed, missing, changed or foreign context fails without ambient fallback.
+- AC-008: Ordinary user Git configuration, native homes and hooks remain
+  unchanged. Qualification installs current runtime support only in the selected
+  disposable native home; normal non-verifier workflows retain existing rules.
 
 #### Negative Criteria
 
@@ -2904,6 +2916,10 @@ weakening ownership checks during validation and cleanup.
   identity overrides and configuration that disables the owned push guard.
 - NC-003: Do not bypass normal SDLC promotion, treat non-Git prompt parsing as
   Git admission proof, or weaken source-installed and live-evidence gates.
+- NC-004: Do not allow arbitrary Git environment overrides, repository-local
+  executable configuration, conditional includes, global attributes leakage,
+  or suppression of the owned origin's rejecting push hook. A profile pointer
+  alone is never proof of ownership or permission to use another repository.
 
 #### Validation Method
 
@@ -4016,6 +4032,132 @@ Report static, installation, fresh native triggering and comparative quality
 evidence separately; unavailable runners do not count as passes.
 
 <!-- /REQUIREMENT: REQ-054 -->
+
+<!-- REQUIREMENT: REQ-055 status=active priority=P0 type=feature -->
+### REQ-055: Complete document-package intake and phased delivery
+
+#### User Story
+
+Workflow users need complete document-package intake and phased delivery for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Inventory portable normative sources with relative paths, content digests, authority and stable source IDs. Reject missing references, duplicate IDs, unresolved conflicts and source drift before dispatch. Preserve accepted architecture and original IDs while mapping all obligations to canonical requirements/features; do not flatten source catalogs into bounded prompt lists.
+- AC-002: Represent phase/package dependencies and exit criteria separately from private delivery slices and task plans. Track scoped checks, full acceptance and release gates independently; partial slices cannot certify whole features or phases.
+- AC-003: Use one semantic spec publisher. Publish concise canonical specs and referenced portable contract assets; workers report gaps. Keep private paths, secrets, raw prompts and runtime state out of reusable artifacts.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-055 -->
+
+<!-- REQUIREMENT: REQ-056 status=active priority=P0 type=feature -->
+### REQ-056: Bounded scalable execution across ready features
+
+#### User Story
+
+Workflow users need bounded scalable execution across ready features for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Validate dependency graphs iteratively for more than 2000 tasks independent of input ordering. Use indexed dependency lookups and dependency-scoped incoming evidence rather than all historical task output.
+- AC-002: Keep one root coordinator, one active delivery candidate, at most four active workers and four retained task worktrees by default. Integrate, validate and clean bounded batches before allocating successors. Each batch shares its frozen base; dependent batches start from the validated preceding integration tip.
+- AC-003: Admit tasks across ready features only within open phase/package barriers and frozen slice membership. Serialize shared files/contracts/runtime resources. Preserve quiescence, fences, deterministic integration, checkpoint recovery, repair budgets and explicit continuation.
+- AC-004: Preserve the original selected branch; after verified merge allocate the next slice from the current default. Partial slice completion does not satisfy the full feature. Unsupported old execution state remains preserved without automatic conversion.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-056 -->
+
+<!-- REQUIREMENT: REQ-057 status=active priority=P0 type=feature -->
+### REQ-057: Evidence-bound conditional SDLC merge completion
+
+#### User Story
+
+Workflow users need evidence-bound conditional sdlc merge completion for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Default completion to reviewed PR; an explicit run-start opt-in may authorize derived exact-PR merges within accepted repository/default/objective/delivery/live-operation scope without repeated approval. Cluster availability alone grants no merge authority.
+- AC-002: Require source, basis, head/base, promoted commit, acceptance plan, deployed artifact/configuration and environment/trial identity to match independently produced execution evidence. Every mandatory slice/regression criterion must pass; missing, skipped, stale, forged or intervened evidence fails closed. Reviewed non-applicability is limited to genuinely non-runtime changes.
+- AC-003: Share protected direct-merge admission and result observation beneath separate ordinary and SDLC owners. Never recursively enter ordinary repair or bypass branch protection, required human approvals or merge-triggered effect authority. Reject queues and unsupported setup until separately qualified.
+- AC-004: Distinguish submitted, merged and result-verified. Reconcile uncertain effects before retry; preserve deadlines. Result verification failure pauses dependencies without repeating merge. Head/base drift requires corrective integration and fresh evidence.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-057 -->
+
+<!-- REQUIREMENT: REQ-058 status=active priority=P0 type=feature -->
+### REQ-058: Composable SDLC phase and specialist contracts
+
+#### User Story
+
+Workflow users need composable sdlc phase and specialist contracts for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Retain SDLC phase adapters and sole coordinator ownership while reusing bounded research/design/validation specialists. Gather local evidence first; preserve accepted supplied decisions and selectively route only unresolved specialist questions.
+- AC-002: Keep TDD, tests, evaluation and UAT distinct. General align fixes invalidate affected evidence and return to the parent gate sequence. Retire the redundant sdlc-align-specs surface into align without an alias.
+- AC-003: Maintain public help, explicit-only phase metadata, portable installation dependencies, source/installed parity and separate static/runtime/quality evidence. Synthetic fixtures must not copy confidential source packages.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-058 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

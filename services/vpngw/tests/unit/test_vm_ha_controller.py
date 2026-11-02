@@ -154,6 +154,85 @@ def _proven_transfer_checkpoint(
     )
 
 
+@pytest.mark.parametrize(
+    "intent",
+    [
+        TransferIntent.PLANNED_FAILOVER,
+        TransferIntent.PLANNED_FAILBACK,
+        TransferIntent.AUTOMATIC_FAILOVER,
+    ],
+)
+def test_active_transfer_keeps_proof_until_terminal_intent_is_retired(
+    policy: VMHAController, intent: TransferIntent
+) -> None:
+    """Receipt publication can be deferred by an agent holding the writer lock."""
+    from nebius_vpngw.agent.vm_ha_checkpoint import (
+        controller_checkpoint_from_dict,
+        controller_checkpoint_to_dict,
+    )
+
+    failback = intent is TransferIntent.PLANNED_FAILBACK
+    snapshot = _snapshot(
+        configured_role=ConfiguredRole.ACTIVE if failback else ConfiguredRole.PASSIVE,
+        peer_heartbeat=_peer(configured_role="passive" if failback else "active"),
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        transfer_intent=intent,
+        transfer_effect_started=True,
+    )
+    snapshot = replace(snapshot, routes_reconciled_context=_reconciled(snapshot))
+    checkpoint = _proven_transfer_checkpoint(snapshot)
+    proof = checkpoint.transfer_continuity
+    for _ in range(3):
+        decision = policy.decide(snapshot, checkpoint)
+        assert decision.action is None
+        assert decision.forwarding_enabled
+        # A restart must retain the same proof while the durable intent remains.
+        checkpoint = controller_checkpoint_from_dict(
+            controller_checkpoint_to_dict(decision.checkpoint)
+        )
+        assert checkpoint.transfer_continuity == proof
+
+    retired = policy.decide(
+        replace(snapshot, transfer_intent=None, transfer_effect_started=False), checkpoint
+    )
+    assert retired.action is None and retired.forwarding_enabled
+    assert retired.checkpoint.transfer_continuity is None
+
+
+@pytest.mark.parametrize(
+    "cloud_change",
+    [
+        {"ownership_epoch": "43"},
+        {"former_owner_compute_state": ComputeState.RUNNING},
+        {"candidate_attachment_exact": False},
+        {"former_attachment_absent": False},
+        {"ownership_re_read_exact": False},
+        {"authoritative": False},
+    ],
+)
+def test_active_transfer_retained_proof_does_not_bypass_fresh_fencing(
+    policy: VMHAController, cloud_change: dict[str, object]
+) -> None:
+    snapshot = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        transfer_intent=TransferIntent.PLANNED_FAILOVER,
+        transfer_effect_started=True,
+    )
+    snapshot = replace(snapshot, routes_reconciled_context=_reconciled(snapshot))
+    active = policy.decide(snapshot, _proven_transfer_checkpoint(snapshot))
+    assert active.forwarding_enabled
+    assert active.checkpoint.transfer_continuity is not None
+
+    changed = replace(snapshot, cloud=replace(snapshot.cloud, **cloud_change))
+    fenced = policy.decide(changed, active.checkpoint)
+
+    assert not fenced.forwarding_enabled
+    assert fenced.action is not None
+    assert fenced.action.kind is ActionKind.DISABLE_ACTIVE
+
+
 def test_route_target_runtime_change_invalidates_reconciliation(policy: VMHAController) -> None:
     snapshot = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.PASSIVE)
     changed = replace(
@@ -599,6 +678,88 @@ def test_exact_owner_gets_one_bounded_local_repair_before_fencing(
     assert fenced.state is HAState.REPAIR_EXHAUSTED
 
 
+@pytest.mark.parametrize(
+    "mode", [DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE, DataPlaneMode.BLOCKED]
+)
+@pytest.mark.parametrize("remaining", [0.0, 1.0])
+def test_exhausted_static_episode_cannot_start_another_owner_preparation_or_repair(
+    policy, mode, remaining
+):
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=mode,
+        readiness=LocalReadiness(True, False, True, True, candidate_preparation_required=True),
+        tunnel_recovery_remaining=remaining,
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    owned = replace(owned, routes_reconciled_context=_reconciled(owned))
+    result = policy.decide(owned, checkpoint)
+    assert result.state is HAState.REPAIR_EXHAUSTED
+    assert result.checkpoint.repair_attempt is None
+    assert (result.action.kind if result.action else None) == (
+        ActionKind.DISABLE_ACTIVE if mode is DataPlaneMode.ACTIVE else None
+    )
+
+
+def test_static_episode_allows_fenced_restart_preparation_only_within_original_budget(policy):
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.PASSIVE,
+        readiness=LocalReadiness(True, False, True, True, candidate_preparation_required=True),
+        tunnel_recovery_remaining=20.0,
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    result = policy.decide(owned, checkpoint)
+    assert result.action.kind is ActionKind.PREPARE_CANDIDATE_DATAPLANE
+    active = replace(
+        owned, data_plane_mode=DataPlaneMode.ACTIVE, routes_reconciled_context=_reconciled(owned)
+    )
+    waiting = policy.decide(active, checkpoint)
+    assert waiting.state is HAState.REPAIRING and waiting.action is None
+    assert waiting.checkpoint.repair_attempt is None
+
+
+def test_static_peer_grace_requires_fresh_heartbeat_and_exact_authoritative_owner(policy):
+    claim = {
+        "owner": {
+            "cluster": "cluster",
+            "owner": "node-a",
+            "allocation": "allocation",
+            "epoch": "owner-revision",
+            "incarnation": 3,
+        },
+        "started": 990.0,
+        "deadline": 1020.0,
+    }
+    peer = replace(
+        _peer(),
+        tunnel_capability=True,
+        tunnel_recovery=claim,
+        route_ready=False,
+        promotion_ready=False,
+    )
+    snapshot = _snapshot(
+        peer_heartbeat=peer,
+        wall_time=1000.0,
+        cloud=replace(_cloud(), observed_owner_epoch="owner-revision"),
+    )
+    assert policy._peer_fresh(snapshot)
+    for changes in (
+        {"peer_heartbeat": None},
+        {"peer_received_at": None},
+        {"peer_received_at": 80.0},
+        {"wall_time": 1019.0},
+        {"wall_time": 989.0},
+        {"peer_heartbeat": replace(peer, tunnel_capability=False)},
+        {"peer_heartbeat": replace(peer, service_healthy=False)},
+        {"cloud": replace(snapshot.cloud, observed_owner_epoch="different-revision")},
+        {"cloud": replace(snapshot.cloud, authoritative=False)},
+        {"cloud": replace(snapshot.cloud, allocation_id="different-allocation")},
+        {"cloud": replace(snapshot.cloud, observed_owner_node_id="node-b")},
+    ):
+        assert not policy._peer_fresh(replace(snapshot, **changes)), changes
+
+
 def test_unhealthy_fresh_owner_heartbeat_starts_suspicion_without_skipping_stop(
     policy: VMHAController,
 ) -> None:
@@ -704,6 +865,57 @@ def test_redundant_path_degradation_keeps_exact_owner_forwarding_without_repair(
     assert result.action is None
     assert result.forwarding_enabled
     assert result.checkpoint.repair_attempt is None
+
+
+def test_repaired_backup_coverage_resets_consumed_attempt_after_continuous_health(
+    policy: VMHAController,
+) -> None:
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(True, True, False, True),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    owned = replace(
+        owned,
+        routes_reconciled_context=_reconciled(
+            owned, ownership_incarnation=checkpoint.ownership_incarnation
+        ),
+    )
+    started = policy.decide(owned, checkpoint)
+    assert started.action is not None
+    healthy_backup = replace(
+        owned,
+        readiness=LocalReadiness(
+            True,
+            True,
+            True,
+            True,
+            path_degraded=True,
+            degraded_reasons=("redundant-bgp-session-unavailable",),
+        ),
+        completed_effect_operation_id=started.action.operation_id,
+    )
+    checkpoint = started.checkpoint
+    for now in (101.0, 102.0, 160.999):
+        observed = policy.decide(replace(healthy_backup, now=now), checkpoint)
+        assert observed.action is None
+        assert observed.checkpoint.repair_attempt is not None
+        assert observed.checkpoint.repair_attempt.deadline_at == 105.0
+        checkpoint = observed.checkpoint
+
+    recovered = policy.decide(replace(healthy_backup, now=161.0), checkpoint)
+    assert recovered.state is HAState.DEGRADED_PATH
+    assert recovered.forwarding_enabled
+    assert recovered.checkpoint.repair_attempt is None
+
+    # A later, independently observed failure has a fresh bounded attempt only
+    # after the complete coverage has remained continuously healthy for 60s.
+    later = policy.decide(replace(owned, now=162.0), recovered.checkpoint)
+    assert later.action is not None
+    assert later.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    assert later.checkpoint.repair_attempt is not None
+    assert later.checkpoint.repair_attempt.deadline_at == 167.0
 
 
 def test_allocation_replacement_invalidates_route_reconciliation_before_forwarding(

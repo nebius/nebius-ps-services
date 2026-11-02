@@ -114,6 +114,7 @@ class LocalReadiness:
     candidate_preparation_required: bool = False
     cold_standby_ready: bool = False
     routing_hygiene_ready: bool = True
+    passive_policy_refresh_required: bool = False
 
     @property
     def promotion_ready(self) -> bool:
@@ -166,6 +167,7 @@ class CloudObservation:
     ownership_epoch: str = ""
     former_attachment_exact: bool = False
     candidate_attachment_absent: bool = False
+    observed_owner_epoch: str = ""
 
     def local_attachment_exact(self, node_id: str) -> bool:
         """Return fresh exact ownership without inferring a transfer."""
@@ -251,6 +253,8 @@ class ControllerSnapshot:
     apply_owner_adoption: bool = False
     transfer_inhibited: bool = False
     standby_replacement_inhibited: bool = False
+    tunnel_recovery_remaining: float | None = None
+    wall_time: float | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -856,13 +860,47 @@ class VMHAController:
 
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
         routes_current = self._routes_current(snapshot, checkpoint)
+        if (
+            snapshot.tunnel_recovery_remaining is not None
+            and not snapshot.readiness.promotion_ready
+            and (
+                snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                or snapshot.tunnel_recovery_remaining <= 1
+            )
+        ):
+            # This persisted episode subsumes local repair; never stack another
+            # generic repair window after a failed Static tunnel selection.
+            if snapshot.tunnel_recovery_remaining > 1 and not parity_reasons and routes_current:
+                return self._result(
+                    HAState.REPAIRING,
+                    ("static-tunnel-recovery-active",),
+                    snapshot,
+                    replace(checkpoint, state=HAState.REPAIRING),
+                )
+            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                return self._action(
+                    HAState.REPAIR_EXHAUSTED,
+                    ("static-tunnel-recovery-exhausted",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.DISABLE_ACTIVE,
+                )
+            return self._result(
+                HAState.REPAIR_EXHAUSTED,
+                ("static-tunnel-recovery-exhausted",),
+                snapshot,
+                replace(checkpoint, state=HAState.REPAIR_EXHAUSTED),
+            )
         repair = checkpoint.repair_attempt
         if repair is not None and not self._repair_attempt_matches(repair, snapshot, checkpoint):
             checkpoint = replace(checkpoint, repair_attempt=None)
             repair = None
 
         if not parity_reasons and routes_current:
-            if snapshot.readiness.promotion_ready and not snapshot.readiness.path_degraded:
+            if snapshot.readiness.promotion_ready:
+                # Complete usable coverage is healthy even when a redundant
+                # peer is down. Count it toward the existing recovery/reset
+                # contract; otherwise the consumed attempt never retires.
                 checkpoint, waiting_for_health = self._record_repair_health(snapshot, checkpoint)
                 repair = checkpoint.repair_attempt
                 if waiting_for_health:
@@ -872,8 +910,6 @@ class VMHAController:
                         snapshot,
                         replace(checkpoint, state=HAState.REPAIRING),
                     )
-            elif snapshot.readiness.promotion_ready and snapshot.readiness.path_degraded:
-                checkpoint = self._reset_repair_health(checkpoint)
             elif repair is not None:
                 return self._existing_repair_decision(snapshot, checkpoint, repair)
             elif snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
@@ -913,7 +949,14 @@ class VMHAController:
                     state=state,
                     suspect_since=None,
                     established_ownership_context=snapshot.ownership_context,
-                    transfer_continuity=None,
+                    # Receipt publication may wait for the rearm writer. Until
+                    # its durable intent is retired, every active tick must
+                    # still prove the exact fenced transfer, including restart.
+                    transfer_continuity=(
+                        checkpoint.transfer_continuity
+                        if snapshot.transfer_intent is not None
+                        else None
+                    ),
                 ),
             )
 
@@ -943,6 +986,15 @@ class VMHAController:
                 promotion_blockers,
                 snapshot,
                 replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+            )
+
+        if snapshot.readiness.passive_policy_refresh_required:
+            return self._action(
+                HAState.NORMAL,
+                ("owner-passive-bgp-policy-requires-refresh",),
+                snapshot,
+                checkpoint,
+                ActionKind.ENTER_PASSIVE,
             )
 
         if snapshot.readiness.candidate_preparation_required:
@@ -1211,8 +1263,31 @@ class VMHAController:
             and received_at is not None
             and 0 <= snapshot.now - received_at < self.peer_timeout_seconds
             and heartbeat.service_healthy
-            and heartbeat.route_ready
-            and heartbeat.promotion_ready
+            and (
+                (heartbeat.route_ready and heartbeat.promotion_ready)
+                or self._peer_tunnel_recovery(snapshot)
+            )
+        )
+
+    @staticmethod
+    def _peer_tunnel_recovery(snapshot: ControllerSnapshot) -> bool:
+        heartbeat = snapshot.peer_heartbeat
+        claim = heartbeat.tunnel_recovery if heartbeat is not None else None
+        if claim is None or snapshot.wall_time is None:
+            return False
+        owner = claim["owner"]
+        return bool(
+            heartbeat is not None
+            and snapshot.cloud.authoritative
+            and heartbeat.tunnel_capability
+            and heartbeat.observed_owner_id
+            == heartbeat.node_id
+            == snapshot.cloud.observed_owner_node_id
+            and owner["owner"] == heartbeat.node_id
+            and owner["cluster"] == snapshot.cluster_id
+            and owner["allocation"] == snapshot.cloud.allocation_id
+            and owner["epoch"] == snapshot.cloud.observed_owner_epoch
+            and claim["started"] <= snapshot.wall_time < claim["deadline"] - 1
         )
 
     def _peer_recent(self, snapshot: ControllerSnapshot) -> bool:
@@ -1792,6 +1867,9 @@ class RecoverableController:
         decision_observer: (
             Callable[[ControllerSnapshot, ControllerCheckpoint, ControllerResult], None] | None
         ) = None,
+        decision_preflight: (
+            Callable[[ControllerSnapshot, ControllerCheckpoint, ControllerResult], bool] | None
+        ) = None,
     ) -> None:
         self.policy = policy
         self.snapshots = snapshots
@@ -1800,11 +1878,21 @@ class RecoverableController:
         self.decision_observer = decision_observer or (
             lambda _snapshot, _checkpoint, _decision: None
         )
+        self.decision_preflight = decision_preflight
 
     def step(self) -> ControllerResult:
         checkpoint = self.checkpoints.load()
         snapshot = self.snapshots.observe()
         decision = self.policy.decide(snapshot, checkpoint)
+        if self.decision_preflight is not None and self.decision_preflight(
+            snapshot, checkpoint, decision
+        ):
+            # A subordinate recovery may claim the loss detected by this very
+            # snapshot. Replan once before persisting a competing VM action;
+            # all authority, readiness and fencing checks still run afresh.
+            checkpoint = self.checkpoints.load()
+            snapshot = self.snapshots.observe()
+            decision = self.policy.decide(snapshot, checkpoint)
         if decision.checkpoint != checkpoint:
             self.checkpoints.save(decision.checkpoint)
         self.decision_observer(snapshot, checkpoint, decision)

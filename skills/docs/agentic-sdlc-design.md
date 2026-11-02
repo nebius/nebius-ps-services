@@ -1,5 +1,18 @@
 # Agentic SDLC Design
 
+The current document-program contract is defined in
+[document delivery](../worktree/references/document-delivery.md). It adds portable
+source snapshots and complete obligation coverage, immutable phase barriers and
+SLICE identities, cross-feature task membership, four active/four retained task
+worktrees, bounded dependency indexes and exact qualification. Requirements are
+extracted before reconciling supplied design; canonical publication remains with
+`maintain-project-specs`. Plan obligations up front and detail upcoming slices.
+Completed slice definitions cannot be rewritten; source changes require impact
+analysis and corrective slices with fresh evidence. Old active state is preserved
+for explicit recovery, never converted silently. Local deterministic validation
+is distinct from fresh host activation, native parallel execution and remote merge
+qualification.
+
 The initial design adapter stages newly published canonical files only after a
 repository-wide canonical-pair scope check; strict validation and objective-impact
 settlement then admit planning without moving the preparation-owned commit.
@@ -80,7 +93,7 @@ not serve concurrent worker tests.
 
 The Agentic SDLC workflow is a skill-driven state machine for turning a user
 prompt into committed implementation, product-level UAT, pull request creation,
-PR review, and an explicitly requested merge.
+PR review, and conditionally authorized merge with result verification.
 
 There is no workflow CLI. The agent chooses the next SDLC skill, committed
 project documents hold product truth, private local state records execution,
@@ -175,7 +188,7 @@ current unambiguous plan or the same native session's bound run; a new session
 continues explicitly. Readable project/objective descriptions resolve ambiguity.
 The coordinator never infers session ownership from a sole active run.
 
-Private `workflow/run-v1`, `workflow/accepted-objective-v1` and
+Private `workflow/run-v2`, `workflow/accepted-objective-v2` and
 `workflow/session-binding-v1` records live under `<agent-home>/sdlc-runs/`.
 The normalized objective contains outcome, scope, constraints, acceptance
 criteria, clarifications, provenance digests and revision ancestry. Do not store
@@ -275,10 +288,11 @@ The Stop hook can route an active run back through the explicit session-bound
 run is complete, paused, blocked, waiting on human input, over the iteration or
 retry budget, or making no progress after repeated continuation attempts. It
 can continue to the bound `$sdlc-start continue [project-folder]` command when local state recommends another phase,
-steering needs to be refreshed by `sdlc-auto-steering`, all features are
-committed and UAT still needs to run, or UAT failed with an addressable
-classification. It never auto-continues into `sdlc-merge-pr`; merge requires
-an explicit user request.
+steering needs to be refreshed by `sdlc-auto-steering`, or UAT failed with an
+addressable classification. The coordinator selects slice UAT; feature-queue
+status labels never override its selected phase. It continues into `sdlc-merge-pr` only when the accepted run
+policy explicitly opts the current delivery slice into verified merging.
+Default completion stops at a reviewed PR.
 
 The PreToolUse hook does not deny filesystem targets by path. File reads,
 writes, updates, deletes, and moves may target repository files, outside-repo
@@ -448,7 +462,7 @@ The implementation state schema uses this phase order:
 15. uat from the promoted project checkout
 16. create-pr
 17. review-pr
-18. sdlc-merge-pr, only after explicit user request
+18. sdlc-merge-pr, only within accepted run-level opt-in, followed by merged-result verification
 
 `sdlc-auto-steering` also runs at the start of each feature loop, or whenever
 `sdlc-start` sees new steering input, stale steering fingerprints, or
@@ -585,6 +599,15 @@ agent-driven golden path has not been completed. That status is expected until
 the disposable workflow run, idempotency run, change-request run, failure-loop
 run, and steering checks have evidence.
 
+Dedicated deterministic capabilities require document obligation coverage,
+exact portable source admission, phase/slice ordering, immutable delivered
+slices, current completion evidence, 2,100-task graphs, indexed handoffs and
+the four-retained-worktree limit. Missing tests fail; skipped tests remain
+partial. Shared semantic and delivery owners participate in installed parity.
+Dispatch and task-wave suites run once, outside the execution aggregate.
+Current live profiles do not qualify native multi-slice document delivery or
+real remote merging; those boundaries remain explicit in every report.
+
 The verifier may ingest an optional private manifest with
 `--live-evidence PATH`, defaulting to
 `~/.codex/sdlc-verification/live-results.json`. It validates the verification
@@ -661,8 +684,8 @@ Required happy-path evidence:
   and fast-forwards the unchanged project promotion branch to the exact
   integration tip under the common-Git-directory lock. It then removes the
   clean integration worktree and deletes its ref at the exact promoted SHA.
-- `sdlc-uat-tests` records product-level UAT evidence after all features are
-  committed.
+- `sdlc-uat-tests` records product-level UAT evidence after the current slice is
+  promoted, covering all its mandatory and inherited regression obligations.
 - private SDLC state, plans, screenshots, transcripts, and evidence stay out
   of the disposable project Git index.
 
@@ -858,8 +881,8 @@ repository bootstrapping is outside this workflow.
 ### `sdlc-gather-context`
 
 Builds a compact context pack for one `REQ-*` or `FEAT-*`. It gathers official
-vendor facts first, internal/project facts second, and code/test evidence
-third. For serial multi-layer features, it also records layer owners, API or
+local project contracts and code/tests first, then bounded research of
+unresolved official vendor facts. For serial multi-layer features, it also records layer owners, API or
 command contracts, persistence expectations, fixtures, integration seams, and
 gaps that affect the vertical slice. The context pack records sources,
 constraints, unresolved risks, and design implications without dumping raw
@@ -1070,7 +1093,7 @@ it may use that environment within the recorded allowed actions; missing,
 unsafe, or unconfirmed live access is classified instead of guessed around.
 Passing tests alone are not treated as evaluation.
 
-On failure, evaluation emits `failure-event-v1` with the criterion/test ID,
+On failure, evaluation emits `failure-event-v2` with the criterion/test ID,
 expected and observed behavior, reproduction oracle, evidence digests, exact
 integration commit, environment identity, and requirements/design/plan
 fingerprints. It distinguishes an already-proven mechanical owner from a
@@ -1127,7 +1150,7 @@ criteria without storing credentials in transcripts.
 ### `sdlc-classify-failure`
 
 Classifies failed phases before the loop retries. The deterministic helper
-validates and deduplicates `failure-event-v1`, optional `diagnosis-v1`, and the
+validates and deduplicates `failure-event-v2`, optional `diagnosis-v2`, and the
 stable blocker identity; owns taxonomy routing, design admission, budget
 enforcement, invalidations, and crash-safe intent/commit transitions; and
 derives the human-readable failure log.
@@ -1145,8 +1168,8 @@ or redesign.
 The general `align` skill checks that requirements, design, locked plans,
 tests, implementation, documentation, end-to-end slice evidence, and other
 evidence tell one consistent story. Drift is routed to the responsible SDLC
-skill. The legacy `sdlc-align-specs` helper may report advisory context but is
-not a workflow phase or prerequisite.
+skill. Source-to-requirement-to-feature-to-slice-to-task-to-test traceability
+is advisory work owned by `align`; `sdlc-align-specs` is retired without an alias.
 
 ### `sdlc-commit`
 
@@ -1158,11 +1181,15 @@ It records worker, merge, final, promoted, and cleanup evidence and never pushes
 
 ### `sdlc-uat-tests`
 
-Runs product-level UAT after all feature commits are complete. It builds a UAT
-matrix from requirements, validates cross-feature user journeys and negative
-criteria, may use the confirmed safe Live Experiment Environment within its
+Runs product-level UAT after the current delivery slice is sealed and promoted.
+Its matrix covers every mandatory slice criterion and inherited regression
+obligation, including cross-feature user journeys and negative criteria. It may
+use the confirmed safe Live Experiment Environment within its
 recorded allowed operations and reset rules, records evidence, and marks the
-product ready for final handoff only on pass. For a managed outer worktree, final
+slice ready for handoff only on pass. Future slices stay pending; feature and
+phase completion require their complete source acceptance obligations. Accepted
+non-runtime slices may use reviewed live N/A with an executed qualification
+harness. For a managed outer worktree, final
 alignment, UAT, and documentation evidence plus a clean exact promoted head and
 zero internal resources release the Agentic SDLC lease into
 `outer-integration-pending`. The coordinator returns the recorded primary path
@@ -1195,18 +1222,22 @@ before review resumes.
 
 ### `sdlc-merge-pr`
 
-Merges only after an explicit user request for a specific PR. It verifies PR
-status, checks, reviews, branch state, and UAT evidence. The current remote PR
-head, clean local HEAD, promoted SHA, and review evidence must all identify one
-commit. It writes short-lived authorization for one exact
-`gh pr merge <pr-number-or-url> [--merge|--rebase|--squash]
---match-head-commit <promoted-sha>` command immediately before the guarded
-action; the merge-queue form omits the strategy. Implicit PR selection,
-administrator bypass, branch deletion, repository override, other flags, shell
-operators, and appended actions fail closed. The skill records merge evidence
-and marks the run complete when applicable. Drift returns through failure
-classification; active Agentic SDLC does not use a race-prone GitHub merge MCP
-path.
+Owns conditional delivery through the shared protected broker. Default completion
+stops at a reviewed PR. Run-level opt-in binds the objective revision, repository,
+default branch, slice scope, live operations and merge-triggered effects. A test
+cluster is not merge consent. The source-owned adapter independently verifies
+promoted head, reviewed diff, all mandatory qualification criteria, artifact and
+configuration, clean trial provenance, current base, CI, conversations, approvals
+and objections. COMMENT attestations are not GitHub approvals.
+
+Only compatible already-installed protected direct-merge workflows are admitted.
+Merge queues, protection bypass, managed outer source checkouts, raw CLI/API merges
+and label-only authorization are rejected. Journal before dispatch; ambiguous
+submission resumes by exact broker intent without repeating the effect. Verify
+merged-result CI before admitting the next slice. A merged result with failed
+verification remains merged and blocks dependent delivery. Preserve initial branch
+history; subsequent delivery branches start from the verified current default.
+See [document delivery](../worktree/references/document-delivery.md).
 
 ## Failure And Retry Model
 
@@ -1217,12 +1248,12 @@ history, invalidations, budgets, next skill, and any human blocker.
 
 The normalized records are:
 
-- `failure-event-v1`: the exact failed criterion, expected/observed behavior,
+- `failure-event-v2`: the exact failed criterion, expected/observed behavior,
   reproduction, evidence digests, integration commit, environment identity,
   and requirements/design/plan fingerprints.
-- `diagnosis-v1`: causal proof, confidence, remedy scale, regression oracle,
+- `diagnosis-v2`: causal proof, confidence, remedy scale, regression oracle,
   evidence references, and proposed classification.
-- `repair-control-v1`: the atomic active-blocker projection with route history,
+- `repair-control-v2`: the atomic active-blocker projection with route history,
   attempts, active time, feature dispatches, invalidations, and status.
 - `repair-journal`: append-only intent/commit transitions used for crash-safe
   replay.
@@ -1236,7 +1267,7 @@ If a responsible cause is already proven, classification routes directly to
 the owner. Otherwise, ambiguous, persistent, intermittent, or cross-boundary
 failure enters Agentic SDLC diagnostic mode in `troubleshoot`. That mode
 preserves the exact failed commit and criteria, builds the failure contract and
-causal model, finds the earliest divergence, and returns `diagnosis-v1`. It may
+causal model, finds the earliest divergence, and returns `diagnosis-v2`. It may
 use explicitly scoped, reversible, uncommitted instrumentation only in the
 private integration worktree and must remove it before handoff. It cannot
 commit a product repair, change tests/specifications, call design, or select a
@@ -1286,8 +1317,8 @@ Acceptance criteria cannot be weakened to make a repair pass.
 
 A successful remediation with invalidations enters
 `revalidation_required`, not terminal `resolved`. The authoritative
-`revalidation-cursor-v1` orders each invalidated surface and exact next skill.
-Every gate advances it with immutable `revalidation-evidence-v1` whose source
+`revalidation-cursor-v2` orders each invalidated surface and exact next skill.
+Every gate advances it with immutable `revalidation-evidence-v2` whose source
 is a structured phase-owned `passed` result. Its source digest, current
 requirements/design/plan fingerprints, immutable classification, successful
 dispatch, and cursor identity are bound to the active repair. Pre-commit gates
@@ -1355,8 +1386,8 @@ Git actions are intentionally split:
   promoted SHA after UAT passes; it never changes that SHA.
 - In active Agentic SDLC mode, `review-pr` is findings-and-readiness-only and
   never changes the PR head.
-- `sdlc-merge-pr` merges only with explicit user instruction and only while the
-  remote head still equals the exact promoted and reviewed SHA.
+- `sdlc-merge-pr` merges only within explicit accepted run-level authority and
+  while remote head, promotion, review, qualification and current base agree.
 
 The optional PreToolUse hook can require short-lived local authorization files
 under the active run's `permissions/` directory:
@@ -1364,7 +1395,6 @@ under the active run's `permissions/` directory:
 - `commit-authorization.json`
 - `execution/<action-id>.json`
 - `pr-authorization.json`
-- `merge-authorization.json`
 
 These files are written immediately before the guarded action, scoped to the
 branch or PR, include an expiry, and are removed or allowed to expire after the
@@ -1380,10 +1410,10 @@ closed. Raw execution authorization also binds action, canonical worktree, Git
 common directory, branch, expected HEAD, and exact target/command. Normal
 execution-plane mutations use the private helper, which revalidates the same
 identity before and after each transition.
-Merge authorization binds `phase: "sdlc-merge-pr"`, the exact branch, PR,
-promoted/reviewed head, explicit user request, passing checks/review/UAT,
-expiry, and the one canonical, explicit-PR, single-action head-matched CLI
-command. Only the optional long-form merge strategy is variable.
+Merge admission is a producer-validated qualification receipt plus an authenticated
+review attestation and protected broker intent. Supplied passing labels or a local
+merge-authorization file cannot authorize CLI/API merging. The delivery owner
+rechecks scope and evidence immediately before protected submission.
 
 ## Resume And Idempotency
 
@@ -1429,7 +1459,7 @@ The workflow intentionally does not:
 - rewrite worker/merge history or force-clean unverified Git resources
 - use conversation memory as authoritative run state
 - commit local SDLC run state, screenshots, transcripts, or plans
-- merge without explicit user instruction
+- merge outside accepted run-level authority
 - bypass validation, tests, evaluation, UAT, PR review, or failure
   classification
 

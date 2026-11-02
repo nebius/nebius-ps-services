@@ -75,7 +75,7 @@ preserves the exact failed commit and criteria, and may use only reversible,
 uncommitted instrumentation that is removed before handoff.
 
 It does not commit a product fix or call design, planning, or implementation.
-It returns one structured `diagnosis-v1` to `sdlc-classify-failure`, including
+It returns one structured `diagnosis-v2` to `sdlc-classify-failure`, including
 the earliest divergence, violated invariant, causal chain, counterfactual,
 alternatives eliminated, confidence, regression oracle, evidence references,
 and the bounded owner handoff. Missing evidence and competing hypotheses stop;

@@ -14,6 +14,117 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Treat malformed BGP summary containers as unknown tunnel health instead of
+  allowing an observer exception to reach the HA controller. Add real-observer
+  regression cases and clarify HA versus ordinary BGP target selection in CLI
+  help and operator documentation. These alignment corrections have local
+  regression coverage; the previously qualified native/live candidate predates
+  this observer and help-text delta.
+- Bind HA tunnel status to the complete current owner authority, including
+  cluster and incarnation. Keep probe coverage validation consistent with
+  accepted CIDR spelling, and treat malformed BGP state observations as unknown.
+  These corrections have focused regression coverage and are included in the
+  restart-recovery candidate; targeted live trials do not repeat every edge case.
+- Repair HA BGP restart recovery by preparing durable selection while fenced,
+  preserving passive deny-all exports until canonical owner activation, and
+  requiring active route/export verification before tunnel completion. Release
+  confirmed failed overrides, block unknown selected-path evidence, and recheck
+  preferred coverage for failback without extending request deadlines. Refresh
+  stale passive import preferences through the existing checkpointed controller
+  transition, so retained failed-peer routes cannot block recovery. Cold Static
+  readiness never bypasses uncertain BGP policy. Add composed crash regressions
+  and native activate/verify/release/failed-peer restart coverage with exports
+  enabled and disabled; no additional SingleVM migration is required.
+- Qualify the restart repair with 3,186 local tests, two additional crash replay
+  tests, and the complete 86-test native Linux/systemd/strongSwan/FRR lane.
+  Targeted live BGP tunnel command cycles and pending-operation restarts passed
+  on both owners, including automatic VM promotion, strict Compute fencing and
+  standby recovery. Same-owner replay is proven in the native lane. Seven steady
+  traffic windows met the conditional under-1% exception, with maximum loss of
+  0.50%; upgrade and VM-transition loss remain separate. A shorter Static smoke
+  passed backup selection, normal package refresh with selection persistence,
+  and public failback on the same candidate, with exact installed-file checks
+  on both members; it added no workload traffic window.
+- Verify ongoing manual BGP overrides against actual received, selected and
+  advertised routes. Release confirmed failed coverage even when the peer stays
+  Established; keep unknown evidence fail-closed. Add observer and CLI boundary
+  regressions. This correction is included in the restart-recovery candidate;
+  its route-withdrawal fixture proof remains distinct from live restart proof.
+- Include the composed late Static loss and recovery-exhaustion regressions in
+  the CI safety lane, and document the native FRR/HA fixture's proof boundaries.
+- Count complete healthy backup coverage toward the existing owner-repair
+  recovery and sixty-second reset, even while a redundant BGP peer remains down.
+  Preserve two fresh recovery observations and every repair deadline, readiness
+  and fencing gate.
+- Accept the controller's ready `degraded-path` state in the canonical routing
+  writer guard, so ordinary agent reload after BGP recovery preserves forwarding
+  through the healthy backup. Keep current-boot, guard and readiness checks strict.
+- Preserve exact HA cloud-route receipts during confirmed BGP path loss and use
+  the existing five-second repair budget to clear only the failed BGP session
+  when a complete healthy backup is available. Keep healthy tunnels running,
+  release failed manual overrides before repair, and retain strict readiness
+  and fencing checks.
+
+- Write HA BGP tunnel policy through the existing group-writable FRR file,
+  preserving its ownership and permissions inside the controller's systemd
+  sandbox. Avoid temporary-file creation that could crash the owner and trigger
+  VM failover. Add a regression under the production capability restrictions.
+- Publish HA heartbeats from fresh controller observations during tunnel work,
+  avoiding duplicate cloud reads and healthy-peer suspicion between slow cycles.
+  Keep exact snapshot binding, peer freshness and fencing limits unchanged.
+- Admit confirmed Static tunnel recovery before committing generic VM repair when
+  a path fails between health observations. Recheck authority before effects and
+  retain the single persisted 30-second recovery deadline.
+- Reject managed HA route-scope changes before apply effects. Add explicit,
+  digest-bound recovery for an interrupted pre-host reapply after proving retained
+  cloud and installed host identities, preserving journal lineage and normal
+  non-owner-first activation.
+- Keep HA Static preparation inside the controller filesystem sandbox by applying
+  runtime XFRM settings without rewriting persistent bootstrap sysctl configuration.
+- Wait for transient HA controller writer contention during tunnel request
+  admission, preserving serialization and exact authority checks.
+- Accept concurrent scoped IKE teardown only after fresh SA evidence proves
+  absence, so an already-deleted SA does not abort a healthy Static switch.
+- Serialize HA agent reloads with tunnel operations and track configured settings
+  separately from operational selection, avoiding daemon restarts during switching.
+- Retain exact fenced VM transfer proof while completion receipt publication waits
+  for the writer lock, preventing a healthy failover or failback from fencing itself
+  on the following controller tick. Keep fresh Compute and allocation checks.
+- Treat null HA destination lists as unspecified coverage, preserving native
+  routing and reporting switching unavailable instead of failing policy rendering.
+
+- Add controller-owned HA Static automatic tunnel recovery and HA Static/BGP
+  manual tunnel failover/failback on the current owner. Keep Static alternatives
+  cold, preserve native BGP backups, verify import/export policy, and persist
+  selections and operation progress across unchanged apply and service restart.
+- Bound Static recovery to one persisted 30-second episode, including local
+  fencing, with exact owner/configuration binding and optional scoped probes.
+  Expose selection and recovery status without changing the VM status contract.
+- Require both HA members to support connection tunnel selection after the
+  supported non-owner-first upgrade. Preserve ordinary SingleVM behavior and
+  in-place upgrades without an additional configuration migration.
+- Treat established, confirmed-down and unknown BGP peers distinctly when proving
+  HA export readiness; a down redundant peer no longer invalidates healthy coverage.
+- Qualify native packet paths with isolated Linux, strongSwan and FRR 10.5 tests.
+  Include matching FRR reload tools in the disposable systemd fixture.
+  Cover Static switching in mixed deployments while preserving an unrelated
+  BGP session, received/exported routes and traffic under both owner bindings.
+  An earlier candidate passed 3,087 unit tests, 28 native tunnel tests and all six
+  genuine 0.6.0–0.6.2 SingleVM host upgrades, including unchanged reapply,
+  interrupted apply and automatic reboot recovery in both modes. Two complete
+  live Static and BGP failover/failback cycles passed under the temporary loss
+  criterion. Keep Static's earlier full-cycle artifact distinct from its verified
+  final-candidate refresh and selection persistence. Preserve failed/incomplete
+  trial evidence. A fresh complete live replay of the earlier pre-host recovery
+  sequence remains unverified.
+- Clarify that controller restart preserves selection while ownership authority
+  is unchanged. Mandatory startup fencing can trigger existing automatic VM
+  takeover, which resets selection on the new owner.
+- Record the temporary live qualification loss exception in REQ-025: after three
+  bounded reduction attempts, accept below 1% in each direction until withdrawn
+  when loss is the sole remaining issue. Retain 0.2% as the normal target and
+  preserve every other acceptance gate and original trial verdict.
+
 - **Breaking:** require nonempty `gateway.ssh_allowed_cidrs` for ordinary and HA
   configurations. Collect it in the wizard and require `--ssh-allowed-cidr` when
   importing peer configuration; document existing-customer migration and SSH recovery.

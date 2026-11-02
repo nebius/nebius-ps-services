@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import multiprocessing
 from pathlib import Path
@@ -42,7 +43,7 @@ def failure_payload(
 ) -> dict[str, object]:
     return {
         "schema": repair_control.FAILURE_EVENT_SCHEMA,
-        "feature_id": "FEAT-001",
+        "execution_id": "FEAT-001",
         "phase": "evaluation",
         "criterion_id": "AC-001",
         "expected": "The response contains the accepted value.",
@@ -74,7 +75,7 @@ def localized_diagnosis(
 ) -> dict[str, object]:
     return {
         "schema": repair_control.DIAGNOSIS_SCHEMA,
-        "feature_id": "FEAT-001",
+        "execution_id": "FEAT-001",
         "event_id": event["event_id"],
         "blocker_key": event["blocker_key"],
         "result": "localized_implementation_defect",
@@ -158,7 +159,7 @@ def design_diagnosis(event: dict[str, object]) -> dict[str, object]:
 def unresolved_diagnosis(event: dict[str, object]) -> dict[str, object]:
     return {
         "schema": repair_control.DIAGNOSIS_SCHEMA,
-        "feature_id": "FEAT-001",
+        "execution_id": "FEAT-001",
         "event_id": event["event_id"],
         "blocker_key": event["blocker_key"],
         "result": "unresolved",
@@ -175,7 +176,7 @@ def approval_payload(
     statement = "I approve this broader public-contract design change."
     return {
         "schema": repair_control.DESIGN_APPROVAL_SCHEMA,
-        "feature_id": "FEAT-001",
+        "execution_id": "FEAT-001",
         "event_id": event["event_id"],
         "decision": "approved",
         "design_gate": draft,
@@ -225,8 +226,8 @@ def revalidation_payload(
         "plan": digest("4"),
     }
     gate = {
-        "schema": "agentic-sdlc/gate-evidence-v1",
-        "feature_id": "FEAT-001",
+        "schema": "agentic-sdlc/gate-evidence-v2",
+        "execution_id": "FEAT-001",
         "surface": surface,
         "owner_skill": repair_control.REVALIDATION_ROUTES[surface],
         "status": status,
@@ -240,7 +241,7 @@ def revalidation_payload(
     path.write_text(content, encoding="utf-8")
     return {
         "schema": repair_control.REVALIDATION_EVIDENCE_SCHEMA,
-        "feature_id": "FEAT-001",
+        "execution_id": "FEAT-001",
         "surface": surface,
         "integration_commit": commit,
         "fingerprints": current_fingerprints,
@@ -291,6 +292,37 @@ class RepairControlTests(unittest.TestCase):
         self.assertEqual(classification["corrective_mode"], "corrective_plan_v_next")
         self.assertNotEqual(classification["next_recommended_skill"], "troubleshoot")
 
+    def test_execution_cli_classifies_recorded_failure(self) -> None:
+        event = self.record_event()
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", [
+            "repair_control.py", "classify", "--run-dir", str(self.run_dir),
+            "--execution", "FEAT-001", "--event", event["event_id"],
+        ]), mock.patch("sys.stdout", output):
+            self.assertEqual(repair_control.main(), 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["classification"]["classification"], "IMPLEMENTATION_DEFECT")
+        self.assertEqual(result["classification"]["execution_id"], "FEAT-001")
+
+    def test_execution_cli_routes_repair_actions(self) -> None:
+        cases = [
+            ("refresh-revalidation-routes", "refresh_revalidation_routes",
+             ["--expected-cursor", "cursor", "--evidence-reference", "receipt"]),
+            ("dispatch", "begin_remediation", ["--classification", "classification",
+             "--remedy-scale", "localized", "--hypothesis", "proven owner defect",
+             "--evidence-reference", "receipt"]),
+            ("complete", "complete_remediation", ["--dispatch", "dispatch",
+             "--result", "succeeded", "--verification-reference", "receipt"]),
+        ]
+        for command, owner, options in cases:
+            with self.subTest(command=command), mock.patch.object(sys, "argv", [
+                "repair_control.py", command, "--run-dir", str(self.run_dir),
+                "--execution", "SLICE-002", *options,
+            ]), mock.patch.object(repair_control, owner, return_value={}) as call, \
+                    mock.patch("sys.stdout", io.StringIO()):
+                self.assertEqual(repair_control.main(), 0)
+                self.assertEqual(call.call_args.args[:2], (self.run_dir, "SLICE-002"))
+
     def environment_recovery_fixture(self, proposed="ENVIRONMENT_DEFECT"):
         integration = self.run_dir / "worktrees" / "FEAT-001" / "integration"
         integration.mkdir(parents=True)
@@ -313,7 +345,7 @@ class RepairControlTests(unittest.TestCase):
         coordinator.write_text(
             json.dumps(
                 {
-                    "schema": "workflow/execution-coordinator-v1",
+                    "schema": "workflow/execution-coordinator-v2",
                     "status": "integrated",
                     "active_wave": None,
                     "cleanup_retained": [],
@@ -334,7 +366,7 @@ class RepairControlTests(unittest.TestCase):
         )
         payload = revalidation_payload(self.run_dir, "evaluation", 0, commit=head)
         payload.update(
-            schema="agentic-sdlc/environment-recovery-v1",
+            schema="agentic-sdlc/environment-recovery-v2",
             event_id=event["event_id"],
             classification_id=classification["classification_id"],
         )
@@ -372,7 +404,7 @@ class RepairControlTests(unittest.TestCase):
             "s=importlib.util.spec_from_file_location('environment_stop_probe',sys.argv[1]); "
             "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
             "a=types.SimpleNamespace(run_dir=m.Path(sys.argv[2])); "
-            "state={'current_feature':'FEAT-001','next_recommended_skill':'sdlc-update-documents',"
+            "state={'current_execution':'FEAT-001','next_recommended_skill':'sdlc-update-documents',"
             "'repair':{'schema':'agentic-sdlc/repair-state-pointer-v1',"
             "'control':'repairs/FEAT-001/repair-control.json','failure_event':sys.argv[3]}}; "
             "assert m._repair_stop_reason(a,state) is None"
@@ -831,7 +863,7 @@ class RepairControlTests(unittest.TestCase):
         coordinator_path.write_text(
             json.dumps(
                 {
-                    "schema": "workflow/execution-coordinator-v1",
+                    "schema": "workflow/execution-coordinator-v2",
                     "integration_worktree": str(integration),
                 }
             ),
@@ -1002,7 +1034,7 @@ class RepairControlTests(unittest.TestCase):
                 coordinator_path.write_text(
                     json.dumps(
                         {
-                            "schema": "workflow/execution-coordinator-v1",
+                            "schema": "workflow/execution-coordinator-v2",
                             "status": "done",
                             "base_branch": "main",
                             "project_root": str(promoted_project),

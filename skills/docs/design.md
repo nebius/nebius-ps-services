@@ -1727,7 +1727,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=4 -->
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=5 -->
 ### FEAT-009: Adaptive troubleshooting with bounded helpers and measured qualification
 
 #### Requirements Covered
@@ -1737,7 +1737,7 @@ No independent verification evidence was recorded before schema v2 migration.
 #### Context Evidence
 
 The prior 629-line core mandated broad discovery and eight log-layer rows.
-Existing causal proof, production boundaries, budget schemas, diagnosis-v1,
+Existing causal proof, production boundaries, budget schemas, the versioned diagnosis contract,
 report classes and clean replay are retained. The approved refactor changes
 investigation breadth and measurement, not the standard for a causal claim.
 
@@ -1841,8 +1841,8 @@ Implemented a 288-line adaptive core with scoped evidence and conditional
 lifecycle/SDLC/report references; decision guides cover code, compute, storage,
 network and existing platform overlays. Selective collection and repeated trials
 use bounded POSIX subprocess helpers and schema 2 without compatibility shims.
-Shared hook payloads, Stop ownership, budget flags/state and diagnosis-v1 remain
-unchanged. The shared native evaluator now supports isolated paired diagnostics,
+Shared hook payloads, Stop ownership and budget flags/state remain unchanged.
+The SDLC execution-identity update uses diagnosis-v2 without a compatibility alias. The shared native evaluator now supports isolated paired diagnostics,
 independent repair oracles, bounded trace review, payload/evidence identity and
 fail-closed promotion. Supplemental platform replays remain separately labeled.
 Direct helper, hook and harness tests run in skills CI. Actual user installation
@@ -1908,6 +1908,11 @@ natural-language requests, polite action questions, and native skill mentions
 at any position. Both commit skills permit semantic selection, which alone
 never grants authority. Discussion, help, examples, negation, and skill repair
 remain non-actions. No model service or new agent runtime is introduced.
+The emitted guidance limits root `begin` to standalone commit, commit-push and
+create-pr requests. SDLC admission and its eventual commit remain owned by the
+SDLC coordinator and `sdlc-commit`, including before an active run exists. This
+prevents a fixture starting on its default branch from entering the unrelated
+standalone commit guard; that guard and delegated commit controls stay intact.
 
 Root `begin` validates a typed requested action against the hook-owned receipt
 before any branch switch or HEAD-changing operation. It creates one immutable
@@ -6191,8 +6196,8 @@ evidence remains unavailable; remote CI was not run.
 
 <!-- /FEATURE: FEAT-031 -->
 
-<!-- FEATURE: FEAT-032 reqs=REQ-033 status=ready delivery=implemented priority=P1 version=1 -->
-### FEAT-032: Shared ownership contract for disposable local Git origins
+<!-- FEATURE: FEAT-032 reqs=REQ-033 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-032: Owned local Git origins and validated configuration isolation
 
 #### Requirements Covered
 
@@ -6246,22 +6251,90 @@ independent object copying and effective URL rewrite behavior:
 [remote](https://git-scm.com/docs/git-remote),
 [config](https://git-scm.com/docs/git-config).
 
+#### Validated Git Isolation
+
+Version 2 adds a single fixed profile for each fresh owned fixture. The harness
+creates private configuration, empty attributes and a bounded context receipt
+before baseline initialization, then seals the profile to the immutable origin
+receipt. The generation marker, exact paths, private owner-controlled files,
+fixed configuration bytes and receipt digest are revalidated before use.
+Initialization is an explicit harness-only operation; ordinary consumers require
+sealed state and never recreate missing or altered files.
+
+A shared `git_environment.py` module in the trusted runtime owns validation and
+its exact environment overlay. It replaces global configuration, disables
+system configuration and system attributes, and fixes global attributes to an
+owned empty file. It supplies a generic fixture-only author identity and local-
+only transport defaults. It does not change HOME, ordinary agent configuration,
+credentials, installed ordinary hooks or the owned origin's rejecting hook.
+Caller overrides outside the exact validated overlay remain forbidden.
+
+Allowed Git scope is the exact primary checkout, its owned origin, or a linked
+worktree inside the same owned scope whose metadata and common-directory links
+prove membership in that primary repository. Workflow registration, task leases,
+branch/head binding and native-home authorization remain separate existing
+checks. The profile adds no authorization to commit, dispatch, promote or delete.
+Repository-local and worktree configuration use a small explicit safe-key
+allowance. Reject include/includeIf directives even when inactive, executable
+filters, hooks, diff/textconv and signing programs, attributes redirection,
+foreign transports and unsupported configuration before invoking affected Git
+operations. Profile validation is an integrity boundary, not an OS sandbox
+against an arbitrary malicious process with the same operating-system user.
+
+Wire the validator into fixture Git operations, direct-objective/spec owners,
+execution and managed worktree Git helpers, promotion, SDLC hook observations,
+commit intent/transactions and native worker environment propagation. A private environment launcher runs
+ordinary native commands with a validated sealed profile; it performs no SDLC
+phase transitions. Qualification subprocesses retain their own bounded fixture
+contexts instead of inheriting a parent profile for unrelated repositories.
+Lifecycle startup, resume and cleanup validate the same profile; failed trials
+remain failed, and a repaired contract starts a fresh trial. Cleanup keeps the
+profile until the final Git ownership check has completed.
+
+Distribute the validator through the existing verified support loader and
+installer inventory. Source and installed skill parity remain required. Use a
+fresh selected disposable native home for current runtime/hook qualification;
+ordinary hook state is preserved. Existing retained fixtures without a profile
+are not silently converted or adopted. Hook-routing checks exclude only the
+exact selected-home prefix from command tokens; directory names cannot imply
+SDLC routing, while hook names and arguments remain checked.
+When the installed verifier checks a separate source catalog, source synthetic
+hook fixture construction runs in a bounded subprocess with that fixture's
+validated Git environment and native home. The parent retains its one trusted
+runtime identity. Seed launch, timeout and execution failures become sanitized
+FAIL rows, preserving the final report without weakening the loader guard.
+
+Git documents the configuration and attributes boundaries in its
+[environment reference](https://git-scm.com/docs/git) and
+[attributes reference](https://git-scm.com/docs/gitattributes). Python/Git and the
+native agent stack remain fixed; no application or AI technology selection is
+needed. All new profile creation and validation behavior is deterministic.
+System-design review focuses on one owner, immutable generation binding, failure
+before mutation, complete propagation and exact cleanup. No new service or
+external integration is introduced.
+
 #### Selected Option
 
 Use one shared owner for a single local bare origin in each disposable scope.
 This exercises normal SDLC admission while keeping transport and cleanup local.
+Use one shared validated profile rather than per-caller exemptions.
 
 #### Alternatives Considered
 
 The current remote-free fixture cannot reach ordinary Git-backed admission.
 A special SDLC no-origin mode would alter production behavior to accommodate
 its test. Accepting arbitrary local remotes would lose ownership and safe
-cleanup guarantees. All are rejected for this test-harness repair.
+cleanup guarantees. Baseline-only filter overrides miss conditional includes;
+rewriting personal Git configuration changes unrelated behavior. A generic
+unvalidated environment bypass weakens all consumers. These alternatives are
+rejected; explicit isolation is limited to owned disposable scopes.
 
 #### Implementation Boundaries
 
 Change the verifier, three-tier lifecycle, shared private origin owner, focused
-tests, skill/checklist/scenario guidance, README and changelog. Preserve normal
+tests, shared runtime and distribution inventory, workflow/spec Git entrypoints,
+commit environment guards, skill/checklist/scenario guidance, README and
+changelog. Preserve normal
 prompt/worktree promotion, installed hooks and unrelated user changes.
 
 #### Test-First Success Criteria
@@ -6272,6 +6345,13 @@ prompt/worktree promotion, installed hooks and unrelated user changes.
   before Git transport or browser/Docker cleanup; origin push is rejected.
 - TDD-003: Replay, descendant implementation, retained resume and owned cleanup
   preserve baseline identity and leave unrelated paths unchanged.
+- TDD-004: Inherited executable filters and global attributes cannot affect a
+  fresh fixture; harmless sentinels prove no inherited command ran.
+- TDD-005: Local executable settings, inactive conditional includes, profile
+  tampering, caller overrides and a foreign checkout fail before mutation.
+- TDD-006: Normal intake, linked worker Git, coordinator commit, resume and
+  cleanup carry the same sealed context; an unrelated ordinary transaction
+  retains its original environment rejection behavior.
 
 #### Validation Plan
 
@@ -6293,9 +6373,9 @@ starting Docker/browser UAT; do not synthesize semantic live evidence.
 #### Rollout And Rollback
 
 Review and validate source first, then synchronize only the user-approved
-skills. Existing proven canonical remote-free lightweight fixtures may receive
-their first owned origin during normal preparation. Foreign or partial origin
-state is never adopted. Preserve failed live trials and recover through exact
+skills. Fresh fixtures receive their owned profile and origin during normal
+preparation. Existing fixtures without a profile, foreign origins and partial
+origin state are never adopted. Preserve failed live trials and recover through exact
 owned cleanup; do not roll back by deleting ambiguous state.
 
 #### Done Definition
@@ -6306,16 +6386,22 @@ clearly distinguishes source, installed and full live behavior.
 
 #### Implementation Evidence
 
-Implemented the shared owned_git_origin module, verifier and lifecycle wiring,
-real baseline preparation, strict ownership validation and fail-closed cleanup.
-Normal local fetch establishes the tracking default used by Worktree.
+Version 2 implements the shared sealed profile, strict local configuration and
+metadata checks, native launch/worker propagation, promotion and hook checks,
+and distribution through the trusted runtime. Ordinary settings remain intact.
+Implementation is present; full installed and native qualification is pending.
 
 #### Verification Evidence
 
-Focused real-Git tests pass for replay, frozen refs, unsafe configuration,
-foreign ownership and rejected pushes. Composed normal prompt intake creates
-the promotion branch and managed worktree create/remove succeeds. Full
-deterministic and live verification remain pending for this source candidate.
+Before version 2, the original setup failure was reproduced and repaired in
+unit/composition fixtures: 17 focused checks, 121 three-tier tests and 14 tests
+against the installed skill pass. The live verifier still rejects inherited
+Git filters under the old contract. Version 2 has passing real-Git negative
+controls for profile tampering, nested foreign repositories, common-directory
+redirection, borrowed storage and disabled origin guards, plus focused intake,
+worker, promotion and hook checks. Source alignment passes. Installation parity,
+a fresh complete preflight and an independent native Docker/browser trial
+remain required before a live verification claim.
 
 <!-- /FEATURE: FEAT-032 -->
 
@@ -9833,6 +9919,264 @@ runner lacks authenticated, dependency-complete execution. No live GitHub
 operation or real-home installation was performed.
 
 <!-- /FEATURE: FEAT-053 -->
+
+<!-- FEATURE: FEAT-054 reqs=REQ-055 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-054: Complete document-package intake and phased delivery
+
+#### Requirements Covered
+
+- REQ-055: Complete document-package intake and phased delivery.
+
+#### Context Evidence
+
+Existing Worktree objective/execution helpers, canonical spec parser, SDLC adapters and protected merge helpers define the current ownership boundaries. The accepted readiness review identified missing package coverage, unbounded retained waves, recursive graph validation and label-only merge admission.
+
+#### Design Details
+
+Extend the shared objective intake with digest-bound document bundles and completion policy. The canonical spec owner validates a source-ID coverage crosswalk; source assets remain portable project documentation. Add a private program ledger with explicit phase dependencies, immutable slice membership, task feature/requirement mappings, scoped completion and phase-exit evidence. Elaborate upcoming slices rather than an entire detailed backlog. Source changes fence dispatch and require accepted impact/replanning. Existing spec schemas, stable IDs and paired publication remain authoritative.
+
+#### Selected Option
+
+Extend existing deterministic owners and thin phase adapters with versioned contracts.
+
+#### Alternatives Considered
+
+A replacement coordinator duplicates authority. One project-wide PR makes review and recovery unbounded. Concurrent publication candidates add base races; retain one qualified candidate.
+
+#### Implementation Boundaries
+
+Repo-owned skills, referenced support helpers, hook source, templates, documentation, catalogs and tests. No application implementation, actual cluster operation or production installation is included.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing/stale evidence and invalid dependencies fail before workflow effects.
+- TDD-002: Complete current evidence advances only the selected scope and preserves ordinary workflows.
+
+#### Validation Plan
+
+Run focused unit/real-Git tests, syntax/lint, paired spec validation, align-skill and align.
+
+#### Test Plan
+
+Cover large synthetic catalogs and graphs, mixed-feature admission, bounded resources, evidence substitution, phase barriers and interrupted delivery.
+
+#### Evaluation Plan
+
+Use fresh native and disposable external qualification only within separately identified test targets; keep NOT_RUN explicit.
+
+#### Rollout And Rollback
+
+Ship source first. Drain old active runs before installation; preserve old state without conversion. Restore reviewed source if regressions arise; never undo external effects blindly.
+
+#### Done Definition
+
+Implementation, ownership, docs and focused tests agree; all unexecuted native/live lanes are explicitly reported.
+
+#### Implementation Evidence
+
+Implemented source_bundle.py, workflow_program.py and accepted objective v2. Portable contract snapshots carry digests, original IDs, explicit dispositions and canonical REQ/FEAT mappings. Programs declare phases, slices and regression criteria; exact input admission rejects unrelated changes. Completed slice definitions and order remain immutable, and full completion requires current obligation evidence beyond phase exit subsets.
+
+#### Verification Evidence
+
+Synthetic package tests pass with 601 obligations, missing catalog IDs/references, conflicts, drift and canonical mappings. Program tests cover phase ordering, completed-contract immutability and missing/stale full-program evidence. Prose inventory and semantic conflict completeness remain root-reviewed rather than automatically proven.
+
+Final source/package/program validation: 15 tests passed, including the 601-obligation catalog and completed-program amendment checks.
+
+<!-- /FEATURE: FEAT-054 -->
+
+<!-- FEATURE: FEAT-055 reqs=REQ-056 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-055: Bounded scalable execution across ready features
+
+#### Requirements Covered
+
+- REQ-056: Bounded scalable execution across ready features.
+
+#### Context Evidence
+
+Existing Worktree objective/execution helpers, canonical spec parser, SDLC adapters and protected merge helpers define the current ownership boundaries. The accepted readiness review identified missing package coverage, unbounded retained waves, recursive graph validation and label-only merge admission.
+
+#### Design Details
+
+Worktree remains the sole shared execution/Git owner. Generalize execution identity to a slice ID while preserving product feature IDs on tasks. Use iterative topological validation, deterministic bounded wave partitioning and one task-to-wave index. Limit retained resources independently of active concurrency. Shared Implement uses the same primitives with ordinary feature membership. A slice-wide spec gap fences dispatch; successor immutable plans retain history. Delivery-only canonical reconciliation is root-owned and precedes final sealing; material changes replan. No nested coordinators or concurrent promotion writers.
+
+#### Selected Option
+
+Extend existing deterministic owners and thin phase adapters with versioned contracts.
+
+#### Alternatives Considered
+
+A replacement coordinator duplicates authority. One project-wide PR makes review and recovery unbounded. Concurrent publication candidates add base races; retain one qualified candidate.
+
+#### Implementation Boundaries
+
+Repo-owned skills, referenced support helpers, hook source, templates, documentation, catalogs and tests. No application implementation, actual cluster operation or production installation is included.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing/stale evidence and invalid dependencies fail before workflow effects.
+- TDD-002: Complete current evidence advances only the selected scope and preserves ordinary workflows.
+
+#### Validation Plan
+
+Run focused unit/real-Git tests, syntax/lint, paired spec validation, align-skill and align.
+
+#### Test Plan
+
+Cover large synthetic catalogs and graphs, mixed-feature admission, bounded resources, evidence substitution, phase barriers and interrupted delivery.
+
+#### Evaluation Plan
+
+Use fresh native and disposable external qualification only within separately identified test targets; keep NOT_RUN explicit.
+
+#### Rollout And Rollback
+
+Ship source first. Drain old active runs before installation; preserve old state without conversion. Restore reviewed source if regressions arise; never undo external effects blindly.
+
+#### Done Definition
+
+Implementation, ownership, docs and focused tests agree; all unexecuted native/live lanes are explicitly reported.
+
+#### Implementation Evidence
+
+Implemented iterative graph validation, indexed dependency waves, four-task integration batches, explicit retained worktree limit and feature membership on slice tasks. Handoffs expose at most sixteen short dependency summaries plus a digest-bound index and a 64 KiB limit. Shared ordinary Implement keeps its FEAT identity. Continuation renews only the exhausted iteration window; repair and no-progress budgets remain.
+
+#### Verification Evidence
+
+Deterministic tests pass for 2,100-task forward/backward chains, fan-out/fan-in, cycles, write conflicts, bounded waves and 2,100 dependency references. Ordinary workflow and real-Git integration regressions are included in the changed-scope validation. Native parallel worker throughput at project scale is not qualified.
+
+Final execution validation: 91 real-Git/execution tests, 31 ordinary workflow contract tests, 15 dispatch tests and the 2,100-predecessor handoff test passed. The four-retained-worktree test verifies batch cleanup and the next validated base.
+
+Execution CLI dispatch consistently consumes `--execution`, including worker reconciliation and repair-control classification, dispatch, completion and route refresh. Command-level regression tests exercise real preparation, wave allocation, status and recorded-failure classification, in addition to direct owner tests. Native qualification remains separate from these deterministic checks.
+
+<!-- /FEATURE: FEAT-055 -->
+
+<!-- FEATURE: FEAT-056 reqs=REQ-057 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-056: Evidence-bound conditional SDLC merge completion
+
+#### Requirements Covered
+
+- REQ-057: Evidence-bound conditional SDLC merge completion.
+
+#### Context Evidence
+
+Existing Worktree objective/execution helpers, canonical spec parser, SDLC adapters and protected merge helpers define the current ownership boundaries. The accepted readiness review identified missing package coverage, unbounded retained waves, recursive graph validation and label-only merge admission.
+
+#### Design Details
+
+Add versioned accepted completion policy and immutable live/review/admission receipts. A deterministic owner helper validates actual executed evidence and current scope before dispatching the exact candidate through the protected broker. Hooks reject raw merge, approval and dispatch; caller-supplied passed labels grant no authority. Reuse the existing protected Actions broker and authoritative result verification through an SDLC adapter; ordinary ownership and repair paths remain separate. Direct merge only, compatible protected setup and unmanaged source checkout initially. Live receipts bind source/artifact/configuration, lease/trial/reset provenance, mandatory criteria and intervention state. Revocation fences new effects; already submitted effects must be reconciled.
+
+#### Selected Option
+
+Extend existing deterministic owners and thin phase adapters with versioned contracts.
+
+#### Alternatives Considered
+
+A replacement coordinator duplicates authority. One project-wide PR makes review and recovery unbounded. Concurrent publication candidates add base races; retain one qualified candidate.
+
+#### Implementation Boundaries
+
+Repo-owned skills, referenced support helpers, hook source, templates, documentation, catalogs and tests. No application implementation, actual cluster operation or production installation is included.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing/stale evidence and invalid dependencies fail before workflow effects.
+- TDD-002: Complete current evidence advances only the selected scope and preserves ordinary workflows.
+
+#### Validation Plan
+
+Run focused unit/real-Git tests, syntax/lint, paired spec validation, align-skill and align.
+
+#### Test Plan
+
+Cover large synthetic catalogs and graphs, mixed-feature admission, bounded resources, evidence substitution, phase barriers and interrupted delivery.
+
+#### Evaluation Plan
+
+Use fresh native and disposable external qualification only within separately identified test targets; keep NOT_RUN explicit.
+
+#### Rollout And Rollback
+
+Ship source first. Drain old active runs before installation; preserve old state without conversion. Restore reviewed source if regressions arise; never undo external effects blindly.
+
+#### Done Definition
+
+Implementation, ownership, docs and focused tests agree; all unexecuted native/live lanes are explicitly reported.
+
+#### Implementation Evidence
+
+Implemented workflow_qualification.py and workflow_delivery.py with protected merge helper reuse. A committed frozen harness executes all criteria and independently observes candidate, environment and trial identities. Receipts persist trial/attempt checkpoints before live criteria. Accepted opt-in gates exact protected dispatch; ambiguous submission and merged-result failures reconcile without remerging. Hooks deny raw merge/approval/dispatch and only continue opted-in slices. Default reviewed-PR completion stops at a resumable checkpoint.
+
+#### Verification Evidence
+
+Executed local harness fixtures reject skipped tests, passing labels, wrong artifacts, intervention, revoked authority and forged receipts. Mocked GitHub tests cover two slices for merge/squash/rebase, ambiguous submission, result-CI failure/resume, base drift and queues. Real Git tests preserve initial history and recover next-branch creation. No remote merge, live application qualification or fresh native-host activation was performed; unattended readiness remains unverified.
+
+Final evidence/delivery validation: eight executed-harness tests and nine delivery/recovery tests passed; 109 shared merge regressions also passed. The abrupt-process-exit probe preserves the first attempted criterion and rejects reuse of its trial.
+
+<!-- /FEATURE: FEAT-056 -->
+
+<!-- FEATURE: FEAT-057 reqs=REQ-058 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-057: Composable SDLC phase and specialist contracts
+
+#### Requirements Covered
+
+- REQ-058: Composable SDLC phase and specialist contracts.
+
+#### Context Evidence
+
+Existing Worktree objective/execution helpers, canonical spec parser, SDLC adapters and protected merge helpers define the current ownership boundaries. The accepted readiness review identified missing package coverage, unbounded retained waves, recursive graph validation and label-only merge admission.
+
+#### Design Details
+
+Document caller-aware advisory return contracts for research, design and domain specialists. Validation uses report-only code-review and check-only linting. Align receives the exact integration checkout, write scope and parent finding ledger; it returns changed paths and invalidations. Move advisory traceability guidance from sdlc-align-specs to align, retire owned installation/catalog references and preserve canonical parsing with maintain-project-specs. Keep existing host controls and progressive disclosure. Qualify with synthetic package/graph/evidence tests, ordinary-workflow regressions, disposable installation and separately authorized native/live trials.
+
+#### Selected Option
+
+Extend existing deterministic owners and thin phase adapters with versioned contracts.
+
+#### Alternatives Considered
+
+A replacement coordinator duplicates authority. One project-wide PR makes review and recovery unbounded. Concurrent publication candidates add base races; retain one qualified candidate.
+
+#### Implementation Boundaries
+
+Repo-owned skills, referenced support helpers, hook source, templates, documentation, catalogs and tests. No application implementation, actual cluster operation or production installation is included.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing/stale evidence and invalid dependencies fail before workflow effects.
+- TDD-002: Complete current evidence advances only the selected scope and preserves ordinary workflows.
+
+#### Validation Plan
+
+Run focused unit/real-Git tests, syntax/lint, paired spec validation, align-skill and align.
+
+#### Test Plan
+
+Cover large synthetic catalogs and graphs, mixed-feature admission, bounded resources, evidence substitution, phase barriers and interrupted delivery.
+
+#### Evaluation Plan
+
+Use fresh native and disposable external qualification only within separately identified test targets; keep NOT_RUN explicit.
+
+#### Rollout And Rollback
+
+Ship source first. Drain old active runs before installation; preserve old state without conversion. Restore reviewed source if regressions arise; never undo external effects blindly.
+
+#### Done Definition
+
+Implementation, ownership, docs and focused tests agree; all unexecuted native/live lanes are explicitly reported.
+
+#### Implementation Evidence
+
+Implemented local-first SDLC context gathering, advisory design/research caller contracts, report-only review and check-only lint routing, general align traceability, and affected-gate revalidation. Retired sdlc-align-specs without an alias; reconciled troubleshooting v2 contracts, metadata, templates, workflow design and catalog diagrams.
+
+#### Verification Evidence
+
+Changed-scope structure, trigger-definition and Codex/Claude metadata checks pass. Source callers and helper ownership were reviewed with code-review and apply-security and aligned with align-skill/align. Fresh trigger execution, comparative output quality and native workflow activation remain separate unexecuted qualifications.
+
+Final integration validation: 235 workflow-verifier tests, 29 disposable Codex/Claude installer/runtime tests, 113 hook cases (suite plus corrected targeted rerun), 18 start/spec tests, 16 objective tests, three Implement tests, ten evaluation tests, 34 repair tests, six corrective-plan tests and 58 troubleshooting tests passed. Static validation covered 30 changed skills and 424 trigger definitions; changed-scope lint and diff checks passed.
+
+<!-- /FEATURE: FEAT-057 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

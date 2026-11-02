@@ -15,5 +15,9 @@ unchanged-source checks and managed outer-worktree ownership. Post-promotion
 documentation drift starts a corrective run. Remote publication still requires
 its existing authorization and exact-commit checks.
 
+In verifier-owned disposable runs, hook Git reads validate the sealed Git
+profile before observing project identity or staged content. Invalid profiles
+fail closed; ordinary sessions retain their existing Git environment.
+
 See [SKILL.md](SKILL.md), [state schema](references/state-schema.md) and the
 [shared execution contract](../worktree/references/workflow-contract.md).

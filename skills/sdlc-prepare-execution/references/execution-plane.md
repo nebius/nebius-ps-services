@@ -53,9 +53,9 @@ domain and an exclusive assignment-bound lease.
 
 ## State And Resources
 
-Shared schemas are `workflow/execution-coordinator-v1`, `workflow/execution-wave-v1`,
-`workflow/execution-task-v1`, `workflow/worker-assignment-v1`, and
-`workflow/worker-result-v1`. Each assignment binds a normalized objective and
+Shared schemas are `workflow/execution-coordinator-v2`, `workflow/execution-wave-v2`,
+`workflow/execution-task-v2`, `workflow/worker-assignment-v2`, and
+`workflow/worker-result-v2`. Each assignment binds a normalized objective and
 immutable execution basis; each admitted result binds exact identity, ancestry,
 changed paths, validation, review and native termination. Typed `spec_gaps` return
 to the root coordinator. Workers never publish canonical specs independently.
@@ -135,7 +135,7 @@ done. Preparation retains the existing integration tip and TDD lineage; it does
 not reopen completed waves or reseal TDD.
 
 Coordinator `task-finish` writes a digest-protected
-`agentic-sdlc/task-finish-intent-v1` before invoking Git. The intent binds the
+`agentic-sdlc/task-finish-intent-v2` before invoking Git. The intent binds the
 assignment digest, base, staged tree, canonical message, and structured
 evidence. A retry may adopt only an exact clean direct-child commit matching
 that intent, and may reuse a result file only when every result field matches

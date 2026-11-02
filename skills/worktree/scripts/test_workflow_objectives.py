@@ -42,7 +42,7 @@ class ObjectiveTests(unittest.TestCase):
         result = self.accept()
         run = Path(result["run_dir"])
         self.assertEqual(result["status"], "ACCEPTED")
-        self.assertEqual(read(run / "objectives/r0001.json"), self.value)
+        self.assertEqual(read(run / "objectives/r0001.json"), objectives.normalize(self.value))
         self.assertFalse((run / "prompt.json").exists())
         self.assertEqual(os.stat(run / "objective.json").st_mode & 0o777, 0o600)
 
@@ -52,6 +52,23 @@ class ObjectiveTests(unittest.TestCase):
         self.assertEqual(second["run_dir"], first["run_dir"])
         self.assertEqual(second["revision"], "r0001")
         self.assertEqual(second["status"], "CONTINUE")
+
+    def test_explicit_continue_renews_only_exhausted_iteration_window(self):
+        origin = self.root / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "origin", "main")
+        result = objectives.accept(self.project, self.home, "agentic-sdlc", "session-a", self.value)
+        run = Path(result["run_dir"])
+        checkpoint = {"iteration_count": 200, "max_iterations": 200,
+                      "failure_count": 3, "no_progress_count": 2}
+        write(run / "current-state.json", checkpoint)
+        objectives.continue_run(self.project, self.home, "agentic-sdlc", "session-a")
+        self.assertEqual(read(run / "run.json")["continuation_window_start"], 200)
+        self.assertEqual(read(run / "run.json")["continuation_windows"], 2)
+        self.assertEqual(read(run / "current-state.json"), checkpoint)
+        objectives.continue_run(self.project, self.home, "agentic-sdlc", "session-a")
+        self.assertEqual(read(run / "run.json")["continuation_windows"], 2)
 
     def test_new_session_does_not_infer_sole_active_run(self):
         self.accept()

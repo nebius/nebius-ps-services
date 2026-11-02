@@ -30,6 +30,7 @@ from project_specs_lib.transaction import publish_spec_pair  # noqa: E402
 from test_workflow_execution import REQUIREMENTS, DESIGN, PLAN, finish_task as fixture_finish  # noqa: E402
 import three_tier_lifecycle as lifecycle  # noqa: E402
 import three_tier_target as target  # noqa: E402
+from git_fixture_environment import isolated_git_configuration  # noqa: E402
 
 
 def private_json(path, value):
@@ -40,6 +41,7 @@ def private_json(path, value):
 
 class ThreeTierTargetTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(isolated_git_configuration())
         self.temporary = tempfile.TemporaryDirectory(
             dir=Path(tempfile.gettempdir()).resolve()
         )
@@ -59,7 +61,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.project = Path(self.state["project_root"])
         self.home = Path(self.state["private_root"]) / "codex-home"
         self.environment = mock.patch.dict(
-            os.environ, {"CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "target-root"}
+            os.environ, {**lifecycle.owned_git_origin.environment(self.project), "CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "target-root"}
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -72,7 +74,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.manifest = self.run.parent / 'project.json'
         project_id = json.loads(self.manifest.read_text())['project_id']
         private_json(self.run / 'current-state.json', {'run_id': self.run_id, 'project_id': project_id,
-                     'current_feature':'FEAT-001','status':'running','current_phase':'sdlc-start'})
+                     'current_execution':'FEAT-001','status':'running','current_phase':'sdlc-start'})
         self.base = self.git("rev-parse", "HEAD")
         self.startup_observation = target.observe_startup(
             self.state, skills_root=ROOT, agent="codex"

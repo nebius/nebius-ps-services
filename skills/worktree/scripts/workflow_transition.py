@@ -219,32 +219,32 @@ def parser() -> argparse.ArgumentParser:
     specs = sub.add_parser("prepare-specs")
     specs.add_argument("--run-dir", type=Path, required=True)
     specs.add_argument("--project-root", type=Path, required=True)
-    specs.add_argument("--feature", required=True)
+    specs.add_argument("--execution", required=True)
 
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--run-dir", type=Path, required=True)
     prepare.add_argument("--project-root", type=Path, required=True)
-    prepare.add_argument("--feature", required=True)
+    prepare.add_argument("--execution", required=True)
     prepare.add_argument("--plan", type=Path, required=True)
     prepare.add_argument("--capacity", type=int, default=4)
 
     tdd = sub.add_parser("seal-tdd")
     tdd.add_argument("--run-dir", type=Path, required=True)
-    tdd.add_argument("--feature", required=True)
+    tdd.add_argument("--execution", required=True)
     tdd.add_argument("--message", required=True)
 
     wave = sub.add_parser("wave-prepare")
     wave.add_argument("--run-dir", type=Path, required=True)
-    wave.add_argument("--feature", required=True)
+    wave.add_argument("--execution", required=True)
     wave.add_argument("--wave", required=True)
 
     batch = sub.add_parser("wave-refill")
     batch.add_argument("--run-dir", type=Path, required=True)
-    batch.add_argument("--feature", required=True)
+    batch.add_argument("--execution", required=True)
     batch.add_argument("--wave", required=True)
 
     reconciliation = sub.add_parser("worker-reconcile")
-    for name in ("feature", "wave", "task"):
+    for name in ("execution", "wave", "task"):
         reconciliation.add_argument("--" + name, required=True)
     reconciliation.add_argument("--run-dir", type=Path, required=True)
     reconciliation.add_argument("--termination", type=Path, required=True)
@@ -258,20 +258,20 @@ def parser() -> argparse.ArgumentParser:
 
     admission = sub.add_parser("task-admit")
     admission.add_argument("--run-dir", type=Path, required=True)
-    admission.add_argument("--feature", required=True)
+    admission.add_argument("--execution", required=True)
     admission.add_argument("--wave", required=True)
     admission.add_argument("--task", required=True)
     admission.add_argument("--termination", type=Path, required=True)
 
     replan = sub.add_parser("replan-future")
     replan.add_argument("--run-dir", type=Path, required=True)
-    replan.add_argument("--feature", required=True)
+    replan.add_argument("--execution", required=True)
     replan.add_argument("--plan", type=Path, required=True)
     replan.add_argument("--capacity", type=int, default=1)
 
     task_start = sub.add_parser("task-start")
     task_start.add_argument("--run-dir", type=Path, required=True)
-    task_start.add_argument("--feature", required=True)
+    task_start.add_argument("--execution", required=True)
     task_start.add_argument("--wave", required=True)
     task_start.add_argument("--task", required=True)
     task_start.add_argument("--assignment-digest", required=True)
@@ -279,14 +279,14 @@ def parser() -> argparse.ArgumentParser:
 
     task_arm = sub.add_parser("task-arm")
     task_arm.add_argument("--run-dir", type=Path, required=True)
-    task_arm.add_argument("--feature", required=True)
+    task_arm.add_argument("--execution", required=True)
     task_arm.add_argument("--wave", required=True)
     task_arm.add_argument("--task", required=True)
     task_arm.add_argument("--assignment-digest", required=True)
 
     task_requeue = sub.add_parser("task-requeue")
     task_requeue.add_argument("--run-dir", type=Path, required=True)
-    task_requeue.add_argument("--feature", required=True)
+    task_requeue.add_argument("--execution", required=True)
     task_requeue.add_argument("--wave", required=True)
     task_requeue.add_argument("--task", required=True)
     task_requeue.add_argument("--assignment-digest", required=True)
@@ -295,7 +295,7 @@ def parser() -> argparse.ArgumentParser:
 
     task_heartbeat = sub.add_parser("task-heartbeat")
     task_heartbeat.add_argument("--run-dir", type=Path, required=True)
-    task_heartbeat.add_argument("--feature", required=True)
+    task_heartbeat.add_argument("--execution", required=True)
     task_heartbeat.add_argument("--wave", required=True)
     task_heartbeat.add_argument("--task", required=True)
     task_heartbeat.add_argument("--assignment-digest", required=True)
@@ -303,14 +303,14 @@ def parser() -> argparse.ArgumentParser:
 
     task_watch = sub.add_parser("task-watch")
     task_watch.add_argument("--run-dir", type=Path, required=True)
-    task_watch.add_argument("--feature", required=True)
+    task_watch.add_argument("--execution", required=True)
     task_watch.add_argument("--wave", required=True)
     task_watch.add_argument("--task", required=True)
     task_watch.add_argument("--assignment-digest", required=True)
 
     approval = sub.add_parser("authorize-recovery")
     approval.add_argument("--run-dir", type=Path, required=True)
-    approval.add_argument("--feature", required=True)
+    approval.add_argument("--execution", required=True)
     approval.add_argument("--wave", required=True)
     approval.add_argument("--task", required=True)
     approval.add_argument("--termination", type=Path, required=True)
@@ -318,7 +318,7 @@ def parser() -> argparse.ArgumentParser:
 
     task_recover = sub.add_parser("task-recover")
     task_recover.add_argument("--run-dir", type=Path, required=True)
-    task_recover.add_argument("--feature", required=True)
+    task_recover.add_argument("--execution", required=True)
     task_recover.add_argument("--wave", required=True)
     task_recover.add_argument("--task", required=True)
     task_recover.add_argument("--scope-cwd", type=Path, required=True)
@@ -328,7 +328,7 @@ def parser() -> argparse.ArgumentParser:
     task_finish = sub.add_parser("task-finish")
     task_finish.add_argument("--run-dir", type=Path, required=True)
     task_finish.add_argument("--termination", type=Path, required=True)
-    task_finish.add_argument("--feature", required=True)
+    task_finish.add_argument("--execution", required=True)
     task_finish.add_argument("--wave", required=True)
     task_finish.add_argument("--task", required=True)
     task_finish.add_argument("--validation", required=True)
@@ -341,18 +341,18 @@ def parser() -> argparse.ArgumentParser:
 
     integrate = sub.add_parser("wave-integrate")
     integrate.add_argument("--run-dir", type=Path, required=True)
-    integrate.add_argument("--feature", required=True)
+    integrate.add_argument("--execution", required=True)
     integrate.add_argument("--wave", required=True)
 
     complete = sub.add_parser("wave-complete")
     complete.add_argument("--run-dir", type=Path, required=True)
-    complete.add_argument("--feature", required=True)
+    complete.add_argument("--execution", required=True)
     complete.add_argument("--wave", required=True)
     complete.add_argument("--evidence", required=True)
 
     failed = sub.add_parser("wave-fail")
     failed.add_argument("--run-dir", type=Path, required=True)
-    failed.add_argument("--feature", required=True)
+    failed.add_argument("--execution", required=True)
     failed.add_argument("--wave", required=True)
     failed.add_argument("--classification", required=True)
     failed.add_argument("--dispatch", required=True)
@@ -360,13 +360,13 @@ def parser() -> argparse.ArgumentParser:
 
     seal = sub.add_parser("seal-feature")
     seal.add_argument("--run-dir", type=Path, required=True)
-    seal.add_argument("--feature", required=True)
+    seal.add_argument("--execution", required=True)
     seal.add_argument("--evidence", required=True)
     seal.add_argument("--message", required=True)
 
     promote = sub.add_parser("promote")
     promote.add_argument("--run-dir", type=Path, required=True)
-    promote.add_argument("--feature", required=True)
+    promote.add_argument("--execution", required=True)
     promote.add_argument("--evidence", required=True)
 
     release = sub.add_parser("release-outer-lease")
@@ -383,7 +383,7 @@ def parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status")
     status.add_argument("--run-dir", type=Path, required=True)
-    status.add_argument("--feature", required=True)
+    status.add_argument("--execution", required=True)
     return value
 
 
@@ -409,31 +409,31 @@ def _execute(args: argparse.Namespace) -> Any:
         authorize_coordinator(args.run_dir, session)
     if args.command == "task-finish":
         from workflow_reconcile import termination
-        termination(args.run_dir, args.feature, args.wave, args.task, args.termination, session)
+        termination(args.run_dir, args.execution, args.wave, args.task, args.termination, session)
     if args.command == "authorize-recovery":
         from workflow_reconcile import authorize_recovery
-        return authorize_recovery(args.run_dir, args.feature, args.wave, args.task,
+        return authorize_recovery(args.run_dir, args.execution, args.wave, args.task,
                                   args.termination, session, args.next_session_sha256)
     if args.command == "worker-reconcile":
         from workflow_reconcile import reconcile_worker
-        return reconcile_worker(args.run_dir, args.feature, args.wave, args.task, args.termination, session)
+        return reconcile_worker(args.run_dir, args.execution, args.wave, args.task, args.termination, session)
     if args.command == "prepare":
         return prepare_execution(
-            args.run_dir, args.project_root, args.feature, args.plan, args.capacity
+            args.run_dir, args.project_root, args.execution, args.plan, args.capacity
         )
     if args.command == "prepare-specs":
         from workflow_execution import prepare_specifications
-        return prepare_specifications(args.run_dir, args.project_root, args.feature)
+        return prepare_specifications(args.run_dir, args.project_root, args.execution)
     if args.command == "seal-tdd":
-        return seal_tdd_base(args.run_dir, args.feature, args.message)
+        return seal_tdd_base(args.run_dir, args.execution, args.message)
     if args.command == "wave-prepare":
-        return prepare_wave(args.run_dir, args.feature, args.wave)
+        return prepare_wave(args.run_dir, args.execution, args.wave)
     if args.command == "wave-refill":
-        return refill_wave(args.run_dir, args.feature, args.wave)
+        return refill_wave(args.run_dir, args.execution, args.wave)
     if args.command == "task-admit":
-        return admit_task(args.run_dir, args.feature, args.wave, args.task, args.termination)
+        return admit_task(args.run_dir, args.execution, args.wave, args.task, args.termination)
     if args.command == "replan-future":
-        return replan_future(args.run_dir, args.feature, args.plan, args.capacity)
+        return replan_future(args.run_dir, args.execution, args.plan, args.capacity)
     if args.command == "task-start":
         if args.scope_cwd.expanduser().resolve() != Path.cwd().resolve():
             raise ExecutionError(
@@ -441,7 +441,7 @@ def _execute(args: argparse.Namespace) -> Any:
             )
         return start_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             args.assignment_digest,
@@ -451,7 +451,7 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "task-arm":
         return arm_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             args.assignment_digest,
@@ -459,7 +459,7 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "task-requeue":
         return requeue_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             args.assignment_digest,
@@ -469,7 +469,7 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "task-heartbeat":
         return heartbeat_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             args.assignment_digest,
@@ -480,7 +480,7 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "task-watch":
         return watch_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             args.assignment_digest,
@@ -492,7 +492,7 @@ def _execute(args: argparse.Namespace) -> Any:
             )
         return recover_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             runtime_session_identity(),
@@ -503,7 +503,7 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "task-finish":
         return finish_task(
             args.run_dir,
-            args.feature,
+            args.execution,
             args.wave,
             args.task,
             args.validation,
@@ -517,15 +517,15 @@ def _execute(args: argparse.Namespace) -> Any:
             ),
         )
     if args.command == "wave-integrate":
-        return integrate_wave(args.run_dir, args.feature, args.wave)
+        return integrate_wave(args.run_dir, args.execution, args.wave)
     if args.command == "wave-complete":
-        return complete_wave(args.run_dir, args.feature, args.wave, args.evidence)
+        return complete_wave(args.run_dir, args.execution, args.wave, args.evidence)
     if args.command == "wave-fail":
-        return fail_wave(args.run_dir, args.feature, args.wave, args.classification, args.dispatch, args.evidence)
+        return fail_wave(args.run_dir, args.execution, args.wave, args.classification, args.dispatch, args.evidence)
     if args.command == "seal-feature":
-        return seal_feature(args.run_dir, args.feature, args.evidence, args.message)
+        return seal_feature(args.run_dir, args.execution, args.evidence, args.message)
     if args.command == "promote":
-        value = promote_feature(args.run_dir, args.feature, args.evidence)
+        value = promote_feature(args.run_dir, args.execution, args.evidence)
         if value.get("owner") == "implement" and value.get("promotion_source") != "managed-local":
             from workflow_objectives import complete_run
             complete_run(args.run_dir, session)
@@ -542,7 +542,7 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "complete-outer-integration":
         return complete_source_integration(args.run_dir, args.project_root)
     if args.command == "status":
-        return describe_status(args.run_dir, args.feature)
+        return describe_status(args.run_dir, args.execution)
     raise AssertionError(args.command)
 
 

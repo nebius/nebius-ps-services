@@ -11,6 +11,10 @@ behavior, and optional private live-run evidence. Its opt-in live profile builds
 and tests one real local three-tier application without changing the lightweight
 default.
 
+Hook-routing checks inspect command tokens after removing only the exact owned
+agent-home prefix. A verification directory named with `sdlc` does not imply
+phase routing; SDLC hook names and arguments are still rejected on prompt hooks.
+
 The earlier skill-name change from `agentic-sdlc-test` to `sdlc-workflow-test`
 was a hard ownership cut. Before that migration, destroy retained environments
 with the old skill; the new skill does not adopt old-format roots or Docker
@@ -79,11 +83,22 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 - Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract,
   capability regressions, a nested disposable project, and hook fixture checks.
   The worktree, execution, three-tier and task-wave aggregates use explicit
-  900-second budgets; other capability suites keep the 120-second default.
+  900-second budgets; verifier and hook suites use 600 seconds, and other
+  capability suites keep the 120-second default.
   Rejected fixtures are preserved, dependent hook checks are skipped with
   explicit prerequisite failures, and the verifier still writes its report.
   Failed suites report their exit code and bounded failing-test identifiers
   without copying raw diagnostic output.
+  Stop fixtures require the coordinator-selected slice route and reject UAT
+  inference from aggregate feature completion, including partially delivered
+  features and future pending work.
+  Execution excludes dispatch and task-wave contracts already run by their own
+  suites. Missing required tests fail; skipped required tests remain partial.
+  In-process fixtures crossing into commit admission clear inherited Git
+  overrides locally; production environment-rejection guards remain enabled.
+  Dedicated capability rows require full document coverage, exact source
+  admission, phase/slice barriers, current completion evidence, 2,100-task
+  graphs, indexed handoffs and the real-Git four-worktree retention limit.
   Lightweight profile evidence uses the current accepted-objective schema;
   the objective alone is insufficient for a live PASS.
 - Compares configured hook payloads against their authoritative source: SDLC
@@ -93,11 +108,16 @@ proof; invalid ownership, publication or image identity cannot produce new proof
   Both files must be regular and produce successful matching SHA-256 digests;
   missing or unreadable files never satisfy parity, even on both sides.
 - Statically verifies the exact-SHA Agentic SDLC PR publication/review/merge
-  modes and includes bounded observability plus explicit-PR, canonical
-  single-action publication and merge authorization in capability regressions.
+  modes and includes bounded observability, exact publication authorization,
+  executed qualification, protected merge admission and recovery regressions.
+  Hook denials alone cannot establish merge readiness.
 - Requires installed `align`, `worktree`, `nebius-grafana-query`, and
   conditional `troubleshoot` support and includes them in source-installed
-  parity and verification-identity checks. Project lifecycle and project-
+  parity and verification-identity checks. Parity also covers shared canonical
+  specification, context, design/research, review/security/lint and PR delivery
+  owners, including `maintain-project-specs` and the protected `merge-pr` broker.
+  Missing shared owners fail even when both trees lack them.
+  Project lifecycle and project-
   instruction evidence is advisory and absent from the golden path;
   `troubleshoot` is exercised only in controlled failure-routing scenarios.
 - Verifies that `maintain-project-specs` remains the sole semantic, schema,
@@ -122,6 +142,9 @@ proof; invalid ownership, publication or image identity cannot produce new proof
   remotes, redirects, borrowed objects, unsafe inherited command configuration
   and changed ownership fail before transport or cleanup. This does not verify
   hosted authentication, network failures, publication, PRs or merging.
+- Current live profiles do not qualify native multi-slice document delivery or
+  real remote merge. Deterministic program and merge regressions are reported
+  separately and must not be presented as those live outcomes.
 - Writes the verification report to `<agent-home>/sdlc-verification/report.md`.
 - Keeps real repositories, installed skills, hooks, and agent configuration
   unchanged.
@@ -193,16 +216,31 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 
 ## Files
 
-The native workflow CI regression step sets `GIT_CONFIG_NOSYSTEM=1` so
-disposable Git fixtures do not inherit runner-installed system filters such as
-Git LFS. Repository and user configuration checks remain active, and the step
-runs `scripts/test_owned_git_origin.py` to verify the ownership boundary.
+Fresh lightweight and three-tier fixtures create a private Git profile, then
+seal it to the owned origin receipt. The shared runtime validates exact profile
+bytes, generation, repository/worktree membership and the executable origin
+push guard. It excludes inherited configuration and global/system attributes;
+local executable settings, inactive includes, caller overrides and tampering
+remain failures. Unit fixture homes are also restored after each case, including
+failed setup. Existing fixtures without a profile are not silently adopted.
+
+Use `scripts/run_with_git_environment.py --profile <owned-profile> --cwd
+<owned-checkout> -- <native-command>` to launch normal commands with the sealed
+profile. This private launcher only supplies validated environment; it does not
+advance SDLC phases. Use the lifecycle's isolated native home for workflow state
+and current runtime/hook installation. Do not edit personal Git settings, export
+arbitrary overrides, allowlist filters or bypass a failed profile validation.
 
 - `SKILL.md`: runtime verification workflow and safety boundaries.
 - `references/verification-checklist.md`: detailed test plan and pass criteria.
 - `scripts/verify_agentic_sdlc.py`: deterministic safe preflight verifier.
+  A selected source catalog's synthetic hook fixture builder runs in its own
+  bounded process, so an installed verifier retains one trusted runtime identity.
+  Fixture setup failures produce sanitized FAIL results in the report.
 - `scripts/collect_live_evidence.py`: private bounded artifact collector.
 - `scripts/test_verify_agentic_sdlc.py`: verifier status and evidence tests.
+- `scripts/test_git_environment.py`: profile isolation and tampering regressions.
+- `scripts/run_with_git_environment.py`: sealed-profile native command launcher.
 - `assets/live-results.schema.json`: private live-results manifest contract.
 - `assets/three-tier-objective.md.template`: public-safe application
   objective body for the opt-in profile.

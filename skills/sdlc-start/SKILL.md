@@ -81,6 +81,9 @@ Do not archive raw conversation turns or capture prompts globally.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md` for objective, binding, basis,
   scheduler and reconciliation contracts.
 - `references/objective-refinement.md` and `references/state-schema.md`.
@@ -145,7 +148,7 @@ the registered checkout and expected revision. Workers never publish them.
   project truth but never authorizes auto-steering, execution, cleanup,
   finalization, or Stop.
 - After design is ready, require the design adapter's initial canonical-pair
-  admission when files are new: only the selected pair may be dirty, guarded
+  admission when files are new: only the selected pair and exact validated snapshot paths may be dirty, guarded
   repo-root staging makes them tracked, and HEAD remains unchanged. Do not
   advance untracked specs or move the preparation phase's commit earlier.
 - After design is ready and before planning, write the complete private impact claim
@@ -161,7 +164,8 @@ the registered checkout and expected revision. Workers never publish them.
   Do not create, edit, retire, or reload project instructions automatically.
   A user-invoked project-instruction workflow remains separately responsible
   for its own mutation safety and cannot become an SDLC prerequisite.
-- Build or refresh the feature queue from `docs/design.md`.
+- Build or refresh the private program from source obligations and `docs/design.md`;
+  admit its frozen digest before planning. Elaborate upcoming slices only.
 - Check `STEERING.md` and `steering/auto-steering.json` before every
   iteration.
 - If there are new or unresolved steering entries, stale steering fingerprints,
@@ -176,8 +180,11 @@ the registered checkout and expected revision. Workers never publish them.
   workflow. Only in that explicit case route to `project-agent-instructions`;
   otherwise record the recommendation and continue under already-effective
   instructions.
-- Select the highest-priority incomplete feature whose dependencies are complete.
-- Keep exactly one feature execution active. After `plan_locked`, route to
+- Keep phase selection in this coordinator. Stop continuation must not infer UAT
+  from aggregate feature-status labels or override the recorded next phase.
+- Select the next admitted delivery slice whose dependency and phase evidence passes;
+  retain original REQ/FEAT mappings across its tasks.
+- Keep exactly one delivery candidate active. After `plan_locked`, route to
   `sdlc-prepare-execution`; after `execution_prepared`, route to `sdlc-tdd` in
   the recorded integration cwd. From TDD through alignment, require phases to
   use that integration checkout and bind evidence to its recorded HEAD.
@@ -196,7 +203,7 @@ the registered checkout and expected revision. Workers never publish them.
   exactly as a conditional diagnostic branch. Persist its diagnosis pointer
   and return every diagnosis to `sdlc-classify-failure`; troubleshooting never
   chooses or executes the repair phase directly.
-- Treat `repair-control-v1` as authoritative for blocker identity, route
+- Treat `repair-control-v2` as authoritative for blocker identity, route
   history, invalidations, active time, and repair dispatch budgets. Freeze new
   worker dispatch while classifying, diagnosing, or replanning. Stop on missing
   evidence, unresolved competing hypotheses, policy/human decisions, semantic
@@ -247,8 +254,9 @@ the registered checkout and expected revision. Workers never publish them.
   SHA, and `review-pr`
   may record findings/readiness without changing the PR head. Any required
   branch change returns through `sdlc-classify-failure` and this coordinator.
-  `sdlc-merge-pr` may merge only after an explicit user request and only while
-  the remote PR head still equals that promoted and reviewed SHA.
+  `sdlc-merge-pr` consumes accepted run-level conditional merge authority; otherwise
+  stop at the reviewed PR. Use its protected adapter and verify the merged result
+  before starting the next delivery branch. A supplied cluster is not merge consent.
 - Before returning a next skill, write a checkpoint containing current feature,
   phase, status, blocker, retry counts, last successful phase, fingerprints,
   evidence pointers, repair event/diagnosis/control pointers, and next

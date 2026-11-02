@@ -117,6 +117,14 @@ ownership from a name prefix alone.
    the selected isolated native home (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`,
    passed to the verifier with `--agent-home`) for accepted objective and phase state
    so destroy never targets the user's ordinary `~/.codex/sdlc-runs` tree.
+   Preparation seals one Git profile at
+   `<run-root>/.sdlc-git-environment/context.json`. Use
+   `scripts/run_with_git_environment.py --profile <owned-profile> --cwd
+   <owned-checkout> -- <native-command>` for coordinator launches. The shared
+   runtime carries this exact validated context to fresh workers. Current
+   runtime/hooks belong in the isolated native home; ordinary hooks stay intact.
+   Profile loss, tampering or a foreign checkout blocks startup, resume and
+   cleanup. A passing environment launch never counts as a completed SDLC phase.
 5. Render the fixture objective with `scripts/render_three_tier_objective.py`
    into a verifier-owned input artifact. It replaces the five scenario
    placeholders; the artifact has no workflow-managed frontmatter or identity.

@@ -1,6 +1,6 @@
 ---
 name: sdlc-implement-plan
-description: "Use only as part of the Agentic SDLC workflow; after sdlc-tdd, coordinate one feature's dependency waves with isolated agents, branches, and worktrees, ordered integration, combined validation, and non-force cleanup."
+description: "Use only as part of the Agentic SDLC workflow; after sdlc-tdd, coordinate one delivery slice's dependency waves with isolated agents, branches, and worktrees, ordered integration, combined validation, and non-force cleanup."
 user-invocable: false
 ---
 
@@ -43,7 +43,7 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
-Coordinate isolated task agents to implement one locked feature safely.
+Coordinate isolated task agents to implement one locked delivery slice safely.
 
 ## When To Use
 
@@ -69,10 +69,13 @@ Coordinate isolated task agents to implement one locked feature safely.
 - Existing codebase.
 - Prepared execution coordinator, logical waves, immutable assignments, and
   integration worktree.
-- For corrective work, the exact `diagnosis-v1`, stable blocker key, original
+- For corrective work, the exact `diagnosis-v2`, stable blocker key, original
   regression oracle, affected-boundary check, and invalidation set.
 
 ## Required Reads
+
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
 
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
@@ -251,7 +254,7 @@ Coordinate isolated task agents to implement one locked feature safely.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

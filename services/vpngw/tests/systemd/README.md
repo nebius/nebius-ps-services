@@ -43,7 +43,8 @@ An explicit environment marker and container/PID 1 checks prevent accidental hos
 execution. Ordinary integration runs skip this dedicated lane; its own CI job
 requires the prerequisites and all tests to pass.
 
-The image base is pinned; Ubuntu package updates are resolved during each build.
+The image base and FRR 10.5.5 packages, including matching `frr-pythontools`,
+are pinned; other Ubuntu package updates are resolved during each build.
 The default lane also runs real UFW host-policy tests serially, last in the
 disposable container. Its saved rules and POSIX lock are shared with product
 reconciliation inside the router namespace. Tests cover pre-device permits,
@@ -61,6 +62,28 @@ stable session identities and peer-close recovery, including the prior release's
 session settings on one peer. TCP/179 payload exchange does not prove BGP prefix
 exchange, and prior-policy coverage does not qualify a full release upgrade.
 
+The HA tunnel tests also run actual FRR BGP sessions and the production tunnel
+controller, native effects and observers. They verify whole-connection Static
+switching and cold alternatives, BGP import/export overrides and failed-target
+release, bounded recovery, repeated reconciliation, and bidirectional packets.
+Mixed-mode cases check that switching a Static connection preserves an unrelated
+BGP session, its routes and traffic under both owner bindings. Production systemd
+filesystem and capability restrictions cover XFRM preparation and FRR policy writes.
+Cloud ownership is a frozen fixture input; these tests do not prove Compute
+fencing, allocation transfer or peer-provider return routing.
+
+BGP restart cases persist an operation at activate, verify or release, or hold a
+selected peer down during restart, then run
+the production forwarding guard, passive `Agent.reload`, VM activation and tunnel
+verification against real SA/XFRM and FRR evidence. Both local-export settings are
+covered. The failed-peer cases retain FRR's stale route and require the canonical
+passive policy refresh before active forwarding. Namespace service dispatch, LAN
+setup, host firewall and cloud ownership
+are fixture boundaries; routing policy, forwarding and operation results are not
+substituted. The composed lane separately covers failed and unknown selected
+paths, expired requests, failback, checkpointed activation retries, crashes before
+and after passive refresh, and mixed cold-Static/BGP readiness with unknown policy.
+
 Local validation can use native ARM64 Ubuntu. The `ubuntu-24.04` CI job
-provides the AMD64 runner lane. These tests do not prove a live gateway upgrade,
-VPN connectivity, cloud fencing, or HA failover.
+provides the AMD64 runner lane. The fixture proves isolated encrypted packet paths;
+live gateway upgrades, cloud fencing and VM failover require separate live trials.

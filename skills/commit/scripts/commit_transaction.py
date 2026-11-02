@@ -316,20 +316,21 @@ def _safe_private_file(path: Path, root: Path) -> bool:
     return False
 
 
-def _git_environment() -> dict[str, str]:
-    shaped = sorted(
-        name
-        for name in os.environ
-        if (
-            name in REPOSITORY_SHAPING_GIT_ENV
-            or name.startswith(REPOSITORY_SHAPING_GIT_ENV_PREFIXES)
-        )
-    )
+def _git_environment(root: Path | None = None) -> dict[str, str]:
+    from git_environment import environment as owned_environment
+    if "SKILLS_GIT_PROFILE" in os.environ and root is None:
+        raise TransactionError("owned Git environment requires the exact repository scope")
+    try:
+        environment = owned_environment(root or Path.cwd())
+    except ValueError as error:
+        raise TransactionError(str(error)) from error
+    permitted = ({"GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_ATTR_NOSYSTEM"}
+                 if "SKILLS_GIT_PROFILE" in environment else set())
+    shaped = sorted(name for name in os.environ if name not in permitted and (
+        name in REPOSITORY_SHAPING_GIT_ENV or name.startswith(REPOSITORY_SHAPING_GIT_ENV_PREFIXES)))
     if shaped:
-        raise TransactionError(
-            "repository-shaping Git environment must be unset: " + ", ".join(shaped)
-        )
-    return os.environ.copy()
+        raise TransactionError("repository-shaping Git environment must be unset: " + ", ".join(shaped))
+    return environment
 
 
 def _run_git(
@@ -339,7 +340,17 @@ def _run_git(
     env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
-    environment = _git_environment() if env is None else env
+    environment = _git_environment(root) if env is None else env
+    if env is not None and "SKILLS_GIT_PROFILE" in env:
+        from git_environment import environment as owned_environment
+        # This index override was created by this transaction, never inherited.
+        base = {key: value for key, value in env.items() if key != "GIT_INDEX_FILE"}
+        try:
+            environment = owned_environment(root, env=base)
+        except ValueError as error:
+            raise TransactionError(str(error)) from error
+        if "GIT_INDEX_FILE" in env:
+            environment["GIT_INDEX_FILE"] = env["GIT_INDEX_FILE"]
     try:
         completed = subprocess.run(
             ["git", "-C", str(root), *arguments],
@@ -541,7 +552,7 @@ def _preview_tree(root: Path, private_root: Path) -> tuple[str, str]:
             shutil.copyfile(source_index, preview_index)
         else:
             preview_index.unlink(missing_ok=True)
-        environment = _git_environment()
+        environment = _git_environment(root)
         environment["GIT_INDEX_FILE"] = str(preview_index)
         if not source_index.exists():
             _run_git(root, ("read-tree", "HEAD"), env=environment)

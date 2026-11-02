@@ -56,6 +56,8 @@ def _private_json(path: Path, boundary: Path) -> dict:
 
 
 def _run(arguments: list[str], env: dict[str, str]) -> str:
+    if arguments[:2] == ["git", "-C"] and len(arguments) >= 3:
+        env = owned_git_origin.environment(Path(arguments[2]), env=env)
     result = subprocess.run(
         arguments,
         check=False,
@@ -124,7 +126,7 @@ def _registration(state: dict, agent: str):
         state["verification_id"],
         baseline=state["git"]["baseline_sha"],
     )
-    env = dict(os.environ)
+    env = owned_git_origin.environment(project)
     env["CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"] = str(home)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["GIT_OPTIONAL_LOCKS"] = "0"
@@ -207,7 +209,7 @@ def _validate_historical_basis(state: dict, recorded: str, *, agent: str) -> Non
     )
     _, _, _, _, run_dir, current, _ = _registration(state, agent)
     boundary = Path(state["run_root"])
-    feature = current["current_feature"]
+    feature = current["current_execution"]
 
     def canonical(value):
         return hashlib.sha256(json.dumps(
@@ -376,7 +378,7 @@ def _resolve_target(
     boundary = Path(state["run_root"])
     project = Path(state["project_root"])
     run_id = run_dir.name
-    feature = current.get("current_feature")
+    feature = current.get("current_execution")
     # Only the root coordinator's active authoring phase permits unsealed files.
     require_clean = require_clean or not (
         current.get("status") == "running"
@@ -387,7 +389,7 @@ def _resolve_target(
         current.get("run_id") != run_id
         or current.get("project_id") != workspace.get("project_id")
         or not isinstance(feature, str)
-        or re.fullmatch(r"FEAT-[0-9]{3,}", feature) is None
+        or re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", feature) is None
     ):
         raise TargetError(
             "Workflow checkpoint does not bind the active run and feature."
@@ -405,7 +407,7 @@ def _resolve_target(
         sys.path.pop(0)
     status = describe_status(run_dir, feature)
     for key in (
-        "feature_id",
+        "execution_id",
         "status",
         "base_branch",
         "base_head",
@@ -418,7 +420,7 @@ def _resolve_target(
             raise TargetError("Execution identity changed during inspection.")
     if (
         coordinator.get("run_id") != run_id
-        or coordinator.get("feature_id") != feature
+        or coordinator.get("execution_id") != feature
         or coordinator.get("project_root") != str(project)
         or coordinator.get("git_root") != str(project)
         or coordinator.get("selected_project_root") != str(project)
@@ -553,7 +555,7 @@ def _resolve_target(
         "head": expected,
         "branch": branch,
         "run_id": run_id,
-        "feature_id": feature,
+        "execution_id": feature,
         "phase": current["current_phase"],
         "basis_sha256": basis_sha256,
     }

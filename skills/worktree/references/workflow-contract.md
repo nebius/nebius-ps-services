@@ -24,8 +24,8 @@ The normalized objective has exactly outcome (text), scope, constraints,
 acceptance_criteria, clarifications (lists of text), and provenance (kind
 `direct_request`, `current_plan` or `steering`, plus `source_sha256`). No raw turns
 or prompt-history archive is retained. Objective snapshots are immutable
-`objectives/rNNNN.json`; `workflow/accepted-objective-v1` selects adjacent revisions
-with content/semantic digests and parent ancestry. `workflow/run-v1` owns the run.
+`objectives/rNNNN.json`; `workflow/accepted-objective-v2` selects adjacent revisions
+with content/semantic digests and parent ancestry. `workflow/run-v2` owns the run.
 
 State lives under `<agent-home>/implement/` or `<agent-home>/sdlc-runs/`, outside Git.
 `bindings/<native-session-sha256>.json` uses `workflow/session-binding-v1` and names
@@ -161,3 +161,9 @@ never authorizes a push, PR, merge or publication.
 Report deterministic tests, installed hooks, fresh native-agent execution and live
 application evidence separately. Unavailable runtime checks remain NOT_RUN/PARTIAL;
 fixture intervention cannot establish a workflow pass.
+
+## Document programs
+
+Use [document delivery](document-delivery.md) for portable source coverage,
+phase barriers, slice identity, bounded retention and conditional protected merge.
+The same execution primitives serve ordinary singleton Implement and SDLC slices.

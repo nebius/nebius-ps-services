@@ -30,6 +30,10 @@ never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
+When called by `sdlc-gather-context`, answer only its bounded unresolved evidence
+question after its local-source review. Return source-ranked facts and uncertainty;
+the SDLC adapter owns its context pack and phase transition.
+
 Use this skill to produce technical due diligence for engineering decisions.
 The goal is not to stop at answering "what is X"; it is to build enough
 understanding to explain why it exists, how it works, when to use it, when not

@@ -7,6 +7,7 @@ never establish cloud allocation ownership or authorize promotion.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -232,6 +233,8 @@ class PeerHeartbeat:
     promotion_ready: bool
     auto_healing_policy_state: str
     auto_healing_policy_digest: str
+    tunnel_capability: bool = True
+    tunnel_recovery: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _require_identifier("cluster_id", self.cluster_id)
@@ -272,6 +275,32 @@ class PeerHeartbeat:
         }:
             raise StateValidationError("auto_healing_policy_state is invalid")
         _require_sha256("auto_healing_policy_digest", self.auto_healing_policy_digest)
+        _require_bool("tunnel_capability", self.tunnel_capability)
+        if self.tunnel_recovery is not None:
+            claim = self.tunnel_recovery
+            if not isinstance(claim, dict) or set(claim) != {"owner", "started", "deadline"}:
+                raise StateValidationError("invalid tunnel recovery claim")
+            owner = claim["owner"]
+            if not isinstance(owner, dict) or set(owner) != {
+                "cluster",
+                "owner",
+                "allocation",
+                "epoch",
+                "incarnation",
+            }:
+                raise StateValidationError("invalid tunnel recovery owner")
+            for key in ("cluster", "owner", "allocation", "epoch"):
+                _require_identifier(key, owner[key])
+            if type(owner["incarnation"]) is not int or owner["incarnation"] < 0:
+                raise StateValidationError("invalid tunnel recovery incarnation")
+            if (
+                any(
+                    type(claim[key]) not in {int, float} or not math.isfinite(claim[key])
+                    for key in ("started", "deadline")
+                )
+                or not 0 < claim["deadline"] - claim["started"] <= 30
+            ):
+                raise StateValidationError("invalid tunnel recovery deadline")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -288,7 +317,9 @@ class PeerHeartbeat:
             "observed_owner_id": self.observed_owner_id,
             "promotion_ready": self.promotion_ready,
             "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v3",
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v4",
+            "tunnel_capability": self.tunnel_capability,
+            "tunnel_recovery": self.tunnel_recovery,
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
@@ -318,10 +349,12 @@ class PeerHeartbeat:
                 "service_healthy",
                 "route_ready",
                 "promotion_ready",
+                "tunnel_capability",
+                "tunnel_recovery",
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v3":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v4":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -350,6 +383,8 @@ class PeerHeartbeat:
             auto_healing_policy_digest=_require_sha256(
                 "auto_healing_policy_digest", value["auto_healing_policy_digest"]
             ),
+            tunnel_capability=_require_bool("tunnel_capability", value["tunnel_capability"]),
+            tunnel_recovery=value["tunnel_recovery"],
         )
 
 

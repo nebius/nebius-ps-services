@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-plan
-description: "Use only as part of the Agentic SDLC workflow; lock a dependency-safe plan for one ready feature, or append immutable corrective waves in plan vN+1 after a classified evaluation failure."
+description: "Use only as part of the Agentic SDLC workflow; lock a dependency-safe plan for one admitted delivery slice, or append immutable corrective waves in plan vN+1 after a classified evaluation failure."
 user-invocable: false
 ---
 
@@ -43,7 +43,7 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
-Create a local, locked execution plan for exactly one feature.
+Create a local, locked execution plan for one admitted delivery slice, preserving its REQ/FEAT mappings.
 Preserve vertical end-to-end feature slices while expressing implementation as
 a dependency-safe task graph.
 
@@ -67,10 +67,13 @@ a dependency-safe task graph.
 - Corresponding `REQ-*` blocks.
 - Context pack.
 - Current repo and feature state.
-- For correction: `diagnosis-v1`, original regression oracle, failed criterion,
+- For correction: `diagnosis-v2`, original regression oracle, failed criterion,
   current execution lifecycle, and completed task manifest.
 
 ## Required Reads
+
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
 
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
@@ -175,7 +178,7 @@ a dependency-safe task graph.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

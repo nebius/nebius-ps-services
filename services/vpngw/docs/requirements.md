@@ -550,6 +550,8 @@ Evaluate the acceptance criteria using the recorded verification method.
 <!-- REQUIREMENT: REQ-012 status=active priority=P1 type=feature -->
 ### REQ-012: Align every public command with topology and routing mode
 
+REQ-025 supersedes the HA tunnel failover/failback rejection below with controller-owned Static/BGP switching. All other applicability boundaries remain in force.
+
 #### User Story
 
 Give every public `nebius-vpngw` command, subcommand, and flag one explicit, tested applicability contract across ordinary single-VM versus explicit VM-HA configurations and static versus BGP routing, and fail before authentication or mutation when a requested combination is unsupported or the installed gateway agent lacks the required private repair capability. Constraints: Preserve the existing public command tree, arguments, option names and aliases, configuration schema, ordinary single-VM workflows, VM-HA controller ownership, and observational list/status behavior. Preserve connection-level and tunnel-level static prefixes. A rejected tunnel restart/failover/failback applicability request exits exactly `1` with one plain action-specific stderr line and no loading banner, usage panel, generic error prefix, traceback, or success output. A failed route or advertisement operation exits nonzero and never prints a success-style completion message. Non-goals: Adding compatibility aliases or public repair flags, making list commands mutating, bypassing VM-HA authority with direct VPC route writes, using tunnel failover as VM ownership failover, silently accepting an older installed agent, or adding a second route or configuration owner.
@@ -1333,7 +1335,7 @@ Distinguish a fresh unhealthy owner heartbeat from a missing heartbeat and allow
 - One failed tunnel or BGP neighbor remains a tunnel-level event only when every required prefix and traffic selector still has an equivalent usable path. Loss of the sole usable path for any required prefix is a full outage.
 - A repairable outage persists one idempotent attempt before executing the smallest currently supported node-local action: FRR reload or restart for a BGP-only failure, StrongSwan and FRR restart followed by StrongSwan reload for a service or XFRM failure, or gateway-agent reload or restart for a remaining local static-materialization failure. Loss of forwarding is already a physical fence and follows the canonical owner-verified passive-materialization and active-enable path. Repair never stops a VM, moves an allocation, or mutates a VPC route.
 - Repair commands receive the remaining monotonic budget, are individually bounded, and stop early enough to disable and verify kernel forwarding by the absolute deadline. The emergency guard bypasses the ordinary routing lock and physically disables forwarding before best-effort persistence. The ordinary systemd stop path retains its existing forwarding guard; a short watchdog that could terminate legitimate long-running cloud effects is not part of this repair boundary.
-- Successful repair requires two complete fresh healthy observations. The consumed attempt resets only after sixty seconds of continuous health or a new authoritative ownership incarnation; recurrence, fingerprint churn, or an added failure before then is treated as flapping and cannot obtain another repair window.
+- Successful repair requires two complete fresh healthy observations. The consumed attempt resets only after sixty seconds of continuous health or a new authoritative ownership incarnation; recurrence, fingerprint churn, or an added failure before then is treated as flapping and cannot obtain another repair window. Continuous health means complete required forwarding coverage with every current readiness and authority gate satisfied; a confirmed-down redundant BGP peer alone must not prevent the reset.
 - A fresh authenticated heartbeat that reports unhealthy service, route, or promotion readiness starts the existing passive suspicion window while the exact owner uses the matching five-second local budget. A fresh healthy heartbeat cancels suspicion; no repair report, timeout extension, or additional takeover authority crosses the wire. Missing, stale, mixed-version, changed-owner, ambiguous-cloud, or retired-boot evidence receives no grace.
 - Repair exhaustion never authorizes alias transfer directly. The owner disables forwarding by the reserved deadline, while a ready passive follows the existing strict Compute-stop, detach, attach, ownership-reread, route-receipt, and forwarding sequence after its suspicion window. If the candidate is not ready, no transfer occurs; the exact owner remains degraded or blocked and the repair attempt stays consumed.
 - Structured effect events expose secret-free repair operation, owner revision, failure fingerprint, healthy-observation count, remaining budget, transition state, and action duration. Public VM-HA status exposes only the aggregate title and per-member role, mTLS, and readiness projection defined by REQ-007.
@@ -2896,6 +2898,8 @@ packet loss without a mandatory ten-minute observation period.
 
 - Accept steady-state packet loss only when it is strictly less than 0.2% for each
   independently initiated direction and each declared test case. Exactly 0.2% fails.
+  The temporary live qualification exception in REQ-025 overrides only this loss
+  threshold when its stated conditions are met; 0.2% remains the normal target.
 - Calculate loss as 100 times missing unique packets or probe replies divided by
   the transmitted count, with a positive denominator and complete receiver evidence.
   Use the native receiver result when a client summary disagrees; disclose the discrepancy.
@@ -2999,5 +3003,117 @@ Record implementation and verification independently; unavailable native executi
 remains a limitation and cannot count as packet or deployed-runtime proof.
 
 <!-- /REQUIREMENT: REQ-024 -->
+<!-- REQUIREMENT: REQ-025 status=active priority=P0 type=reliability -->
+### REQ-025: HA connection tunnel selection and safe ordinary upgrades
+
+#### User Story
+
+Provide automatic Static and manual Static/BGP tunnel failover on the current HA
+owner without changing VM ownership, allocations, VPC routes or configured roles.
+SingleVM Static remains without tunnel switching; SingleVM BGP retains automatic
+and manual switching. Existing VM failover and strict fencing remain unchanged.
+
+#### Acceptance Criteria
+
+- Selection belongs to the HA controller and all render, repair and reconciliation
+  paths consume one effective policy. Serialize with apply and VM transfers; bind
+  operations to configuration, owner incarnation, allocation, connection and target.
+  Revalidate before effects and after restart; persist progress before effects.
+- Switch whole connections only between same-owner alternatives covering every
+  required destination. Preserve disjoint required paths; reject incomplete coverage,
+  conflicting route ownership, ambiguous targets and unsafe shared IKE termination.
+- Eligible Static connections start on the configured preferred tunnel and select
+  alternatives in configuration order automatically. Keep unused alternatives cold,
+  suspend only the affected connection, activate, reconcile and verify; bounded
+  restoration follows failed activation. Successful automatic recovery is sticky.
+- Observe exact IKE/CHILD SAs, XFRM policy/interface and destination routes, tolerate
+  healthy rekey overlap, and distinguish down from unknown. Optional per-tunnel
+  probes under gateway_group.vm_ha.tunnel_probes require explicit source and target
+  IPs, assigned source and selector coverage, and tunnel binding. Defaults are 5s
+  interval, 1s timeout, three failures and two recovery successes.
+- Confirmed Static coverage loss gets one persisted episode of at most 30s with
+  its last second reserved for local fencing. Admit confirmed loss through the
+  tunnel controller before committing a competing generic VM repair action.
+  Candidates, connections, retries,
+  restarts and configuration changes cannot renew or stack repair windows. Reset
+  eligibility only after 60s continuous health or a new authoritative owner
+  incarnation. Peer grace requires fresh authenticated exact-owner bounded-episode
+  evidence; missing heartbeats get no extra grace. Unready standby promotion remains
+  forbidden and former Compute owner must be Stopped before allocation transfer.
+- An existing exact cloud-route receipt remains separate from confirmed temporary
+  BGP path availability; readiness still requires actual usable selected routes.
+  The existing persisted five-second owner repair may clear only a confirmed
+  failed BGP path when an established, encrypted alternative has complete received
+  destination coverage. Preserve healthy sessions and unrelated connections; no
+  additional BGP recovery grace or promotion-readiness exception is introduced.
+- BGP retains native automatic selection and all backup sessions/imports. Manual
+  override prefers target imports and exports permitted local prefixes only there,
+  preserving advertise_local_prefixes=false. Verify selected and advertised routes;
+  target failure releases override automatically. Failback verifies preferred path
+  before restoring normal policy. Confirmed-down redundant peers do not defeat
+  otherwise complete export coverage; unknown observations fail closed.
+- Existing failover tunnel/failback tunnel commands resolve the actual owner, reject
+  standby targets and require names when ambiguous. Selection survives restart and
+  unchanged apply/package refresh; authoritative owner or semantic config change
+  resets selection. Idempotent retries and CLI timeouts expose outstanding operation.
+  Tunnel status exposes configured/selected path, reason, health, override, recovery
+  and result without changing the VM status contract.
+- Omitted/disabled HA creates no selector state/service/capability requirement.
+  SingleVM in-place apply preserves route ordering, BGP preference, tunnel identities,
+  credentials and resources; adds no migration beyond required ssh_allowed_cidrs.
+  Retain disruption approval, writer quiescence, startup exclusion, receipts and
+  deadlines; unchanged healthy reapply remains non-disruptive. HA upgrade is
+  non-owner-first; admit tunnel operations only after both members prove capability,
+  with no mixed-version fallback.
+- Managed HA reapply rejects changes to the authoritative route-target scope before
+  mutation. An interrupted pre-host reapply may be superseded only by explicit
+  digest-bound recovery after proving unchanged retained cloud and host identities;
+  preserve the original route identity and failed transaction audit lineage.
+
+#### Negative Criteria
+
+- No whole-gateway suspension for local switching, interface-only health proof,
+proactive automatic failback, renewed recovery budget or VM recreation for upgrade.
+One tunnel per HA member provides VM redundancy only; peer return routing and
+same-owner redundant coverage are prerequisites.
+
+#### Validation Method
+
+Exercise all four deployment/routing rows and mixed HA on both owners, including
+manual/automatic/failback, failed targets, unavailable/unequal paths, rekeys, shared
+SAs, races, every crash boundary, retries, config/owner changes, persisted deadlines
+and missing heartbeats. Run real-observer integration and native Linux/systemd/
+strongSwan/FRR lanes plus project gates. Qualify genuine supported 0.6.0-0.6.2
+artifacts against one candidate wheel for SingleVM Static/BGP, saved state,
+interrupted apply, reboot, unchanged reapply and older peer interoperability.
+
+#### Test Method
+
+Use deterministic fault-injection and independent postconditions, then isolated
+live bidirectional traffic, peer return routing and HA promotion. Report measured
+upgrade interruption and transition loss separately; require automatic recovery
+and less than 0.2% steady-state loss in each direction over the declared window.
+Run two complete VM and tunnel failover/failback cycles for each Static and BGP
+live gateway. Repair failures at their causal owner and replay affected cycles
+from a declared clean checkpoint.
+
+Temporary acceptance exception authorized 2026-11-02; remains until withdrawn.
+**Temporary live packet-loss exception:** Make three bounded, evidence-based
+attempts to reduce the observed packet loss. If packet loss is the only remaining
+issue after those attempts, accept strictly less than 1% steady-state loss in each
+independently initiated direction for the authorized Static and BGP live
+qualification, until further notice. Exactly 1% fails. Keep the declared window,
+rate, packet count and completeness requirements; apply the exception consistently
+to baselines and steady recovery. Preserve the normal 0.2% target, original
+measurements and their original verdicts. Record use of the exception explicitly;
+it does not establish a causal fix or waive command correctness, automatic recovery,
+readiness, fencing, upgrade, deadline or other acceptance requirements.
+
+#### Evaluation Method
+
+Keep source, offline, native and live evidence distinct; do not mark release
+qualification complete until genuine upgrades and all declared live trials pass.
+
+<!-- /REQUIREMENT: REQ-025 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

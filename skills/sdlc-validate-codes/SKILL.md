@@ -77,6 +77,9 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
   Before preparation, bind evidence to the accepted objective and applicable
@@ -96,6 +99,10 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 - Failure classification if needed.
 
 ## Process
+
+- Use `code-review` in report-only mode and lint in check-only mode
+  (`--no-fix --no-config-fallback`). Return findings and affected gates to the
+  root; validation does not become a separate implementation or repair owner.
 
 - Use `assets/templates/validate.md.template` for evidence.
 - Run from the registered integration worktree after verifying its Git common
@@ -170,7 +177,7 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

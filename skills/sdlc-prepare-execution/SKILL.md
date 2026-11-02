@@ -43,7 +43,7 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
-Prepare one locked feature for isolated TDD and dependency-wave implementation.
+Prepare one locked delivery slice for isolated TDD and bounded dependency-wave implementation.
 
 ## When To Use
 
@@ -73,6 +73,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
   Before preparation, bind evidence to the accepted objective and applicable
@@ -89,7 +92,8 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   `<agent-home>/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
 - A persistent feature integration branch/worktree under the private run root.
 - A scoped contract commit on the named project branch only when requirements
-  and design are the complete repo-root staged diff.
+  and design plus the exact admitted contract snapshot are the complete
+  repo-root staged diff.
 - State transition to `execution_prepared` and checkpoint evidence.
 
 ## Process
@@ -100,7 +104,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
    managed child, keep the exact local branch and `HEAD` without fetching or
    resolving a remote default. Reject unrelated dirt or private state inside
    the repository.
-2. If current requirements/design changes are the only tracked changes, stage
+2. For document programs, use private `admit-inputs` to validate the exact
+   snapshot/manifest plus canonical pair. If these admitted paths are the only
+   repository changes, stage
    from the repository root with `git add -A`, create one authorized contract
    commit, then require a clean checkout. Read the already-effective
    instruction chain, but never create, refresh, retire, or reload project

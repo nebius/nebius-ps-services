@@ -4,6 +4,58 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Changed
+
+- Repair execution command dispatch after the execution-identity rename:
+  preparation, worker transitions and failure classification now consume the
+  canonical `--execution` argument. Align worker reconciliation with that
+  interface and add command-level real-Git and failure-classification coverage.
+
+- Isolate deterministic hook fixture imports from the verifier's runtime when
+  checking a separate source catalog, and report fixture setup failures without
+  exposing raw diagnostics or losing the verification report.
+
+- Clarify commit prompt-hook ownership during SDLC startup: an eventual SDLC
+  commit phase does not require a standalone root commit transaction before
+  admission. Preserve default-branch protection and delegated commit authority.
+
+- Add sealed, verifier-owned Git configuration profiles for disposable SDLC
+  tests. Share validation across startup, workers, commit admission, evidence,
+  resume and cleanup; exclude inherited configuration and attributes while
+  rejecting local executable settings, foreign scopes and profile tampering.
+  Preserve ordinary Git settings and hooks. Isolate regression fixture homes
+  and restore their environment even after failed setup.
+  Keep prompt-hook routing checks independent of the selected home directory's
+  name while still rejecting SDLC command names and arguments.
+
+- Require document coverage, phased delivery, source freshness and bounded
+  execution regressions in the SDLC verifier. Check installed shared owners,
+  remove duplicate aggregate test execution, align protected merge authority
+  guidance and state unqualified native/remote delivery boundaries in reports.
+  Isolate the shared commit-lock test from verifier Git configuration overrides
+  while preserving production environment admission guards; correct the UAT
+  fixture to follow the coordinator route with future work still pending.
+
+- Align SDLC UAT routing, metadata and evals with promoted delivery slices and
+  inherited regressions; complete the protected merge skill stateful contract.
+  Bind protected merge intent to the validated review snapshot and reject SDLC
+  qualification changes between approval and merge submission. Keep Stop
+  continuation on the coordinator-selected phase instead of inferring UAT from
+  aggregate feature-status labels. Reconcile steering templates with immutable
+  objective snapshots and require qualification/admission/recovery regressions
+  in the verifier merge-safety capability.
+
+- Add portable source inventories, full obligation coverage and explicit phase /
+  delivery-slice contracts; preserve canonical REQ/FEAT ownership.
+- Use iterative task DAG validation, four-task integration batches and direct
+  dependency handoffs. Private execution identities and changed state contracts
+  now use v2; old runs are preserved without conversion.
+- Add executed qualification and SDLC-owned protected direct-merge admission,
+  run-level opt-in, ambiguous submission recovery and exact-result verification.
+  Queues remain unsupported; live/native merge qualification is a separate gate.
+- Reuse research/design in advisory SDLC modes and consolidate advisory spec
+  traceability in align; retire sdlc-align-specs without a compatibility alias.
+
 - Repair fork Required CI discovery when GitHub omits both run and commit PR
   associations. Resolve a unique current fork/ref with shared check-suite
   provenance validation, preserve same-head rerun updates and fail-closed

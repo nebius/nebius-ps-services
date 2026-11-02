@@ -9,14 +9,14 @@ from workflow_state import WorkflowError, lock, read, write
 from workflow_objectives import session_hash, validate_run
 
 RESOURCE_RE = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z")
-IDENTITY = ("owner", "run_dir", "feature_id", "wave_id", "task_id", "assignment_digest", "basis_sha256")
+IDENTITY = ("owner", "run_dir", "execution_id", "wave_id", "task_id", "assignment_digest", "basis_sha256")
 
 
 def historical_assignment(path: Path):
     from workflow_execution import _validate_assignment_record, assignment_path
     value = read(path)
     _validate_assignment_record(value)
-    expected = assignment_path(Path(value["run_dir"]), value["feature_id"], value["wave_id"], value["task_id"])
+    expected = assignment_path(Path(value["run_dir"]), value["execution_id"], value["wave_id"], value["task_id"])
     if path.absolute() != expected or read(expected) != value:
         raise WorkflowError("OWNERSHIP_INVALID", "runtime requires the canonical registered assignment")
     return value
@@ -29,12 +29,12 @@ def _identity(path: Path, resource: str, session: str | None):
     if RESOURCE_RE.fullmatch(resource) is None or "runtime:" + resource not in assignment["conflict_domains"]:
         raise WorkflowError("RESOURCE_UNASSIGNED", "runtime identity must be declared in this task's conflict domains")
     run_dir = Path(assignment["run_dir"])
-    coordinator = read(coordinator_path(run_dir, assignment["feature_id"]))
-    basis = verify_execution(run_dir, assignment["feature_id"], coordinator["plan_digest"],
+    coordinator = read(coordinator_path(run_dir, assignment["execution_id"]))
+    basis = verify_execution(run_dir, assignment["execution_id"], coordinator["plan_digest"],
                              Path(assignment["selected_project_root"]))
     if canonical_digest(basis) != assignment["basis_sha256"]:
         raise WorkflowError("REPLAN_REQUIRED", "runtime assignment is stale")
-    task = read(task_path(run_dir, assignment["feature_id"], assignment["wave_id"], assignment["task_id"]))
+    task = read(task_path(run_dir, assignment["execution_id"], assignment["wave_id"], assignment["task_id"]))
     if (task["status"] != "running" or re.fullmatch(r"[0-9a-f]{64}", str(task.get("worker_session_hash"))) is None
             or session is not None and task["worker_session_hash"] != session_hash(session)):
         raise WorkflowError("OWNERSHIP_INVALID", "only the assigned running native worker may acquire its runtime")
@@ -134,7 +134,7 @@ def release(home: Path, assignment_path: Path, resource: str, session: str, *, t
             if termination is None:
                 raise WorkflowError("WRITER_NOT_QUIESCENT", "coordinator release requires native termination evidence")
             from workflow_reconcile import termination as observe_termination
-            observe_termination(run_dir, assignment["feature_id"], assignment["wave_id"],
+            observe_termination(run_dir, assignment["execution_id"], assignment["wave_id"],
                                 assignment["task_id"], termination, session)
         elif session_hash(session) != value["worker_session_hash"]:
             raise WorkflowError("OWNERSHIP_INVALID", "only the lease owner may release the runtime")

@@ -341,6 +341,29 @@ def test_simultaneous_start_converges_and_peer_close_recovers(endpoints) -> None
     endpoints, ike_version = endpoints
     establish(endpoints, ike_version)
     stable_sessions(endpoints)
+    from nebius_vpngw.agent.vm_ha.tunnel_observation import NativeTunnelObserver
+    from nebius_vpngw.agent.vm_ha.tunnels import Health
+    from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, TunnelPath
+
+    for index, endpoint in enumerate(endpoints, 1):
+        destinations = frozenset({f"10.200.{3 - index}.1/32"})
+        path = TunnelPath(
+            "fixture",
+            "xfrm0",
+            100,
+            True,
+            destinations,
+            "",
+            (f"192.0.2.{index}", f"192.0.2.{3 - index}"),
+            frozenset({f"10.200.{index}.1/32"}),
+        )
+        policy = ConnectionPolicy("fixture", "static", (path,), destinations)
+        observer = NativeTunnelObserver(
+            lambda args, endpoint=endpoint: endpoint.command(*args).stdout
+        )
+        # Never put kernel XFRM state (which contains key material) in assertions.
+        health = observer.observe(policy, "fixture", selected=True)
+        assert health is Health.HEALTHY
     before = [endpoint.sas() for endpoint in endpoints]
     for server, client in (endpoints, reversed(endpoints)):
         tcp179(server, client)

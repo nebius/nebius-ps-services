@@ -4,6 +4,8 @@ from pathlib import Path
 import hashlib
 import subprocess
 
+from workflow_state import git_environment
+
 
 def verify_source_specs(repo: Path, scope: str, base: str) -> None:
     import workflow_execution as engine
@@ -62,7 +64,7 @@ def _verify_committed_pair(repo, project):
         result = engine._run(["git", "rev-parse", "--verify", f"HEAD:{relative}"], repo,
                              "verify committed canonical spec", check=False)
         fingerprint = subprocess.run(["git", "hash-object", "--no-filters", "--stdin"],
-                                     cwd=repo, input=raw, capture_output=True, timeout=30, check=False)
+                                     cwd=repo, input=raw, capture_output=True, timeout=30, check=False, env=git_environment(repo))
         if (result.returncode or fingerprint.returncode
                 or result.stdout.strip().encode("ascii") != fingerprint.stdout.strip()):
             raise engine.ExecutionError("UNCOMMITTED_INPUT", "canonical specs must match committed integration blobs")
@@ -81,7 +83,7 @@ def seal_specifications(run_dir, feature, coordinator):
         raise engine.ExecutionError("REPLAN_REQUIRED", "bootstrap objective changed")
     repo = Path(coordinator["integration_worktree"])
     selected = Path(coordinator["selected_project_root"])
-    project = resolve_spec_checkout(run_dir, selected, feature_id=feature, strict_head=False)
+    project = resolve_spec_checkout(run_dir, selected, execution_id=feature, strict_head=False)
     verify_source_specs(Path(coordinator["project_root"]), coordinator["project_scope"], run["source_head"])
     parent = coordinator["integration_head"]
     current = engine.head(repo)

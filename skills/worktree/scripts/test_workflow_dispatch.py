@@ -126,8 +126,8 @@ print(json.dumps(result))
         )
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff = {
-            "schema": "agentic-sdlc/incoming-handoff-v1",
-            "feature_id": "FEAT-001",
+            "schema": "agentic-sdlc/incoming-handoff-v2",
+            "execution_id": "FEAT-001",
             "wave_id": "WAVE-001",
             "task_id": task_id,
             "assignment_base_head": "a" * 40,
@@ -139,8 +139,8 @@ print(json.dumps(result))
         handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
         handoff_path.chmod(0o600)
         value = {
-            "schema": "workflow/worker-assignment-v1",
-            "feature_id": "FEAT-001",
+            "schema": "workflow/worker-assignment-v2",
+            "execution_id": "FEAT-001",
             "wave_id": "WAVE-001",
             "task_id": task_id,
             "root_intent_sha256": "b" * 64,

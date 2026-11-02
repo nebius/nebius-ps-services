@@ -366,9 +366,13 @@ def lifecycle_lock(root: Path):
 
 
 def command(args: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    environment = None
+    if args[:2] == ["git", "-C"] and len(args) >= 3:
+        environment = owned_git_origin.environment(Path(args[2]))
     try:
         return subprocess.run(
             args,
+            env=environment,
             check=False,
             text=True,
             stdout=subprocess.PIPE,
@@ -590,6 +594,7 @@ def prepare(root_value: Path) -> dict[str, Any]:
             encoding="utf-8",
         )
         try:
+            owned_git_origin.prepare_configuration(run_root / "project", run_root, verification_id, kind="three-tier")
             baseline = owned_git_origin.create_baseline(run_root / "project")
             owned_git_origin.initialize(run_root / "project", run_root, verification_id)
         except owned_git_origin.OriginError as error:
@@ -1120,7 +1125,7 @@ def run_owned_compose(state, compose_args, *, worker_task=None, assignment_diges
         raise LifecycleError('Runtime access requires an exact assignment digest.')
     try:
         _manifest, _project, _active, _lock, run_dir, current, env = three_tier_target._registration(state, agent_name())
-        feature = current['current_feature']
+        feature = current['current_execution']
         coordinator = three_tier_target._private_json(run_dir / 'execution' / feature / 'coordinator.json', Path(state['run_root']))
         wave = coordinator['active_wave']
         if not isinstance(wave, str) or not re.fullmatch(r'TASK-[0-9]{3,}', worker_task):

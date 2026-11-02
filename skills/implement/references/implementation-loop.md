@@ -6,7 +6,7 @@ workspace. Use an operator-authorized scoped permission profile or report
 `ENVIRONMENT_BLOCKER`; never change or bypass controls from the product workflow.
 
 After accepting a new objective, run the shared private transition
-`prepare-specs --run-dir <run> --project-root <project> --feature FEAT-001`.
+`prepare-specs --run-dir <run> --project-root <project> --execution FEAT-001`.
 It allocates the run's sole integration checkout from the accepted committed
 source, with no plan, execution basis, waves or workers. Initial canonical
 publication belongs to this checkout and requires the bound root's current

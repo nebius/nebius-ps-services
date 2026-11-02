@@ -742,6 +742,46 @@ class MergeTests(unittest.TestCase):
             self.execute()
         self.assertEqual(len(self.api.effects), 1)
 
+    def sdlc_policy(self):
+        policy = {**POLICY, "sdlc_contract": "workflow/sdlc-delivery-v1"}
+        value = evidence()
+        value["sdlc"] = {
+            "schema": "workflow/sdlc-delivery-v1", "execution_id": "SLICE-001",
+            "objective_sha256": "1" * 64, "basis_sha256": "2" * 64,
+            "qualification_sha256": "3" * 64, "live": True, "criteria": ["AC-001"],
+            "candidate": {"head": HEAD, "artifact_sha256": "4" * 64,
+                          "configuration_sha256": "5" * 64},
+        }
+        self.api.review["body"] = json.dumps(value)
+        self.api.intent = gate.admitted_intent(self.api, 1, HEAD, 10, "squash", policy)
+        return policy
+
+    def test_intent_uses_the_review_validated_by_its_snapshot(self):
+        policy = self.sdlc_policy()
+        self.api.requests.clear()
+        intent = gate.admitted_intent(self.api, 1, HEAD, 10, "squash", policy)
+        self.assertEqual(intent["sdlc"], json.loads(self.api.review["body"])["sdlc"])
+        self.assertEqual(self.api.requests.count("pulls/1/reviews/10"), 1)
+
+    def test_sdlc_evidence_change_after_approval_blocks_merge(self):
+        for mutation in ("qualification", "remove"):
+            with self.subTest(mutation=mutation):
+                self.api = API()
+                policy = self.sdlc_policy()
+
+                def change_review(api):
+                    value = json.loads(api.review["body"])
+                    if mutation == "remove":
+                        del value["sdlc"]
+                    else:
+                        value["sdlc"]["qualification_sha256"] = "6" * 64
+                    api.review["body"] = json.dumps(value)
+
+                self.api.on_approve = change_review
+                with self.assertRaisesRegex(gate.Blocked, "SDLC.*changed"):
+                    gate.execute(self.api, 1, HEAD, 10, "squash", policy)
+                self.assertEqual(len(self.api.effects), 1)
+
     def test_head_advance_after_approval_blocks_merge(self):
         self.api.on_approve = lambda api: api.pr["head"].update(sha="c" * 40)
         with self.assertRaises(gate.Blocked):

@@ -38,6 +38,7 @@ def main() -> None:
                 "/workspace/tests/integration/test_ordinary_systemd_jobs.py",
                 "/workspace/tests/integration/test_ordinary_transport.py",
                 "/workspace/tests/integration/test_strongswan_sessions.py",
+                "/workspace/tests/integration/test_ha_tunnel_native.py",
                 "/workspace/tests/integration/test_tunnel_host_packets.py",
                 "/workspace/tests/integration/test_ingress_packets.py",
             ]
@@ -113,7 +114,9 @@ def main() -> None:
             "-p",
             "no:cacheprovider",
             *tests,
-            timeout=300,
+            # Includes real IKE cycles, HA recovery and eight complete fenced BGP
+            # restart replays. Individual product operation deadlines are unchanged.
+            timeout=900,
         )
     finally:
         if created:

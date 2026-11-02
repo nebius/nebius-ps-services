@@ -143,6 +143,82 @@ finally:
     os.close(descriptor)
 """
 
+_VM_HA_PREHOST_INSPECTION = r"""
+import fcntl
+import hashlib
+import json
+import os
+import stat
+import time
+from importlib.metadata import version
+from pathlib import Path
+import yaml
+from nebius_vpngw.agent.main import _require_auto_healing_mutation_admission
+from nebius_vpngw.agent.vm_ha.runtime import validate_installed_credential_bundle
+from nebius_vpngw.schema import VMHARuntimeBinding
+
+def read(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576:
+            raise ValueError('unsafe inspection file')
+        return stream.read(1048577)
+
+root = Path('/var/lib/nebius-vpngw/vm-ha')
+config_path = Path('/etc/nebius-vpngw/config-resolved.yaml')
+# Take the existing rearm writer lock without creating or rewriting it.
+with (root / 'rearm.lock').open('rb') as lock:
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+    raw = read(config_path)
+    ha = yaml.safe_load(raw)['vm_ha']
+    binding = VMHARuntimeBinding.model_validate(ha['runtime_binding'])
+    local = next(node for node in binding.nodes if node.node_id == ha['node']['node_id'])
+    credential = validate_installed_credential_bundle(binding, local)
+    _require_auto_healing_mutation_admission(state_dir=root)
+    if (root / 'tunnel-request.json').exists() or (root / 'tunnel-selection.json').exists():
+        from nebius_vpngw.agent.vm_ha.tunnels import require_tunnel_quiescent
+        require_tunnel_quiescent(root)
+    def record(name):
+        path = root / name
+        return json.loads(read(path)) if path.exists() else None
+    pending = [name for name in (
+        'apply.lock', 'manual-failover.json', 'manual-failback.json',
+        'rearm-request.json', 'rearm-cloud-operation.json',
+    ) if (root / name).exists()]
+    staged = Path('/etc/nebius-vpngw/vm-ha-staged')
+    result = {
+        'boot_id': read('/proc/sys/kernel/random/boot_id').decode().strip(),
+        'writer_admission': True,
+        'credential_sha256': credential.bundle_digest,
+        'config_sha256': hashlib.sha256(raw).hexdigest(),
+        'package_version': version('nebius-vpngw'),
+        'node_id': ha['node']['node_id'],
+        'node': ha['node'],
+        'cluster_id': ha['cluster_id'],
+        'readiness': ha['readiness'],
+        'runtime_binding': ha['runtime_binding'],
+        'generation': {k: ha['generation'][k] for k in ('generation_id', 'digests')},
+        'checkpoint': record('controller-checkpoint.json'),
+        'transfer': record('transfer-progress.json'),
+        'rearm': record('rearm-checkpoint.json'),
+        'pending_files': pending,
+        'staged_configs': {p.name: hashlib.sha256(read(p)).hexdigest()
+                           for p in sorted(staged.glob('*.yaml'))},
+    }
+    if read(config_path) != raw:
+        raise ValueError('installed configuration changed during inspection')
+    print(json.dumps(result, sort_keys=True, separators=(',', ':')))
+"""
+
 
 def _host_identity_failure(error: Exception, paramiko: Any, ssh_target: str) -> RuntimeError | None:
     bad_host_key = getattr(paramiko, "BadHostKeyException", ())
@@ -2698,6 +2774,43 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
             output = stdout.read().decode("utf-8").splitlines()
             if return_code != 0 or "VM_HA_MUTATION_SERVICES_STOPPED=1" not in output:
                 raise RuntimeError("VM-HA mutation services did not stop for removal")
+        except Exception as error:
+            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from error
+            raise
+        finally:
+            client.close()
+
+    def inspect_vm_ha_prehost(self, ssh_target: str, instance_name: str, local_cfg: dict) -> dict:
+        """Read bounded installed identity and operation evidence through exact SSH pins."""
+
+        if not ssh_target or self._ssh_policy is None:
+            raise ValueError("VM-HA pre-host inspection requires an exact-pinned SSH target")
+        paramiko = self._ensure_paramiko()
+        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+        username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+        encoded = base64.b64encode(_VM_HA_PREHOST_INSPECTION.encode()).decode("ascii")
+        client = paramiko.SSHClient()
+        try:
+            configure_paramiko_host_verification(
+                client,
+                paramiko,
+                policy=self._ssh_policy,
+                hostname=instance_name,
+                transport_host=ssh_target,
+            )
+            self._connect_client(client, hostname=ssh_target, username=username, vm_spec=vm_spec)
+            _stdin, stdout, _stderr = client.exec_command(
+                f"printf %s {encoded} | base64 -d | sudo /usr/bin/python3", timeout=30
+            )
+            output = stdout.read(1048577)
+            if len(output) > 1048576 or stdout.channel.recv_exit_status() != 0:
+                raise RuntimeError("VM-HA pre-host observation failed closed")
+            payload = json.loads(output)
+            if not isinstance(payload, dict):
+                raise ValueError("VM-HA pre-host observation is malformed")
+            return payload
         except Exception as error:
             identity_failure = _host_identity_failure(error, paramiko, ssh_target)
             if identity_failure is not None:

@@ -17,13 +17,13 @@ import time
 from typing import Any
 
 
-FAILURE_EVENT_SCHEMA = "agentic-sdlc/failure-event-v1"
-DIAGNOSIS_SCHEMA = "agentic-sdlc/diagnosis-v1"
-CLASSIFICATION_SCHEMA = "agentic-sdlc/failure-classification-v1"
-REPAIR_CONTROL_SCHEMA = "agentic-sdlc/repair-control-v1"
-REPAIR_JOURNAL_SCHEMA = "agentic-sdlc/repair-journal-event-v1"
-DESIGN_APPROVAL_SCHEMA = "agentic-sdlc/design-approval-v1"
-REVALIDATION_EVIDENCE_SCHEMA = "agentic-sdlc/revalidation-evidence-v1"
+FAILURE_EVENT_SCHEMA = "agentic-sdlc/failure-event-v2"
+DIAGNOSIS_SCHEMA = "agentic-sdlc/diagnosis-v2"
+CLASSIFICATION_SCHEMA = "agentic-sdlc/failure-classification-v2"
+REPAIR_CONTROL_SCHEMA = "agentic-sdlc/repair-control-v2"
+REPAIR_JOURNAL_SCHEMA = "agentic-sdlc/repair-journal-event-v2"
+DESIGN_APPROVAL_SCHEMA = "agentic-sdlc/design-approval-v2"
+REVALIDATION_EVIDENCE_SCHEMA = "agentic-sdlc/revalidation-evidence-v2"
 
 FEATURE_RE = re.compile(r"FEAT-[0-9]{3,}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40,64}")
@@ -242,9 +242,9 @@ def _normalize_blocker_field(value: Any, label: str) -> str:
 
 
 def _feature_id(value: Any) -> str:
-    candidate = _bounded_string(value, "feature_id", maximum=32)
-    if FEATURE_RE.fullmatch(candidate) is None:
-        raise RepairControlError("RECORD_INVALID", "feature_id must match FEAT-NNN")
+    candidate = _bounded_string(value, "execution_id", maximum=32)
+    if re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", candidate) is None:
+        raise RepairControlError("RECORD_INVALID", "execution_id must match FEAT-NNN")
     return candidate
 
 
@@ -275,7 +275,7 @@ def build_failure_event(payload: dict[str, Any]) -> dict[str, Any]:
 
     if payload.get("schema") != FAILURE_EVENT_SCHEMA:
         raise RepairControlError("RECORD_INVALID", "failure event schema is invalid")
-    feature_id = _feature_id(payload.get("feature_id"))
+    execution_id = _feature_id(payload.get("execution_id"))
     phase = _bounded_string(payload.get("phase"), "phase", maximum=64)
     criterion_id = _bounded_string(
         payload.get("criterion_id"), "criterion_id", maximum=128
@@ -310,7 +310,7 @@ def build_failure_event(payload: dict[str, Any]) -> dict[str, Any]:
     blocker_key = "|".join((component, operation, error_class, source_boundary))
     result = {
         "schema": FAILURE_EVENT_SCHEMA,
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "phase": phase,
         "criterion_id": criterion_id,
         "expected": _bounded_string(payload.get("expected"), "expected"),
@@ -442,7 +442,7 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
 
     if payload.get("schema") != DIAGNOSIS_SCHEMA:
         raise RepairControlError("DIAGNOSIS_INVALID", "diagnosis schema is invalid")
-    if _feature_id(payload.get("feature_id")) != event["feature_id"]:
+    if _feature_id(payload.get("execution_id")) != event["execution_id"]:
         raise RepairControlError(
             "DIAGNOSIS_INVALID", "diagnosis feature does not match"
         )
@@ -474,7 +474,7 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
         )
     diagnosis = {
         "schema": DIAGNOSIS_SCHEMA,
-        "feature_id": event["feature_id"],
+        "execution_id": event["execution_id"],
         "event_id": event["event_id"],
         "blocker_key": event["blocker_key"],
         "result": result_name,
@@ -574,9 +574,9 @@ def build_design_approval(
         raise RepairControlError(
             "DESIGN_APPROVAL_INVALID", "design approval schema is invalid"
         )
-    feature_id = _feature_id(payload.get("feature_id"))
+    execution_id = _feature_id(payload.get("execution_id"))
     if (
-        feature_id != event["feature_id"]
+        execution_id != event["execution_id"]
         or payload.get("event_id") != event["event_id"]
     ):
         raise RepairControlError(
@@ -594,7 +594,7 @@ def build_design_approval(
         )
     approval = {
         "schema": DESIGN_APPROVAL_SCHEMA,
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "event_id": event["event_id"],
         "blocker_key": event["blocker_key"],
         "decision": "approved",
@@ -628,49 +628,49 @@ def build_design_approval(
     return approval
 
 
-def _repair_root(run_dir: Path, feature_id: str) -> Path:
+def _repair_root(run_dir: Path, execution_id: str) -> Path:
     candidate = run_dir.expanduser().absolute()
     if candidate.is_symlink():
         raise RepairControlError(
             "STATE_INVALID", "repair-control run directory is symlinked"
         )
-    return candidate.resolve() / "repairs" / feature_id
+    return candidate.resolve() / "repairs" / execution_id
 
 
-def _control_path(run_dir: Path, feature_id: str) -> Path:
-    return _repair_root(run_dir, feature_id) / "repair-control.json"
+def _control_path(run_dir: Path, execution_id: str) -> Path:
+    return _repair_root(run_dir, execution_id) / "repair-control.json"
 
 
-def _event_path(run_dir: Path, feature_id: str, event_id: str) -> Path:
-    return _repair_root(run_dir, feature_id) / "events" / f"{event_id}.json"
+def _event_path(run_dir: Path, execution_id: str, event_id: str) -> Path:
+    return _repair_root(run_dir, execution_id) / "events" / f"{event_id}.json"
 
 
-def _diagnosis_path(run_dir: Path, feature_id: str, diagnosis_id: str) -> Path:
-    return _repair_root(run_dir, feature_id) / "diagnoses" / f"{diagnosis_id}.json"
+def _diagnosis_path(run_dir: Path, execution_id: str, diagnosis_id: str) -> Path:
+    return _repair_root(run_dir, execution_id) / "diagnoses" / f"{diagnosis_id}.json"
 
 
 def _classification_path(
-    run_dir: Path, feature_id: str, classification_id: str
+    run_dir: Path, execution_id: str, classification_id: str
 ) -> Path:
     return (
-        _repair_root(run_dir, feature_id)
+        _repair_root(run_dir, execution_id)
         / "classifications"
         / f"{classification_id}.json"
     )
 
 
-def _approval_path(run_dir: Path, feature_id: str, approval_id: str) -> Path:
-    return _repair_root(run_dir, feature_id) / "approvals" / f"{approval_id}.json"
+def _approval_path(run_dir: Path, execution_id: str, approval_id: str) -> Path:
+    return _repair_root(run_dir, execution_id) / "approvals" / f"{approval_id}.json"
 
 
-def _revalidation_path(run_dir: Path, feature_id: str, revalidation_id: str) -> Path:
+def _revalidation_path(run_dir: Path, execution_id: str, revalidation_id: str) -> Path:
     return (
-        _repair_root(run_dir, feature_id) / "revalidations" / f"{revalidation_id}.json"
+        _repair_root(run_dir, execution_id) / "revalidations" / f"{revalidation_id}.json"
     )
 
 
-def _journal_path(run_dir: Path, feature_id: str) -> Path:
-    return _repair_root(run_dir, feature_id) / "repair-journal.jsonl"
+def _journal_path(run_dir: Path, execution_id: str) -> Path:
+    return _repair_root(run_dir, execution_id) / "repair-journal.jsonl"
 
 
 def _reject_unsafe_target(path: Path) -> None:
@@ -687,8 +687,8 @@ def _reject_unsafe_target(path: Path) -> None:
 
 
 @contextmanager
-def _transition_lock(run_dir: Path, feature_id: str):
-    root = _repair_root(run_dir, _feature_id(feature_id))
+def _transition_lock(run_dir: Path, execution_id: str):
+    root = _repair_root(run_dir, _feature_id(execution_id))
     _reject_unsafe_target(root)
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
@@ -756,9 +756,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _append_journal(
-    run_dir: Path, feature_id: str, event: str, transition_id: str, **details: Any
+    run_dir: Path, execution_id: str, event: str, transition_id: str, **details: Any
 ) -> None:
-    path = _journal_path(run_dir, feature_id)
+    path = _journal_path(run_dir, execution_id)
     _reject_unsafe_target(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)
@@ -830,7 +830,7 @@ def _new_blocker(event: dict[str, Any]) -> dict[str, Any]:
 def _new_control(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": REPAIR_CONTROL_SCHEMA,
-        "feature_id": event["feature_id"],
+        "execution_id": event["execution_id"],
         "active_blocker": _new_blocker(event),
         "previous_blockers": [],
         "feature_dispatches": 0,
@@ -846,11 +846,11 @@ def _new_control(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _load_control(run_dir: Path, feature_id: str) -> dict[str, Any]:
-    control = _read_json(_control_path(run_dir, feature_id))
+def _load_control(run_dir: Path, execution_id: str) -> dict[str, Any]:
+    control = _read_json(_control_path(run_dir, execution_id))
     if (
         control.get("schema") != REPAIR_CONTROL_SCHEMA
-        or control.get("feature_id") != feature_id
+        or control.get("execution_id") != execution_id
         or not isinstance(control.get("active_blocker"), dict)
     ):
         raise RepairControlError("STATE_INVALID", "repair control schema is invalid")
@@ -884,7 +884,7 @@ def _record_failure_event_unlocked(
     run_dir: Path, payload: dict[str, Any]
 ) -> dict[str, Any]:
     event = build_failure_event(payload)
-    path = _event_path(run_dir, event["feature_id"], event["event_id"])
+    path = _event_path(run_dir, event["execution_id"], event["event_id"])
     if path.exists() or path.is_symlink():
         existing = _read_json(path)
         if _identity_payload(existing, "event_id", "blocker_key") != _identity_payload(
@@ -895,21 +895,21 @@ def _record_failure_event_unlocked(
         created = False
     else:
         created = _store_immutable(path, event, "failure event")
-    control_path = _control_path(run_dir, event["feature_id"])
+    control_path = _control_path(run_dir, event["execution_id"])
     transition_id = _digest({"action": "record-failure", "event_id": event["event_id"]})
     if control_path.exists():
-        control = _load_control(run_dir, event["feature_id"])
+        control = _load_control(run_dir, event["execution_id"])
         current_key = control["active_blocker"]["blocker_key"]
         if not created and control.get("current_event_id") == event["event_id"]:
             _append_journal(
                 run_dir,
-                event["feature_id"],
+                event["execution_id"],
                 "failure-recorded",
                 transition_id,
                 event_id=event["event_id"],
                 blocker_key=event["blocker_key"],
             )
-            _write_failure_log(run_dir, event["feature_id"], control)
+            _write_failure_log(run_dir, event["execution_id"], control)
             return {"created": False, "event": event, "control": control}
         if current_key != event["blocker_key"]:
             if not event.get("independent_blocker_evidence"):
@@ -930,18 +930,18 @@ def _record_failure_event_unlocked(
     _write_json_atomic(control_path, control)
     _append_journal(
         run_dir,
-        event["feature_id"],
+        event["execution_id"],
         "failure-recorded",
         transition_id,
         event_id=event["event_id"],
         blocker_key=event["blocker_key"],
     )
-    _write_failure_log(run_dir, event["feature_id"], control)
+    _write_failure_log(run_dir, event["execution_id"], control)
     return {"created": created, "event": event, "control": control}
 
 
-def _load_event(run_dir: Path, feature_id: str, event_id: str) -> dict[str, Any]:
-    event = _read_json(_event_path(run_dir, feature_id, event_id))
+def _load_event(run_dir: Path, execution_id: str, event_id: str) -> dict[str, Any]:
+    event = _read_json(_event_path(run_dir, execution_id, event_id))
     rebuilt = build_failure_event(event)
     if rebuilt != event or rebuilt["event_id"] != event_id:
         raise RepairControlError("STATE_TAMPERED", "failure event digest is invalid")
@@ -1042,8 +1042,8 @@ def _verify_revalidation_evidence_source(
         ) from exc
     if (
         not isinstance(gate, dict)
-        or gate.get("schema") != "agentic-sdlc/gate-evidence-v1"
-        or gate.get("feature_id") != record["feature_id"]
+        or gate.get("schema") != "agentic-sdlc/gate-evidence-v2"
+        or gate.get("execution_id") != record["execution_id"]
         or gate.get("surface") != record["surface"]
         or gate.get("owner_skill") != record["next_recommended_skill"]
         or gate.get("status") != "passed"
@@ -1257,12 +1257,12 @@ def _current_promoted_head(run_dir: Path, coordinator: dict[str, Any]) -> str:
     return promoted.lower()
 
 
-def _current_revalidation_commit(run_dir: Path, feature_id: str, surface: str) -> str:
+def _current_revalidation_commit(run_dir: Path, execution_id: str, surface: str) -> str:
     coordinator = _load_private_state_json(
-        run_dir.resolve() / "execution" / feature_id / "coordinator.json",
+        run_dir.resolve() / "execution" / execution_id / "coordinator.json",
         "execution coordinator",
     )
-    if coordinator.get("schema") != "workflow/execution-coordinator-v1":
+    if coordinator.get("schema") != "workflow/execution-coordinator-v2":
         raise RepairControlError(
             "REVALIDATION_INVALID", "current execution coordinator is unsupported"
         )
@@ -1280,7 +1280,7 @@ def _verify_revalidation_authority(
 ) -> None:
     revalidation = control["revalidation"]
     classification = _load_classification(
-        run_dir, control["feature_id"], revalidation["classification_id"]
+        run_dir, control["execution_id"], revalidation["classification_id"]
     )
     invalidates = classification.get("invalidates")
     if not isinstance(invalidates, list) or any(
@@ -1297,7 +1297,7 @@ def _verify_revalidation_authority(
         for surface in invalidates
     ]
     projection = {
-        "schema": "agentic-sdlc/revalidation-cursor-v1",
+        "schema": "agentic-sdlc/revalidation-cursor-v2",
         "classification_id": classification["classification_id"],
         "repair_dispatch_id": revalidation.get("repair_dispatch_id"),
         "required": expected_required,
@@ -1311,7 +1311,7 @@ def _verify_revalidation_authority(
         None,
     )
     if (
-        classification.get("feature_id") != control["feature_id"]
+        classification.get("execution_id") != control["execution_id"]
         or classification.get("event_id") != control["current_event_id"]
         or classification.get("blocker_key") != control["active_blocker"]["blocker_key"]
         or revalidation.get("required") != expected_required
@@ -1328,7 +1328,7 @@ def _verify_revalidation_authority(
         )
     if require_current_gate:
         if record["integration_commit"] != _current_revalidation_commit(
-            run_dir, control["feature_id"], record["surface"]
+            run_dir, control["execution_id"], record["surface"]
         ):
             raise RepairControlError(
                 "REVALIDATION_INVALID",
@@ -1344,13 +1344,13 @@ def _verify_revalidation_authority(
 def _record_design_approval_unlocked(
     run_dir: Path, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
+    execution_id = _feature_id(payload.get("execution_id"))
     event_id = _bounded_string(payload.get("event_id"), "event_id", maximum=64)
-    event = _load_event(run_dir, feature_id, event_id)
+    event = _load_event(run_dir, execution_id, event_id)
     approval = build_design_approval(payload, event)
     _verify_human_approval_source(run_dir, approval)
     created = _store_immutable(
-        _approval_path(run_dir, feature_id, approval["approval_id"]),
+        _approval_path(run_dir, execution_id, approval["approval_id"]),
         approval,
         "design approval",
     )
@@ -1359,7 +1359,7 @@ def _record_design_approval_unlocked(
     )
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "design-approval-recorded",
         transition_id,
         event_id=event_id,
@@ -1371,12 +1371,12 @@ def _record_design_approval_unlocked(
 
 def _load_design_approval(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     approval_id: str,
     event: dict[str, Any],
     gate: dict[str, Any],
 ) -> dict[str, Any]:
-    approval = _read_json(_approval_path(run_dir, feature_id, approval_id))
+    approval = _read_json(_approval_path(run_dir, execution_id, approval_id))
     rebuilt = build_design_approval(approval, event)
     if rebuilt != approval or rebuilt["approval_id"] != approval_id:
         raise RepairControlError("STATE_TAMPERED", "design approval digest is invalid")
@@ -1392,11 +1392,11 @@ def _load_design_approval(
 def _record_diagnosis_unlocked(
     run_dir: Path, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
+    execution_id = _feature_id(payload.get("execution_id"))
     event_id = _bounded_string(payload.get("event_id"), "event_id", maximum=64)
-    event = _load_event(run_dir, feature_id, event_id)
+    event = _load_event(run_dir, execution_id, event_id)
     diagnosis = build_diagnosis(payload, event)
-    path = _diagnosis_path(run_dir, feature_id, diagnosis["diagnosis_id"])
+    path = _diagnosis_path(run_dir, execution_id, diagnosis["diagnosis_id"])
     if path.exists() or path.is_symlink():
         existing = _read_json(path)
         if _identity_payload(existing, "diagnosis_id") != _identity_payload(
@@ -1407,7 +1407,7 @@ def _record_diagnosis_unlocked(
         created = False
     else:
         created = _store_immutable(path, diagnosis, "diagnosis")
-    control = _load_control(run_dir, feature_id)
+    control = _load_control(run_dir, execution_id)
     if control.get("current_event_id") != event_id:
         raise RepairControlError(
             "STATE_INVALID", "diagnosis event is not the current failure event"
@@ -1418,14 +1418,14 @@ def _record_diagnosis_unlocked(
     if not created and control.get("current_diagnosis_id") == diagnosis["diagnosis_id"]:
         _append_journal(
             run_dir,
-            feature_id,
+            execution_id,
             "diagnosis-recorded",
             transition_id,
             event_id=event_id,
             diagnosis_id=diagnosis["diagnosis_id"],
             blocker_key=diagnosis["blocker_key"],
         )
-        _write_failure_log(run_dir, feature_id, control)
+        _write_failure_log(run_dir, execution_id, control)
         return {"created": False, "diagnosis": diagnosis, "control": control}
     if control["active_blocker"]["blocker_key"] != diagnosis["blocker_key"]:
         raise RepairControlError(
@@ -1437,24 +1437,24 @@ def _record_diagnosis_unlocked(
     control["revalidation"] = None
     control["status"] = "diagnosed"
     control["updated_at"] = diagnosis["created_at"]
-    _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _write_json_atomic(_control_path(run_dir, execution_id), control)
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "diagnosis-recorded",
         transition_id,
         event_id=event_id,
         diagnosis_id=diagnosis["diagnosis_id"],
         blocker_key=diagnosis["blocker_key"],
     )
-    _write_failure_log(run_dir, feature_id, control)
+    _write_failure_log(run_dir, execution_id, control)
     return {"created": created, "diagnosis": diagnosis, "control": control}
 
 
 def _load_diagnosis(
-    run_dir: Path, feature_id: str, diagnosis_id: str, event: dict[str, Any]
+    run_dir: Path, execution_id: str, diagnosis_id: str, event: dict[str, Any]
 ) -> dict[str, Any]:
-    diagnosis = _read_json(_diagnosis_path(run_dir, feature_id, diagnosis_id))
+    diagnosis = _read_json(_diagnosis_path(run_dir, execution_id, diagnosis_id))
     rebuilt = build_diagnosis(diagnosis, event)
     if rebuilt != diagnosis or rebuilt["diagnosis_id"] != diagnosis_id:
         raise RepairControlError("STATE_TAMPERED", "diagnosis digest is invalid")
@@ -1611,14 +1611,14 @@ def _classification_from(
 
 def _classify_failure_unlocked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     event_id: str,
     diagnosis_id: str | None = None,
 ) -> dict[str, Any]:
-    feature_id = _feature_id(feature_id)
-    event = _load_event(run_dir, feature_id, event_id)
+    execution_id = _feature_id(execution_id)
+    event = _load_event(run_dir, execution_id, event_id)
     diagnosis = (
-        _load_diagnosis(run_dir, feature_id, diagnosis_id, event)
+        _load_diagnosis(run_dir, execution_id, diagnosis_id, event)
         if diagnosis_id
         else None
     )
@@ -1634,10 +1634,10 @@ def _classify_failure_unlocked(
             "human_approval_id",
             maximum=256,
         )
-        _load_design_approval(run_dir, feature_id, approval_id, event, design_admission)
+        _load_design_approval(run_dir, execution_id, approval_id, event, design_admission)
     record = {
         "schema": CLASSIFICATION_SCHEMA,
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "event_id": event_id,
         "diagnosis_id": diagnosis_id,
         "blocker_key": event["blocker_key"],
@@ -1646,9 +1646,9 @@ def _classify_failure_unlocked(
     record["classification_id"] = _digest(
         _identity_payload(record, "classification_id")
     )
-    path = _classification_path(run_dir, feature_id, record["classification_id"])
+    path = _classification_path(run_dir, execution_id, record["classification_id"])
     created = _store_immutable(path, record, "classification")
-    control = _load_control(run_dir, feature_id)
+    control = _load_control(run_dir, execution_id)
     if (
         not created
         and control["route_history"]
@@ -1695,7 +1695,7 @@ def _classify_failure_unlocked(
                 _identity_payload(record, "classification_id")
             )
             path = _classification_path(
-                run_dir, feature_id, record["classification_id"]
+                run_dir, execution_id, record["classification_id"]
             )
             created = _store_immutable(path, record, "classification")
             semantic_key = "|".join(
@@ -1727,14 +1727,14 @@ def _classify_failure_unlocked(
         }
         if invalidation not in control["invalidations"]:
             control["invalidations"].append(invalidation)
-    _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _write_json_atomic(_control_path(run_dir, execution_id), control)
     transition_id = _digest(
         {"action": "classify", "classification_id": record["classification_id"]}
     )
     if duplicate is None:
         _append_journal(
             run_dir,
-            feature_id,
+            execution_id,
             "classification-recorded",
             transition_id,
             classification_id=record["classification_id"],
@@ -1742,7 +1742,7 @@ def _classify_failure_unlocked(
             diagnosis_id=diagnosis_id,
             blocker_key=event["blocker_key"],
         )
-    _write_failure_log(run_dir, feature_id, control)
+    _write_failure_log(run_dir, execution_id, control)
     return {
         "created": created and duplicate is None,
         "classification": record,
@@ -1751,9 +1751,9 @@ def _classify_failure_unlocked(
 
 
 def _load_classification(
-    run_dir: Path, feature_id: str, classification_id: str
+    run_dir: Path, execution_id: str, classification_id: str
 ) -> dict[str, Any]:
-    record = _read_json(_classification_path(run_dir, feature_id, classification_id))
+    record = _read_json(_classification_path(run_dir, execution_id, classification_id))
     expected = _digest(_identity_payload(record, "classification_id"))
     if record.get("schema") != CLASSIFICATION_SCHEMA or expected != classification_id:
         raise RepairControlError("STATE_TAMPERED", "classification digest is invalid")
@@ -1761,32 +1761,32 @@ def _load_classification(
 
 
 def integrated_wave_authority(
-    run_dir: Path, feature_id: str, classification_id: str, dispatch_id: str,
+    run_dir: Path, execution_id: str, classification_id: str, dispatch_id: str,
     *, require_active: bool = True,
 ) -> dict[str, Any]:
     """Read canonical authority for retiring/correcting a failed integrated wave."""
-    feature_id = _feature_id(feature_id)
+    execution_id = _feature_id(execution_id)
     for value in (classification_id, dispatch_id):
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise RepairControlError("REPAIR_NOT_AUTHORIZED", "repair identity is invalid")
-    classification = _load_classification(run_dir, feature_id, classification_id)
-    event = _load_event(run_dir, feature_id, classification["event_id"])
+    classification = _load_classification(run_dir, execution_id, classification_id)
+    event = _load_event(run_dir, execution_id, classification["event_id"])
     diagnosis_id = classification.get("diagnosis_id")
     if (
         classification.get("classification") != "IMPLEMENTATION_DEFECT"
         or classification.get("status") != "routed"
-        or classification.get("feature_id") != feature_id
-        or event.get("feature_id") != feature_id
+        or classification.get("execution_id") != execution_id
+        or event.get("execution_id") != execution_id
         or event.get("execution_lifecycle") != "integrated_wave"
         or not diagnosis_id
     ):
         raise RepairControlError("REPAIR_NOT_AUTHORIZED", "integrated repair is not classified")
-    diagnosis = _load_diagnosis(run_dir, feature_id, diagnosis_id, event)
+    diagnosis = _load_diagnosis(run_dir, execution_id, diagnosis_id, event)
     if diagnosis.get("result") != "localized_implementation_defect" or diagnosis.get(
         "confidence"
     ) not in {"proven", "high_confidence"}:
         raise RepairControlError("REPAIR_NOT_AUTHORIZED", "localized diagnosis is not proven")
-    receipt = _read_json(_repair_root(run_dir, feature_id) / "dispatches" / f"{dispatch_id}.json")
+    receipt = _read_json(_repair_root(run_dir, execution_id) / "dispatches" / f"{dispatch_id}.json")
     identity = {name: receipt.get(name) for name in (
         "blocker_key", "ordinal", "classification_id", "remedy_scale", "hypothesis", "evidence_reference"
     )}
@@ -1799,7 +1799,7 @@ def integrated_wave_authority(
     ):
         raise RepairControlError("STATE_TAMPERED", "repair dispatch receipt is invalid")
     if require_active:
-        control = _load_control(run_dir, feature_id)
+        control = _load_control(run_dir, execution_id)
         if (
             control.get("current_classification_id") != classification_id
             or control.get("status") != "remediating"
@@ -1839,7 +1839,7 @@ def _new_revalidation(
     if not required:
         return None
     projection = {
-        "schema": "agentic-sdlc/revalidation-cursor-v1",
+        "schema": "agentic-sdlc/revalidation-cursor-v2",
         "classification_id": classification["classification_id"],
         "repair_dispatch_id": dispatch_id,
         "required": required,
@@ -1856,7 +1856,7 @@ def _new_revalidation(
 
 def _begin_remediation_unlocked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     classification_id: str,
     remedy_scale: str,
     hypothesis: str,
@@ -1865,8 +1865,8 @@ def _begin_remediation_unlocked(
 ) -> dict[str, Any]:
     """Admit one bounded remediation dispatch and atomically count it."""
 
-    feature_id = _feature_id(feature_id)
-    classification = _load_classification(run_dir, feature_id, classification_id)
+    execution_id = _feature_id(execution_id)
+    classification = _load_classification(run_dir, execution_id, classification_id)
     if classification["status"] != "routed":
         raise RepairControlError(
             "REPAIR_NOT_AUTHORIZED", "classification does not authorize remediation"
@@ -1890,7 +1890,7 @@ def _begin_remediation_unlocked(
     )
     if active_seconds_delta < 0:
         raise RepairControlError("BUDGET_INVALID", "active_seconds_delta is negative")
-    control = _load_control(run_dir, feature_id)
+    control = _load_control(run_dir, execution_id)
     blocker = control["active_blocker"]
     if blocker["blocker_key"] != classification["blocker_key"]:
         raise RepairControlError(
@@ -1909,7 +1909,7 @@ def _begin_remediation_unlocked(
     )
     if duplicate is not None:
         _store_immutable(
-            _repair_root(run_dir, feature_id) / "dispatches" / f"{duplicate['dispatch_id']}.json",
+            _repair_root(run_dir, execution_id) / "dispatches" / f"{duplicate['dispatch_id']}.json",
             {**duplicate, "status": "dispatched", "result": None, "verification_reference": None},
             "repair dispatch",
         )
@@ -1918,7 +1918,7 @@ def _begin_remediation_unlocked(
         )
         _append_journal(
             run_dir,
-            feature_id,
+            execution_id,
             "remediation-dispatch-committed",
             transition_id,
             dispatch_id=duplicate["dispatch_id"],
@@ -1929,18 +1929,18 @@ def _begin_remediation_unlocked(
     if blocker["active_seconds"] >= blocker["time_limit_seconds"]:
         _budget_stop(blocker, "time_limit")
         control["status"] = "exhausted"
-        _write_json_atomic(_control_path(run_dir, feature_id), control)
+        _write_json_atomic(_control_path(run_dir, execution_id), control)
         raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "60-minute ceiling reached")
     if control["feature_dispatches"] >= control["feature_dispatch_limit"]:
         control["status"] = "blocked_feature_dispatch_limit"
-        _write_json_atomic(_control_path(run_dir, feature_id), control)
+        _write_json_atomic(_control_path(run_dir, execution_id), control)
         raise RepairControlError(
             "REPAIR_BUDGET_EXHAUSTED", "four-dispatch feature ceiling reached"
         )
     if blocker["total_attempts"] >= blocker["attempt_limit"]:
         _budget_stop(blocker, "attempt_limit")
         control["status"] = "exhausted"
-        _write_json_atomic(_control_path(run_dir, feature_id), control)
+        _write_json_atomic(_control_path(run_dir, execution_id), control)
         raise RepairControlError(
             "REPAIR_BUDGET_EXHAUSTED", "three-attempt ceiling reached"
         )
@@ -2010,7 +2010,7 @@ def _begin_remediation_unlocked(
     transition_id = _digest({"action": "dispatch", "dispatch_id": dispatch_id})
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "remediation-dispatch-intent",
         transition_id,
         dispatch_id=dispatch_id,
@@ -2022,26 +2022,26 @@ def _begin_remediation_unlocked(
     blocker["status"] = "remediating"
     control["feature_dispatches"] += 1
     control["status"] = "remediating"
-    _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _write_json_atomic(_control_path(run_dir, execution_id), control)
     _store_immutable(
-        _repair_root(run_dir, feature_id) / "dispatches" / f"{dispatch_id}.json",
+        _repair_root(run_dir, execution_id) / "dispatches" / f"{dispatch_id}.json",
         attempt, "repair dispatch",
     )
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "remediation-dispatch-committed",
         transition_id,
         dispatch_id=dispatch_id,
         blocker_key=blocker["blocker_key"],
     )
-    _write_failure_log(run_dir, feature_id, control)
+    _write_failure_log(run_dir, execution_id, control)
     return {"created": True, "attempt": attempt, "control": control}
 
 
 def _complete_remediation_unlocked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     dispatch_id: str,
     result: str,
     verification_reference: str,
@@ -2054,7 +2054,7 @@ def _complete_remediation_unlocked(
     )
     if active_seconds_delta < 0:
         raise RepairControlError("BUDGET_INVALID", "active_seconds_delta is negative")
-    control = _load_control(run_dir, _feature_id(feature_id))
+    control = _load_control(run_dir, _feature_id(execution_id))
     blocker = control["active_blocker"]
     attempt = next(
         (item for item in blocker["attempts"] if item["dispatch_id"] == dispatch_id),
@@ -2076,7 +2076,7 @@ def _complete_remediation_unlocked(
             )
             _append_journal(
                 run_dir,
-                feature_id,
+                execution_id,
                 "remediation-completion-committed",
                 transition_id,
                 dispatch_id=dispatch_id,
@@ -2090,7 +2090,7 @@ def _complete_remediation_unlocked(
     )
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "remediation-completion-intent",
         transition_id,
         dispatch_id=dispatch_id,
@@ -2105,7 +2105,7 @@ def _complete_remediation_unlocked(
     if result == "succeeded":
         blocker["stop_trigger"] = None
         classification = _load_classification(
-            run_dir, _feature_id(feature_id), attempt["classification_id"]
+            run_dir, _feature_id(execution_id), attempt["classification_id"]
         )
         revalidation = _new_revalidation(classification, dispatch_id)
         control["revalidation"] = revalidation
@@ -2128,17 +2128,17 @@ def _complete_remediation_unlocked(
     else:
         blocker["status"] = "diagnosis_required"
         control["status"] = "diagnosis_required"
-    _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _write_json_atomic(_control_path(run_dir, execution_id), control)
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "remediation-completion-committed",
         transition_id,
         dispatch_id=dispatch_id,
         blocker_key=blocker["blocker_key"],
         result=result,
     )
-    _write_failure_log(run_dir, feature_id, control)
+    _write_failure_log(run_dir, execution_id, control)
     return {"updated": True, "attempt": attempt, "control": control}
 
 
@@ -2149,8 +2149,8 @@ def _build_revalidation_evidence(
         raise RepairControlError(
             "REVALIDATION_INVALID", "revalidation evidence schema is invalid"
         )
-    feature_id = _feature_id(payload.get("feature_id"))
-    if feature_id != control["feature_id"]:
+    execution_id = _feature_id(payload.get("execution_id"))
+    if execution_id != control["execution_id"]:
         raise RepairControlError("REVALIDATION_INVALID", "revalidation feature changed")
     revalidation = control.get("revalidation")
     if not isinstance(revalidation, dict):
@@ -2193,7 +2193,7 @@ def _build_revalidation_evidence(
         )
     record = {
         "schema": REVALIDATION_EVIDENCE_SCHEMA,
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "event_id": control["current_event_id"],
         "classification_id": revalidation["classification_id"],
         "repair_dispatch_id": revalidation["repair_dispatch_id"],
@@ -2219,8 +2219,8 @@ def _build_revalidation_evidence(
 def _record_revalidation_unlocked(
     run_dir: Path, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
-    control = _load_control(run_dir, feature_id)
+    execution_id = _feature_id(payload.get("execution_id"))
+    control = _load_control(run_dir, execution_id)
     record = _build_revalidation_evidence(payload, control)
     _verify_revalidation_evidence_source(run_dir, record)
     revalidation = control["revalidation"]
@@ -2230,7 +2230,7 @@ def _record_revalidation_unlocked(
             run_dir, control, record, require_current_gate=False
         )
         _store_immutable(
-            _revalidation_path(run_dir, feature_id, revalidation_id),
+            _revalidation_path(run_dir, execution_id, revalidation_id),
             record,
             "revalidation evidence",
         )
@@ -2239,7 +2239,7 @@ def _record_revalidation_unlocked(
         )
         _append_journal(
             run_dir,
-            feature_id,
+            execution_id,
             "revalidation-recorded",
             transition_id,
             revalidation_id=revalidation_id,
@@ -2272,7 +2272,7 @@ def _record_revalidation_unlocked(
                 "pre-commit revalidation evidence spans multiple integration commits",
             )
     created = _store_immutable(
-        _revalidation_path(run_dir, feature_id, revalidation_id),
+        _revalidation_path(run_dir, execution_id, revalidation_id),
         record,
         "revalidation evidence",
     )
@@ -2285,26 +2285,26 @@ def _record_revalidation_unlocked(
     else:
         control["status"] = "revalidation_required"
         control["active_blocker"]["status"] = "revalidation_required"
-    _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _write_json_atomic(_control_path(run_dir, execution_id), control)
     transition_id = _digest(
         {"action": "record-revalidation", "revalidation_id": revalidation_id}
     )
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "revalidation-recorded",
         transition_id,
         revalidation_id=revalidation_id,
         surface=record["surface"],
         blocker_key=record["blocker_key"],
     )
-    _write_failure_log(run_dir, feature_id, control)
+    _write_failure_log(run_dir, execution_id, control)
     return {"created": created, "revalidation": record, "control": control}
 
 
 def _record_experiment_unlocked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     question: str,
     hypothesis: str,
     evidence_reference: str,
@@ -2315,7 +2315,7 @@ def _record_experiment_unlocked(
 ) -> dict[str, Any]:
     if information_gain not in {"decision_changing", "model_update", "low"}:
         raise RepairControlError("RECORD_INVALID", "information_gain is invalid")
-    control = _load_control(run_dir, _feature_id(feature_id))
+    control = _load_control(run_dir, _feature_id(execution_id))
     blocker = control["active_blocker"]
     if blocker["model_rebuild_required"] and not model_rebuilt:
         raise RepairControlError(
@@ -2344,7 +2344,7 @@ def _record_experiment_unlocked(
     if blocker["active_seconds"] >= blocker["time_limit_seconds"]:
         _budget_stop(blocker, "time_limit")
         control["status"] = "exhausted"
-        _write_json_atomic(_control_path(run_dir, feature_id), control)
+        _write_json_atomic(_control_path(run_dir, execution_id), control)
         raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "60-minute ceiling reached")
     blocker["experiments"].append(experiment)
     if information_gain == "low":
@@ -2354,13 +2354,13 @@ def _record_experiment_unlocked(
     elif model_rebuilt:
         blocker["model_rebuild_required"] = False
         blocker["low_information_experiments"] = 0
-    _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _write_json_atomic(_control_path(run_dir, execution_id), control)
     transition_id = _digest(
         {"action": "experiment", "experiment_id": experiment["experiment_id"]}
     )
     _append_journal(
         run_dir,
-        feature_id,
+        execution_id,
         "diagnostic-experiment-recorded",
         transition_id,
         experiment_id=experiment["experiment_id"],
@@ -2370,46 +2370,46 @@ def _record_experiment_unlocked(
 
 
 def record_failure_event(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
-    with _transition_lock(run_dir, feature_id):
+    execution_id = _feature_id(payload.get("execution_id"))
+    with _transition_lock(run_dir, execution_id):
         return _record_failure_event_unlocked(run_dir, payload)
 
 
 def record_design_approval(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
-    with _transition_lock(run_dir, feature_id):
+    execution_id = _feature_id(payload.get("execution_id"))
+    with _transition_lock(run_dir, execution_id):
         return _record_design_approval_unlocked(run_dir, payload)
 
 
 def record_diagnosis(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
-    with _transition_lock(run_dir, feature_id):
+    execution_id = _feature_id(payload.get("execution_id"))
+    with _transition_lock(run_dir, execution_id):
         return _record_diagnosis_unlocked(run_dir, payload)
 
 
 def classify_failure(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     event_id: str,
     diagnosis_id: str | None = None,
 ) -> dict[str, Any]:
-    with _transition_lock(run_dir, feature_id):
-        return _classify_failure_unlocked(run_dir, feature_id, event_id, diagnosis_id)
+    with _transition_lock(run_dir, execution_id):
+        return _classify_failure_unlocked(run_dir, execution_id, event_id, diagnosis_id)
 
 
 def begin_remediation(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     classification_id: str,
     remedy_scale: str,
     hypothesis: str,
     evidence_reference: str,
     active_seconds_delta: int = 0,
 ) -> dict[str, Any]:
-    with _transition_lock(run_dir, feature_id):
+    with _transition_lock(run_dir, execution_id):
         return _begin_remediation_unlocked(
             run_dir,
-            feature_id,
+            execution_id,
             classification_id,
             remedy_scale,
             hypothesis,
@@ -2420,16 +2420,16 @@ def begin_remediation(
 
 def complete_remediation(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     dispatch_id: str,
     result: str,
     verification_reference: str,
     active_seconds_delta: int = 0,
 ) -> dict[str, Any]:
-    with _transition_lock(run_dir, feature_id):
+    with _transition_lock(run_dir, execution_id):
         return _complete_remediation_unlocked(
             run_dir,
-            feature_id,
+            execution_id,
             dispatch_id,
             result,
             verification_reference,
@@ -2439,7 +2439,7 @@ def complete_remediation(
 
 def record_experiment(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     question: str,
     hypothesis: str,
     evidence_reference: str,
@@ -2448,10 +2448,10 @@ def record_experiment(
     model_rebuilt: bool = False,
     active_seconds_delta: int = 0,
 ) -> dict[str, Any]:
-    with _transition_lock(run_dir, feature_id):
+    with _transition_lock(run_dir, execution_id):
         return _record_experiment_unlocked(
             run_dir,
-            feature_id,
+            execution_id,
             question,
             hypothesis,
             evidence_reference,
@@ -2462,8 +2462,8 @@ def record_experiment(
 
 
 def record_revalidation(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    feature_id = _feature_id(payload.get("feature_id"))
-    with _transition_lock(run_dir, feature_id):
+    execution_id = _feature_id(payload.get("execution_id"))
+    with _transition_lock(run_dir, execution_id):
         return _record_revalidation_unlocked(run_dir, payload)
 
 
@@ -2471,13 +2471,13 @@ def record_environment_recovery(
     run_dir: Path, payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Resolve a pre-promotion environment block after its unchanged gate passes."""
-    feature_id = _feature_id(payload.get("feature_id"))
-    with _transition_lock(run_dir, feature_id):
-        control = _load_control(run_dir, feature_id)
+    execution_id = _feature_id(payload.get("execution_id"))
+    with _transition_lock(run_dir, execution_id):
+        control = _load_control(run_dir, execution_id)
         classification = _load_classification(
-            run_dir, feature_id, control["current_classification_id"]
+            run_dir, execution_id, control["current_classification_id"]
         )
-        event = _load_event(run_dir, feature_id, control["current_event_id"])
+        event = _load_event(run_dir, execution_id, control["current_event_id"])
         surface = event["phase"]
         invalidations = [
             {
@@ -2487,7 +2487,7 @@ def record_environment_recovery(
             }
         ]
         if (
-            payload.get("schema") != "agentic-sdlc/environment-recovery-v1"
+            payload.get("schema") != "agentic-sdlc/environment-recovery-v2"
             or payload.get("event_id") != event["event_id"]
             or payload.get("classification_id") != classification["classification_id"]
             or classification["event_id"] != event["event_id"]
@@ -2513,8 +2513,8 @@ def record_environment_recovery(
                 "recovery is not the active unchanged environment gate",
             )
         record = {
-            "schema": "agentic-sdlc/environment-recovery-v1",
-            "feature_id": feature_id,
+            "schema": "agentic-sdlc/environment-recovery-v2",
+            "execution_id": execution_id,
             "event_id": event["event_id"],
             "classification_id": classification["classification_id"],
             "surface": surface,
@@ -2537,10 +2537,10 @@ def record_environment_recovery(
         _reject_sensitive(record)
         _verify_revalidation_evidence_source(run_dir, record)
         coordinator = _load_private_state_json(
-            run_dir / "execution" / feature_id / "coordinator.json",
+            run_dir / "execution" / execution_id / "coordinator.json",
             "execution coordinator",
         )
-        head = _current_revalidation_commit(run_dir, feature_id, surface)
+        head = _current_revalidation_commit(run_dir, execution_id, surface)
         worktree = Path(coordinator["integration_worktree"])
         if (
             coordinator.get("status") != "integrated"
@@ -2569,7 +2569,7 @@ def record_environment_recovery(
                 "STATE_TAMPERED", "resolved environment recovery changed"
             )
         path = (
-            _control_path(run_dir, feature_id).parent
+            _control_path(run_dir, execution_id).parent
             / "environment-recoveries"
             / f"{recovery_id}.json"
         )
@@ -2580,37 +2580,37 @@ def record_environment_recovery(
         # The sole invalidated gate has passed. Preserve its history in the
         # immutable recovery above, leaving no pending gate in the projection.
         control["invalidations"] = []
-        _write_json_atomic(_control_path(run_dir, feature_id), control)
+        _write_json_atomic(_control_path(run_dir, execution_id), control)
         _append_journal(
             run_dir,
-            feature_id,
+            execution_id,
             "environment-recovery-recorded",
             recovery_id,
             recovery_id=recovery_id,
             event_id=event["event_id"],
         )
-        _write_failure_log(run_dir, feature_id, control)
+        _write_failure_log(run_dir, execution_id, control)
         return {"created": created, "recovery": record, "control": control}
 
 
 def refresh_revalidation_routes(
-    run_dir: Path, feature_id: str, expected_cursor: str, evidence_reference: str
+    run_dir: Path, execution_id: str, expected_cursor: str, evidence_reference: str
 ) -> dict[str, Any]:
     """Invalidate pending gate progress after an owner-route policy repair."""
-    feature_id = _feature_id(feature_id)
+    execution_id = _feature_id(execution_id)
     if re.fullmatch(r"[0-9a-f]{64}", expected_cursor) is None:
         raise RepairControlError("STATE_INVALID", "expected cursor is invalid")
     evidence_reference = _bounded_string(
         evidence_reference, "evidence_reference", maximum=1024
     )
     _reject_sensitive(evidence_reference)
-    with _transition_lock(run_dir, feature_id):
-        control = _load_control(run_dir, feature_id)
+    with _transition_lock(run_dir, execution_id):
+        control = _load_control(run_dir, execution_id)
         previous = control.get("revalidation")
         if not isinstance(previous, dict):
             raise RepairControlError("STATE_INVALID", "no revalidation cursor")
         classification = _load_classification(
-            run_dir, feature_id, previous["classification_id"]
+            run_dir, execution_id, previous["classification_id"]
         )
         fresh = _new_revalidation(classification, previous["repair_dispatch_id"])
         if fresh is None:
@@ -2626,7 +2626,7 @@ def refresh_revalidation_routes(
         if classification["classification_id"] != control["current_classification_id"]:
             raise RepairControlError("STATE_TAMPERED", "classification changed")
         archive_path = (
-            _repair_root(run_dir, feature_id)
+            _repair_root(run_dir, execution_id)
             / "route-refreshes"
             / f"{expected_cursor}.json"
         )
@@ -2683,7 +2683,7 @@ def refresh_revalidation_routes(
                     or re.fullmatch(r"[0-9a-f]{64}", record_id) is None
                 ):
                     raise RepairControlError("STATE_TAMPERED", "invalid gate identity")
-                record = _read_json(_revalidation_path(run_dir, feature_id, record_id))
+                record = _read_json(_revalidation_path(run_dir, execution_id, record_id))
                 if (
                     _digest(_identity_payload(record, "revalidation_id")) != record_id
                     or record.get("cursor_id") != expected_cursor
@@ -2691,28 +2691,28 @@ def refresh_revalidation_routes(
                 ):
                     raise RepairControlError("STATE_TAMPERED", "prior gate changed")
             archive = {
-                "schema": "agentic-sdlc/revalidation-route-refresh-v1",
+                "schema": "agentic-sdlc/revalidation-route-refresh-v2",
                 "previous": previous,
                 "next_cursor_id": fresh["cursor_id"],
                 "evidence_reference": evidence_reference,
             }
             _store_immutable(archive_path, archive, "route refresh")
-            _append_journal(run_dir, feature_id, "route-refresh-intent", transition_id)
+            _append_journal(run_dir, execution_id, "route-refresh-intent", transition_id)
             control["revalidation"] = fresh
-            _write_json_atomic(_control_path(run_dir, feature_id), control)
+            _write_json_atomic(_control_path(run_dir, execution_id), control)
             changed = True
-        _append_journal(run_dir, feature_id, "route-refresh-committed", transition_id)
-        _write_failure_log(run_dir, feature_id, control)
+        _append_journal(run_dir, execution_id, "route-refresh-committed", transition_id)
+        _write_failure_log(run_dir, execution_id, control)
         return {"updated": changed, "control": control}
 
 
-def _write_failure_log(run_dir: Path, feature_id: str, control: dict[str, Any]) -> None:
-    path = run_dir.resolve() / "evidence" / feature_id / "failure-log.md"
+def _write_failure_log(run_dir: Path, execution_id: str, control: dict[str, Any]) -> None:
+    path = run_dir.resolve() / "evidence" / execution_id / "failure-log.md"
     blocker = control["active_blocker"]
     lines = [
-        f"# {feature_id} Failure Log",
+        f"# {execution_id} Failure Log",
         "",
-        "<!-- Derived from failure-event-v1, diagnosis-v1, and repair-control-v1. -->",
+        "<!-- Derived from failure-event-v2, diagnosis-v2, and repair-control-v2. -->",
         "",
         f"- Active blocker: `{blocker['blocker_key']}`",
         f"- Status: `{control['status']}`",
@@ -2818,17 +2818,17 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--input", type=Path, required=True)
     refresh = subparsers.add_parser("refresh-revalidation-routes")
     refresh.add_argument("--run-dir", type=Path, required=True)
-    refresh.add_argument("--feature", required=True)
+    refresh.add_argument("--execution", required=True)
     refresh.add_argument("--expected-cursor", required=True)
     refresh.add_argument("--evidence-reference", required=True)
     classify = subparsers.add_parser("classify")
     classify.add_argument("--run-dir", type=Path, required=True)
-    classify.add_argument("--feature", required=True)
+    classify.add_argument("--execution", required=True)
     classify.add_argument("--event", required=True)
     classify.add_argument("--diagnosis")
     dispatch = subparsers.add_parser("dispatch")
     dispatch.add_argument("--run-dir", type=Path, required=True)
-    dispatch.add_argument("--feature", required=True)
+    dispatch.add_argument("--execution", required=True)
     dispatch.add_argument("--classification", required=True)
     dispatch.add_argument(
         "--remedy-scale", choices=("localized", "design"), required=True
@@ -2838,7 +2838,7 @@ def _parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--active-seconds", type=int, default=0)
     complete = subparsers.add_parser("complete")
     complete.add_argument("--run-dir", type=Path, required=True)
-    complete.add_argument("--feature", required=True)
+    complete.add_argument("--execution", required=True)
     complete.add_argument("--dispatch", required=True)
     complete.add_argument(
         "--result", choices=("failed_same_blocker", "succeeded"), required=True
@@ -2864,18 +2864,18 @@ def main() -> int:
         elif args.command == "refresh-revalidation-routes":
             result = refresh_revalidation_routes(
                 args.run_dir,
-                args.feature,
+                args.execution,
                 args.expected_cursor,
                 args.evidence_reference,
             )
         elif args.command == "classify":
             result = classify_failure(
-                args.run_dir, args.feature, args.event, args.diagnosis
+                args.run_dir, args.execution, args.event, args.diagnosis
             )
         elif args.command == "dispatch":
             result = begin_remediation(
                 args.run_dir,
-                args.feature,
+                args.execution,
                 args.classification,
                 args.remedy_scale,
                 args.hypothesis,
@@ -2885,7 +2885,7 @@ def main() -> int:
         else:
             result = complete_remediation(
                 args.run_dir,
-                args.feature,
+                args.execution,
                 args.dispatch,
                 args.result,
                 args.verification_reference,

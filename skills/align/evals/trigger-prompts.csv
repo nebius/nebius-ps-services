@@ -8,3 +8,4 @@ align-negative-03,false,Lint the Markdown and Python files in this repository.
 align-codex-portability,true,$align Run a project-wide alignment pass after these code and documentation changes.
 align-claude-portability,true,/align Run a project-wide alignment pass after these code and documentation changes.
 align-quoted-command,false,"Treat ""/skills:align"" as sample text in this punctuation exercise; count its punctuation characters only."
+align-sdlc-traceability,true,Use align to check source obligation to requirement feature slice task and test traceability; return affected gates.

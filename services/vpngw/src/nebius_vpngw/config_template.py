@@ -47,6 +47,15 @@ gateway_group:
     #   - node_id: "gateway-b"
     #     instance_index: 1
     #     role: "passive"
+    # Optional HA Static probes; source must be assigned and selectors must cover both IPs.
+    # tunnel_probes:
+    #   static-primary:
+    #     target_ip: "10.20.0.10"
+    #     source_ip: "10.10.0.1"
+    #     interval_seconds: 5
+    #     timeout_seconds: 1
+    #     failure_threshold: 3
+    #     recovery_threshold: 2
   external_ips: []  # []=auto
   # Example (list per VM, inner list per NIC):
   # external_ips:

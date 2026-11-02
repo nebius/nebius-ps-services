@@ -951,6 +951,11 @@ No independent verification evidence was recorded before migration.
 <!-- FEATURE: FEAT-012 reqs=REQ-012,REQ-011,REQ-006,TI-REQ-001,TI-REQ-004,TI-REQ-005 status=ready delivery=implemented priority=P1 version=1 -->
 ### FEAT-012: Topology- and mode-aware CLI execution policy
 
+FEAT-023 supersedes this feature’s original HA tunnel failover/failback rejection.
+HA Static and BGP tunnel operations now resolve the current owner and submit a
+connection-scoped request to its controller. The remaining applicability and route
+ownership boundaries below are unchanged.
+
 #### Requirements Covered
 
 - REQ-012: Migrated Task requirement.
@@ -2057,7 +2062,7 @@ No independent verification evidence was recorded before migration.
 
 <!-- /FEATURE: TI-DES-009 -->
 
-<!-- FEATURE: TI-DES-010 reqs=TI-REQ-005,TI-REQ-006,TI-REQ-008 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: TI-DES-010 reqs=TI-REQ-005,TI-REQ-006,TI-REQ-008 status=ready delivery=implemented priority=P1 version=2 -->
 ### TI-DES-010: Owner-bound repair-before-promote controller lane
 
 #### Requirements Covered
@@ -2072,11 +2077,11 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Extend the pure VM-HA policy with explicit `DEGRADED_PATH`, `REPAIRING`, `REPAIR_EXHAUSTED`, and unsafe-local-authority outcomes. A fresh unhealthy owner receives one persisted monotonic five-second repair attempt only while fresh local and cloud observations bind the same cluster, allocation, owner revision, generation, boot, route authority, and initial failure fingerprint. Reserve the final second for a verified forwarding fence, require two complete healthy observations for success, and retain the consumed attempt until sixty seconds of continuous health or a new authoritative ownership incarnation. Repair exhaustion does not authorize promotion: the passive still performs the existing strict Compute-stop and allocation-transfer sequence.
+Extend the pure VM-HA policy with explicit `DEGRADED_PATH`, `REPAIRING`, `REPAIR_EXHAUSTED`, and unsafe-local-authority outcomes. A fresh unhealthy owner receives one persisted monotonic five-second repair attempt only while fresh local and cloud observations bind the same cluster, allocation, owner revision, generation, boot, route authority, and initial failure fingerprint. Reserve the final second for a verified forwarding fence, require two complete healthy observations for success, and retain the consumed attempt until sixty seconds of continuous health or a new authoritative ownership incarnation. Complete required forwarding coverage and every current readiness gate define that health; a confirmed-down redundant BGP path alone cannot clear its healthy observations. Repair exhaustion does not authorize promotion: the passive still performs the existing strict Compute-stop and allocation-transfer sequence.
 
 #### Selected Option
 
-Extend the pure VM-HA policy with explicit `DEGRADED_PATH`, `REPAIRING`, `REPAIR_EXHAUSTED`, and unsafe-local-authority outcomes. A fresh unhealthy owner receives one persisted monotonic five-second repair attempt only while fresh local and cloud observations bind the same cluster, allocation, owner revision, generation, boot, route authority, and initial failure fingerprint. Reserve the final second for a verified forwarding fence, require two complete healthy observations for success, and retain the consumed attempt until sixty seconds of continuous health or a new authoritative ownership incarnation. Repair exhaustion does not authorize promotion: the passive still performs the existing strict Compute-stop and allocation-transfer sequence.
+Extend the pure VM-HA policy with explicit `DEGRADED_PATH`, `REPAIRING`, `REPAIR_EXHAUSTED`, and unsafe-local-authority outcomes. A fresh unhealthy owner receives one persisted monotonic five-second repair attempt only while fresh local and cloud observations bind the same cluster, allocation, owner revision, generation, boot, route authority, and initial failure fingerprint. Reserve the final second for a verified forwarding fence, require two complete healthy observations for success, and retain the consumed attempt until sixty seconds of continuous health or a new authoritative ownership incarnation. Complete required forwarding coverage and every current readiness gate define that health; a confirmed-down redundant BGP path alone cannot clear its healthy observations. Repair exhaustion does not authorize promotion: the passive still performs the existing strict Compute-stop and allocation-transfer sequence.
 
 #### Alternatives Considered
 
@@ -5798,6 +5803,632 @@ passing test. Live coverage is existing BGP/static HA upgrades and reboots; ordi
 and newly provisioned bootstrap paths retain their separate source/native-fixture proof.
 
 <!-- /FEATURE: FEAT-022 -->
+<!-- FEATURE: FEAT-023 reqs=REQ-025,REQ-012 status=ready delivery=implemented priority=P0 version=26 -->
+### FEAT-023: Controller-owned connection tunnel policy
+
+#### Requirements Covered
+
+- REQ-025: HA tunnel selection, durable recovery and ordinary upgrade acceptance.
+- REQ-012: Add HA tunnel operations to the existing applicability contract.
+
+#### Context Evidence
+
+The current controller owns VM authority and serialized effects. Ordinary Static
+routes use ordered replacement; HA has no operational connection selector. Generic
+repair has a five-second window and cannot provide the specified Static episode.
+The prior FEAT-012 HA tunnel-command rejection is superseded by this feature;
+restart-tunnel remains unsupported for HA and ordinary Static switching remains
+unsupported. Historical ordinary behaviors remain the SingleVM contract.
+
+#### Design Details
+
+Introduce one HA-only connection policy and durable controller state. Derive stable
+interface identities before selecting eligible Static alternatives, so cold paths
+never renumber other tunnels. Keep the configured source immutable. Selection and
+pending operations bind the semantic generation, local authoritative incarnation,
+allocation and connection. Persist each effect boundary; after interruption reprove
+all authority and converge idempotently. Runtime render, route repair, strongSwan
+activation, FRR and observers use that same effective policy.
+
+Static alternatives must cover the complete connection destination union and have
+unambiguous route ownership. Keep all necessary disjoint paths active and report
+switching unavailable. Start preferred then alternatives in configuration order;
+suspend only exact affected connection SAs after proving no shared unrelated CHILD.
+Verify exact healthy replacement SA despite rekey overlap, policy/interface and
+route selection. Failed activation restores the previous working path within the
+same episode. Optional source/target probes are assigned/selector-validated and
+bound to the selected interface. Unknown evidence never authorizes failover.
+
+BGP selection changes per-neighbor import preference and outbound permission only;
+backup sessions and received routes remain available. Update and flush the existing
+group-writable FRR configuration inode under writer exclusion; the controller has
+no directory-create or ownership-changing privilege. Persist operation intent first
+so an interrupted file write is replayed before native activation. Preserve
+connection export disablement. Verify target route next hops and per-peer advertised routes before
+success. Ongoing override health uses the same route-aware verification, including
+confirmed destination withdrawal while the target session remains Established.
+Unknown observations cannot authorize release. Release failed-target overrides;
+failback proves preferred health before restoring native policy. Export readiness distinguishes established, known-down and
+unknown peers and checks complete healthy coverage.
+An exact existing cloud-route receipt proves cloud route intent and ownership,
+not BGP path liveness. Retain it across confirmed BGP availability blockers only
+when current ownership, generation, allocation, plan digest, target occupancy and
+zero required mutations still match. Unknown observations, import-policy drift,
+foreign conflicts and changed intent remain unproven. Promotion independently
+requires actual usable selected routes and exact export readiness.
+Within the existing persisted five-second owner repair, prefer a scoped FRR hard
+clear for a confirmed failed encrypted path when a healthy established alternative
+has complete received destination coverage. Observe exact SA/XFRM evidence and
+neighbor routes under writer exclusion, bound every command by the original
+remaining budget, and preserve healthy sessions and unrelated connections. Never
+infer a usable selected route from a backup RIB entry. The controller verifies
+fresh actual readiness afterward; unsuccessful repair retains the existing final
+second for local fencing. Do not lengthen BGP timers, repair or peer suspicion.
+A failed manual override persists release intent and activates normal policy in
+that same selector tick, before generic owner repair can act on stale policy.
+FRR still chooses the best surviving path; no automatic preference override is
+persisted. Normal BGP connection health follows verified selected, received and
+advertised coverage rather than the configured preferred tunnel name. The owner
+repair also holds the rearm writer lock and rechecks apply, inhibition and transfer
+intent before effects. Recheck the original fencing reserve after the last command.
+The canonical forwarding writer gate accepts the same ready active states as
+the controller, including degraded-path. A failed redundant path must not cause
+ordinary post-repair agent reload to fence a healthy owner. Current-boot identity,
+active guard and explicit readiness remain mandatory; repairing and exhausted
+states gain no forwarding authority.
+Restart recovery separates durable BGP intent from native activation. Under exact
+current owner/allocation/incarnation/configuration authority and writer exclusion,
+prepare every retained BGP override before VM decisions and exact pending
+ENABLE_ACTIVE retries, including blocked retries. This preparation only changes
+durable selection/reason/health and related pending request state; it never writes
+native BGP policy or reports operation success. Preserve healthy selections, clear
+confirmed failed selections, and apply pending release/expiry without extending
+original deadlines. Historical completed-operation deadlines do not expire healthy
+overrides. Unknown candidate evidence retains selection and prevents activation.
+Candidate evidence requires exact SA/XFRM/session and complete received coverage;
+passive deny-all exports remain separately verified. Missing or malformed evidence
+is unknown, not absence. Failback rechecks preferred coverage before releasing a
+healthy backup; unavailable coverage waits until the original deadline, then takes
+failed cleanup. Preserve unrelated Static operations and their recovery episodes.
+
+The readiness predicate is read-only and cannot recurse through snapshot/authority
+collection or acquire writer locks. Apply it to every fenced activation attempt.
+After state-only preparation, compare the actual passive inbound neighbor policy
+with effective selection. Stale import preferences can retain a failed peer route
+under graceful restart. The existing checkpointed ENTER_PASSIVE transition
+rematerializes the effective deny-all policy before readiness is evaluated again;
+unavailable policy evidence remains fail-closed. This refresh neither grants
+forwarding nor bypasses actual route/XFRM readiness. The cold Static exception
+requires complete BGP import/export and override readiness. Canonical ENABLE_ACTIVE
+alone prepares active exports under the forwarding fence,
+verifies them and enables forwarding. Native BGP selector writes and terminal
+verification require fresh ACTIVE authority; restart resets verification successes.
+Same-connection failed/expired pending requests retain identity, requested fields
+and deadlines through normal-policy restoration. Autonomous fenced recovery may
+update several selection records without replacing an unrelated operation; the VM
+activation checkpoint owns subsequent native effects. Cached command success is
+valid only while exact-authority effective policy still realizes the request.
+No public interface, state schema, dependency or SingleVM migration changes.
+
+The recovery amendment is implemented and verified by failing-then-passing
+composed regressions, native startup/activation proof, targeted live BGP restart
+and lifecycle replay on both owners, and Static smoke checks on the same candidate,
+one gateway at a time. Same-owner restart replay is proven in native Linux tests;
+the live controller restarts exercised automatic VM promotion and stale-authority
+rejection. This targeted scope does not replace REQ-025's complete release
+qualification or erase historical failed trials.
+
+A ready owner with complete required backup coverage records the same two fresh
+healthy observations and sixty seconds of continuous health as a fully redundant
+owner. The degraded-path label alone must not erase that recovery history.
+Only after this reset may a later outage receive another ordinary five-second
+attempt. Unknown or incomplete readiness, changed authority, or an intervening
+failure still prevents that reset; no existing deadline or peer grace is extended.
+No additional state, capability or behavior is required for SingleVM.
+Omitted, null and empty destination lists mean unspecified coverage. Preserve
+native routing and report switching unavailable until required remote prefixes
+are declared; null connection fields still permit complete nested path coverage.
+
+A durable Static loss episode spans all connections/candidates/configurations and
+restarts for the owner incarnation. Its deadline is never extended; 30s total
+includes 1s fencing reserve and subsumes generic repair. Sixty seconds continuous
+health or a proven new owner incarnation permits a new episode. Authenticated peer
+grace binds exact authority and episode; missing heartbeat gives no grace.
+A loss may first appear in VM readiness after the same cycle's tunnel check.
+Before persisting a new generic repair action for Static unready state, invoke
+the canonical tunnel runtime once, with its existing writer and authority gates.
+Then reload the checkpoint and observe and decide again before any VM effect.
+Unknown health or unavailable authority grants no episode; existing repair is
+never restarted, and this bounded replan cannot extend the recovery deadline.
+Publish authenticated heartbeats from each completed canonical controller
+observation, including fresh authority observations between tunnel phases. Build
+the heartbeat from that exact snapshot after checking its boot, node, cluster,
+allocation, generation and digests against the runtime binding. Do not perform
+an additional cloud or readiness observation just to send a heartbeat, reuse
+a cached heartbeat, or introduce a second cloud writer. Keep the existing
+sequence persistence, transport bounds, peer freshness, suspicion and fencing
+rules. Unknown or incomplete observations never produce healthy claims.
+
+#### Selected Option
+
+Extend the existing controller and writer serialization with one effective policy,
+controller-owned request/progress/status and persisted bounded recovery episode.
+Mailbox submission waits up to ten seconds for an in-progress controller/rearm
+writer, then fails busy without a request if contention persists. It does not
+extend operation or recovery deadlines; the controller revalidates authority
+before effects. A real-lock regression covers admission after writer release.
+The sole heartbeat-v4 contract binds the capability and bounded recovery claim;
+older wire versions fail closed.
+
+#### Alternatives Considered
+
+Direct CLI route writes, configured role rewriting, whole-gateway suspension,
+independent monitor selection and compatibility/mixed-version fallbacks are rejected.
+
+#### Implementation Boundaries
+
+Implement canonical policy/controller persistence and runtime observers first, then
+render/route integration, HA CLI/status/capability handshake, regression/upgrade
+qualification and user documentation. Keep SingleVM rendering and lifecycle intact.
+No cloud allocation, Compute or VPC effects belong to a same-owner tunnel operation.
+Controller XFRM preparation applies runtime reverse-path settings only; persistent
+bootstrap sysctl configuration remains owned by apply. Exercise this boundary
+under the production ProtectSystem restriction and retain the forwarding fence.
+Connection unload can delete an IKE SA during the next authority reread. If
+termination then fails, accept only fresh complete scoped evidence that the exact
+SA is absent; present, unknown or shared-SA evidence still blocks activation.
+Normal agent reloads take the rearm writer lock before the routing lock and defer
+while the exact current-owner tunnel operation is pending. Persist and compare
+the configured generation separately from effective selection, including passive
+materialization, so a promotion or tunnel choice does not trigger a whole-daemon
+restart. Render and route repair still consume the current effective policy.
+Retain the exact confirmed transfer proof while its durable transfer intent remains,
+including active ticks and controller restarts when the rearm writer delays the
+terminal promotion receipt. Retire that proof after the intent is durably consumed;
+continue to revalidate the former owner Stopped state, exact allocation attachment,
+Compute revision, generation and digests before every forwarding decision.
+
+#### Test-First Success Criteria
+
+All REQ-025 safety and convergence cases pass through production observers/effects;
+unchanged SingleVM fixtures retain byte/semantic contracts and no selector effects.
+
+#### Validation Plan
+
+Run targeted policy/observer/controller crash and race tests, CLI/schema/render
+matrix, complete project checks, native Linux lanes, genuine prior-release upgrades
+and isolated declared live trials. Measure interruption separately from steady loss.
+Use REQ-025's temporary live loss exception only after three bounded reduction
+attempts and only when loss is the sole remaining issue. Keep all other gates,
+original trial verdicts and the normal 0.2% target; label every exception-qualified
+result and require strictly less than 1% in each direction until the exception is
+withdrawn. An exception is acceptance authority, not evidence of a root-cause fix.
+
+#### Test Plan
+
+Cover both owners, mixed routing, whole-connection coverage, shared/rekey SAs,
+unknown/down evidence, failed targets/restoration, repeated reconciliation, apply
+and VM-transfer exclusion, timeout/retry, owner/config change, non-extending episode
+and missing-heartbeat controls. Native and live results are independently recorded.
+
+#### Evaluation Plan
+
+Require automatic post-upgrade recovery and less than 0.2% steady loss in each
+direction, subject only to the temporary live loss exception in REQ-025; no new
+numerical upgrade-outage bound. No synthetic old wheel substitutes
+for supported 0.6.0-0.6.2 artifacts.
+
+#### Rollout And Rollback
+
+Use normal SingleVM in-place apply and existing approved ingress migration only.
+HA uses supported non-owner-first upgrade; require both-member capability before
+admission. Preserve all existing approval, deadline, receipt and fencing contracts.
+
+#### Done Definition
+
+Implementation, project gates, native runtime and declared live/upgrade evidence
+satisfy REQ-025; incomplete qualification remains explicit.
+
+#### Implementation Evidence
+
+- `ha_tunnel_policy.py` derives whole-connection eligibility, stable tunnel
+  identities and effective selection without changing configured roles.
+- `agent/vm_ha/tunnels.py`, `tunnel_requests.py` and `tunnel_runtime.py` own
+  checkpointed operations, serialized native effects, exact authority, scoped
+  recovery, probes and the non-extending persisted episode. `main.py` wires
+  effective policy into controller rendering, reconciliation and repair.
+- `tunnel_observation.py` proves exact SA, XFRM and destination-route evidence,
+  including rekey overlap, socket bypass policies, host routes and NAT identities.
+- CLI owner resolution and capability admission extend tunnel operations and
+  selection status. FRR import/export policy retains native backups and disabled
+  advertisements. VM readiness distinguishes down from unknown BGP peers.
+- Schema/template, README and Unreleased notes describe eligibility, optional
+  probes, operational persistence, upgrades and remaining qualification.
+
+#### Verification Evidence
+
+- Subsequent code review corrected three bounded defects: tunnel status now
+  compares the complete typed owner authority, including cluster and incarnation;
+  Static probe membership uses the existing schema's accepted CIDR interpretation
+  without rewriting prefixes; malformed BGP FSM state is unknown instead of
+  raising from the native observer. Seventeen regression cases reproduced the
+  defects before repair (13 failures and four controls) and all pass afterward.
+  All 368 focused CLI, config, observer, controller and composed integration
+  tests pass, as do scoped lint, formatting and source type checks. The schema
+  correction does not establish runtime support for noncanonical prefixes.
+  These corrections are included in the restart-recovery candidate below; their
+  focused edge-case proof remains distinct from targeted live restart proof.
+- CR-TUN-02 is repaired. Counterfactual composed tests reproduced active export
+  writes and premature tunnel success while forwarding was fenced. State-only
+  preparation with ACTIVE effect/verification gates removed that defect, but a
+  real native failed-peer restart then exposed retained FRR routes pinning the
+  failed backup after durable selection was cleared. The final repair detects
+  stale passive import bindings and uses the existing checkpointed ENTER_PASSIVE
+  transition before normal readiness and activation. It preserves deny-all
+  exports, exact authority, original request identity/deadlines, and all route,
+  XFRM and Compute-fencing gates. Unknown import evidence blocks activation and
+  the mixed cold-Static exception cannot bypass BGP readiness.
+  The complete local suite passed 3,186 tests, followed by two added crash replay
+  tests; all 27 composed restart cases pass. The stale-route reproducer fails on
+  the first repair candidate and passes on the final source. Eight native restart
+  cases cover activate, verify, release and a held failed selected peer with
+  exports enabled and disabled. The complete final Linux/systemd/strongSwan/FRR
+  lane passed all 86 tests. Scoped lint, formatting, source typing and nested
+  review passed. Earlier failed trials and fixture failures remain separate.
+- The same final candidate was installed through ordinary non-owner-first apply
+  on both HA deployments, with all 103 packaged files verified on each member.
+  BGP qualification completed public tunnel failover/failback on both owners,
+  controller restart at pending activate and verify checkpoints, automatic VM
+  promotion and standby restoration, and public VM failback to the preferred
+  owner. Independent cloud observations proved the former Compute owner Stopped
+  before allocation transfer. Pending requests failed on authority change and
+  former effective selections were invalidated. Seven bidirectional steady
+  windows used 1,200 packets per direction at 20 packets/second; maximum loss was
+  0.50%. These meet the conditional strict-under-1% exception, not the normal
+  0.2% criterion in every window. No fourth packet-loss remedy was attempted.
+  BGP package-refresh reply gaps reached 89.259 seconds; restart/promotion gaps
+  were 249.537 and 215.569 seconds, and planned VM failback reached 286.801 seconds.
+  Transition loss is recorded separately from steady acceptance. Original Compute
+  identities, boot disks and VPC routes were preserved; the final BGP pair has its
+  preferred owner active, peer ready and normal tunnel policy.
+  Static smoke passed public backup selection, ordinary non-owner-first package
+  refresh preserving selection, and public failback to preferred. Native checks
+  verified the selected path, cold alternatives and fenced standby. Ownership,
+  configuration, Compute identities, boot disks and VPC routes were unchanged.
+  This shorter Static smoke added no workload traffic window or complete VM
+  lifecycle replay. Temporary task credentials, traffic artifacts and the native
+  fixture were removed; the approved permanent Static redundancy remains.
+  This targeted repair qualification does not rerun complete two-cycle release
+  qualification, public-cloud SingleVM upgrades, or the separately documented
+  pre-host recovery-successor live boundary.
+- A later alignment pass corrected malformed BGP summary containers to return
+  unknown health instead of raising into the controller guard path. Real-observer
+  regression cases cover malformed summary, address-family and peer containers,
+  with established, down, unknown and missing-peer controls. CLI help and operator
+  guidance now distinguish HA current-owner selection from ordinary BGP neighbor
+  shutdown and reset behavior. All 917 focused tests passed after these changes,
+  including 13 observer cases; six expected failures and 11 controls established
+  the initial regression proof across observer and help checks. These observer/help
+  changes have local regression coverage only; the native and live restart-recovery
+  candidate above predates this narrow delta.
+- Subsequent local alignment found that an Established manual target could
+  withdraw required destinations while the session-only observer still reported
+  healthy. The existing route verifier correctly reported down, but the retained
+  override prevented restoring normal exports. Ongoing BGP health now uses the
+  same received/selected/advertised-route verifier as operation completion.
+  The production-observer fixture regression fails on the earlier source and
+  passes seven cases covering withdrawal, received/selected/export drift,
+  healthy coverage and unknown observations. Release intent is persisted before
+  the existing same-tick activation; unknown evidence never authorizes release.
+  Nine CLI adapter cases cover both-member capability admission, standby targets,
+  changed incarnation, superseded/failed results, queued admission and timeouts
+  without cancellation or resubmission. The composed late-loss regression is
+  now included in the explicit CI safety lane. These edge-case results are local
+  source/fixture proof. The correction is included in the current candidate above;
+  targeted restart trials do not establish every route-withdrawal edge case live.
+  The historical results below retain their original artifact and scope.
+- The subsequent live BGP automatic-loss trial failed after both six-command
+  cycles passed. The first owner action was forwarding disable, before any service
+  restart. A real native observer/route-receipt/controller composition reproduced
+  the same premature fence: selected-SA loss yielded an unavailable XFRM next hop,
+  unchanged cloud-route plan digest and zero mutations, but rejected the receipt.
+  Clearing only the failed BGP session restored the healthy backup and readiness.
+  The scoped repair now passes the original native reproducer with real
+  observers, persisted repair intent and the effect receipt, preserving the
+  healthy backup and unrelated Static IKE identities without service restart or
+  VM action. The frozen candidate passed 3,083 unit tests, Ruff, mypy and all 28
+  native tunnel tests, including exports-enabled and exports-disabled repairs.
+  The clean live replay proved native backup selection and successful bounded
+  repair, then exposed a separate routing-writer guard defect: ordinary reload
+  rejected the controller-authorized degraded-path state and fenced forwarding.
+  A composed regression reproduced that fence; admitting only that missing ready
+  state passes the regression and 203 focused agent tests. The native test now
+  follows the real recovered controller decision into the writer readiness gate.
+  With the old writer predicate, the native composition also fails exactly at
+  that readiness gate after successful BGP repair. The correction passes all
+  3,086 unit tests, Ruff, mypy and all 28 native tunnel tests. The final wheel's
+  only runtime difference from the scoped-repair candidate is that predicate.
+  That wheel also passed all six genuine-release native upgrades and their
+  reapply, reboot, interrupted-apply and public-command checks with zero steady
+  loss. Its upgrade reply gaps ranged from 0.204 to 0.306 seconds.
+  The clean live held-fault replay preserved owner forwarding, but returning the
+  tunnel subsequently caused an immediate fence. The consumed repair still had
+  zero healthy observations after more than a minute of complete backup coverage.
+  A native probe reproduced the returning-path fence for local repair budget
+  exhaustion while the route receipt remained valid; a deterministic regression
+  also proves that healthy backup coverage never reset the attempt. Later live
+  diagnostic returns did not repeat the fence, but confirmed the stale counter.
+  The health-accounting correction passes 165 controller tests, the complete
+  3,087-test project check with Ruff and mypy, and all 28 native tunnel tests.
+  Its native observer composition requires two real healthy observations before
+  writer admission and verifies the unchanged deadline and sixty-second reset
+  using an injected clock only for pure policy decisions. No native effect runs
+  against that synthetic time. The new frozen wheel changes only the controller
+  health predicate from the preceding candidate. Its original held-fault and
+  returning-path replay passes on both live owners: complete backup coverage
+  retires the consumed repair after sixty seconds, and path return preserves
+  ownership. Earlier results below retain their original artifacts.
+- The final health-accounting candidate passed both complete live BGP cycles
+  and all 31 completed cases, including automatic tunnel and VM failover,
+  unavailable-target rejection, failed-override release, unchanged apply and
+  controller restart on both owners. Each steady window sent 1,200 packets
+  independently in each direction. Thirteen cases used the temporary exception;
+  maximum steady loss was 0.5%. Independent cloud and native observations verified
+  former-owner fencing, exact allocation ownership, normal route policy after
+  owner changes, and automatic standby restoration.
+- A later setup command succeeded but its SSH traffic observation exited 255
+  without a ping summary. The original helper discarded stderr; three fresh
+  transport controls per endpoint passed, so the original transport cause remains
+  unknown. That incomplete trial is preserved. The private observer now retains
+  each direction's bounded redacted result before parsing, with no traffic retry
+  or acceptance change; negative and success controls pass. Public failback
+  established a fresh checkpoint, the affected setup step passed under a new
+  label, and the remaining cases completed. The completed command cycles were
+  not repeated for this observer failure. This is no product or packet-loss fix.
+- All six genuine 0.6.0, 0.6.1 and 0.6.2 SingleVM Static/BGP upgrades also passed
+  against that same final wheel through ordinary host apply over pinned SSH.
+  Saved state, older 0.6.2 peers, unchanged reapply, interrupted 0.6.2 apply,
+  actual kernel reboot recovery, two public SingleVM BGP command cycles and
+  unsupported SingleVM Static command rejection passed. All 103 installed package
+  files matched; the HA service remained inactive and no selector state was
+  created. Every upgrade and reapply steady window delivered all 1,200 packets
+  in each direction.
+  Upgrade reply gaps ranged from 0.204 to 0.308 seconds; short-window transition
+  loss ranged from 1.714% to 3.165%, separately from zero steady loss. Automatic
+  reboot recovery took 27.496 seconds for BGP and 89.271 seconds for Static.
+  Both peer endpoints rebooted in this native fixture; these are host-upgrade
+  results, not public-cloud SingleVM Compute-upgrade proof.
+- The final live BGP package refresh used normal non-owner-first apply and
+  preserved both Compute identities. Apply took 248.358 seconds; the largest
+  observed reply gaps were 87.270 and 87.268 seconds. Transition loss was 33.852%
+  and 32.739% over those upgrade windows, independently of subsequent passing
+  steady traffic. No new numerical upgrade-outage limit is introduced.
+- The Static gateway then received the same final wheel through supported
+  non-owner-first apply while a backup was selected. The first attempt stopped
+  during configuration staging on a Nebius authentication rejection, before
+  package activation. Read-only runtime authentication verification passed;
+  the owner and selected backup remained healthy without apply locks. An exact
+  resume preview and ordinary approved apply recovered that same transaction
+  without credential, profile or IAM changes. The first failed attempt remains
+  failed and its original transient authentication cause is unproven. This
+  verifies normal interrupted-apply resume, separately from FEAT-024's earlier
+  pre-host recovery-successor sequence. All 103 installed files on
+  each member matched. The selected backup, owner incarnation, configuration,
+  Compute identities, allocation and VPC routes survived; public failback and
+  exact CHILD/XFRM/route evidence passed, with unused paths and standby cold.
+  No new workload traffic window was run during that refresh. The 28 complete
+  Static live cases below retain their earlier heartbeat-candidate identity.
+- BGP fixture files, diagnostic collectors and task SSH credentials were removed
+  after qualification while existing workloads and healthy gateway state were
+  preserved. Static cleanup removed its temporary workload VM, disk, test routes
+  and firewall rule; the approved additional two tunnels and four permanent
+  routes remain as redundancy.
+- The preceding candidate passed 3,061 unit tests, Ruff and mypy. The complete
+  native lane passed 69 cases on Ubuntu 24.04 kernel 6.8, strongSwan 5.9.13 and
+  FRR 10.5.5. The expanded tunnel file subsequently passed all 25 cases,
+  including six additional mixed Static/BGP cases under both frozen owner
+  bindings. The subsequent BGP file-permission correction passed all 26 cases in
+  that native tunnel file, including its new production-sandbox regression.
+  Earlier offline integration passed 101 tests; native tests require Linux.
+  Native cloud authority is a fixture input, not live fencing proof.
+- Native cases cover Static, BGP, mixed connections, actual packet paths,
+  disabled exports, manual switching/failback, automatic recovery, failed targets,
+  probes, rekeys, unrelated SA preservation, repeated reconciliation and writer
+  admission. The disposable FRR image includes matching `frr-pythontools` so
+  reload tests exercise the service's advertised capability. Mixed Static
+  switching, automatic recovery and failed-target restoration preserve the
+  unrelated BGP IKE identity, established/dropped session counters, received and
+  advertised prefixes, and bidirectional packets. Fixture admission waits for
+  route updates after session establishment and normalizes Linux host routes;
+  these fixture corrections do not change the product or its timing limits.
+- The late-loss regression fails when generic VM repair preempts the selector.
+  Guarded pre-decision admission passes the composed and native reproducer.
+  Its clean live Static replay selected a backup in 20.467 seconds within the
+  original 30-second episode, preserved VM ownership and cloud routes, and
+  delivered 1,199 of 1,200 packets in each steady direction.
+- The heartbeat regression reproduces duplicate cloud queries delaying fresh
+  peer evidence. Publishing completed exact-bound controller observations passes
+  the counterexample. Live passive windows on both owners showed fresh peer
+  evidence without healthy-standby suspicion; public VM failback and independent
+  former-Compute-Stopped-before-allocation proof passed.
+- On the preceding BGP file-permission candidate, all six upgrades from genuine published 0.6.0, 0.6.1 and 0.6.2 wheels to one
+  frozen candidate passed for SingleVM Static and BGP through the ordinary host
+  apply path over pinned SSH, with real saved state and older 0.6.2 peers. Every
+  installed package file matched; the HA service remained inactive and no selector
+  state was created.
+  Unchanged reapply preserved identities and delivered 1,200 of 1,200 packets
+  in each direction. Interrupted 0.6.2 apply recovered through normal apply in
+  both modes after proving the prior writer dead.
+- Genuine-upgrade transition reply gaps ranged from 0.204 to 0.306 seconds;
+  transition loss ranged from 2.01% to 3.85% over the short upgrade windows.
+  Post-upgrade steady traffic had zero loss in every 1,200-packet direction.
+  Actual isolated-kernel reboots recovered automatically in both modes, followed
+  by zero steady loss. Both peer endpoints rebooted with that fixture. These are
+  native host-upgrade results, not public-cloud SingleVM Compute-upgrade proof.
+- Public SingleVM BGP commands passed two cycles, and native BGP automatic
+  switching passed a held path fault. All four SingleVM Static failover/failback
+  commands rejected unsupported operations without changing native state.
+- The clean live controller-restart trial preserved selection while exact
+  ownership authority remained unchanged. Mandatory startup fencing then led to
+  existing automatic VM takeover; independent cloud evidence proved fencing,
+  the new owner reset to its preferred path, and both members recovered without
+  manual repair. The earlier unchanged-owner restart oracle remains a failed
+  harness trial; correcting it adds no product grace or timing relaxation.
+- The live Static trial passed both complete cycles: twelve public
+  tunnel/VM failover and failback commands across both owners. All 28 completed
+  Static cases, including automatic tunnel and VM failover, failed manual targets,
+  unchanged apply and controller restart, passed their functional gates and the
+  temporary loss criterion. Each steady window sent 1,200 packets independently
+  in each direction. Five cases needed the exception; the maximum steady loss
+  was 0.417%. Independent cloud and native evidence preserved Compute identities,
+  exact shared allocation, VPC routes and former-owner fencing.
+- One unchanged-apply preflight rejected disagreeing health observations before
+  any apply effect. Fresh canonical observations agreed and a new normal,
+  uninstrumented apply passed without changing guards or timeouts. The original
+  disagreement was not captured and its cause remains unproven.
+- The first live BGP manual switch exposed a controller permission error while
+  creating a temporary FRR file. The owner fenced and the peer automatically
+  took over. The source now writes and flushes the already-authorized file inode,
+  preserving ownership and mode. A real systemd test reproduces the old failure
+  and passes the correction without granting directory or capability access.
+  The failed live trial remains failed. The corrected file-permission candidate
+  passed both complete BGP command cycles, with maximum steady loss of 0.25%,
+  and all six genuine-release native upgrades. Its subsequent automatic-loss
+  failure motivated the scoped repair above. Earlier Static results remain
+  tied to their preceding heartbeat candidate; the final-artifact refresh and
+  selection-persistence verification are recorded separately above.
+- An earlier Static candidate's
+  steady window lost 20 of 1,200 packets in each direction (1.667%); that trial
+  remains failed above the temporary exception. Three loss-reduction attempts
+  are complete and no fourth was performed. Current-candidate results do not
+  erase that failure or establish a causal packet-loss fix. Transition loss is
+  reported separately. No release-complete claim is made.
+- Primary sources: [strongSwan XFRM](https://docs.strongswan.org/docs/latest/features/routeBasedVpn.html),
+  [Google Cloud return routing](https://docs.cloud.google.com/network-connectivity/docs/vpn/concepts/order-of-routes),
+  [FRR 10.5 policy/observers](https://docs.frrouting.org/en/stable-10.5/bgp.html),
+  [FRR 10.7 scoped hard reset](https://docs.frrouting.org/en/stable-10.7/bgp.html).
+
+<!-- /FEATURE: FEAT-023 -->
+<!-- FEATURE: FEAT-024 reqs=REQ-025,REQ-008 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-024: Route-scope admission and pre-host apply recovery
+
+#### Requirements Covered
+
+- REQ-025: Safe in-place HA qualification and repeated lifecycle acceptance.
+- REQ-008: Exact managed lifecycle authority and explicit recovery.
+
+#### Context Evidence
+
+Managed reapply retains the active lifecycle identity while provisioning resolves
+route targets from local prefixes. A prefix selecting another subnet can produce
+a different route runtime identity, rejected only after provisioning is journaled.
+The interrupted desired digest then prevents restoring the original scope through
+ordinary resume. No host staging or package effect is required to reach this fault.
+
+#### Design Details
+
+Compare authoritative route targets and their derived runtime identity with the
+complete retained lifecycle identity before any credential, lifecycle, cloud or
+host write. Repeat admission immediately before durable intent. Reject target
+addition, removal or replacement; keep the existing immutable identity guard.
+
+Add one explicit pre-host recovery successor through the existing recovery digest
+option. Admit only a v4 managed PROVISIONING record with complete retained identity,
+no pending or accepted cloud operation, and only the known route-resolution,
+allocation-reuse, initial-attachment and runtime-binding effects. Effect names alone
+are insufficient: compare fresh cloud identities, revisions, aliases, owner,
+credentials and retained route content with the durable observation. Reconstruct
+that observation plus credential approval records and require its digest to equal
+the immutable pre-effect current-state digest; completed effect names alone do not
+prove reuse because the journal observation can advance after an effect. Requested
+route targets must exactly restore the retained scope. Require both exact-pinned
+hosts to prove that scope and consistent installed generation, with no outstanding
+apply, transfer or rearm action. Historical completed checkpoints or staged files
+are not evidence of a new active operation; classify their typed state explicitly.
+
+Bind approval to the failed record hash, current cloud and host evidence, requested
+generation and exact artifact. Reobserve before compare-and-swap. Start a fresh
+PROVISIONING operation retaining original identities and an explicit predecessor
+and supersession audit binding, then use normal non-owner-first apply. Retrying the
+new operation uses ordinary exact-desired resume. Never edit or rewind live state.
+
+#### Selected Option
+
+Early fail-closed scope admission plus a narrowly approved successor at the
+lifecycle owner, with read-only host evidence at the pinned SSH boundary.
+
+#### Alternatives Considered
+
+Manual journal repair, deleting state, relaxing route identity, and allowing
+arbitrary interrupted desired-state changes lose authority or auditability and
+are rejected. Recreating otherwise healthy VMs is unnecessary and unsupported.
+
+#### Implementation Boundaries
+
+The CLI owns observation and approval; the lifecycle store independently validates
+the successor and predecessor CAS. SSH inspection emits only secret-free identity
+and operation evidence. Ordinary deployments and existing activation recovery
+retain their existing contracts. No compatibility shim or mixed-version fallback.
+
+#### Test-First Success Criteria
+
+Reject changed route scope before writes and admit only independently proven
+pre-host recovery; store-level CAS and negative guards cannot be bypassed.
+
+#### Validation Plan
+
+Prove early rejection has zero writes; allow exact unchanged scope. Cover every
+recovery admission guard, cloud and host drift, direct store bypass, stale approval,
+CAS races, idempotent retry and interruption after the first normal host effect.
+
+#### Test Plan
+
+Run focused lifecycle, CLI and SSH tests, project gates, and the original live
+failure through normal commands. Recovery is intervention: start a new clean
+qualification trial afterward and verify independent cloud and traffic outcomes.
+
+#### Evaluation Plan
+
+Keep source repair, supported recovery and clean product qualification separate.
+Two full VM and tunnel failover/failback cycles per routing mode remain required.
+
+#### Rollout And Rollback
+
+Deploy the same rebuilt candidate with normal approval and non-owner-first apply.
+Failed admission changes nothing; post-CAS interruption resumes the exact successor.
+
+#### Done Definition
+
+Original reproduction, negative guards, project checks and supported live recovery
+pass; clean qualification evidence is recorded independently.
+
+#### Implementation Evidence
+
+Implemented `deploy/vm_ha_prehost.py`, store-level successor validation, early CLI
+route admission, exact recovery approval and pinned SSH inspection. Host admission
+validates installed roles, cluster/node/readiness parity, credential bundle and
+canonical writer quiescence. Preserve the normal activation path and sandbox.
+
+#### Verification Evidence
+
+Thirty-five focused recovery tests pass, including real bounded file inspection,
+secret exclusion, role/readiness drift, immutable pre-effect proof, stale CAS and
+store-level bypass attempts. The affected suite passes 613 tests; full project
+checks pass 3,020 unit tests, lint and types. Offline integration passes 101 tests
+with 64 native skips; native binary packaging is verified separately.
+
+Live replay rejects changed route scope before credential reconciliation or host
+installation and preserves the journal hash. The supported recovery successor was
+applied and both hosts materialized the candidate; final activation exposed an
+independent runtime sysctl write outside the service sandbox. After its source
+repair, normal supported resume completed with the original Compute identities,
+exact owner forwarding and a fenced ready standby. This proves the resumed
+activation segment. Subsequent clean Static and BGP tunnel/VM lifecycle
+qualification passed separately, as recorded in FEAT-023. A clean end-to-end
+live replay from the original pre-host checkpoint remains unverified; the later
+passing lifecycle trials do not replace that missing recovery-sequence proof.
+
+<!-- /FEATURE: FEAT-024 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 
@@ -6772,7 +7403,10 @@ If GCP still shows both routes with same priority:
 
 ## Failover
 
-### Automatic Failover (Active/Passive)
+### Automatic BGP Tunnel Failover (Active/Passive)
+
+These preferences apply to BGP tunnels on the forwarding VM when no manual HA
+override is active. The HA standby VM remains fenced.
 
 - Both tunnels stay UP (IPsec + BGP), but only the **active** path is used for data.
 - **Local selection:** FRR applies `local-preference` (active 200, passive 100) to pick the active path.
@@ -6786,9 +7420,10 @@ If GCP still shows both routes with same priority:
 
 **BFD compatibility:** Treat BFD as an explicit peer capability, not a generic BGP feature. Enable it only when the peer vendor/platform docs say BFD is supported for that specific VPN/BGP workflow and the negotiated timers are compatible.
 
-### Manual Failover (CLI)
+### Ordinary BGP Manual Failover (CLI)
 
-Use the CLI to force traffic onto the passive tunnel by shutting down the active BGP neighbor (IPsec stays up):
+On a regular (non-HA) BGP gateway, use the CLI to force traffic onto the passive
+tunnel by shutting down the active BGP neighbor (IPsec stays up):
 
 ```bash
 # If exactly two tunnels exist, auto-select the passive tunnel
@@ -6826,7 +7461,19 @@ nebius-vpngw failback tunnel <active-tunnel-name> --local-config-file <file>
 sudo vtysh -c "configure terminal" -c "router bgp <ASN>" -c "no neighbor <peer-ip> shutdown"
 ```
 
-Or reapply config / restart FRR to reset running state.
+For ordinary BGP, reapply config or restart FRR to reset this running state.
+
+### HA Static/BGP Manual Tunnel Selection
+
+HA commands submit a connection-scoped request to the current owner. Failover
+selects an eligible alternative; failback restores that connection's configured
+preferred path. Supply a name when selection is ambiguous. Static keeps unused
+alternatives cold; BGP retains backup sessions and uses import/export policy.
+Selection survives unchanged apply and service restart while ownership authority
+is unchanged. An authoritative owner change, including automatic takeover after
+startup fencing, resets selection. Use the public failback command to restore the
+preferred policy; see [FEAT-023](#feat-023-controller-owned-connection-tunnel-policy)
+for authority, verification and recovery rules.
 
 ## Static Routes Configuration
 

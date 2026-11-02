@@ -43,6 +43,10 @@ integration checkout before initial specification publication. The following
 execution and creates worker waves. This preserves the accepted source and
 keeps initial spec changes out of uncommitted worker inputs. These are internal
 workflow transitions, not additional public Worktree actions.
+The transition helper consistently selects the private execution with
+`--execution`, including worker reconciliation. Ordinary feature executions
+and document delivery slices use the same argument; it does not change task
+feature membership or coordinator authorization.
 The shared plan parser preserves multiline task contracts and ownership lists,
 and rejects empty fields, duplicate fields and malformed task headings before
 preparation. Implement and SDLC consume this same parser.
@@ -148,6 +152,12 @@ Use these boundaries:
 - After all children are integrated, publish only the accumulated source
   branch. Remove each child separately after its exact local integration proof
   is recorded.
+
+Owned SDLC verification profiles propagate through coordinator Git, linked
+workers, native dispatch and qualification subprocesses. The shared validator
+rechecks exact repository membership and fixed configuration before Git use;
+existing task leases, registration and promotion gates remain authoritative.
+Ordinary worktrees without a verifier profile keep their existing behavior.
 
 ## VS Code Worktree Discovery
 

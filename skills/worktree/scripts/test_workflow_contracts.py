@@ -2,6 +2,7 @@
 """Real-Git direct workflow contracts; native observations are explicit test stubs."""
 
 from pathlib import Path
+import os
 import shutil
 import tempfile
 import threading
@@ -23,6 +24,11 @@ class DirectExecutionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
         self.home = self.root / "home"
+        isolated_home = mock.patch.dict(os.environ, {
+            "CODEX_HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.home),
+        })
+        isolated_home.start()
+        self.addCleanup(isolated_home.stop)
         self.project = self.root / "project"
         self.project.mkdir()
         git(self.project, "init", "-q", "-b", "feature/source")
@@ -109,6 +115,46 @@ class DirectExecutionTests(unittest.TestCase):
             engine.prepare_specifications(self.run_dir, self.project, "FEAT-001")
         return engine.prepare_execution(
             self.run_dir, self.project, "FEAT-001", self.plan, 4
+        )
+
+    def test_execution_cli_prepares_and_reports_current_execution(self):
+        import workflow_transition
+
+        common = ["--run-dir", str(self.run_dir), "--execution", "FEAT-001"]
+        commands = [
+            ["prepare-specs", *common, "--project-root", str(self.project)],
+            ["prepare", *common, "--project-root", str(self.project),
+             "--plan", str(self.plan), "--capacity", "4"],
+            ["wave-prepare", *common, "--wave", "WAVE-001"],
+            ["status", *common],
+        ]
+        with mock.patch.object(workflow_transition, "runtime_session_identity",
+                               return_value=self.session):
+            for command in commands:
+                with self.subTest(command=command[0]):
+                    result = workflow_transition.execute(
+                        workflow_transition.parser().parse_args(command)
+                    )
+                    self.assertTrue(result)
+        self.assertTrue(engine.assignment_path(
+            self.run_dir, "FEAT-001", "WAVE-001", "TASK-001"
+        ).is_file())
+
+    def test_worker_reconciliation_uses_canonical_execution_flag(self):
+        import workflow_transition
+
+        args = workflow_transition.parser().parse_args([
+            "worker-reconcile", "--run-dir", str(self.run_dir),
+            "--execution", "FEAT-001", "--wave", "WAVE-001",
+            "--task", "TASK-001", "--termination", str(self.root / "stopped.json"),
+        ])
+        with mock.patch.object(workflow_transition, "runtime_session_identity",
+                               return_value=self.session), \
+                mock.patch.object(reconcile, "reconcile_worker") as observe:
+            workflow_transition.execute(args)
+        observe.assert_called_once_with(
+            self.run_dir, "FEAT-001", "WAVE-001", "TASK-001",
+            self.root / "stopped.json", self.session,
         )
 
     def test_multiline_contract_survives_assignment_serialization(self):
@@ -855,7 +901,7 @@ class DirectExecutionTests(unittest.TestCase):
                 "promote",
                 "--run-dir",
                 str(self.run_dir),
-                "--feature",
+                "--execution",
                 "FEAT-001",
                 "--evidence",
                 "not authority",

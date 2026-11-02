@@ -14,7 +14,7 @@ When `sdlc-classify-failure` routes an active Agentic SDLC failure here:
 - Do not commit product fixes, change tests or specifications, weaken
   acceptance, invoke general `design`, or call an SDLC design, plan, or
   implementation phase directly.
-- Return one `diagnosis-v1` to `sdlc-classify-failure`. The classifier remains
+- Return one `diagnosis-v2` to `sdlc-classify-failure`. The classifier remains
   authoritative for diagnosis validation, taxonomy, budget accounting,
   invalidation, and the next owner.
 - The result must be exactly one of: localized implementation defect, test
@@ -54,5 +54,5 @@ preserve. It defines the bug and repair boundary, not a speculative patch.
   the SDLC coordinator then routes to the recorded design, plan, or other
   owning phase.
 - In Agentic SDLC diagnostic mode, stop at the causal handoff. Emit
-  `diagnosis-v1`, remove temporary instrumentation, and return to
+  `diagnosis-v2`, remove temporary instrumentation, and return to
   classification without entering `REMEDIATED`.

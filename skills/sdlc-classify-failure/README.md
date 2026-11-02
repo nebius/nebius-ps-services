@@ -51,6 +51,11 @@ duplicate drift, malformed or sensitive evidence, unsupported redesign,
 repeated direct repair, semantic
 cycling, and exhausted blocker or feature budgets.
 
+Classification, remediation dispatch/completion and revalidation-route refresh
+select the private execution with `--execution`. The dispatcher passes that
+identity unchanged to the owning operation for both feature and delivery-slice
+executions; command-level tests cover the same interface used by native agents.
+
 Use `integrated_wave` when task integration is complete but combined validation
 has failed. Its proven localized diagnosis and counted dispatch authorize the
 execution owner's failure retirement and corrective plan. Immutable dispatch
@@ -65,7 +70,7 @@ gates; it never reopens the retired integration checkout.
 
 A successful repair with invalidations enters `revalidation_required`.
 `record-revalidation` advances one ordered gate at a time using immutable
-`revalidation-evidence-v1` whose source must be a structured phase-owned
+`revalidation-evidence-v2` whose source must be a structured phase-owned
 `passed` result. The helper verifies its file digest, current workflow
 fingerprints, immutable classification, successful dispatch, and cursor
 identity. Pre-commit evidence must match the live integration HEAD. Final

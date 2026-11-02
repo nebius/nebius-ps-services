@@ -12,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -78,7 +79,14 @@ def network():
             ns(endpoint, "ip", "addr", "add", f"{subnet}.2/24", "dev", endpoint_link)
             ns(endpoint, "ip", "link", "set", endpoint_link, "up")
         # Real saved policy is container-local and reset serially between cases.
-        ns(router, "ufw", "--force", "reset")
+        # UFW names backups with one-second precision and refuses to overwrite
+        # them. Fast consecutive cases must reserve a new timestamp first.
+        deadline = time.monotonic() + 2
+        while list(Path("/etc/ufw").glob(f"*.rules.{time.strftime('%Y%m%d_%H%M%S')}")):
+            assert time.monotonic() < deadline, "UFW fixture backup clock did not advance"
+            time.sleep(0.05)
+        reset = ns(router, "ufw", "--force", "reset", check=False)
+        assert reset.returncode == 0, reset.stderr
         ns(router, "ufw", "default", "deny", "incoming")
         ns(router, "ufw", "default", "deny", "outgoing")
         ns(router, "ufw", "--force", "enable")

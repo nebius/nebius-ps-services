@@ -5,7 +5,7 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Create a local, locked execution plan for exactly one feature. When the feature
+Create a local, locked execution plan for one admitted delivery slice. When it
 spans serial application layers, the plan preserves one end-to-end slice and
 expresses work as stable `TASK-*` records with dependencies, exact/prefix write
 claims, conflict domains, focused validation, done criteria, and stop conditions.
@@ -28,15 +28,15 @@ keeps the original evaluator oracle as the first regression target.
 
 ## Primary Inputs
 
-- One `FEAT-*`.
+- One `SLICE-*` with frozen `FEAT-*` and `REQ-*` membership.
 - Corresponding `REQ-*` blocks.
 - Context pack.
 - Current repo and feature state.
 
 ## Output
 
-- Local plan exists with its adjacent lock marker: `FEAT-001.plan.v1.md`
-  and `FEAT-001.plan.v1.md.lock`. Append `.lock` without replacing `.md`.
+- Local plan exists with its adjacent lock marker: `SLICE-001.plan.v1.md`
+  and `SLICE-001.plan.v1.md.lock`. Append `.lock` without replacing `.md`.
 - Plan contains test, implementation, validation, and evaluation steps.
 - Plan identifies the end-to-end slice or records why no vertical slice applies.
 - Task dependencies are acyclic; parallel candidates have disjoint ownership.

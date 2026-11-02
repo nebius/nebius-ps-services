@@ -14,6 +14,7 @@ from typing import Any
 
 from .contracts import (
     MAX_SPEC_BYTES,
+    git_environment,
     ProjectSpecError,
     digest,
     inspect_pair_bytes,
@@ -480,7 +481,7 @@ def publish_spec_pair(project_root: Path, *, expected_objective_sha256=None,
     import sys
     project = project_root.resolve()
     result = subprocess.run(["git", "-C", str(project), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                            capture_output=True, text=True, timeout=30, check=False)
+                            capture_output=True, text=True, timeout=30, check=False, env=git_environment(project))
     common = Path(result.stdout.strip()) if result.returncode == 0 else None
     registry = common / "workflow-spec-publication" if common is not None else None
     if registry is None or not (registry.exists() or registry.is_symlink()):

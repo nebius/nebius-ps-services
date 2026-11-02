@@ -14,7 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = ROOT / "global-context-management/assets/trusted_runtime_bootstrap.py.template"
 SUPPORT = ROOT / "global-context-management/scripts"
-FILES = ("trusted_runtime.py", "agent_runtime.py", "hook_runtime.py", "task_state_permissions.py")
+FILES = ("trusted_runtime.py", "agent_runtime.py", "hook_runtime.py", "task_state_permissions.py", "git_environment.py")
 
 
 class TrustedRuntimeTests(unittest.TestCase):

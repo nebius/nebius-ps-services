@@ -220,7 +220,7 @@ def load_assignment(path: Path) -> dict[str, object]:
             "WORKFLOW_UPGRADE_REQUIRED", "legacy worker assignment is unsupported"
         )
     if not isinstance(value, dict) or value.get("schema") != (
-        "workflow/worker-assignment-v1"
+        "workflow/worker-assignment-v2"
     ):
         raise DispatchError(
             "EXECUTION_STATE_INVALID", "worker assignment schema is invalid"
@@ -293,8 +293,8 @@ def load_assignment(path: Path) -> dict[str, object]:
     handoff_digest = unsigned_handoff.pop("handoff_digest", None)
     if (
         not isinstance(handoff, dict)
-        or handoff.get("schema") != "agentic-sdlc/incoming-handoff-v1"
-        or handoff.get("feature_id") != value.get("feature_id")
+        or handoff.get("schema") != "agentic-sdlc/incoming-handoff-v2"
+        or handoff.get("execution_id") != value.get("execution_id")
         or handoff.get("wave_id") != value.get("wave_id")
         or handoff.get("task_id") != value.get("task_id")
         or handoff_digest != value.get("incoming_handoff_digest")
@@ -315,8 +315,8 @@ def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
         "task-start",
         "--run-dir",
         str(run_dir),
-        "--feature",
-        str(assignment["feature_id"]),
+        "--execution",
+        str(assignment["execution_id"]),
         "--wave",
         str(assignment["wave_id"]),
         "--task",
@@ -328,6 +328,7 @@ def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
     ]
     instructions = [
         "Implement exactly one immutable workflow worker assignment.",
+        "Read the incoming handoff; retrieve digest-bound predecessor results only when their bounded summaries are insufficient.",
         "Run the task-start command represented by this JSON argv before editing:",
         json.dumps(start),
         "Run direct task-heartbeat commands at least every "
@@ -340,8 +341,8 @@ def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
                 "task-heartbeat",
                 "--run-dir",
                 str(run_dir),
-                "--feature",
-                str(assignment["feature_id"]),
+                "--execution",
+                str(assignment["execution_id"]),
                 "--wave",
                 str(assignment["wave_id"]),
                 "--task",
@@ -388,8 +389,8 @@ def _transition(
         action,
         "--run-dir",
         str(assignment["run_dir"]),
-        "--feature",
-        str(assignment["feature_id"]),
+        "--execution",
+        str(assignment["execution_id"]),
         "--wave",
         str(assignment["wave_id"]),
         "--task",
@@ -402,6 +403,7 @@ def _transition(
         completed = subprocess.run(
             command,
             cwd=str(assignment["scope_cwd"]),
+            env=runtime_environment(cwd=Path(assignment["scope_cwd"])),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -503,7 +505,7 @@ def dispatch_sequential(
             process = subprocess.Popen(
                 command,
                 cwd=str(assignment["scope_cwd"]),
-                env=runtime_environment(selected, fresh_session=True),
+                env=runtime_environment(selected, fresh_session=True, cwd=Path(assignment["scope_cwd"])),
                 stdin=subprocess.PIPE,
                 text=True,
                 stdout=subprocess.PIPE,

@@ -57,6 +57,9 @@ Agentic SDLC checkpoints.
 - Do not create, open, update, review, merge, or close pull requests.
 - Do not replace `sdlc-commit`; that skill is only for Agentic SDLC feature
   checkpoints with SDLC evidence and local run state.
+  An SDLC objective mentioning its eventual commit phase does not request a
+  standalone root transaction. Do not call root `begin` before SDLC admission
+  or its branch preparation; preserve the coordinator's own commit authority.
 - Do not create branches, switch branches, pull, merge, rebase, cherry-pick,
   revert, stash, reset, amend, squash, or repair divergence.
 - Do not stage a partial pathspec or project-scoped path. This skill always

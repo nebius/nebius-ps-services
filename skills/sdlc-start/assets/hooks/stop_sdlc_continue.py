@@ -151,7 +151,6 @@ REVALIDATION_ROUTES = {
 
 def _normalize_skill_name(value: str) -> str:
     aliases = {
-        "align-specs": "align",
         "auto-steering": "sdlc-auto-steering",
         "classify-failure": "sdlc-classify-failure",
         "commit": "sdlc-commit",
@@ -276,54 +275,6 @@ def _continue_normally() -> dict[str, Any]:
     return {"continue": True}
 
 
-def _feature_items(feature_queue: dict[str, Any]) -> list[dict[str, Any]]:
-    for key in ("features", "queue", "items"):
-        value = feature_queue.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
-
-
-def _all_features_committed(feature_queue: dict[str, Any]) -> bool:
-    features = _feature_items(feature_queue)
-    if not features:
-        return False
-    committed_states = {
-        "committed",
-        "uat",
-        "pr-ready",
-        "pr",
-        "review",
-        "merged",
-        "complete",
-        "completed",
-    }
-    for feature in features:
-        status = str(feature.get("status") or feature.get("phase") or "").lower()
-        if not feature.get("committed") and status not in committed_states:
-            return False
-    return True
-
-
-def _uat_passed(feature_queue: dict[str, Any], current_state: dict[str, Any]) -> bool:
-    for source in (
-        feature_queue.get("uat"),
-        current_state.get("uat"),
-        current_state.get("evidence"),
-    ):
-        if isinstance(source, dict):
-            status = str(
-                source.get("status") or source.get("uat") or source.get("result") or ""
-            ).lower()
-            if status in {"pass", "passed", "success"}:
-                return True
-    return str(current_state.get("uat_status") or "").lower() in {
-        "pass",
-        "passed",
-        "success",
-    }
-
-
 def _uat_failed_addressable(current_state: dict[str, Any]) -> bool:
     status = str(current_state.get("uat_status") or "").lower()
     failure = str(
@@ -374,10 +325,10 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
     except (json.JSONDecodeError, OSError):
         return "Agentic SDLC repair state is unreadable."
     if (
-        control.get("schema") != "agentic-sdlc/repair-control-v1"
-        or event.get("schema") != "agentic-sdlc/failure-event-v1"
-        or control.get("feature_id") != current_state.get("current_feature")
-        or event.get("feature_id") != current_state.get("current_feature")
+        control.get("schema") != "agentic-sdlc/repair-control-v2"
+        or event.get("schema") != "agentic-sdlc/failure-event-v2"
+        or control.get("execution_id") != current_state.get("current_execution")
+        or event.get("execution_id") != current_state.get("current_execution")
         or control.get("current_event_id") != event.get("event_id")
         or control.get("active_blocker", {}).get("blocker_key")
         != event.get("blocker_key")
@@ -419,7 +370,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         completed_ids = revalidation.get("completed_revalidation_ids")
         cursor = revalidation.get("cursor")
         if (
-            revalidation.get("schema") != "agentic-sdlc/revalidation-cursor-v1"
+            revalidation.get("schema") != "agentic-sdlc/revalidation-cursor-v2"
             or revalidation.get("classification_id")
             != control.get("current_classification_id")
             or not isinstance(required, list)
@@ -435,7 +386,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         classification_path = (
             active.run_dir
             / "repairs"
-            / str(current_state.get("current_feature"))
+            / str(current_state.get("current_execution"))
             / "classifications"
             / f"{classification_id}.json"
         )
@@ -457,10 +408,10 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         ).hexdigest()
         invalidated_surfaces = classification.get("invalidates")
         if (
-            classification.get("schema") != "agentic-sdlc/failure-classification-v1"
+            classification.get("schema") != "agentic-sdlc/failure-classification-v2"
             or recorded_classification_id != classification_id
             or calculated_classification_id != classification_id
-            or classification.get("feature_id") != current_state.get("current_feature")
+            or classification.get("execution_id") != current_state.get("current_execution")
             or classification.get("event_id") != event.get("event_id")
             or classification.get("blocker_key") != event.get("blocker_key")
             or not isinstance(invalidated_surfaces, list)
@@ -477,7 +428,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             for surface in invalidated_surfaces
         ]
         cursor_projection = {
-            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "schema": "agentic-sdlc/revalidation-cursor-v2",
             "classification_id": classification_id,
             "repair_dispatch_id": revalidation.get("repair_dispatch_id"),
             "required": expected_required,
@@ -521,7 +472,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             evidence_path = (
                 active.run_dir
                 / "repairs"
-                / str(current_state.get("current_feature"))
+                / str(current_state.get("current_execution"))
                 / "revalidations"
                 / f"{revalidation_id}.json"
             )
@@ -554,8 +505,8 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             if (
                 recorded_id != revalidation_id
                 or calculated_id != revalidation_id
-                or evidence.get("schema") != "agentic-sdlc/revalidation-evidence-v1"
-                or evidence.get("feature_id") != current_state.get("current_feature")
+                or evidence.get("schema") != "agentic-sdlc/revalidation-evidence-v2"
+                or evidence.get("execution_id") != current_state.get("current_execution")
                 or evidence.get("event_id") != event.get("event_id")
                 or evidence.get("classification_id")
                 != control.get("current_classification_id")
@@ -576,9 +527,9 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
                 return "Agentic SDLC gate evidence is unreadable."
             if (
                 not isinstance(gate_evidence, dict)
-                or gate_evidence.get("schema") != "agentic-sdlc/gate-evidence-v1"
-                or gate_evidence.get("feature_id")
-                != current_state.get("current_feature")
+                or gate_evidence.get("schema") != "agentic-sdlc/gate-evidence-v2"
+                or gate_evidence.get("execution_id")
+                != current_state.get("current_execution")
                 or gate_evidence.get("surface") != evidence.get("surface")
                 or gate_evidence.get("owner_skill")
                 != evidence.get("next_recommended_skill")
@@ -595,7 +546,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             coordinator_path = (
                 active.run_dir
                 / "execution"
-                / str(current_state.get("current_feature"))
+                / str(current_state.get("current_execution"))
                 / "coordinator.json"
             )
             try:
@@ -603,7 +554,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             except (json.JSONDecodeError, OSError):
                 return "Agentic SDLC execution coordinator is unreadable."
             integration_value = coordinator.get("integration_worktree")
-            if coordinator.get("schema") != "workflow/execution-coordinator-v1":
+            if coordinator.get("schema") != "workflow/execution-coordinator-v2":
                 return "Agentic SDLC execution coordinator is inconsistent."
             fingerprint_ids = current_state.get("fingerprint_ids")
             current_fingerprints: dict[str, str] = {}
@@ -652,7 +603,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         except (json.JSONDecodeError, OSError):
             return "Agentic SDLC diagnosis is unreadable."
         if (
-            diagnosis.get("schema") != "agentic-sdlc/diagnosis-v1"
+            diagnosis.get("schema") != "agentic-sdlc/diagnosis-v2"
             or diagnosis.get("diagnosis_id") != control.get("current_diagnosis_id")
             or diagnosis.get("event_id") != event.get("event_id")
             or diagnosis.get("blocker_key") != event.get("blocker_key")
@@ -667,7 +618,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         classification_path = (
             active.run_dir
             / "repairs"
-            / str(current_state.get("current_feature"))
+            / str(current_state.get("current_execution"))
             / "classifications"
             / f"{classification_id}.json"
         )
@@ -692,10 +643,10 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         history = control.get("route_history")
         latest_route = history[-1] if isinstance(history, list) and history else {}
         if (
-            classification.get("schema") != "agentic-sdlc/failure-classification-v1"
+            classification.get("schema") != "agentic-sdlc/failure-classification-v2"
             or classification.get("classification_id") != classification_id
             or recorded_classification_id != calculated_classification_id
-            or classification.get("feature_id") != current_state.get("current_feature")
+            or classification.get("execution_id") != current_state.get("current_execution")
             or classification.get("event_id") != event.get("event_id")
             or classification.get("blocker_key") != event.get("blocker_key")
             or latest_route.get("classification_id") != classification_id
@@ -744,7 +695,7 @@ def _max_iterations(current_state: dict[str, Any]) -> int:
 def _bound_project(active, run_state: dict[str, Any]) -> str | None:
     # load_active_run has already verified the native session binding, run and
     # immutable objective ancestry. Continuation never reconstructs prompt files.
-    if (run_state.get("schema") != "workflow/run-v1"
+    if (run_state.get("schema") != "workflow/run-v2"
             or run_state.get("owner") != "agentic-sdlc"
             or run_state.get("run_id") != active.run_id):
         return None
@@ -759,7 +710,7 @@ def _continuation_prompt(
             f"Use ${COORDINATOR_SKILL} continue {shlex.quote(project_folder)}",
             "Continue the active SDLC run from local state.",
             "",
-            f"Current feature: {current_state.get('current_feature') or '<none>'}",
+            f"Current execution: {current_state.get('current_execution') or '<none>'}",
             f"Current phase: {current_state.get('current_phase') or '<unknown>'}",
             f"Next recommended skill: {_normalize_skill_name(next_skill)}",
             f"Reason: {reason}",
@@ -845,7 +796,6 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         run_state = load_json(active.run_json_path) or {}
         current_state = load_json(active.current_state_path) or {}
-        feature_queue = load_json(active.feature_queue_path) or {}
     except json.JSONDecodeError:
         return stop("SDLC state is corrupt and needs repair.")
 
@@ -875,8 +825,8 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if repair_reason:
         return stop(repair_reason)
 
-    if _current_iteration(current_state) >= _max_iterations(current_state):
-        return stop("Max SDLC iterations reached.")
+    if _current_iteration(current_state) - int(run_state.get("continuation_window_start", 0)) >= _max_iterations(current_state):
+        return stop("Max SDLC iterations reached; resumable checkpoint. Explicit continue starts another bounded window; failure and no-progress budgets remain.")
 
     retry_phase = _retry_exceeded(current_state)
     if retry_phase:
@@ -915,16 +865,6 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         _record_continuation(active, payload, digest, no_progress, steering_reason)
         return continue_with(prompt)
 
-    if _all_features_committed(feature_queue) and not _uat_passed(
-        feature_queue, current_state
-    ):
-        reason = "all features are committed and UAT has not passed"
-        prompt = _continuation_prompt(
-            current_state, "sdlc-uat-tests", reason, project_folder
-        )
-        _record_continuation(active, payload, digest, no_progress, reason)
-        return continue_with(prompt)
-
     if _uat_failed_addressable(current_state):
         reason = "UAT failed with an addressable classification"
         prompt = _continuation_prompt(
@@ -934,9 +874,16 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         return continue_with(prompt)
 
     if next_skill == "sdlc-merge-pr":
-        return stop(
-            "Merge requires an explicit user request and will not be continued automatically."
-        )
+        objective = load_json(active.run_dir / "objective.json") or {}
+        revisions = objective.get("revisions", [])
+        snapshot = load_json(active.run_dir / revisions[-1]["snapshot"]) if revisions else {}
+        completion = (snapshot or {}).get("completion", {})
+        execution_id = current_state.get("current_execution")
+        if (completion.get("boundary") != "merge-verified"
+                or execution_id not in completion.get("delivery_scope", [])):
+            return stop("Merge requires an explicit user request in the accepted run completion policy.")
+        # Continuation only routes the coordinator. The protected delivery owner
+        # independently admits exact source, review, live and GitHub evidence.
     if next_skill:
         reason = f"state recommends {next_skill}"
         prompt = _continuation_prompt(

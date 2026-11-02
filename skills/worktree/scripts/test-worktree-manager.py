@@ -121,10 +121,19 @@ class WorktreeManagerTest(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
+        # This fixture compares lock namespaces, not Git-environment admission.
+        # The verifier isolates Git config; commit correctly rejects those
+        # inherited overrides. Give this in-process fixture its own clean env.
+        environment = {
+            key: value for key, value in os.environ.items()
+            if key not in module.REPOSITORY_SHAPING_GIT_ENV
+            and not key.startswith(module.REPOSITORY_SHAPING_GIT_ENV_PREFIXES)
+        }
         for agent in ("codex", "claude"):
             with self.subTest(agent=agent), mock.patch.dict(os.environ, {
-                "SKILLS_AGENT": agent, "CLAUDE_CONFIG_DIR": str(self.root / "claude")
-            }):
+                **environment, "SKILLS_AGENT": agent,
+                "CLAUDE_CONFIG_DIR": str(self.root / "claude")
+            }, clear=True):
                 os.environ.pop("CODEX_THREAD_ID", None)
                 expected = module._transaction_root(module._common_dir(self.repo))
                 self.assertEqual(interop_state._commit_transaction_root(self.repo), expected)

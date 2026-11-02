@@ -241,7 +241,7 @@ def vm_ha_effective_resource_bindings(
     effective = {
         key: value
         for key, value in bindings.items()
-        if not key.startswith(_PASSIVE_REPLACEMENT_AUDIT_PREFIXES)
+        if not key.startswith((*_PASSIVE_REPLACEMENT_AUDIT_PREFIXES, "prehost-superseded-"))
     }
     member_cycles: dict[str, set[int]] = {}
     for key in bindings:
@@ -2061,6 +2061,15 @@ def _validate_successor(
         and successor.transaction.operation_id != previous.transaction.operation_id
     ):
         _validate_destroyed_reprovision_successor(previous, successor)
+        return
+    if (
+        previous.status is VMHALifecycleStatus.PROVISIONING
+        and successor.status is VMHALifecycleStatus.PROVISIONING
+        and successor.transaction.operation_id != previous.transaction.operation_id
+    ):
+        from .vm_ha_prehost import validate_prehost_successor
+
+        validate_prehost_successor(previous, successor)
         return
     if (
         previous.status is VMHALifecycleStatus.ACTIVATING

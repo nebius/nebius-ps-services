@@ -162,22 +162,35 @@ def onboarding_configure(
     if tag is not None:
         cfg["tags"] = tag
     if interactive:
-        cli.console.print(
-            "Review the exact administrator-approved settings. No enrollment happens in this wizard."
+        from .tailscale_wizard import (
+            print_auth_guidance,
+            print_comment,
+            print_guidance,
+            prompt_rules,
+            prompt_tags,
+        )
+
+        print_comment(
+            "Review approved settings before activation. This wizard does not enroll routers."
         )
         for key, hint in (
             ("tailnet", "string"),
             ("tags", "list(string)"),
             ("routes", "list(string)"),
         ):
-            answer, stop = cli._prompt_scalar_override(
-                "tailscale." + key, cfg.get(key), type_hint=hint, required=True
-            )
+            print_guidance("tailscale." + key)
+            if key == "tags":
+                answer, stop = prompt_tags(cfg.get(key), "tailscale.tags")
+            else:
+                answer, stop = cli._prompt_scalar_override(
+                    "tailscale." + key, cfg.get(key), type_hint=hint, required=True
+                )
             if stop or cli._wizard_backtrack_requested(answer):
                 return
             cfg[key] = answer
         for key in ("owner", "purpose", "environment"):
             onboarding = cfg.setdefault("onboarding", {})
+            print_guidance("tailscale.onboarding." + key)
             answer, stop = cli._prompt_scalar_override(
                 "tailscale.onboarding." + key,
                 onboarding.get(key, ""),
@@ -194,20 +207,26 @@ def onboarding_configure(
             (cfg["policy"], "auto_approve", "bool", True),
             (cfg["onboarding"], "admin_requirements", "list(string)", []),
         ):
+            prefix = "onboarding." if key == "admin_requirements" else "policy."
+            field = "tailscale." + ("" if key == "approval" else prefix) + key
+            print_guidance(field)
             answer, stop = cli._prompt_scalar_override(
-                "tailscale." + key, container.get(key, default), type_hint=hint, required=False
+                field,
+                container.get(key, default),
+                type_hint=hint,
+                required=False,
+                show_empty_default=key == "tag_owners",
             )
             if stop or cli._wizard_backtrack_requested(answer):
                 return
             container[key] = answer
-        from .tailscale_wizard import prompt_rules
-
         rules, stop = prompt_rules(
             cfg.get("policy", {}).get("rules", []), candidate, "tailscale.policy.rules"
         )
         if stop or cli._wizard_backtrack_requested(rules):
             return
         cfg.setdefault("policy", {})["rules"] = rules
+        print_auth_guidance()
     if missing(candidate):
         raise ValueError(
             "Complete administrator request settings: " + ", ".join(missing(candidate))
