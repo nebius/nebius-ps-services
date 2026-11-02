@@ -7208,7 +7208,8 @@ Heartbeat v4 separates service health, transfer readiness, local forwarding
 readiness, and observed data-plane mode. Readiness is tri-state. Cold static
 standby can be transfer-ready while local forwarding readiness is false.
 Controller mutations invalidate advisory health through a local revision.
-Unknown owner health starts the existing five-second suspicion interval.
+Fresh unknown owner observations receive the grace described below before the
+existing five-second suspicion interval. Stale delivery retains its existing policy.
 Healthy evidence cancels suspicion only before transfer starts. The five-second
 repair budget and one-second fencing reserve remain unchanged. Repair completion
 wakes sampling, but recovery delivery before suspicion expires is not guaranteed.
@@ -7243,3 +7244,44 @@ read showing ownership loss still schedules fencing. Errors from mutations,
 including retryable SDK errors, retain the existing guarded recovery behavior.
 Availability handling does not weaken the former-owner Stopped proof or exact
 candidate attachment required for takeover and activation.
+
+### Observation grace and partial forwarding
+
+`ObservationGrace` tracks consecutive failures and elapsed monotonic time for
+cloud queries, local queries and accepted unknown peer samples independently.
+Its threshold is three failures over at least ten seconds. A cloud timeout
+aborts the iteration and retries, with structured grace diagnostics. Reaching
+the cloud threshold does not change forwarding. Local query failure produces
+explicit unavailable readiness, rather than synthesizing four confirmed failures.
+The snapshot adapter counts failed local observations. Its last mode can preserve
+existing forwarding during grace but never authorizes activation. Proven durable
+authority conflicts remain immediate safety failures.
+
+Heartbeats retain null health for unavailable local observations. The receiver
+tracks distinct fresh authenticated frames, grants observation grace, then starts
+normal five-second suspicion. It does not refresh the timer from replay or stale
+healthy samples. Confirmed failed health, blocked mode, stale delivery and an
+effect-backed transfer retain their separate handling. No wire or checkpoint
+fields were added, and no additional worker or daemon is needed.
+
+`forwarding_ready` represents existing-owner service with usable configured paths.
+`promotion_ready` remains strict across required destinations and policies. A
+failed connection with another usable path produces degraded connection status
+and a healthy forwarding heartbeat. Established BGP neighbors must retain exact
+observed exports. A disconnected neighbor's missing export query does not prove
+global policy drift, but unavailable observations on established neighbors and
+positive policy violations remain distinct from ordinary connection loss.
+
+Static repair compares selected usable routes with installed routes and replaces
+only stale destinations. Scoped failures retain healthy forwarding, with bounded
+retry opportunities. IKE/BGP protocol recovery retains existing per-peer behavior.
+Automatic repair no longer restarts running strongSwan/FRR or reloads all tunnels.
+It starts only confirmed stopped services. Complete path loss keeps the existing
+repair/fencing budget, and ownership or route-authority violations remain strict.
+
+Status exposes observation streaks, degraded connections and forwarding
+continuity. The ordinary agent may defer a reload when current-boot and generation
+evidence proves that continuity. It performs no activation or data-plane writes
+on that path. Fresh activation and ordinary forwarding writers still require the
+strict readiness gate. The guarded upgrade requires
+`vm-ha-independent-heartbeat-v2` and bundles the helper for isolated recovery.

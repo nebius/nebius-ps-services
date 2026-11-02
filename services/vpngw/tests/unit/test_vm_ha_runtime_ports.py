@@ -1127,7 +1127,7 @@ def _repair_action(*, deadline: float, reasons: tuple[str, ...]) -> ControllerAc
     )
 
 
-def test_local_repair_uses_only_the_budget_before_reserved_fence(tmp_path: Path) -> None:
+def test_bgp_path_repair_does_not_restart_frr(tmp_path: Path) -> None:
     calls: list[tuple[tuple[str, ...], float]] = []
 
     def runner(argv, timeout: float) -> CommandResult:
@@ -1145,15 +1145,10 @@ def test_local_repair_uses_only_the_budget_before_reserved_fence(tmp_path: Path)
 
     runtime.repair_local(_repair_action(deadline=15.0, reasons=("bgp-not-ready",)))
 
-    assert calls == [
-        (
-            (DataPlaneCommandSet().systemctl, "reload-or-restart", "frr"),
-            4.0,
-        )
-    ]
+    assert calls == []
 
 
-def test_xfrm_loss_repairs_the_encrypted_path_before_bgp(tmp_path: Path) -> None:
+def test_remote_xfrm_loss_does_not_restart_healthy_daemons(tmp_path: Path) -> None:
     calls: list[tuple[str, ...]] = []
 
     def runner(argv, _timeout: float) -> CommandResult:
@@ -1176,25 +1171,19 @@ def test_xfrm_loss_repairs_the_encrypted_path_before_bgp(tmp_path: Path) -> None
         )
     )
 
-    assert calls == [
-        (
-            DataPlaneCommandSet().systemctl,
-            "restart",
-            "strongswan-starter",
-            "frr",
-        ),
-        (DataPlaneCommandSet().swanctl, "--load-all", "--noprompt"),
-    ]
+    assert calls == []
 
 
-def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) -> None:
+def test_stopped_service_recovery_respects_reserved_fence(tmp_path: Path) -> None:
     now = [10.0]
     calls: list[tuple[str, ...]] = []
 
     def runner(argv, _timeout: float) -> CommandResult:
         command = tuple(argv)
         calls.append(command)
-        if command[1:] == ("reload-or-restart", "frr"):
+        if command[1:] == ("is-active", "--quiet", "frr"):
+            return CommandResult(3, "")
+        if command[1:] == ("start", "frr"):
             now[0] = 14.1
         if command[1:] == ("-n", "net.ipv4.ip_forward"):
             return CommandResult(0, "0\n")
@@ -1209,10 +1198,12 @@ def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) ->
         monotonic_clock=lambda: now[0],
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("bgp-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("local-service-unhealthy",)))
 
     assert calls == [
-        (DataPlaneCommandSet().systemctl, "reload-or-restart", "frr"),
+        (DataPlaneCommandSet().systemctl, "is-active", "--quiet", "strongswan-starter"),
+        (DataPlaneCommandSet().systemctl, "is-active", "--quiet", "frr"),
+        (DataPlaneCommandSet().systemctl, "start", "frr"),
         (DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"),
         (DataPlaneCommandSet().sysctl, "-n", "net.ipv4.ip_forward"),
     ]
@@ -1239,7 +1230,7 @@ def test_expired_local_repair_physically_fences_without_routing_lock(tmp_path: P
         monotonic_clock=lambda: 14.1,
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("xfrm-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("local-service-unhealthy",)))
 
     assert calls == [
         (DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"),
@@ -1281,7 +1272,9 @@ def test_readiness_fails_closed_while_passive_services_are_not_materialized(
         data_plane_factory=UnavailableDataPlane,
     )
 
-    assert ports.routes.readiness() == LocalReadiness(False, False, False, False)
+    assert ports.routes.readiness() == LocalReadiness(
+        False, False, False, False, observation_available=False
+    )
     ports.close()
 
 

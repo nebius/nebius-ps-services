@@ -145,6 +145,8 @@ def readiness(data_plane):
     routes = object.__new__(BoundRouteRuntime)
     routes.data_plane = data_plane
     routes.static_manifest = SimpleNamespace(prefixes=frozenset({PREFIX}))
+    routes.connection_prefixes = {"site-a": {PREFIX}}
+    routes.connection_sessions = {}
     routes.bgp_policies = []
     routes.expected_import_policy_digest = hashlib.sha256(b"{}").hexdigest()
     return routes.readiness()

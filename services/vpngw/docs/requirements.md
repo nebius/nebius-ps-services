@@ -2771,8 +2771,9 @@ Stopped fencing, route authority, and ordinary non-HA behavior remain unchanged.
 
 The advisory protocol must distinguish transfer readiness from forwarding
 readiness and actual mode, represent unavailable checks explicitly, report
-observation age, and reject unsupported versions. Unknown owner health starts or
-continues suspicion without extending its deadline. Cold static standby must not
+observation age, and reject unsupported versions. Stale delivery starts or
+continues suspicion without extending its deadline. Fresh unavailable local
+observations receive the bounded grace defined below. Cold static standby must not
 be classified as unready solely because tunnels are intentionally absent.
 
 Validation must cover concurrent blocking calls, aggregate sampling deadlines,
@@ -2794,3 +2795,46 @@ their exact durable identity until fresh observations permit recovery. Cold
 starts remain guarded. Positive authoritative evidence of ownership loss still
 fences, as do existing local safety failures and uncertain mutation outcomes.
 Cloud read recovery must use fresh evidence, never cached ownership authority.
+
+### VM-HA local observation grace and connection isolation
+
+Cloud and local query failures use the same observation-grace mechanism with
+independent per-source timers. A failed local query is unknown, not evidence
+that every service or tunnel failed. Existing-owner forwarding continues until
+at least three consecutive failed observations span at least ten seconds.
+Successful observations reset the streak. Expired local uncertainty may fence.
+Expired cloud uncertainty remains informational and never fences by itself.
+Timers use a monotonic clock and reset on a guarded controller restart.
+
+Fresh unknown peer health receives the same grace before the existing
+five-second suspicion window starts. Count distinct authenticated frames, not
+repeated evaluation of the same frame. Stale samples cannot refresh the grace,
+and confirmed failure or an already-started transfer bypasses it. Missing or
+stale heartbeat delivery retains its existing detection and suspicion policy.
+
+An established owner may remain active with one failed connection when another
+configured encrypted path remains usable, services are healthy and observed
+import/export policy remains safe. Report the affected connections and degraded
+state without advertising full promotion readiness. Heartbeats must represent
+remaining forwarding capability independently of promotion/transfer readiness.
+New activation still requires all existing readiness and ownership proofs.
+
+Repair replaces only stale static routes with selected usable paths. Connection
+loss alone must not restart or reload strongSwan/FRR or clear healthy sessions.
+Keep existing protocol reconnect behavior. Confirmed stopped local services may
+be started individually, without restarting a running alternative strongSwan
+service. Failed scoped route repair does not fence healthy connections and may
+retry within bounded attempts. Complete path loss retains the existing repair
+budget and takeover policy.
+
+During observation grace or repair, an ordinary agent reload may defer without
+changing services, routes, exports or forwarding. Deferral requires the current
+boot, generation, active guard and controller-granted forwarding continuity.
+It grants no authority to activate or re-enable forwarding.
+
+The guarded upgrade requires independent-heartbeat capability v2 on both agents
+and the observation helper in both wheel and package-independent recovery bundle.
+Heartbeat v4 and checkpoint formats remain unchanged. Validate query recovery,
+grace boundaries, replay/staleness, partial static/BGP loss, scoped repair errors,
+ownership loss and apply inhibition. No live qualification is implied by local
+test success.

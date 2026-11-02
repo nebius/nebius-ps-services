@@ -434,7 +434,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
     assert status["state"] == "blocked"
     assert status["reasons"] == ["mtls-rotation-active"]
     assert status["controller_capabilities"] == [
-        "vm-ha-independent-heartbeat-v1",
+        "vm-ha-independent-heartbeat-v2",
         "vm-ha-mtls-rotation-quiescence-v1",
         "vm-ha-live-peer-replacement-v4",
         "vm-ha-standby-replacement-inhibition-v2",

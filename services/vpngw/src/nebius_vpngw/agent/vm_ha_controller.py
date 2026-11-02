@@ -16,6 +16,10 @@ from enum import Enum
 from typing import Protocol
 
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
+from nebius_vpngw.agent.vm_ha.observation import (
+    OBSERVATION_FAILURE_LIMIT,
+    OBSERVATION_GRACE_SECONDS,
+)
 
 
 class HAState(str, Enum):
@@ -115,11 +119,36 @@ class LocalReadiness:
     static_route_repair_ready: bool = False
     cold_standby_ready: bool = False
     routing_hygiene_ready: bool = True
+    observation_available: bool = True
+    observation_failures: int = 0
+    observation_failure_age: float = 0.0
+    partial_path_available: bool = False
+    static_route_repair_required: bool = False
+    degraded_connections: tuple[str, ...] = ()
+
+    @property
+    def observation_grace_expired(self) -> bool:
+        return bool(
+            not self.observation_available
+            and self.observation_failures >= OBSERVATION_FAILURE_LIMIT
+            and self.observation_failure_age >= OBSERVATION_GRACE_SECONDS
+        )
+
+    @property
+    def forwarding_ready(self) -> bool:
+        """An existing owner may retain usable paths with a failed connection."""
+
+        return (
+            self.observation_available
+            and self.service_healthy
+            and (self.promotion_ready or self.partial_path_available)
+        )
 
     @property
     def promotion_ready(self) -> bool:
         return all(
             (
+                self.observation_available,
                 self.service_healthy,
                 self.static_ready,
                 self.bgp_ready,
@@ -133,8 +162,10 @@ class LocalReadiness:
         """Return whether a non-owner can safely enter the fenced transfer chain."""
 
         repairable = self.static_route_repair_ready and self.service_healthy and self.bgp_ready
-        return self.routing_hygiene_ready and (
-            self.promotion_ready or self.cold_standby_ready or repairable
+        return (
+            self.observation_available
+            and self.routing_hygiene_ready
+            and (self.promotion_ready or self.cold_standby_ready or repairable)
         )
 
     @property
@@ -255,6 +286,7 @@ class ControllerSnapshot:
     apply_owner_adoption: bool = False
     transfer_inhibited: bool = False
     standby_replacement_inhibited: bool = False
+    peer_observation_grace: bool = False
 
     def __post_init__(self) -> None:
         if not all(
@@ -567,6 +599,20 @@ class VMHAController:
                 and pending.kind not in _LOCAL_SAFETY_ACTIONS
             ):
                 return self._wait_for_cloud(snapshot, checkpoint)
+            if (
+                not snapshot.readiness.observation_available
+                and pending.kind not in _LOCAL_SAFETY_ACTIONS
+                and snapshot.guard_boot_id == snapshot.boot_id
+                and not snapshot.apply_locked
+                and (
+                    snapshot.data_plane_mode is not DataPlaneMode.ACTIVE
+                    or (
+                        snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+                        and self._routes_current(snapshot, checkpoint)
+                    )
+                )
+            ):
+                return self._wait_for_local_observation(snapshot, checkpoint)
             postcondition_met = self.pending_action_postcondition(
                 pending,
                 snapshot,
@@ -841,13 +887,28 @@ class VMHAController:
 
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
         routes_current = self._routes_current(snapshot, checkpoint)
+        if (
+            not snapshot.readiness.observation_available
+            and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+            and routes_current
+        ):
+            return self._wait_for_local_observation(snapshot, checkpoint)
         repair = checkpoint.repair_attempt
         if repair is not None and not self._repair_attempt_matches(repair, snapshot, checkpoint):
             checkpoint = replace(checkpoint, repair_attempt=None)
             repair = None
 
         if not parity_reasons and routes_current:
-            if snapshot.readiness.promotion_ready and not snapshot.readiness.path_degraded:
+            if (
+                snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                and snapshot.readiness.static_route_repair_required
+                and (
+                    repair is None
+                    or (snapshot.readiness.forwarding_ready and snapshot.now >= repair.deadline_at)
+                )
+            ):
+                return self._repair_action(snapshot, checkpoint)
+            if snapshot.readiness.forwarding_ready and not snapshot.readiness.path_degraded:
                 checkpoint, waiting_for_health = self._record_repair_health(snapshot, checkpoint)
                 repair = checkpoint.repair_attempt
                 if waiting_for_health:
@@ -857,7 +918,7 @@ class VMHAController:
                         snapshot,
                         replace(checkpoint, state=HAState.REPAIRING),
                     )
-            elif snapshot.readiness.promotion_ready and snapshot.readiness.path_degraded:
+            elif snapshot.readiness.forwarding_ready and snapshot.readiness.path_degraded:
                 checkpoint = self._reset_repair_health(checkpoint)
             elif repair is not None:
                 return self._existing_repair_decision(snapshot, checkpoint, repair)
@@ -882,11 +943,13 @@ class VMHAController:
                     checkpoint,
                     ActionKind.DISABLE_ACTIVE,
                 )
-            if reasons:
-                state = HAState.DEGRADED
-            elif snapshot.readiness.path_degraded:
+            if snapshot.readiness.path_degraded:
                 state = HAState.DEGRADED_PATH
-                reasons = snapshot.readiness.degraded_reasons or ("redundant-path-degraded",)
+                reasons = (
+                    reasons or snapshot.readiness.degraded_reasons or ("redundant-path-degraded",)
+                )
+            elif reasons:
+                state = HAState.DEGRADED
             else:
                 state = HAState.ACTIVE
             return self._result(
@@ -1107,6 +1170,18 @@ class VMHAController:
         cloud = snapshot.cloud
         suspect_since = checkpoint.suspect_since
         if not self._planned_transfer_requested(snapshot):
+            if (
+                snapshot.peer_observation_grace
+                and not snapshot.transfer_effect_started
+                and checkpoint.suspect_since is None
+                and cloud.former_owner_compute_state is not ComputeState.STOPPED
+            ):
+                return self._result(
+                    HAState.NORMAL,
+                    ("peer-local-observation-grace-active",),
+                    snapshot,
+                    replace(checkpoint, state=HAState.NORMAL, suspect_since=None),
+                )
             if suspect_since is None:
                 return self._result(
                     HAState.SUSPECT,
@@ -1273,6 +1348,26 @@ class VMHAController:
         if cloud.ownership_re_read_exact and not cloud.candidate_attachment_exact:
             reasons.append("ownership-confirmation-without-exact-attachment")
         return tuple(reasons)
+
+    def _wait_for_local_observation(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> ControllerResult:
+        active = snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+        if active and snapshot.readiness.observation_grace_expired:
+            return self._action(
+                HAState.REPAIR_EXHAUSTED,
+                ("local-observation-grace-exhausted",),
+                snapshot,
+                replace(checkpoint, pending_action=None),
+                ActionKind.DISABLE_ACTIVE,
+            )
+        return ControllerResult(
+            state=HAState.DEGRADED if active else HAState.BLOCKED,
+            reasons=("local-health-observation-unavailable",),
+            forwarding_enabled=active,
+            action=None,
+            checkpoint=checkpoint,
+        )
 
     @staticmethod
     def _wait_for_cloud(

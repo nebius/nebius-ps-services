@@ -104,6 +104,7 @@ class _ContextManagedFake:
 def _write_vm_ha_agent_wheel(wheel: Path) -> None:
     dist_info = "nebius_vpngw-1.2.3.dist-info"
     members = {
+        "nebius_vpngw/agent/vm_ha/observation.py": b"# observation grace asset\n",
         "nebius_vpngw/agent/main.py": (
             b"import argparse\nimport json\n"
             b"from .vm_ha.heartbeat import HEARTBEAT_CAPABILITY\n"
@@ -122,7 +123,7 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
             b"if __name__ == '__main__':\n"
             b"    main()\n"
         ),
-        "nebius_vpngw/agent/vm_ha/heartbeat.py": b'HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v1"\n',
+        "nebius_vpngw/agent/vm_ha/heartbeat.py": b'HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v2"\n',
         "nebius_vpngw/agent/vm_ha/restoration.py": (
             b'STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v2"\n'
         ),

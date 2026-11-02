@@ -870,6 +870,7 @@ class LocalDataPlaneObservation:
     routing_hygiene_ready: bool = True
     static_route_repair_required: bool = False
     available_static_prefixes: frozenset[str] = frozenset()
+    established_bgp_exports_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -1156,6 +1157,10 @@ def _passive_bgp_policy_matches(
     return True
 
 
+class LocalAuthorityError(RuntimeError):
+    """Positive local state conflicts with durable forwarding authority."""
+
+
 class LocalDataPlaneObserver:
     """Read-only observation with one deadline for the entire command sequence."""
 
@@ -1257,15 +1262,20 @@ class LocalDataPlaneObserver:
             return dict(self.expected_bgp_exports)
         return {peer: frozenset() for peer in self.expected_bgp_exports}
 
+    def _service_active(self, service: str) -> bool:
+        result = self._run(self.commands.systemctl, "is-active", "--quiet", service)
+        if result.returncode == 0:
+            return True
+        if result.returncode in {3, 4}:
+            return False
+        raise RuntimeError("local service health observation unavailable")
+
     def observe(self) -> LocalDataPlaneObservation:
+        self.last_service_health = None
         strongswan_healthy = any(
-            self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
-            for service in ("strongswan-starter", "strongswan")
+            self._service_active(service) for service in ("strongswan-starter", "strongswan")
         )
-        services = (
-            strongswan_healthy
-            and self._run(self.commands.systemctl, "is-active", "--quiet", "frr").returncode == 0
-        )
+        services = strongswan_healthy and self._service_active("frr")
         self.last_service_health = services
         summary = _json_object(
             self._run(self.commands.vtysh, "-c", "show bgp summary json"), "FRR session state"
@@ -1305,6 +1315,16 @@ class LocalDataPlaneObserver:
             established_sessions=established,
         )
         advertised = {} if export_evidence is None else export_evidence[1]
+        expected_exports = self._expected_exports_for_mode(self.mode())
+        established_exports = {}
+        for peer in established:
+            if peer in expected_exports:
+                established_exports[peer] = expected_exports[peer]
+        serving_exports_ready = bool(
+            configured == frozenset(expected_exports)
+            and _bgp_export_state(established_exports, advertised, configured_peers=established)
+            is BGPExportState.MATCH
+        )
         established_ike_sa_count = 0
         if self.tunnel_cold_passive:
             listed_sas = self._run(self.commands.swanctl, "--list-sas", "--raw")
@@ -1365,13 +1385,14 @@ class LocalDataPlaneObserver:
                 configured_peers=configured,
             ),
             routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
+            established_bgp_exports_ready=serving_exports_ready,
         )
 
     def mode(self) -> DataPlaneMode:
         forwarding = self._forwarding()
         if not self.state_path.exists():
             if forwarding:
-                raise RuntimeError("forwarding is enabled without durable VM-HA authority")
+                raise LocalAuthorityError("forwarding is enabled without durable VM-HA authority")
             return DataPlaneMode.BLOCKED
         try:
             value = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -1385,7 +1406,9 @@ class LocalDataPlaneObserver:
             return mode
         except (OSError, ValueError, json.JSONDecodeError):
             if forwarding:
-                raise RuntimeError("forwarding conflicts with durable VM-HA authority") from None
+                raise LocalAuthorityError(
+                    "forwarding conflicts with durable VM-HA authority"
+                ) from None
             return DataPlaneMode.BLOCKED
 
 
@@ -1822,9 +1845,19 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         policies = _json_or_text(command("-j", "xfrm", "policy"), "XFRM policy")
         devices = _usable_xfrm_devices(links, states, policies)
         selected = select_static_routes(self.static_candidates, devices)
+        installed_routes = _json_object(
+            command("-j", "-4", "route", "show", "table", "all"), "routes"
+        )
+        installed = set()
+        if isinstance(installed_routes, list):
+            for route in installed_routes:
+                if isinstance(route, Mapping):
+                    installed.add((route.get("dst"), route.get("dev")))
         repaired = False
         for prefix, device in selected.items():
             if device not in devices:
+                continue
+            if (prefix, device) in installed:
                 continue
             result = command("route", "replace", prefix, "dev", device)
             if result.returncode != 0:
@@ -1856,57 +1889,48 @@ class SystemDataPlaneRuntime(LocalDataPlaneObserver):
         repair_deadline = action.repair_deadline_at - 1.0
         try:
             reasons = set(action.repair_reasons)
-            static_repaired = False
+            if self.monotonic_clock() >= repair_deadline:
+                raise TimeoutError
             if "static-routes-not-ready" in reasons and self.static_candidates:
                 self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
                 lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    static_repaired = self._repair_static_routes(repair_deadline)
+                    self._repair_static_routes(repair_deadline)
                 finally:
                     os.close(lock_fd)
-            if static_repaired and "local-service-unhealthy" not in reasons:
-                if "bgp-not-ready" not in reasons:
-                    return
-                reasons.discard("xfrm-not-ready")
-            encrypted_path_unhealthy = bool({"local-service-unhealthy", "xfrm-not-ready"} & reasons)
-            if encrypted_path_unhealthy:
-                result = self._run_before(
-                    repair_deadline,
-                    self.commands.systemctl,
-                    "restart",
-                    "strongswan-starter",
-                    "frr",
-                )
-            elif "bgp-not-ready" in reasons:
-                result = self._run_before(
-                    repair_deadline,
-                    self.commands.systemctl,
-                    "reload-or-restart",
-                    "frr",
-                )
-            else:
-                result = self._run_before(
-                    repair_deadline,
-                    self.commands.systemctl,
-                    "reload-or-restart",
-                    "nebius-vpngw-agent",
-                )
-            if result.returncode != 0:
-                raise RuntimeError("local repair command did not complete successfully")
-            if encrypted_path_unhealthy:
-                loaded = self._run_before(
-                    repair_deadline,
-                    self.commands.swanctl,
-                    "--load-all",
-                    "--noprompt",
-                )
-                if loaded.returncode != 0:
-                    raise RuntimeError("local tunnel state did not reload")
+            # Preserve running daemons' individual IKE/BGP protocol state.
+            # Never restart them to repair a failed remote connection.
+            if "local-service-unhealthy" in reasons:
+                for alternatives in (("strongswan-starter", "strongswan"), ("frr",)):
+                    running = False
+                    for service in alternatives:
+                        active = self._run_before(
+                            repair_deadline,
+                            self.commands.systemctl,
+                            "is-active",
+                            "--quiet",
+                            service,
+                        )
+                        if active.returncode == 0:
+                            running = True
+                            break
+                        if active.returncode not in {3, 4}:
+                            raise RuntimeError("local service recovery observation unavailable")
+                    if running:
+                        continue
+                    started = self._run_before(
+                        repair_deadline, self.commands.systemctl, "start", alternatives[0]
+                    )
+                    if started.returncode != 0:
+                        raise RuntimeError("stopped local service could not be started")
             if self.monotonic_clock() >= repair_deadline:
                 raise TimeoutError
         except (OSError, RuntimeError, ValueError, TimeoutError):
-            self.emergency_fence(action)
+            # A failed route query or per-prefix update must not take healthy
+            # connections down. The controller evaluates fresh health next.
+            if "local-service-unhealthy" in action.repair_reasons:
+                self.emergency_fence(action)
 
     def enable_active(self, action: ControllerAction) -> None:
         # Promotion prerequisites must be installed and verified while the
@@ -2257,6 +2281,7 @@ class BoundRouteRuntime:
         static_manifest_json: str,
         bgp_policy_json: str,
         expected_import_policy_digest: str,
+        connection_sessions: Mapping[str, Iterable[str]] | None = None,
         clock: Callable[[], float] = time.time,
         takeover_hold_down_seconds: float = 30.0,
         withdrawal_stability_observations: int = 3,
@@ -2265,6 +2290,9 @@ class BoundRouteRuntime:
             raise ValueError("Committed BGP policy manifest digest mismatch")
         self.binding = binding
         self.local_node_id = local_node_id
+        self.connection_sessions: dict[str, frozenset[str]] = {}
+        for name, sessions in (connection_sessions or {}).items():
+            self.connection_sessions[name] = frozenset(sessions)
         self.cloud = cloud
         self.data_plane = data_plane
         self.backend = backend
@@ -2288,6 +2316,14 @@ class BoundRouteRuntime:
         self.bgp_policies = json.loads(bgp_policy_json)
         if not isinstance(self.bgp_policies, list):
             raise ValueError("Committed BGP policy manifest must be a list")
+        self.connection_prefixes: dict[str, set[str]] = {}
+        for record in [*json.loads(static_manifest_json), *self.bgp_policies]:
+            if not isinstance(record, Mapping):
+                raise ValueError("Committed connection policy record is invalid")
+            name = str(record.get("connection") or "")
+            self.connection_prefixes.setdefault(name, set()).update(
+                record.get("remote_prefixes") or ()
+            )
         self.expected_import_policy_digest = expected_import_policy_digest
         self.clock = clock
         self.reconciler = VMHARouteReconciler(
@@ -2329,14 +2365,22 @@ class BoundRouteRuntime:
     def readiness(self) -> LocalReadiness:
         try:
             observed = self.data_plane.observe()
+            mode = self.data_plane.mode()
+        except LocalAuthorityError:
+            raise
         except RuntimeError:
             # A freshly guarded member intentionally starts before FRR and
             # strongSwan are materialized.  Treat unavailable local service
             # observations as not-ready so the controller can enter passive
             # and request that materialization.  Promotion remains blocked
             # until a later complete observation proves every readiness bit.
-            return LocalReadiness(False, False, False, False)
-        return self.readiness_from_observation(observed, self.data_plane.mode())
+            confirmed_service_failure = (
+                getattr(self.data_plane, "last_service_health", None) is False
+            )
+            return LocalReadiness(
+                False, False, False, False, observation_available=confirmed_service_failure
+            )
+        return self.readiness_from_observation(observed, mode)
 
     def readiness_from_observation(
         self, observed: LocalDataPlaneObservation, mode: DataPlaneMode
@@ -2350,6 +2394,29 @@ class BoundRouteRuntime:
             else frozenset()
         )
         export_ready = observed.bgp_export_state is BGPExportState.MATCH
+        serving_exports_ready = export_ready or (
+            observed.bgp_export_state is BGPExportState.UNKNOWN
+            and observed.established_bgp_exports_ready
+        )
+        observation_available = bool(
+            observed.bgp_export_state is not BGPExportState.UNKNOWN or serving_exports_ready
+        )
+        partial_path_available = bool(
+            observed.service_healthy
+            and serving_exports_ready
+            and observed.observed_bgp_policy_digest == self.expected_import_policy_digest
+            and (
+                (required_xfrm_prefixes | bgp.eligible_prefixes) & observed.usable_xfrm_prefixes
+                or (not required_xfrm_prefixes and bgp.promotion_ready)
+            )
+        )
+        degraded_connections = []
+        for name, prefixes in self.connection_prefixes.items():
+            sessions = self.connection_sessions.get(name, frozenset())
+            if not prefixes.issubset(observed.usable_xfrm_prefixes) or (
+                sessions and not sessions & observed.established_bgp_sessions
+            ):
+                degraded_connections.append(name)
         export_reason = {
             BGPExportState.DRIFT: "bgp-export-drift",
             BGPExportState.UNKNOWN: "bgp-export-unavailable",
@@ -2362,7 +2429,12 @@ class BoundRouteRuntime:
             static_ready=static_ready,
             bgp_ready=bgp.promotion_ready and export_ready,
             xfrm_ready=required_xfrm_prefixes.issubset(observed.usable_xfrm_prefixes),
-            path_degraded=bool(missing_redundant_sessions or export_reason or hygiene_reason),
+            path_degraded=bool(
+                missing_redundant_sessions
+                or export_reason
+                or hygiene_reason
+                or degraded_connections
+            ),
             degraded_reasons=tuple(
                 reason
                 for condition, reason in (
@@ -2376,6 +2448,10 @@ class BoundRouteRuntime:
                 if condition
             ),
             routing_hygiene_ready=routing_hygiene_ready,
+            observation_available=observation_available,
+            partial_path_available=partial_path_available,
+            static_route_repair_required=observed.static_route_repair_required,
+            degraded_connections=tuple(sorted(degraded_connections)),
         )
         static_only = bool(self.static_manifest.prefixes) and not self.bgp_policies
         candidate_preparation_required = bool(
@@ -2935,9 +3011,15 @@ class VMHARuntimePorts:
                     started_at,
                     readiness.service_healthy,
                     readiness.transfer_ready,
-                    readiness.promotion_ready,
+                    readiness.forwarding_ready
+                    if after is DataPlaneMode.ACTIVE
+                    else readiness.promotion_ready,
                     after.value,
                 )
+                if not readiness.observation_available:
+                    sample = HealthSample(
+                        started_at, observed.service_healthy, None, None, after.value
+                    )
         except RuntimeError:
             failed = False if observer.last_service_health is False else None
             sample = HealthSample(started_at, observer.last_service_health, failed, failed)
@@ -3397,6 +3479,12 @@ def build_runtime_ports(
     if not isinstance(bgp_records, list):
         raise ValueError("VM-HA BGP policy manifest must be a list")
     configured_sessions = _configured_bgp_sessions(config, bgp_records)
+    connection_sessions = {}
+    for record in bgp_records:
+        if isinstance(record, Mapping) and record.get("connection"):
+            connection_sessions[str(record["connection"])] = _configured_bgp_sessions(
+                config, [record]
+            )
     expected_bgp_exports = _expected_bgp_exports(config, bgp_records)
     expected_import_policy_digest = _expected_import_policy_digest(config, bgp_records)
     if boot_id is not None and not runtime_identity_binding_is_explicit(binding, local):
@@ -3485,6 +3573,7 @@ def build_runtime_ports(
         routes = BoundRouteRuntime(
             binding=binding,
             local_node_id=local_node_id,
+            connection_sessions=connection_sessions,
             cloud=cloud,
             data_plane=data_plane,
             backend=backend,

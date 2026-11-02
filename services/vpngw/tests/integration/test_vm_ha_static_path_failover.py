@@ -6,14 +6,17 @@ does not execute systemctl, change host routes, or prove packet delivery.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from tests.unit.test_vm_ha_agent_runtime import _runtime_config
 from tests.unit.test_vm_ha_controller import (
     _owned_cloud,
+    _peer,
     _proven_transfer_checkpoint,
     _reconciled,
     _snapshot,
@@ -29,11 +32,14 @@ from tests.unit.test_vm_ha_static_selection import (
 
 from nebius_vpngw.agent import main as agent_main
 from nebius_vpngw.agent import xfrm_manager
-from nebius_vpngw.agent.vm_ha.runtime import CommandResult
+from nebius_vpngw.agent.vm_ha.heartbeat import HeartbeatSnapshots
+from nebius_vpngw.agent.vm_ha.runtime import BoundRouteRuntime, CommandResult, VMHARuntimePorts
 from nebius_vpngw.agent.vm_ha_controller import (
     ActionKind,
     CloudObservation,
     ComputeState,
+    ConfiguredRole,
+    ControllerCheckpoint,
     DataPlaneMode,
     HAState,
     VMHAController,
@@ -167,6 +173,143 @@ def test_owner_without_a_replacement_path_reaches_forwarding_fence(tmp_path):
     assert exhausted.action.kind is ActionKind.DISABLE_ACTIVE
     data_plane.disable_active(exhausted.action)
     assert kernel.forwarding == "0"
+
+
+def connection_routes(data_plane):
+    routes = object.__new__(BoundRouteRuntime)
+    routes.data_plane = data_plane
+    routes.static_manifest = SimpleNamespace(prefixes=frozenset({PREFIX, "192.168.0.0/24"}))
+    routes.connection_prefixes = {"uk-us": {PREFIX}, "other": {"192.168.0.0/24"}}
+    routes.connection_sessions = {}
+    routes.bgp_policies = []
+    routes.expected_import_policy_digest = hashlib.sha256(b"{}").hexdigest()
+    return routes
+
+
+def connection_readiness(data_plane):
+    return connection_routes(data_plane).readiness()
+
+
+def multi_connection_runtime(tmp_path, kernel):
+    cfg = config(mixed=True)
+    cfg["connections"][0]["routing_mode"] = "static"
+    cfg["connections"][0]["remote_prefixes"] = ["192.168.0.0/24"]
+    data_plane = simulated_runtime(tmp_path, kernel, cfg)
+    data_plane._write_state(action(), DataPlaneMode.ACTIVE)
+    return data_plane
+
+
+def test_one_failed_connection_keeps_other_connection_forwarding_without_takeover(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0"}
+    kernel.routes = {"192.168.0.0/24": "xfrm0", PREFIX: "xfrm1"}
+    data_plane = multi_connection_runtime(tmp_path, kernel)
+    observed, checkpoint = owner_snapshot(data_plane)
+    local = connection_readiness(data_plane)
+    assert not local.promotion_ready
+    assert local.forwarding_ready
+    assert local.degraded_connections == ("uk-us",)
+    observed = replace(observed, readiness=local)
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    for now in (100.0, 110.0, 1000.0):
+        decision = policy.decide(replace(observed, now=now), checkpoint)
+        assert decision.state is HAState.DEGRADED_PATH
+        assert decision.action is None
+        assert decision.forwarding_enabled
+        checkpoint = decision.checkpoint
+    assert kernel.forwarding == "1"
+    assert kernel.routes["192.168.0.0/24"] == "xfrm0"
+    assert not any("restart" in command for command in kernel.calls)
+
+
+def test_sampler_advertises_partial_forwarding_so_standby_does_not_take_over(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0"}
+    kernel.routes = {"192.168.0.0/24": "xfrm0", PREFIX: "xfrm1"}
+    data_plane = multi_connection_runtime(tmp_path, kernel)
+    ports = SimpleNamespace(
+        data_plane=data_plane,
+        routes=connection_routes(data_plane),
+        monotonic_clock=lambda: 100.0,
+        heartbeat_snapshots=HeartbeatSnapshots(),
+    )
+    VMHARuntimePorts.sample_local_health(ports, cancelled=lambda: False)
+    sample, _ownership = ports.heartbeat_snapshots.read()
+    assert sample.local_forwarding_ready is True
+    assert sample.transfer_ready is False
+    template = _peer()
+    ports.binding = SimpleNamespace(
+        cluster_id=template.cluster_id,
+        generation_id=template.generation_id,
+        configuration_digest=template.digests.configuration,
+        static_routes_digest=template.digests.static_routes,
+        bgp_policy_digest=template.digests.bgp_policy,
+    )
+    ports.local = SimpleNamespace(node_id=template.node_id, role=ConfiguredRole.ACTIVE)
+    ports.mtls_snapshot_provider = lambda: SimpleNamespace(
+        epoch=template.mtls_epoch, certificate_fingerprint=template.certificate_fingerprint
+    )
+    ports.auto_healing_policy_provider = lambda: ("enabled", template.auto_healing_policy_digest)
+    heartbeat = VMHARuntimePorts.heartbeat(
+        ports, boot_id="owner-boot", sequence=1, clock=lambda: 100.0
+    )
+    standby = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    decision = standby.decide(
+        _snapshot(now=100.0, peer_heartbeat=heartbeat, peer_received_at=100.0),
+        ControllerCheckpoint(),
+    )
+    assert decision.state is HAState.NORMAL
+    assert decision.action is None
+
+
+def test_static_route_repair_changes_only_the_affected_connection(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0", "xfrm2"}
+    kernel.routes = {"192.168.0.0/24": "xfrm0", PREFIX: "xfrm1"}
+    data_plane = multi_connection_runtime(tmp_path, kernel)
+    observed, checkpoint = owner_snapshot(data_plane)
+    observed = replace(observed, readiness=connection_readiness(data_plane))
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    decision = policy.decide(observed, checkpoint)
+    assert decision.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    kernel.calls.clear()
+    data_plane.repair_local(decision.action)
+    writes = []
+    for command in kernel.calls:
+        if command[1:3] == ("route", "replace"):
+            writes.append(command)
+    assert len(writes) == 1
+    assert writes[0][3:] == (PREFIX, "dev", "xfrm2")
+    assert kernel.routes == {"192.168.0.0/24": "xfrm0", PREFIX: "xfrm2"}
+    assert kernel.forwarding == "1"
+    assert not any("restart" in command for command in kernel.calls)
+
+
+def test_failed_scoped_route_update_does_not_fence_healthy_connection(tmp_path):
+    kernel = Kernel()
+    kernel.forwarding = "1"
+    kernel.usable = {"xfrm0", "xfrm2"}
+    kernel.routes = {"192.168.0.0/24": "xfrm0", PREFIX: "xfrm1"}
+    data_plane = multi_connection_runtime(tmp_path, kernel)
+    observed, checkpoint = owner_snapshot(data_plane)
+    observed = replace(observed, readiness=connection_readiness(data_plane))
+    policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+    decision = policy.decide(observed, checkpoint)
+    kernel.fail_write = True
+    data_plane.repair_local(decision.action)
+    assert kernel.forwarding == "1"
+    acknowledged = policy.decide(
+        replace(observed, now=101.0, completed_effect_operation_id=decision.action.operation_id),
+        decision.checkpoint,
+    )
+    assert acknowledged.action is None
+    assert acknowledged.forwarding_enabled
+    retried = policy.decide(replace(observed, now=105.1), acknowledged.checkpoint)
+    assert retried.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    assert retried.action.operation_id != decision.action.operation_id
 
 
 def test_reload_then_backup_sa_can_pass_standby_admission(tmp_path):

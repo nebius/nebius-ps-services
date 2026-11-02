@@ -30,6 +30,7 @@ from .routing_guard import (
     enforce_vm_ha_passive_routing_hygiene_locked,
     require_vm_ha_current_boot_ready,
     require_vm_ha_route_maintenance_ready,
+    vm_ha_reload_deferred,
 )
 from .state_store import StateStore
 from .strongswan_renderer import StrongSwanRenderer
@@ -69,6 +70,7 @@ from .vm_ha.models import (
     StateValidationError,
 )
 from .vm_ha.mtls import ManagedMTLSError, ManagedMTLSStore
+from .vm_ha.observation import ObservationGrace
 from .vm_ha.progress import (
     TRANSFER_PROGRESS_ACTIONS,
     TransferProgressIdentity,
@@ -96,6 +98,7 @@ from .vm_ha.restoration import (
     restoration_is_active,
 )
 from .vm_ha.runtime import (
+    LocalAuthorityError,
     VMHARuntimePorts,
     build_runtime_ports,
     runtime_identity_public_status,
@@ -792,6 +795,14 @@ def _typed_transfer_intent_provider(
 class VMHACloudObservationUnavailable(RuntimeError):
     """A retryable read failed before the controller could authorize any effect."""
 
+    def __init__(
+        self, message: str, *, observation_status: Mapping[str, object] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.observation_status = (
+            dict(observation_status) if observation_status is not None else None
+        )
+
 
 class VMHASnapshotAdapter:
     """Build exact policy input from immutable binding and live adapters."""
@@ -804,6 +815,7 @@ class VMHASnapshotAdapter:
         state_dir: Path = VM_HA_STATE_DIR,
         clock: Callable[[], float] = time.time,
         boot_id: Callable[[], str] = _boot_id,
+        observation_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         node = config.get("node")
         generation = config.get("generation")
@@ -848,10 +860,15 @@ class VMHASnapshotAdapter:
         self.providers = providers
         self.state_dir = state_dir
         self.clock = clock
+        self.observation_clock = observation_clock
         self.boot_id = boot_id
         self.last_snapshot: ControllerSnapshot | None = None
         self.last_apply_operation_id: str | None = None
         self.last_transfer_inhibition_operation_id: str | None = None
+        self.cloud_observation_grace = ObservationGrace()
+        self.local_observation_grace = ObservationGrace()
+        self.peer_observation_grace = ObservationGrace()
+        self.last_unknown_peer_sample: tuple[str, int] | None = None
 
     def _retire_prior_generation_adoption_state(
         self, *, adoption: Mapping[str, Any], operation_id: str
@@ -913,13 +930,54 @@ class VMHASnapshotAdapter:
 
     def _observe_cloud(self) -> CloudObservation:
         try:
-            return self.providers.cloud()
+            cloud = self.providers.cloud()
         except RetryableHACloudError as error:
+            self.cloud_observation_grace.failed(self.observation_clock())
             # Scope the exception to observations. The same SDK error from a
             # mutation must retain the guarded, journal-based recovery path.
             raise VMHACloudObservationUnavailable(
-                "cloud observation unavailable; retrying"
+                "cloud observation unavailable; retrying",
+                observation_status=self.cloud_observation_grace.status(self.observation_clock()),
             ) from error
+        self.cloud_observation_grace.succeeded()
+        return cloud
+
+    def _peer_in_observation_grace(
+        self, peer: PeerHeartbeat | None, received_at: float | None, now: float
+    ) -> bool:
+        fresh = bool(
+            peer is not None
+            and received_at is not None
+            and 0 <= now - received_at < 10.0
+            and peer.health_sample_age_seconds is not None
+            and peer.health_sample_age_seconds + now - received_at < 10.0
+        )
+        unknown = bool(
+            fresh
+            and peer is not None
+            and peer.local_forwarding_ready is None
+            and peer.service_healthy is not False
+            and peer.data_plane_mode in {None, "active"}
+        )
+        if not unknown:
+            if (
+                fresh
+                and peer is not None
+                and (
+                    peer.local_forwarding_ready is not None
+                    or peer.service_healthy is False
+                    or peer.data_plane_mode in {"blocked", "passive"}
+                )
+            ):
+                self.peer_observation_grace.succeeded()
+                self.last_unknown_peer_sample = None
+            return False
+        assert peer is not None
+        sample_id = (peer.boot_id, peer.sequence)
+        if sample_id != self.last_unknown_peer_sample:
+            self.peer_observation_grace.failed(self.observation_clock())
+            self.last_unknown_peer_sample = sample_id
+        return not self.peer_observation_grace.expired(self.observation_clock())
 
     def observe(self) -> ControllerSnapshot:
         cloud = self._observe_cloud()
@@ -995,7 +1053,30 @@ class VMHASnapshotAdapter:
                     transfer_intent = None
                     transfer_effect_started = False
         readiness = self.providers.readiness()
-        data_plane = self.providers.data_plane()
+        try:
+            data_plane = self.providers.data_plane()
+        except LocalAuthorityError:
+            raise
+        except RuntimeError:
+            # Retain this process's prior mode only to preserve forwarding.
+            # Unknown readiness cannot authorize a new activation.
+            data_plane = (
+                self.last_snapshot.data_plane_mode
+                if self.last_snapshot is not None
+                else DataPlaneMode.BLOCKED
+            )
+            readiness = replace(readiness, observation_available=False)
+        if readiness.observation_available:
+            self.local_observation_grace.succeeded()
+        else:
+            self.local_observation_grace.failed(self.observation_clock())
+            readiness = replace(
+                readiness,
+                observation_failures=self.local_observation_grace.consecutive_failures,
+                observation_failure_age=self.local_observation_grace.elapsed(
+                    self.observation_clock()
+                ),
+            )
         routes = self.providers.routes()
         peer, peer_received_at = self.providers.peer()
         snapshot = ControllerSnapshot(
@@ -1025,6 +1106,9 @@ class VMHASnapshotAdapter:
             apply_owner_adoption=adoption_authorized,
             transfer_inhibited=transfer_inhibition_operation_id is not None,
             standby_replacement_inhibited=(standby_replacement_inhibition_operation_id is not None),
+            peer_observation_grace=self._peer_in_observation_grace(
+                peer, peer_received_at, self.clock()
+            ),
         )
         self.last_apply_operation_id = apply_operation_id
         self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
@@ -1882,7 +1966,19 @@ class VMHAControllerRuntime:
         if snapshot is None:
             raise RuntimeError("VM-HA controller has no observed snapshot")
         ready = bool(
-            snapshot.cloud.authoritative and result.forwarding_enabled and result.action is None
+            snapshot.cloud.authoritative
+            and snapshot.readiness.promotion_ready
+            and result.forwarding_enabled
+            and result.action is None
+        )
+        forwarding_continuity = bool(
+            snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+            and snapshot.guard_boot_id == snapshot.boot_id
+            and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+            and not snapshot.apply_locked
+            and result.state
+            in {HAState.ACTIVE, HAState.DEGRADED, HAState.DEGRADED_PATH, HAState.REPAIRING}
+            and (result.action is None or result.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE)
         )
         route_context = snapshot.routes_reconciled_context
         cold_standby = bool(
@@ -2092,6 +2188,19 @@ class VMHAControllerRuntime:
                 STANDBY_RESTORATION_CAPABILITY,
             ],
             "state": result.state.value,
+            "forwarding_continuity": forwarding_continuity,
+            "observation_health": {
+                "cloud": self.snapshots.cloud_observation_grace.status(
+                    self.snapshots.observation_clock()
+                ),
+                "local": self.snapshots.local_observation_grace.status(
+                    self.snapshots.observation_clock()
+                ),
+                "peer_local": self.snapshots.peer_observation_grace.status(
+                    self.snapshots.observation_clock()
+                ),
+            },
+            "degraded_connections": list(snapshot.readiness.degraded_connections),
             "reasons": list(result.reasons),
             "recovery_action": None,
             "controller_ready_boot_id": snapshot.boot_id if ready else None,
@@ -4814,7 +4923,7 @@ def _run_vm_ha_controller(
         while True:
             try:
                 status = runtime.step()
-            except VMHACloudObservationUnavailable:
+            except VMHACloudObservationUnavailable as error:
                 if not (
                     isinstance(runtime, DefaultVMHAControllerRuntime)
                     and ready_notified
@@ -4822,6 +4931,14 @@ def _run_vm_ha_controller(
                 ):
                     raise
                 print("[VM-HA] Cloud observation unavailable; retrying in 5 seconds", flush=True)
+                if error.observation_status is not None:
+                    print(
+                        "[VM-HA-OBSERVATION] "
+                        + json.dumps(
+                            {"source": "cloud", **error.observation_status}, sort_keys=True
+                        ),
+                        flush=True,
+                    )
                 time.sleep(5)
                 continue
             except RuntimeError as error:
@@ -4960,6 +5077,9 @@ class Agent:
                 try:
                     require_vm_ha_current_boot_readiness()
                 except RuntimeError:
+                    if vm_ha_reload_deferred(cfg):
+                        print("[Agent] Deferring reload while HA preserves existing forwarding")
+                        return
                     vm_ha_blocked = True
                     try:
                         _vm_ha_materialization_authorized()

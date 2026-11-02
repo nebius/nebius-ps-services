@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, replace
 
-HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v1"
+HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v2"
 HEALTH_MAX_AGE_SECONDS = 10.0
 CLOCK_SKEW_SECONDS = 5.0
 

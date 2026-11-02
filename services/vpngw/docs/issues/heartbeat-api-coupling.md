@@ -16,13 +16,17 @@ Takeover and activation still require fresh cloud proof. Uncertain mutation
 outcomes and positive ownership-loss evidence retain fencing.
 
 The retry correction passed offline tests but has not been deployed or retested
-live. Local observation failures still become failed readiness checks and can
-cause disruptive repair. A consecutive-failure grace policy is not implemented.
+live. This branch now also distinguishes local query failure from confirmed bad
+health, grants three-failure/ten-second observation grace, preserves remaining
+paths on partial connection loss and avoids broad daemon restarts during repair.
+These follow-up changes require capability v2 and separate live qualification.
 
 Maintained regressions are in
 [heartbeat tests](../../tests/unit/test_vm_ha_heartbeat.py),
 [cloud-read retry tests](../../tests/unit/test_vm_ha_cloud_read_retries.py), and
-[two-node failover tests](../../tests/integration/test_vm_ha_failover.py).
+[observation-grace tests](../../tests/unit/test_vm_ha_observation_grace.py).
+The [two-node failover tests](../../tests/integration/test_vm_ha_failover.py)
+and composed static-path tests cover the transfer and repair boundaries.
 See the [validation summary](heartbeat-us-unplanned-static-validation.md).
 
 Raw logs and the original standalone reproducer were removed from the working

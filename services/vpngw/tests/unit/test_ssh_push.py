@@ -79,7 +79,8 @@ def _write_vm_ha_agent_wheel(
 ) -> None:
     dist_info = "nebius_vpngw-1.2.3.dist-info"
     members = {
-        "nebius_vpngw/agent/vm_ha/heartbeat.py": b'HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v1"\n',
+        "nebius_vpngw/agent/vm_ha/observation.py": b"# observation grace asset\n",
+        "nebius_vpngw/agent/vm_ha/heartbeat.py": b'HEARTBEAT_CAPABILITY = "vm-ha-independent-heartbeat-v2"\n',
         "nebius_vpngw/agent/vm_ha/restoration.py": (
             f'STANDBY_RESTORATION_CAPABILITY = "{restoration_capability}"\n'
         ).encode(),
@@ -715,7 +716,7 @@ class _ManagedMTLSClient:
             output = json.dumps(
                 {
                     "features": [
-                        "vm-ha-independent-heartbeat-v1",
+                        "vm-ha-independent-heartbeat-v2",
                         "vm-ha-live-peer-replacement-v4",
                         "vm-ha-standby-restoration-v2",
                     ],
@@ -923,7 +924,7 @@ def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkey
     assert receipt["cffi_version"] == "1.17.0"
     assert receipt["artifact_sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
     assert receipt["capabilities"] == [
-        "vm-ha-independent-heartbeat-v1",
+        "vm-ha-independent-heartbeat-v2",
         "vm-ha-live-peer-replacement-v4",
         "vm-ha-standby-restoration-v2",
     ]

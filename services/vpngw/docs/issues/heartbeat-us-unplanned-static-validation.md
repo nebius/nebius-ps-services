@@ -49,7 +49,8 @@ rules, active fault timers and probe processes were removed.
 
 - Repeat owner, standby and simultaneous API outages after deploying `1d8bd5cc`.
 - Resolve guard/status consistency and premature planned-transfer CLI failures.
-- Distinguish unavailable local observations from confirmed unhealthy components.
+- Live-qualify local observation grace, partial forwarding and scoped repair.
+  These are implemented on this branch but were absent from the historical campaign.
 - Run a separate US-to-UK BGP campaign covering advertisements, withdrawals,
   route selection, takeover/failback and standby recovery. TCP survival is deferred.
 - Preserve the approved cold-static and link-local policies while fixing these bugs.

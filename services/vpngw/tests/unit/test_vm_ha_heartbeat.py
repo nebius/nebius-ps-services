@@ -326,7 +326,7 @@ def test_upgrade_rejects_missing_running_capability(capabilities: object) -> Non
 def test_upgrade_rejects_missing_or_stale_peer(peer: object) -> None:
     assert not _vm_ha_independent_heartbeat_matches(
         {
-            "controller_capabilities": ["vm-ha-independent-heartbeat-v1"],
+            "controller_capabilities": ["vm-ha-independent-heartbeat-v2"],
             "mtls": {"peer": peer},
         }
     )

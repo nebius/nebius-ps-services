@@ -598,6 +598,11 @@ class VMHAAgentArtifact:
                         "nebius_vpngw/agent/vm_ha/heartbeat.py",
                         limit=1024 * 1024,
                     ),
+                    "nebius_vpngw/agent/vm_ha/observation.py": cls._read_wheel_member(
+                        wheel,
+                        "nebius_vpngw/agent/vm_ha/observation.py",
+                        limit=1024 * 1024,
+                    ),
                     "nebius_vpngw/agent/vm_ha/restoration.py": cls._read_wheel_member(
                         wheel,
                         "nebius_vpngw/agent/vm_ha/restoration.py",
