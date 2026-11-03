@@ -5948,3 +5948,154 @@ def test_confirmed_continuity_can_coexist_with_completed_promotion(promotion_com
     assert status["promotion_committed"] is True
     assert status["forwarding_continuity"] is True
     assert case.actions == []
+
+
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+def test_committed_transfer_cleanup_waits_for_lock_after_former_owner_restarts(
+    promotion_completion_case,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    intent: str,
+) -> None:
+    case = promotion_completion_case(intent)
+    unlink = agent_main._durably_unlink
+
+    def interrupt_lineage_cleanup(path):
+        if path == case.lineage_path:
+            raise RuntimeError("interrupted after restoration commit")
+        unlink(path)
+
+    with monkeypatch.context() as injection:
+        injection.setattr(agent_main, "_durably_unlink", interrupt_lineage_cleanup)
+        with pytest.raises(RuntimeError, match="interrupted after restoration commit"):
+            case.runtime.step()
+    receipt = case.receipt_path.read_bytes()
+    restoration = StandbyRestorationStore(tmp_path).load()
+    assert restoration is not None
+    assert restoration.phase is RestorationPhase.COMMITTED
+    case.cloud = replace(case.cloud, former_owner_compute_state=ComputeState.RUNNING)
+    case.now += 20.0
+    case.runtime.close(restore_guard=False)
+    case.runtime = case.restart()
+    descriptor = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    assert descriptor is not None
+    try:
+        status = case.runtime.step()
+        assert status["forwarding_continuity"] is True
+        assert status["promotion_committed"] is True
+        assert case.lineage_path.exists()
+        assert case.checkpoints.load().transfer_continuity is not None
+        assert case.actions == []
+    finally:
+        os.close(descriptor)
+    case.now += 1.0
+    case.runtime.step()
+    assert not case.lineage_path.exists()
+    assert case.checkpoints.load().transfer_continuity is None
+    assert case.receipt_path.read_bytes() == receipt
+    assert case.actions == []
+
+
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+@pytest.mark.parametrize("mismatch", ["operation", "route", "epoch"])
+def test_interrupted_completion_rejects_receipt_for_other_transfer_or_owner_revision(
+    promotion_completion_case,
+    monkeypatch: pytest.MonkeyPatch,
+    intent: str,
+    mismatch: str,
+) -> None:
+    case = promotion_completion_case(intent)
+    unlink = agent_main._durably_unlink
+
+    def interrupt_lineage_cleanup(path):
+        if path == case.lineage_path:
+            raise RuntimeError("interrupted after restoration commit")
+        unlink(path)
+
+    with monkeypatch.context() as injection:
+        injection.setattr(agent_main, "_durably_unlink", interrupt_lineage_cleanup)
+        with pytest.raises(RuntimeError, match="interrupted after restoration commit"):
+            case.runtime.step()
+    if mismatch == "operation":
+        lineage = json.loads(case.lineage_path.read_text())
+        lineage["first_operation_id"] = "different-transfer"
+        case.lineage_path.write_text(json.dumps(lineage))
+    elif mismatch == "route":
+        receipt = json.loads(case.receipt_path.read_text())
+        receipt["route_operation_id"] = "different-route-operation"
+        case.receipt_path.write_text(json.dumps(receipt))
+    else:
+        case.cloud = replace(case.cloud, ownership_epoch="43")
+    case.cloud = replace(case.cloud, former_owner_compute_state=ComputeState.RUNNING)
+    case.now += 20.0
+    if mismatch == "route":
+        with pytest.raises(StandbyRestorationError, match="promotion receipt digest is invalid"):
+            case.runtime.step()
+    else:
+        case.runtime.step()
+    assert [action.kind for action in case.actions] == [ActionKind.DISABLE_ACTIVE]
+    assert case.lineage_path.exists()
+
+
+def test_completion_retry_reuses_original_receipt_timestamps(
+    promotion_completion_case,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = promotion_completion_case("planned-failover")
+
+    def unavailable_restoration(_store, **_kwargs):
+        raise StandbyRestorationError("temporary restoration write failure")
+
+    with monkeypatch.context() as injection:
+        injection.setattr(StandbyRestorationStore, "commit", unavailable_restoration)
+        with pytest.raises(StandbyRestorationError):
+            case.runtime.step()
+    receipt = case.receipt_path.read_bytes()
+    case.now += 50.0
+    # Exercise the normal terminal writer too, not only snapshot recovery.
+    status = json.loads((case.receipt_path.parent / "status.json").read_text())
+    result = _commit_promotion_receipt(
+        status=status,
+        config=case.runtime.config,
+        lineage_path=case.lineage_path,
+        receipt_path=case.receipt_path,
+        request_paths=(),
+        clock=lambda: case.now,
+    )
+    assert result == json.loads(receipt)
+    assert case.receipt_path.read_bytes() == receipt
+    assert not case.lineage_path.exists()
+    assert case.actions == []
+
+
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+def test_exact_completion_recovery_does_not_depend_on_wall_clock_order(
+    promotion_completion_case,
+    monkeypatch: pytest.MonkeyPatch,
+    intent: str,
+) -> None:
+    case = promotion_completion_case(intent)
+    lineage = json.loads(case.lineage_path.read_text())
+    # A backward wall-clock correction can put completion before started_at.
+    # Operation identity and ownership, rather than timestamp order, prove it.
+    lineage["started_at"] = case.now + 10.0
+    case.lineage_path.write_text(json.dumps(lineage))
+    unlink = agent_main._durably_unlink
+
+    def interrupt_lineage_cleanup(path):
+        if path == case.lineage_path:
+            raise RuntimeError("interrupted completion")
+        unlink(path)
+
+    with monkeypatch.context() as injection:
+        injection.setattr(agent_main, "_durably_unlink", interrupt_lineage_cleanup)
+        with pytest.raises(RuntimeError, match="interrupted completion"):
+            case.runtime.step()
+    receipt = case.receipt_path.read_bytes()
+    assert json.loads(receipt)["common_cutover_seconds"] == 0.0
+    case.cloud = replace(case.cloud, former_owner_compute_state=ComputeState.RUNNING)
+    case.now += 1.0
+    case.runtime.step()
+    assert case.actions == []
+    assert not case.lineage_path.exists()
+    assert case.receipt_path.read_bytes() == receipt

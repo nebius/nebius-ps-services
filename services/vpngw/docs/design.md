@@ -2704,6 +2704,8 @@ Replace the two request-and-return public callbacks with one role-neutral planne
 
 `cli.py` owns the shared public workflow, deadline, polling, output channels, and final cloud re-read. The private `--vm-ha-status` response adds only a strict identity-free `promotion_committed` projection derived from the existing durable promotion receipt and the same current status snapshot; it does not expose resource identities or create a new request, status, or persisted schema. The agent, controller, cloud adapter, route reconciler, forwarding port, and automatic rearm retain their existing ownership and effect order.
 
+The controller retains confirmed transfer continuity while terminal completion is pending, including during writer-lock contention or degraded-path readiness. It retires continuity only after the runtime durably records the promotion receipt and restoration decision and retires transfer lineage. Interrupted completion is recognized only by a receipt matching the exact transfer operation, configuration, route operation, and fresh allocation ownership revision. Cleanup is retried under the shared rearm writer lock. While cleanup waits, an already restarted former owner does not turn that completed cutover back into an unfinished transfer. Receipt timestamps remain unchanged across retries. Receipt recognition does not replace fresh ownership, route, or forwarding checks, and it does not authorize a new attachment or activation.
+
 #### Test-First Success Criteria
 
 - The migrated validation contract passes after implementation.

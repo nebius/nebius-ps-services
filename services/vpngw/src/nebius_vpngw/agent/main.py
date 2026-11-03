@@ -1024,7 +1024,22 @@ class VMHASnapshotAdapter:
             self._retire_prior_generation_adoption_state(
                 adoption=adoption, operation_id=apply_operation_id
             )
-        if transfer_intent is TransferIntent.AUTOMATIC_FAILOVER and transfer_effect_started:
+        transfer_completion_recorded = False
+        if transfer_effect_started and not adoption_authorized:
+            transfer_completion_recorded = _recover_committed_transfer(
+                config=self.config,
+                state_dir=self.state_dir,
+                cloud=cloud,
+                node_id=self.local_node_id,
+                now=self.clock(),
+            )
+            if transfer_completion_recorded:
+                transfer_intent, transfer_effect_started = self.providers.transfer_intent()
+        if (
+            transfer_intent is TransferIntent.AUTOMATIC_FAILOVER
+            and transfer_effect_started
+            and not transfer_completion_recorded
+        ):
             lineage_path = self.state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
             if adoption_authorized:
                 _durably_unlink(lineage_path)
@@ -1135,6 +1150,7 @@ class VMHASnapshotAdapter:
             ),
             transfer_intent=transfer_intent,
             transfer_effect_started=transfer_effect_started,
+            transfer_completion_recorded=transfer_completion_recorded,
             apply_owner_adoption=adoption_authorized,
             transfer_inhibited=transfer_inhibition_operation_id is not None,
             standby_replacement_inhibited=(standby_replacement_inhibition_operation_id is not None),
@@ -1719,31 +1735,108 @@ def _commit_promotion_receipt(
             restoration_store.retire_terminal(
                 authorization_id=restoration.authorization_id,
             )
-    if not receipt_path.exists() or current.get("receipt_id") != receipt_id:
+    if receipt_path.exists() and current.get("receipt_id") == receipt_id:
+        # Retrying restoration or cleanup must reuse the exact durable receipt,
+        # including its original timestamps, rather than manufacture a new one.
+        preserved_receipt = dict(receipt)
+        preserved_receipt.update(
+            committed_at=current["committed_at"],
+            common_cutover_seconds=current["common_cutover_seconds"],
+        )
+        if current != preserved_receipt:
+            raise ValueError("existing VM-HA promotion receipt disagrees with transfer completion")
+        receipt = current
+    else:
         _atomic_write_json(receipt_path, receipt)
     if lineage is not None:
-        # The receipt is terminal transfer authority. Commit the exact
-        # restoration authorization before retiring lineage so a crash cannot
-        # leave a promoted owner with no durable way to restart its peer.
-        restoration_store = StandbyRestorationStore(receipt_path.parent)
-        try:
-            restoration_store.commit(
-                receipt=receipt,
-                updated_at=committed_at,
-            )
-        except StandbyRestorationError:
-            if lineage["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
-                raise
-            # Automatic owner-loss promotion is availability-authoritative.
-            # Unusable restoration evidence disables only the optional
-            # standby restart; it must not invalidate an otherwise fenced,
-            # terminal promotion.
-            restoration_store.discard_unusable_authorization()
-    if lineage is not None:
-        _durably_unlink(lineage_path)
+        _finish_committed_transfer(
+            receipt=receipt,
+            lineage_path=lineage_path,
+            now=committed_at,
+        )
     if adoption is not None and adoption_path is not None:
         _durably_unlink(adoption_path)
     return receipt
+
+
+def _finish_committed_transfer(
+    *, receipt: Mapping[str, Any], lineage_path: Path, now: float
+) -> None:
+    """Finish receipt-first restoration and lineage cleanup under rearm.lock."""
+    # Preserve a durable restoration decision before retiring transfer lineage.
+    restoration_store = StandbyRestorationStore(lineage_path.parent)
+    try:
+        restoration_store.commit(receipt=receipt, updated_at=now)
+    except StandbyRestorationError:
+        if receipt["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
+            raise
+        # Unusable optional restoration cannot invalidate automatic cutover.
+        restoration_store.discard_unusable_authorization()
+    _durably_unlink(lineage_path)
+
+
+def _recover_committed_transfer(
+    *,
+    config: Mapping[str, Any],
+    state_dir: Path,
+    cloud: CloudObservation,
+    node_id: str,
+    now: float,
+) -> bool:
+    """Recognize only this exact completed transfer, then retry its cleanup.
+
+    A receipt can survive a crash before lineage retirement. Rearm may already
+    have restarted the former owner. Do not reinterpret that completed transfer
+    as a new takeover requiring the former owner to be stopped again.
+    """
+    if not cloud.local_attachment_exact(node_id):
+        return False
+    lineage_path = state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
+    lineage = _read_transfer_lineage(lineage_path, config=config)
+    if lineage is None:
+        return False
+    receipt_path = state_dir / VM_HA_PROMOTION_RECEIPT_PATH.name
+    receipt = _read_promotion_receipt(receipt_path, config=config)
+    if not _promotion_receipt_matches_current_owner(receipt, cloud=cloud, node_id=node_id):
+        return False
+    assert receipt is not None
+    expected_id = promotion_receipt_id_v1(
+        allocation_id=str(lineage["allocation_id"]),
+        first_operation_id=str(lineage["first_operation_id"]),
+        generation_id=str(lineage["generation_id"]),
+        intent=str(lineage["intent"]),
+        owner_node_id=str(lineage["candidate_node_id"]),
+        ownership_epoch=cloud.ownership_epoch,
+        route_operation_id=str(receipt["route_operation_id"]),
+    )
+    if not (
+        receipt["receipt_id"] == expected_id
+        and receipt["intent"] == lineage["intent"]
+        and receipt["former_owner_node_id"] == lineage["former_owner_node_id"]
+    ):
+        return False
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(state_dir / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    if descriptor is None:
+        # Recognition is read-only. Cleanup waits for the writer, but the exact
+        # receipt already proves cutover and cannot be undone by lock contention.
+        return True
+    try:
+        if (
+            _read_promotion_receipt(receipt_path, config=config) != receipt
+            or _read_transfer_lineage(lineage_path, config=config) != lineage
+        ):
+            return False
+        try:
+            _finish_committed_transfer(receipt=receipt, lineage_path=lineage_path, now=now)
+        except (OSError, StandbyRestorationError):
+            # Completion bookkeeping is retried. A valid terminal receipt must
+            # not turn a restoration/cleanup failure into dataplane fencing.
+            pass
+        return True
+    finally:
+        os.close(descriptor)
 
 
 def _advance_standby_restoration(

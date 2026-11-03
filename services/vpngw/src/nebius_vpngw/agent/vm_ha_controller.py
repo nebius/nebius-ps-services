@@ -299,6 +299,7 @@ class ControllerSnapshot:
     completed_effect_operation_id: str | None = None
     transfer_intent: TransferIntent | None = None
     transfer_effect_started: bool = False
+    transfer_completion_recorded: bool = False
     apply_owner_adoption: bool = False
     transfer_inhibited: bool = False
     standby_replacement_inhibited: bool = False
@@ -995,7 +996,15 @@ class VMHAController:
                     state=state,
                     suspect_since=None,
                     established_ownership_context=snapshot.ownership_context,
-                    transfer_continuity=None,
+                    # The runtime retires lineage only after the terminal receipt
+                    # and restoration decision are durable. A busy writer lock or
+                    # degraded path must not delete still-required transfer proof.
+                    transfer_continuity=(
+                        checkpoint.transfer_continuity
+                        if self._transfer_in_progress(snapshot, checkpoint)
+                        or snapshot.transfer_effect_started
+                        else None
+                    ),
                 ),
             )
 
@@ -1822,6 +1831,8 @@ class VMHAController:
     def _transfer_in_progress(
         snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> bool:
+        if snapshot.transfer_completion_recorded:
+            return False
         return bool(snapshot.transfer_intent is not None or checkpoint.suspect_since is not None)
 
     @staticmethod
