@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import nebius_vpngw.agent.main as agent_main
 from nebius_vpngw.agent.main import (
     DefaultVMHAControllerRuntime,
     VMHACheckpointFileStore,
@@ -110,6 +111,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     LocalReadiness,
     RecoverableController,
     RouteReconciliationContext,
+    TransferContinuity,
     TransferIntent,
 )
 from nebius_vpngw.agent.vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
@@ -5604,3 +5606,345 @@ def test_rule_only_table_220_cleanup_does_not_record_a_spurious_failure(monkeypa
         assert not remaining_rule[0]
     finally:
         local_commands.CURRENT.reset(token)
+
+
+@pytest.fixture
+def promotion_completion_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Compose real policy, checkpoint, snapshot, status and completion writers.
+
+    Only cloud/service observations and effect handlers are synthetic. Heartbeat
+    workers are disabled to make completion ordering independent of scheduling.
+    """
+    runtimes = []
+
+    def build(intent: str = "automatic-failover") -> SimpleNamespace:
+        config = _passive_runtime_config()
+        local_id = "node-b"
+        peer_id = "node-a"
+        peer_role = "active"
+        if intent == "planned-failback":
+            config = _runtime_config()
+            local_id = "node-a"
+            peer_id = "node-b"
+            peer_role = "passive"
+
+        lineage = _automatic_lineage()
+        lineage.update(intent=intent, candidate_node_id=local_id, former_owner_node_id=peer_id)
+        lineage_path = tmp_path / "transfer-lineage.json"
+        lineage_path.write_text(json.dumps(lineage), encoding="utf-8")
+        guard_path = tmp_path / "guard.json"
+        guard_path.write_text(
+            json.dumps({"guard_boot_id": "boot-local", "data_plane_mode": "active"}),
+            encoding="utf-8",
+        )
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"vm_ha": config}), encoding="utf-8")
+        digests = DigestSet("a" * 64, "b" * 64, "c" * 64)
+        peer = PeerHeartbeat(
+            cluster_id="cluster-a",
+            node_id=peer_id,
+            boot_id="boot-peer",
+            sequence=1,
+            sent_at="2026-08-12T00:00:00Z",
+            configured_role=peer_role,
+            observed_owner_id=local_id,
+            generation_id="a" * 64,
+            mtls_epoch=1,
+            certificate_fingerprint="d" * 64,
+            digests=digests,
+            service_healthy=True,
+            transfer_ready=True,
+            local_forwarding_ready=True,
+            auto_healing_policy_state="enabled",
+            auto_healing_policy_digest="e" * 64,
+            data_plane_mode="passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
+        )
+        policy = AutoHealingPolicyStore(tmp_path).initialize(
+            cluster_id="cluster-a",
+            node_id=local_id,
+            peer_node_id=peer_id,
+            generation_id="a" * 64,
+            updated_at=10.0,
+        )
+        peer = replace(
+            peer,
+            sent_at="1970-01-01T00:00:20Z",
+            auto_healing_policy_digest=policy.decision_digest,
+        )
+        certificate = PolicyAgreementStore(tmp_path).capture(
+            policy=policy,
+            heartbeat=peer,
+            captured_at=20.0,
+        )
+        StandbyRestorationStore(tmp_path).arm(
+            source=RestorationSource(intent),
+            certificate=certificate,
+            owner_node_id=local_id,
+            former_owner_node_id=peer_id,
+            allocation_id="allocation-a",
+            generation_id="a" * 64,
+            digests=certificate.digests,
+            request_fingerprint=None if intent == "automatic-failover" else "e" * 64,
+            first_operation_id=str(lineage["first_operation_id"]),
+            updated_at=20.0,
+        )
+        case = SimpleNamespace(
+            now=100.0,
+            readiness=LocalReadiness(True, True, True, True),
+            routes=None,
+            cloud=CloudObservation(
+                True,
+                "allocation-a",
+                local_id,
+                peer_id,
+                ComputeState.STOPPED,
+                True,
+                True,
+                True,
+                "42",
+            ),
+            actions=[],
+            lineage_path=lineage_path,
+            receipt_path=tmp_path / "promotion-receipt.json",
+            checkpoints=VMHACheckpointFileStore(tmp_path / "controller-checkpoint.json"),
+        )
+        providers = VMHASnapshotProviders(
+            peer=lambda: (peer, case.now),
+            readiness=lambda: case.readiness,
+            cloud=lambda: case.cloud,
+            data_plane=lambda: DataPlaneMode.ACTIVE,
+            routes=lambda: case.routes,
+            transfer_intent=_typed_transfer_intent_provider(state_dir=tmp_path, config=config),
+        )
+        handlers = {}
+        for kind in ActionKind:
+            handlers[kind] = case.actions.append
+
+        def restart() -> DefaultVMHAControllerRuntime:
+            controller = build_vm_ha_controller_runtime(
+                config_path=config_path,
+                providers=providers,
+                handlers=handlers,
+                state_dir=tmp_path,
+                clock=lambda: case.now,
+                boot_id=lambda: "boot-local",
+            )
+            ports = SimpleNamespace(
+                heartbeat_snapshots=HeartbeatSnapshots(),
+                local=SimpleNamespace(
+                    node_id=local_id,
+                    role=SimpleNamespace(value="active" if local_id == "node-a" else "passive"),
+                ),
+                install_shutdown_guard=lambda **_kwargs: None,
+                close=lambda: None,
+            )
+            runtime = DefaultVMHAControllerRuntime(
+                controller,
+                ports,
+                boot_id="boot-local",
+                sequence_path=tmp_path / "sequence.json",
+                guard_path=guard_path,
+                config=config,
+                transfer_lineage_path=lineage_path,
+                promotion_receipt_path=case.receipt_path,
+                clock=lambda: case.now,
+            )
+            monkeypatch.setattr(runtime, "_start_peer_listener", lambda: None)
+            monkeypatch.setattr(runtime, "_start_heartbeat_workers", lambda: None)
+            runtimes.append(runtime)
+            return runtime
+
+        case.restart = restart
+        case.runtime = restart()
+        observed = case.runtime.controller.snapshots.observe()
+        case.routes = replace(observed.route_reconciliation_context, operation_id="route-effect")
+        case.checkpoints.save(
+            ControllerCheckpoint(
+                state=HAState.PROMOTING,
+                suspect_since=90.0,
+                transfer_continuity=TransferContinuity(
+                    attach_operation_id="attach-operation",
+                    allocation_id="allocation-a",
+                    former_owner_node_id=peer_id,
+                    candidate_node_id=local_id,
+                    generation_id="a" * 64,
+                    digests=digests,
+                    ownership_incarnation=0,
+                    pre_attach_revision="41",
+                    post_attach_revision="42",
+                    ownership_confirmed=True,
+                ),
+            )
+        )
+        return case
+
+    yield build
+
+    for runtime in runtimes:
+        runtime.close(restore_guard=False)
+
+
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+def test_completion_contention_preserves_forwarding_until_commit(
+    promotion_completion_case,
+    tmp_path: Path,
+    intent: str,
+) -> None:
+    case = promotion_completion_case(intent)
+    descriptor = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    assert descriptor is not None
+    try:
+        first = case.runtime.step()
+        assert first["promotion_ready"] is True
+        assert not case.receipt_path.exists()
+        assert case.lineage_path.exists()
+    finally:
+        os.close(descriptor)
+
+    second = case.runtime.step()
+    assert case.actions == [], f"Completion retry issued disruptive effects: {second['reasons']}"
+    assert case.receipt_path.exists()
+    assert not case.lineage_path.exists()
+    third = case.runtime.step()
+    assert third["promotion_committed"] is True
+
+
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+def test_degraded_path_defers_completion_without_losing_takeover_proof(
+    promotion_completion_case,
+    intent: str,
+) -> None:
+    case = promotion_completion_case(intent)
+    case.readiness = replace(
+        case.readiness,
+        static_ready=False,
+        xfrm_ready=False,
+        path_degraded=True,
+        partial_path_available=True,
+    )
+    first = case.runtime.step()
+    assert first["state"] == "degraded-path"
+    assert first["forwarding_continuity"] is True
+    assert not case.receipt_path.exists()
+    case.runtime.step()
+    assert case.actions == [], "Pending completion must preserve the working path"
+
+    case.readiness = LocalReadiness(True, True, True, True)
+    case.runtime.step()
+    assert case.receipt_path.exists()
+    assert not case.lineage_path.exists()
+
+
+def test_completion_pending_keeps_durable_continuity(promotion_completion_case, tmp_path: Path):
+    case = promotion_completion_case()
+    descriptor = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    assert descriptor is not None
+    try:
+        case.runtime.step()
+        assert case.checkpoints.load().transfer_continuity is not None
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.parametrize(
+    "boundary", ["before-receipt", "after-receipt", "after-authorization", "after-lineage"]
+)
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+def test_completion_interruption_recovers_without_repeating_takeover(
+    promotion_completion_case,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+    intent: str,
+) -> None:
+    case = promotion_completion_case(intent)
+    write_json = agent_main._atomic_write_json
+    unlink = agent_main._durably_unlink
+    commit_restoration = StandbyRestorationStore.commit
+
+    def interrupt_authorization(store, **kwargs):
+        result = commit_restoration(store, **kwargs)
+        if boundary == "after-authorization":
+            raise RuntimeError("injected completion interruption")
+        return result
+
+    def interrupt_write(path, payload):
+        if path == case.receipt_path and boundary == "before-receipt":
+            raise RuntimeError("injected completion interruption")
+        write_json(path, payload)
+        if path == case.receipt_path and boundary == "after-receipt":
+            raise RuntimeError("injected completion interruption")
+
+    def interrupt_unlink(path):
+        unlink(path)
+        if path == case.lineage_path and boundary == "after-lineage":
+            raise RuntimeError("injected completion interruption")
+
+    with monkeypatch.context() as injection:
+        injection.setattr(agent_main, "_atomic_write_json", interrupt_write)
+        injection.setattr(agent_main, "_durably_unlink", interrupt_unlink)
+        injection.setattr(StandbyRestorationStore, "commit", interrupt_authorization)
+        with pytest.raises(RuntimeError, match="injected completion interruption"):
+            case.runtime.step()
+
+    assert case.receipt_path.exists() is (boundary != "before-receipt")
+    assert case.lineage_path.exists() is (boundary != "after-lineage")
+    case.runtime.close(restore_guard=False)
+    case.runtime = case.restart()
+    for _attempt in range(3):
+        status = case.runtime.step()
+        if case.actions:
+            break
+    assert case.actions == [], f"Completion recovery repeated takeover: {status['reasons']}"
+    assert status["promotion_committed"] is True
+    assert not case.lineage_path.exists()
+
+
+@pytest.mark.parametrize("intent", ["automatic-failover", "planned-failover", "planned-failback"])
+def test_completion_without_deferral_remains_stable(promotion_completion_case, intent: str):
+    case = promotion_completion_case(intent)
+    case.runtime.step()
+    assert case.receipt_path.exists()
+    assert not case.lineage_path.exists()
+    second = case.runtime.step()
+    assert second["promotion_committed"] is True
+    assert case.actions == []
+
+
+def test_actual_ownership_loss_still_fences_pending_completion(
+    promotion_completion_case,
+    tmp_path: Path,
+) -> None:
+    case = promotion_completion_case()
+    descriptor = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    assert descriptor is not None
+    try:
+        case.runtime.step()
+    finally:
+        os.close(descriptor)
+    case.cloud = replace(
+        case.cloud,
+        observed_owner_node_id="node-a",
+        candidate_attachment_exact=False,
+        ownership_re_read_exact=False,
+        ownership_epoch="43",
+    )
+    case.runtime.step()
+    assert [action.kind for action in case.actions] == [ActionKind.DISABLE_ACTIVE]
+    assert case.checkpoints.load().transfer_continuity is None
+
+
+def test_confirmed_continuity_can_coexist_with_completed_promotion(promotion_completion_case):
+    case = promotion_completion_case()
+    proof = case.checkpoints.load().transfer_continuity
+    case.runtime.step()
+    assert case.receipt_path.exists()
+    assert not case.lineage_path.exists()
+
+    checkpoint = case.checkpoints.load()
+    case.checkpoints.save(replace(checkpoint, transfer_continuity=proof))
+    status = case.runtime.step()
+    assert status["promotion_committed"] is True
+    assert status["forwarding_continuity"] is True
+    assert case.actions == []
