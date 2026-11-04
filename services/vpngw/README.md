@@ -1124,6 +1124,24 @@ tunnels 1 and 2. Only the authoritative shared-allocation owner forwards.
 VM-HA remains opt-in and default-disabled; a static-only GCP Classic standby is
 tunnel-cold rather than the warm-tunnel topology shown here.
 
+### Static paths between VM-HA pairs
+
+Explicit VM HA selects one local static route per destination using current
+XFRM security-association and policy evidence. A usable preferred (`active`)
+tunnel wins over a usable backup (`passive`). A usable backup wins over an
+unavailable preferred path. Before any tunnel establishes, the agent installs
+the preferred path for bootstrap, but readiness still requires a usable
+encrypted path. Ordinary gateways retain the configuration-order behavior
+specified above.
+
+Two independently failing-over two-VM pairs with fixed member public IPs may
+configure all four member-to-member paths. Those paths need not all establish
+at once: a static-only remote standby is tunnel-cold. During preparation or
+bounded owner repair, the controller refreshes local static-route selection
+under the routing lock. Route changes do not grant shared-IP ownership or enable
+forwarding. Read-only health checks never repair routes, and BGP readiness remains
+required for mixed static/BGP gateways.
+
 ### Two-node VM-level HA
 
 Start from [`examples/vm-ha-bgp-example.yaml`](examples/vm-ha-bgp-example.yaml).

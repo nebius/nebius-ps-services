@@ -46,6 +46,7 @@ from .agent.vm_ha.auto_healing import (
     encode_policy_request,
     policy_decision_digest,
 )
+from .agent.vm_ha.heartbeat import HEARTBEAT_CAPABILITY
 from .agent.vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -3141,6 +3142,18 @@ def _finalize_vm_ha_managed_mtls(
             )
 
 
+def _vm_ha_independent_heartbeat_matches(payload: dict[str, t.Any]) -> bool:
+    capabilities = payload.get("controller_capabilities")
+    mtls = payload.get("mtls")
+    peer = mtls.get("peer") if isinstance(mtls, dict) else None
+    return bool(
+        isinstance(capabilities, list)
+        and HEARTBEAT_CAPABILITY in capabilities
+        and isinstance(peer, dict)
+        and peer.get("fresh") is True
+    )
+
+
 def _vm_ha_mtls_agent_evidence_matches(
     transaction: _VMHAMTLSApplyTransaction,
     node_id: str,
@@ -3886,7 +3899,7 @@ def _validate_vm_ha_display_status(
         and isinstance(validated["promotion_ready"], bool)
         and isinstance(validated["standby_ready"], bool)
         and isinstance(validated["standby_tunnel_state"], str)
-        and validated["standby_tunnel_state"] in {"cold", "warm", "not-standby"}
+        and validated["standby_tunnel_state"] in {"cold", "warm", "repairable", "not-standby"}
         and (pending is None or isinstance(pending, str) and bool(pending))
         and (apply_operation is None or isinstance(apply_operation, str) and bool(apply_operation))
         and isinstance(validated["rearm_phase"], str)
@@ -4060,7 +4073,7 @@ def _validate_vm_ha_display_status(
         data_plane == "passive"
         and owner is not None
         and owner != local_node
-        and validated["standby_tunnel_state"] in {"cold", "warm"}
+        and validated["standby_tunnel_state"] in {"cold", "warm", "repairable"}
         and standby_reasons == []
     ):
         raise _VMHAAgentStatusPermanent(
@@ -4130,7 +4143,7 @@ def _validate_vm_ha_planned_status(
         and all(
             isinstance(reason, str) and re.fullmatch(r"[a-z0-9-]+", reason) for reason in reasons
         )
-        and standby_tunnel_state in {"cold", "warm", "not-standby"}
+        and standby_tunnel_state in {"cold", "warm", "repairable", "not-standby"}
         and isinstance(standby_reasons, list)
         and all(isinstance(reason, str) and reason for reason in standby_reasons)
         and (pending is None or isinstance(pending, str) and bool(pending))
@@ -4138,7 +4151,7 @@ def _validate_vm_ha_planned_status(
         raise _VMHAAgentStatusPermanent("VM-HA planned status has invalid runtime evidence")
     if validated["standby_ready"] is True and not (
         validated["data_plane_mode"] == "passive"
-        and standby_tunnel_state in {"cold", "warm"}
+        and standby_tunnel_state in {"cold", "warm", "repairable"}
         and standby_reasons == []
         and isinstance(guard_boot_id, str)
         and guard_boot_id
@@ -8756,7 +8769,8 @@ def _apply_impl(
                         owner: bool = owner_replacement_entry,
                     ) -> bool:
                         return bool(
-                            payload.get("data_plane_mode") == ("active" if owner else "passive")
+                            _vm_ha_independent_heartbeat_matches(payload)
+                            and payload.get("data_plane_mode") == ("active" if owner else "passive")
                             and payload.get("promotion_ready") is owner
                             and (
                                 not owner
@@ -8798,7 +8812,8 @@ def _apply_impl(
                     )
                     activated_agent_statuses[current_owner_node_id] = _wait_for_vm_ha_agent_status(
                         predicate=lambda payload: bool(
-                            payload.get("data_plane_mode") == "active"
+                            _vm_ha_independent_heartbeat_matches(payload)
+                            and payload.get("data_plane_mode") == "active"
                             and payload.get("promotion_ready") is True
                             and payload.get("observed_owner_node_id") == current_owner_node_id
                             and payload.get("transfer_inhibition_operation_id") == operation_id

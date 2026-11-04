@@ -62,6 +62,8 @@ def build_binary() -> None:
         "agent/vm_ha_checkpoint.py",
         "agent/vm_ha_controller.py",
         "agent/vm_ha/models.py",
+        "agent/vm_ha/heartbeat.py",
+        "agent/vm_ha/observation.py",
         "agent/vm_ha/mtls.py",
     ):
         source = Path(__file__).parent / relative

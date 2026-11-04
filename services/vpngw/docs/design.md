@@ -2704,6 +2704,8 @@ Replace the two request-and-return public callbacks with one role-neutral planne
 
 `cli.py` owns the shared public workflow, deadline, polling, output channels, and final cloud re-read. The private `--vm-ha-status` response adds only a strict identity-free `promotion_committed` projection derived from the existing durable promotion receipt and the same current status snapshot; it does not expose resource identities or create a new request, status, or persisted schema. The agent, controller, cloud adapter, route reconciler, forwarding port, and automatic rearm retain their existing ownership and effect order.
 
+The controller retains confirmed transfer continuity while terminal completion is pending, including during writer-lock contention or degraded-path readiness. It retires continuity only after the runtime durably records the promotion receipt and restoration decision and retires transfer lineage. Interrupted completion is recognized only by a receipt matching the exact transfer operation, configuration, route operation, and fresh allocation ownership revision. Cleanup is retried under the shared rearm writer lock. While cleanup waits, an already restarted former owner does not turn that completed cutover back into an unfinished transfer. Receipt timestamps remain unchanged across retries. Receipt recognition does not replace fresh ownership, route, or forwarding checks, and it does not authorize a new attachment or activation.
+
 #### Test-First Success Criteria
 
 - The migrated validation contract passes after implementation.
@@ -7194,3 +7196,187 @@ update_req = UpdateSubnetRequest(
 
 **Resolution:**
 **Switching to XFRM interfaces completely eliminated this issue.** XFRM's `if_id` binding mechanism provides clean separation between tunnel interfaces and avoids the packet duplication problem that occurred with VTI mode. The current implementation uses XFRM interfaces exclusively and does not experience packet duplication.
+
+## Independent VM-HA heartbeats
+
+The VM-HA service has four application threads: the authoritative controller,
+peer receiver, read-only local-health sampler, and heartbeat publisher. SDK
+internals may use additional threads. Cloud calls and mutations stay in the
+controller. Sampling targets one second with one aggregate five-second command
+deadline. Publication targets one second with a retained five-second total
+network-send deadline, one attempt per tick, and no queued missed ticks.
+
+Heartbeat v4 separates service health, transfer readiness, local forwarding
+readiness, and observed data-plane mode. Readiness is tri-state. Cold static
+standby can be transfer-ready while local forwarding readiness is false.
+Controller mutations invalidate advisory health through a local revision.
+Fresh unknown owner observations receive the grace described below before the
+existing five-second suspicion interval. Stale delivery retains its existing policy.
+Healthy evidence cancels suspicion only before transfer starts. The five-second
+repair budget and one-second fencing reserve remain unchanged. Repair completion
+wakes sampling, but recovery delivery before suspicion expires is not guaranteed.
+
+Ownership is advisory last-successful controller evidence with its own age.
+It never authorizes effects. Health and ownership age include elapsed observation
+time, delivery delay, the existing five-second clock-skew allowance, and receiver
+residence. Age >= ten seconds is unknown. This conservative bound assumes clocks
+differ by at most five seconds. Freshness is separate from authenticated-message
+admission. Snapshot construction reads peer/time after all blocking providers.
+
+The v4 wire format is a coordinated guarded upgrade, not a mixed-version rolling
+protocol. Existing generation-bound advisory-cache resets preserve replay state,
+ownership journals, and pending operations. Activation verifies the running
+independent-heartbeat capability and fresh authenticated v4 evidence on both
+nodes. mTLS proof does not require a successful routing-health sample.
+
+Retryable failures at the controller's cloud observation boundary abort that
+iteration before policy evaluation or effects. The service retries after five
+seconds without installing a new guard, rewriting the checkpoint, or refreshing
+the last-successful cloud observation. Heartbeats continue to expose fresh local
+health and the increasing age of the last successful ownership observation.
+An API outage has no automatic fencing deadline. Persisted status remains the
+last completed controller iteration during an exception, rather than claiming
+fresh cloud authority. Retry messages identify observation unavailability.
+This boundary includes route-receipt validation reads of allocation ownership,
+route-target membership and complete route inventory. Pagination failures qualify
+only when their underlying failure is a retryable transport error. Cloud grace
+resets only after both ownership and receipt observations complete successfully.
+
+A non-authoritative policy snapshot also pauses cloud-dependent effects and
+their replay. It preserves existing forwarding, reports unknown cloud authority,
+and cannot report activation readiness. Already checkpointed local safety
+actions and cold-start guarding remain enforceable. A successful authoritative
+read showing ownership loss still schedules fencing. Errors from mutations,
+including retryable SDK errors, retain the existing guarded recovery behavior.
+Availability handling does not weaken the former-owner Stopped proof or exact
+candidate attachment required for takeover and activation.
+
+### Observation grace and partial forwarding
+
+`ObservationGrace` tracks consecutive failures and elapsed monotonic time for
+cloud queries, local queries and accepted unknown peer samples independently.
+Its threshold is three failures over at least ten seconds. A cloud timeout
+aborts the iteration and retries, with structured grace diagnostics. Reaching
+the cloud threshold does not change forwarding. Local query failure produces
+explicit unavailable readiness, rather than synthesizing four confirmed failures.
+The snapshot adapter counts failed local observations. Its last mode can preserve
+existing forwarding during grace but never authorizes activation. Proven durable
+authority conflicts remain immediate safety failures.
+Receipt validation also propagates unavailable local queries into this grace.
+The same process may retain its previously verified receipt solely for existing
+forwarding under unchanged fresh ownership, an active current-boot guard and no
+writer inhibition. A missing receipt, ownership change or new activation cannot
+use that continuity. A successful complete local observation resets the streak.
+
+Heartbeats retain null health for unavailable local observations. The receiver
+tracks distinct fresh authenticated frames, grants observation grace, then starts
+normal five-second suspicion. It does not refresh the timer from replay or stale
+healthy samples. Confirmed failed health, blocked mode, stale delivery and an
+effect-backed transfer retain their separate handling. No wire or checkpoint
+fields were added, and no additional worker or daemon is needed.
+
+`forwarding_ready` represents existing-owner service with usable configured paths.
+`promotion_ready` remains strict across required destinations and policies. A
+failed connection with another usable path produces degraded connection status
+and a healthy forwarding heartbeat. Established BGP neighbors must retain exact
+observed exports. A disconnected neighbor's missing export query does not prove
+global policy drift, but unavailable observations on established neighbors and
+positive policy violations remain distinct from ordinary connection loss.
+
+Static repair compares selected usable routes with installed routes and replaces
+only stale destinations. Scoped failures retain healthy forwarding, with bounded
+retry opportunities. IKE/BGP protocol recovery retains existing per-peer behavior.
+Automatic repair no longer restarts running strongSwan/FRR or reloads all tunnels.
+It starts only confirmed stopped services. Complete path loss keeps the existing
+repair/fencing budget, and ownership or route-authority violations remain strict.
+
+Local observations expose each pending static correction as a sorted
+`(destination, interface)` pair. Repair reasons include an explicit static repair
+tag and these targets rather than depending on promotion blockers being present.
+The executor recomputes current usable selections under the routing lock and
+replaces only stale destinations. A route-only attempt is retired after fresh
+readiness proves its correction complete, or when a different nonempty target
+set supersedes it. Other failure reasons keep the existing gateway repair budget.
+The controller retains its active reconciliation marker during forwarding
+continuity, avoiding redundant ordinary-agent reloads after scoped repair or
+observation grace. Checkpoint field names and heartbeat format are unchanged.
+
+Status exposes observation streaks, degraded connections and forwarding
+continuity. The ordinary agent may defer a reload when current-boot and generation
+evidence proves that continuity. It performs no activation or data-plane writes
+on that path. Fresh activation and ordinary forwarding writers still require the
+strict readiness gate. The guarded upgrade requires
+`vm-ha-independent-heartbeat-v2` and bundles the helper for isolated recovery.
+
+### Mixed-routing standby preparation
+
+The previous static-only optimization set `tunnel_cold_passive` when the committed
+static manifest was nonempty and the BGP manifest was empty. Mixed gateways took
+the BGP warm path and restored static SAs on the non-forwarding standby. The live
+US–UK repeat demonstrated that the remote static route could then prefer that
+standby even though the local HA ownership and forwarding fence were correct.
+
+Keep whole-gateway HA and the static-only suspension path. Also derive enabled
+static connection names from the canonical tunnel/XFRM projection, including
+routing inheritance and disabled-tunnel handling. Passive strongSwan rendering
+omits those connections entirely while preserving all interface numbers and BGP
+configuration. The default on-disk file is therefore safe for passive reloads and
+remote initiation. Preserve a running daemon carrying BGP IKE state. Initial
+bootstrap with positively observed absence of BGP SAs still restarts the daemon
+to apply its plugin settings. Unavailable service or SA queries cannot authorize
+a restart.
+
+After passive materialization publishes the BGP-only configuration, reload
+connections and verify static responder absence. Terminate static IKE IDs by
+exact configured connection name, then observe their absence again. BGP SAs are
+not terminated by this selective path. Do this before waiting for passive export
+verification, so an unrelated slow BGP observation cannot delay static cleanup.
+Failures retain the existing blocked forwarding authority. All mutations remain
+under the existing routing writer lock.
+
+The local sampler observes both loaded connection names and IKE SAs. Malformed
+or unavailable VICI responses remain unknown observations under the existing
+bounded grace. Positive static state on a non-owner requests passive
+rematerialization and prevents standby admission. A mixed standby may have BGP
+IKE SAs while its static component is cold. Existing `standby_tunnel_state=cold`
+then describes that suspended static component, without a new persisted enum.
+Cold readiness requires valid BGP/export readiness, static suspension, no usable
+static candidate path and normal routing hygiene.
+
+The existing candidate preparation action stays after exact ownership proof and
+before route reconciliation. Its callback renders full initiation syntax in
+memory and atomically publishes only the canonical swanctl file. It does not
+restart services, apply netplan, advertise prefixes or enable forwarding. The
+runtime loads that file, waits for a static SA rather than any BGP SA, and repairs
+static route selection. A later fresh observation must prove all final readiness
+conditions. An intervening passive reload may suspend static tunnels again, so
+candidate preparation remains replayable while forwarding stays fenced.
+
+No independent connection owner, connection takeover state machine, public YAML
+option, heartbeat format, checkpoint format, new worker or new service is added.
+The separate establishment-proof fence observed during the live repeat is not
+resolved by this change. Local simulation and wheel checks do not qualify live
+packet delivery or US–UK BGP failover.
+
+The cleanup relies on strongSwan's existing load operation, which unloads
+connections absent from the supplied file. Its
+[5.9 implementation](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/commands/load_conns.c#L357-L405)
+confirms that behavior. The read-only verifier uses the corresponding
+[list-conns event and reply format](https://github.com/strongswan/strongswan/blob/5.9.13/src/swanctl/commands/list_conns.c#L286-L349),
+with completeness and duplicate checks before asserting static responder absence.
+
+Offline validation passed 3,045 unit/integration tests, including nineteen new
+mixed-standby cases and the production bootstrap oracle. Another 31 require
+unavailable disposable Linux/systemd fixtures, and the frozen-binary test was
+excluded because PyInstaller is unavailable. Changed-source lint and type checks
+passed. This is not live deployment or takeover qualification.
+
+
+Candidate publication runs inside the controller's hardened service namespace.
+Grant only `/etc/swanctl` as an additional `ReadWritePaths` directory so the
+atomic temporary-file/rename writer can run under `ProtectSystem=strict`.
+Publication I/O failures become guarded retryable controller effects rather than
+uncaught process exits. Unit-policy regression coverage checks the canonical
+configuration parent, and an injected read-only failure verifies that publication
+failure neither loads tunnels nor enables forwarding. The November 2 live
+preflight exposed this permission omission before controlled fault injection.

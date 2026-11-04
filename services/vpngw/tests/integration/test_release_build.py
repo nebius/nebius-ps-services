@@ -122,6 +122,7 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     assert "nebius_vpngw/systemd/nebius-vpngw-ufw-lock.conf" in names
     assert "nebius_vpngw/agent/vm_ha/promotion_receipt.py" in names
     assert "nebius_vpngw/agent/vm_ha/restoration.py" in names
+    assert "nebius_vpngw/agent/vm_ha/observation.py" in names
     assert "services/vpngw/src/nebius_vpngw/_version.py" not in names
 
     install_root = tmp_path / "installed"

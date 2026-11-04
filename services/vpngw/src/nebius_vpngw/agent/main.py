@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import yaml
 
+from nebius_vpngw.deploy.vm_ha_cloud import is_retryable_ha_cloud_error
 from nebius_vpngw.schema import VMHARuntimeBinding
 
 from .firewall_manager import update_firewall_from_config
@@ -29,6 +30,7 @@ from .routing_guard import (
     enforce_vm_ha_passive_routing_hygiene_locked,
     require_vm_ha_current_boot_ready,
     require_vm_ha_route_maintenance_ready,
+    vm_ha_reload_deferred,
 )
 from .state_store import StateStore
 from .strongswan_renderer import StrongSwanRenderer
@@ -50,6 +52,7 @@ from .vm_ha.auto_healing import (
     require_auto_healing_transactions_quiescent,
     require_auto_healing_writer_quiescent,
 )
+from .vm_ha.heartbeat import HEARTBEAT_CAPABILITY
 from .vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -67,6 +70,7 @@ from .vm_ha.models import (
     StateValidationError,
 )
 from .vm_ha.mtls import ManagedMTLSError, ManagedMTLSStore
+from .vm_ha.observation import ObservationGrace
 from .vm_ha.progress import (
     TRANSFER_PROGRESS_ACTIONS,
     TransferProgressIdentity,
@@ -94,6 +98,8 @@ from .vm_ha.restoration import (
     restoration_is_active,
 )
 from .vm_ha.runtime import (
+    LocalAuthorityError,
+    LocalObservationUnavailable,
     VMHARuntimePorts,
     build_runtime_ports,
     runtime_identity_public_status,
@@ -123,7 +129,7 @@ from .vm_ha_controller import (
     TransferIntent,
     VMHAController,
 )
-from .xfrm_manager import XFRMManager
+from .xfrm_manager import XFRMManager, vm_ha_static_endpoints
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 STATE_PATH = Path("/etc/nebius-vpngw/last-applied.json")
@@ -787,6 +793,18 @@ def _typed_transfer_intent_provider(
     return intent
 
 
+class VMHACloudObservationUnavailable(RuntimeError):
+    """A retryable read failed before the controller could authorize any effect."""
+
+    def __init__(
+        self, message: str, *, observation_status: Mapping[str, object] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.observation_status = (
+            dict(observation_status) if observation_status is not None else None
+        )
+
+
 class VMHASnapshotAdapter:
     """Build exact policy input from immutable binding and live adapters."""
 
@@ -798,6 +816,7 @@ class VMHASnapshotAdapter:
         state_dir: Path = VM_HA_STATE_DIR,
         clock: Callable[[], float] = time.time,
         boot_id: Callable[[], str] = _boot_id,
+        observation_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         node = config.get("node")
         generation = config.get("generation")
@@ -842,10 +861,15 @@ class VMHASnapshotAdapter:
         self.providers = providers
         self.state_dir = state_dir
         self.clock = clock
+        self.observation_clock = observation_clock
         self.boot_id = boot_id
         self.last_snapshot: ControllerSnapshot | None = None
         self.last_apply_operation_id: str | None = None
         self.last_transfer_inhibition_operation_id: str | None = None
+        self.cloud_observation_grace = ObservationGrace()
+        self.local_observation_grace = ObservationGrace()
+        self.peer_observation_grace = ObservationGrace()
+        self.last_unknown_peer_sample: tuple[str, int] | None = None
 
     def _retire_prior_generation_adoption_state(
         self, *, adoption: Mapping[str, Any], operation_id: str
@@ -878,7 +902,7 @@ class VMHASnapshotAdapter:
                 config=self.config,
                 apply_operation_id=current_operation,
             )
-            cloud = self.providers.cloud()
+            cloud = self._observe_cloud()
             if not (
                 current_operation == operation_id
                 and current_adoption == adoption
@@ -905,9 +929,61 @@ class VMHASnapshotAdapter:
         finally:
             os.close(descriptor)
 
+    def _observe_cloud(self) -> CloudObservation:
+        try:
+            cloud = self.providers.cloud()
+        except Exception as error:
+            if not is_retryable_ha_cloud_error(error):
+                raise
+            raise self._cloud_observation_unavailable() from error
+        return cloud
+
+    def _cloud_observation_unavailable(self) -> VMHACloudObservationUnavailable:
+        self.cloud_observation_grace.failed(self.observation_clock())
+        return VMHACloudObservationUnavailable(
+            "cloud observation unavailable; retrying",
+            observation_status=self.cloud_observation_grace.status(self.observation_clock()),
+        )
+
+    def _peer_in_observation_grace(
+        self, peer: PeerHeartbeat | None, received_at: float | None, now: float
+    ) -> bool:
+        fresh = bool(
+            peer is not None
+            and received_at is not None
+            and 0 <= now - received_at < 10.0
+            and peer.health_sample_age_seconds is not None
+            and peer.health_sample_age_seconds + now - received_at < 10.0
+        )
+        unknown = bool(
+            fresh
+            and peer is not None
+            and peer.local_forwarding_ready is None
+            and peer.service_healthy is not False
+            and peer.data_plane_mode in {None, "active"}
+        )
+        if not unknown:
+            if (
+                fresh
+                and peer is not None
+                and (
+                    peer.local_forwarding_ready is not None
+                    or peer.service_healthy is False
+                    or peer.data_plane_mode in {"blocked", "passive"}
+                )
+            ):
+                self.peer_observation_grace.succeeded()
+                self.last_unknown_peer_sample = None
+            return False
+        assert peer is not None
+        sample_id = (peer.boot_id, peer.sequence)
+        if sample_id != self.last_unknown_peer_sample:
+            self.peer_observation_grace.failed(self.observation_clock())
+            self.last_unknown_peer_sample = sample_id
+        return not self.peer_observation_grace.expired(self.observation_clock())
+
     def observe(self) -> ControllerSnapshot:
-        peer, peer_received_at = self.providers.peer()
-        cloud = self.providers.cloud()
+        cloud = self._observe_cloud()
         if cloud.allocation_id != self.allocation_id:
             raise ValueError("VM-HA cloud observation has the wrong allocation identity")
         guard_path = self.state_dir / VM_HA_GUARD_PATH.name
@@ -948,7 +1024,22 @@ class VMHASnapshotAdapter:
             self._retire_prior_generation_adoption_state(
                 adoption=adoption, operation_id=apply_operation_id
             )
-        if transfer_intent is TransferIntent.AUTOMATIC_FAILOVER and transfer_effect_started:
+        transfer_completion_recorded = False
+        if transfer_effect_started and not adoption_authorized:
+            transfer_completion_recorded = _recover_committed_transfer(
+                config=self.config,
+                state_dir=self.state_dir,
+                cloud=cloud,
+                node_id=self.local_node_id,
+                now=self.clock(),
+            )
+            if transfer_completion_recorded:
+                transfer_intent, transfer_effect_started = self.providers.transfer_intent()
+        if (
+            transfer_intent is TransferIntent.AUTOMATIC_FAILOVER
+            and transfer_effect_started
+            and not transfer_completion_recorded
+        ):
             lineage_path = self.state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
             if adoption_authorized:
                 _durably_unlink(lineage_path)
@@ -979,6 +1070,62 @@ class VMHASnapshotAdapter:
                     _durably_unlink(lineage_path)
                     transfer_intent = None
                     transfer_effect_started = False
+        readiness = self.providers.readiness()
+        try:
+            data_plane = self.providers.data_plane()
+        except LocalAuthorityError:
+            raise
+        except RuntimeError:
+            # Retain this process's prior mode only to preserve forwarding.
+            # Unknown readiness cannot authorize a new activation.
+            data_plane = (
+                self.last_snapshot.data_plane_mode
+                if self.last_snapshot is not None
+                else DataPlaneMode.BLOCKED
+            )
+            readiness = replace(readiness, observation_available=False)
+        try:
+            routes = self.providers.routes()
+        except LocalObservationUnavailable:
+            previous = self.last_snapshot
+            routes = None
+            if (
+                previous is not None
+                and previous.boot_id == self.boot_id()
+                and guard.get("guard_boot_id") == previous.boot_id
+                and guard.get("data_plane_mode") == "active"
+                and data_plane is DataPlaneMode.ACTIVE
+                and previous.data_plane_mode is DataPlaneMode.ACTIVE
+                and cloud.local_attachment_exact(self.local_node_id)
+                and cloud.ownership_epoch == previous.cloud.ownership_epoch
+                and apply_operation_id is None
+                and transfer_inhibition_operation_id is None
+            ):
+                # Same-process continuity only. Missing receipts, changed
+                # ownership and new activations never gain authority here.
+                routes = previous.routes_reconciled_context
+            if readiness.service_healthy or not readiness.observation_available:
+                readiness = replace(readiness, observation_available=False)
+        except Exception as error:
+            # Receipt validation rereads allocation, target membership and route
+            # inventory. Only this read-only boundary receives retry handling.
+            # The same errors from effects retain guarded journal recovery.
+            if not is_retryable_ha_cloud_error(error):
+                raise
+            raise self._cloud_observation_unavailable() from error
+        if readiness.observation_available:
+            self.local_observation_grace.succeeded()
+        else:
+            self.local_observation_grace.failed(self.observation_clock())
+            readiness = replace(
+                readiness,
+                observation_failures=self.local_observation_grace.consecutive_failures,
+                observation_failure_age=self.local_observation_grace.elapsed(
+                    self.observation_clock()
+                ),
+            )
+        self.cloud_observation_grace.succeeded()
+        peer, peer_received_at = self.providers.peer()
         snapshot = ControllerSnapshot(
             now=self.clock(),
             boot_id=self.boot_id(),
@@ -992,20 +1139,24 @@ class VMHASnapshotAdapter:
             peer_received_at=peer_received_at,
             apply_locked=apply_operation_id is not None,
             emergency_active_only=self.providers.emergency_active_only(),
-            readiness=self.providers.readiness(),
+            readiness=readiness,
             cloud=cloud,
             guard_boot_id=str(guard.get("guard_boot_id")) if guard.get("guard_boot_id") else None,
-            data_plane_mode=self.providers.data_plane(),
-            routes_reconciled_context=self.providers.routes(),
+            data_plane_mode=data_plane,
+            routes_reconciled_context=routes,
             route_runtime_id=self.route_runtime_id,
             completed_effect_operation_id=(
                 completed_effect[0] if completed_effect is not None else None
             ),
             transfer_intent=transfer_intent,
             transfer_effect_started=transfer_effect_started,
+            transfer_completion_recorded=transfer_completion_recorded,
             apply_owner_adoption=adoption_authorized,
             transfer_inhibited=transfer_inhibition_operation_id is not None,
             standby_replacement_inhibited=(standby_replacement_inhibition_operation_id is not None),
+            peer_observation_grace=self._peer_in_observation_grace(
+                peer, peer_received_at, self.clock()
+            ),
         )
         self.last_apply_operation_id = apply_operation_id
         self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
@@ -1584,31 +1735,108 @@ def _commit_promotion_receipt(
             restoration_store.retire_terminal(
                 authorization_id=restoration.authorization_id,
             )
-    if not receipt_path.exists() or current.get("receipt_id") != receipt_id:
+    if receipt_path.exists() and current.get("receipt_id") == receipt_id:
+        # Retrying restoration or cleanup must reuse the exact durable receipt,
+        # including its original timestamps, rather than manufacture a new one.
+        preserved_receipt = dict(receipt)
+        preserved_receipt.update(
+            committed_at=current["committed_at"],
+            common_cutover_seconds=current["common_cutover_seconds"],
+        )
+        if current != preserved_receipt:
+            raise ValueError("existing VM-HA promotion receipt disagrees with transfer completion")
+        receipt = current
+    else:
         _atomic_write_json(receipt_path, receipt)
     if lineage is not None:
-        # The receipt is terminal transfer authority. Commit the exact
-        # restoration authorization before retiring lineage so a crash cannot
-        # leave a promoted owner with no durable way to restart its peer.
-        restoration_store = StandbyRestorationStore(receipt_path.parent)
-        try:
-            restoration_store.commit(
-                receipt=receipt,
-                updated_at=committed_at,
-            )
-        except StandbyRestorationError:
-            if lineage["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
-                raise
-            # Automatic owner-loss promotion is availability-authoritative.
-            # Unusable restoration evidence disables only the optional
-            # standby restart; it must not invalidate an otherwise fenced,
-            # terminal promotion.
-            restoration_store.discard_unusable_authorization()
-    if lineage is not None:
-        _durably_unlink(lineage_path)
+        _finish_committed_transfer(
+            receipt=receipt,
+            lineage_path=lineage_path,
+            now=committed_at,
+        )
     if adoption is not None and adoption_path is not None:
         _durably_unlink(adoption_path)
     return receipt
+
+
+def _finish_committed_transfer(
+    *, receipt: Mapping[str, Any], lineage_path: Path, now: float
+) -> None:
+    """Finish receipt-first restoration and lineage cleanup under rearm.lock."""
+    # Preserve a durable restoration decision before retiring transfer lineage.
+    restoration_store = StandbyRestorationStore(lineage_path.parent)
+    try:
+        restoration_store.commit(receipt=receipt, updated_at=now)
+    except StandbyRestorationError:
+        if receipt["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
+            raise
+        # Unusable optional restoration cannot invalidate automatic cutover.
+        restoration_store.discard_unusable_authorization()
+    _durably_unlink(lineage_path)
+
+
+def _recover_committed_transfer(
+    *,
+    config: Mapping[str, Any],
+    state_dir: Path,
+    cloud: CloudObservation,
+    node_id: str,
+    now: float,
+) -> bool:
+    """Recognize only this exact completed transfer, then retry its cleanup.
+
+    A receipt can survive a crash before lineage retirement. Rearm may already
+    have restarted the former owner. Do not reinterpret that completed transfer
+    as a new takeover requiring the former owner to be stopped again.
+    """
+    if not cloud.local_attachment_exact(node_id):
+        return False
+    lineage_path = state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
+    lineage = _read_transfer_lineage(lineage_path, config=config)
+    if lineage is None:
+        return False
+    receipt_path = state_dir / VM_HA_PROMOTION_RECEIPT_PATH.name
+    receipt = _read_promotion_receipt(receipt_path, config=config)
+    if not _promotion_receipt_matches_current_owner(receipt, cloud=cloud, node_id=node_id):
+        return False
+    assert receipt is not None
+    expected_id = promotion_receipt_id_v1(
+        allocation_id=str(lineage["allocation_id"]),
+        first_operation_id=str(lineage["first_operation_id"]),
+        generation_id=str(lineage["generation_id"]),
+        intent=str(lineage["intent"]),
+        owner_node_id=str(lineage["candidate_node_id"]),
+        ownership_epoch=cloud.ownership_epoch,
+        route_operation_id=str(receipt["route_operation_id"]),
+    )
+    if not (
+        receipt["receipt_id"] == expected_id
+        and receipt["intent"] == lineage["intent"]
+        and receipt["former_owner_node_id"] == lineage["former_owner_node_id"]
+    ):
+        return False
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    descriptor = _acquire_rearm_lock(state_dir / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    if descriptor is None:
+        # Recognition is read-only. Cleanup waits for the writer, but the exact
+        # receipt already proves cutover and cannot be undone by lock contention.
+        return True
+    try:
+        if (
+            _read_promotion_receipt(receipt_path, config=config) != receipt
+            or _read_transfer_lineage(lineage_path, config=config) != lineage
+        ):
+            return False
+        try:
+            _finish_committed_transfer(receipt=receipt, lineage_path=lineage_path, now=now)
+        except (OSError, StandbyRestorationError):
+            # Completion bookkeeping is retried. A valid terminal receipt must
+            # not turn a restoration/cleanup failure into dataplane fencing.
+            pass
+        return True
+    finally:
+        os.close(descriptor)
 
 
 def _advance_standby_restoration(
@@ -1862,7 +2090,21 @@ class VMHAControllerRuntime:
         snapshot = self.snapshots.last_snapshot
         if snapshot is None:
             raise RuntimeError("VM-HA controller has no observed snapshot")
-        ready = bool(result.forwarding_enabled and result.action is None)
+        ready = bool(
+            snapshot.cloud.authoritative
+            and snapshot.readiness.promotion_ready
+            and result.forwarding_enabled
+            and result.action is None
+        )
+        forwarding_continuity = bool(
+            snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+            and snapshot.guard_boot_id == snapshot.boot_id
+            and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+            and not snapshot.apply_locked
+            and result.state
+            in {HAState.ACTIVE, HAState.DEGRADED, HAState.DEGRADED_PATH, HAState.REPAIRING}
+            and (result.action is None or result.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE)
+        )
         route_context = snapshot.routes_reconciled_context
         cold_standby = bool(
             snapshot.data_plane_mode is DataPlaneMode.PASSIVE
@@ -1871,7 +2113,19 @@ class VMHAControllerRuntime:
         warm_standby = bool(
             snapshot.data_plane_mode is DataPlaneMode.PASSIVE and snapshot.readiness.promotion_ready
         )
-        standby_tunnel_state = "cold" if cold_standby else "warm" if warm_standby else "not-standby"
+        repairable_standby = bool(
+            snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+            and snapshot.readiness.static_route_repair_ready
+            and snapshot.readiness.transfer_ready
+        )
+        if cold_standby:
+            standby_tunnel_state = "cold"
+        elif warm_standby:
+            standby_tunnel_state = "warm"
+        elif repairable_standby:
+            standby_tunnel_state = "repairable"
+        else:
+            standby_tunnel_state = "not-standby"
         standby_reasons: list[str] = []
         standby_checks = (
             (snapshot.guard_boot_id == snapshot.boot_id, "cold-start-guard-stale"),
@@ -1912,6 +2166,7 @@ class VMHAControllerRuntime:
                     "route_runtime_id": snapshot.route_runtime_id,
                     "service_healthy": True,
                     "static_ready": snapshot.readiness.static_ready,
+                    "static_route_repair_ready": snapshot.readiness.static_route_repair_ready,
                     "bgp_ready": snapshot.readiness.bgp_ready,
                     "xfrm_ready": snapshot.readiness.xfrm_ready,
                     "apply_locked": False,
@@ -2033,10 +2288,16 @@ class VMHAControllerRuntime:
         peer_standby_ready = bool(
             peer_fresh
             and peer is not None
+            and snapshot.peer_received_at is not None
             and peer.observed_owner_id == snapshot.local_node_id
-            and peer.service_healthy
-            and peer.route_ready
-            and peer.promotion_ready
+            and peer.service_healthy is True
+            and peer.transfer_ready is True
+            and peer.data_plane_mode == "passive"
+            and peer.health_sample_age_seconds is not None
+            and peer.health_sample_age_seconds + snapshot.now - snapshot.peer_received_at < 10.0
+            and peer.ownership_observation_age_seconds is not None
+            and peer.ownership_observation_age_seconds + snapshot.now - snapshot.peer_received_at
+            < 10.0
         )
         redundancy_ready = bool(
             standby_ready
@@ -2045,12 +2306,26 @@ class VMHAControllerRuntime:
         payload = {
             "schema": _STATUS_SCHEMA,
             "controller_capabilities": [
+                HEARTBEAT_CAPABILITY,
                 _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
             ],
             "state": result.state.value,
+            "forwarding_continuity": forwarding_continuity,
+            "observation_health": {
+                "cloud": self.snapshots.cloud_observation_grace.status(
+                    self.snapshots.observation_clock()
+                ),
+                "local": self.snapshots.local_observation_grace.status(
+                    self.snapshots.observation_clock()
+                ),
+                "peer_local": self.snapshots.peer_observation_grace.status(
+                    self.snapshots.observation_clock()
+                ),
+            },
+            "degraded_connections": list(snapshot.readiness.degraded_connections),
             "reasons": list(result.reasons),
             "recovery_action": None,
             "controller_ready_boot_id": snapshot.boot_id if ready else None,
@@ -2147,6 +2422,11 @@ class VMHAControllerRuntime:
     def step(self) -> dict[str, Any]:
         try:
             return self._write_status(self.controller.step())
+        except VMHACloudObservationUnavailable:
+            # No cloud truth or effect was obtained. Leave the existing guard,
+            # forwarding, checkpoints and last-successful observation intact.
+            # Independent workers continue reporting current local health.
+            raise
         except Exception as error:
             self.guard()
             try:
@@ -2175,6 +2455,10 @@ class VMHAControllerRuntime:
             raise
 
 
+class VMHAWorkerFailure(Exception):
+    """A required independent worker failed and the service must shut down."""
+
+
 class DefaultVMHAControllerRuntime:
     """Service-owned composition with bounded peer I/O and guarded teardown."""
 
@@ -2193,11 +2477,10 @@ class DefaultVMHAControllerRuntime:
         promotion_receipt_path: Path | None = None,
         clock: Callable[[], float] = time.time,
         peer_timeout_seconds: float = 2.0,
-        peer_send_attempts: int = 3,
         peer_retry_seconds: float = 0.05,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
-        if peer_timeout_seconds <= 0 or peer_send_attempts < 1 or peer_retry_seconds < 0:
+        if peer_timeout_seconds <= 0 or peer_retry_seconds < 0:
             raise ValueError("VM-HA peer retry bounds are invalid")
         self.controller = controller
         self.ports = ports
@@ -2211,7 +2494,6 @@ class DefaultVMHAControllerRuntime:
         self.promotion_receipt_path = promotion_receipt_path
         self.clock = clock
         self.peer_timeout_seconds = peer_timeout_seconds
-        self.peer_send_attempts = peer_send_attempts
         self.peer_retry_seconds = peer_retry_seconds
         self.sleeper = sleeper
         self.started_guarded = False
@@ -2220,6 +2502,11 @@ class DefaultVMHAControllerRuntime:
         self.listener_stop = threading.Event()
         self.listener_thread: threading.Thread | None = None
         self.listener_error: BaseException | None = None
+        self.worker_error: BaseException | None = None
+        self.publisher_thread: threading.Thread | None = None
+        self.sampler_thread: threading.Thread | None = None
+        self.first_publication = threading.Event()
+        self.last_published_health: tuple[object, ...] | None = None
 
     def _reserve_heartbeat_sequence(self) -> int:
         sequence = 0
@@ -2280,23 +2567,113 @@ class DefaultVMHAControllerRuntime:
         heartbeat = self.ports.heartbeat(
             boot_id=self.boot_id,
             sequence=self._reserve_heartbeat_sequence(),
-            clock=self.clock(),
+            clock=self.clock,
         )
 
-        for attempt in range(self.peer_send_attempts):
-            try:
-                self.ports.peer_runtime.send(heartbeat)
-                return
-            except PeerTransportError:
-                if attempt + 1 < self.peer_send_attempts:
-                    self.sleeper(self.peer_retry_seconds)
+        sent = True
+        try:
+            self.ports.peer_runtime.send(heartbeat)
+        except PeerTransportError:
+            sent = False
+        if isinstance(heartbeat, PeerHeartbeat):
+            signature = (
+                heartbeat.service_healthy,
+                heartbeat.transfer_ready,
+                heartbeat.local_forwarding_ready,
+                heartbeat.data_plane_mode,
+            )
+            if not sent or signature != self.last_published_health or heartbeat.sequence % 10 == 0:
+                print(
+                    "[VM-HA-HEARTBEAT] "
+                    + json.dumps(
+                        {
+                            "event": "sent" if sent else "send-failed",
+                            "sequence": heartbeat.sequence,
+                            "health_sample_age_seconds": heartbeat.health_sample_age_seconds,
+                            "ownership_observation_age_seconds": heartbeat.ownership_observation_age_seconds,
+                            "service_healthy": heartbeat.service_healthy,
+                            "transfer_ready": heartbeat.transfer_ready,
+                            "local_forwarding_ready": heartbeat.local_forwarding_ready,
+                            "data_plane_mode": heartbeat.data_plane_mode,
+                        },
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
+                self.last_published_health = signature
+
+    def _worker_failed(self, error: BaseException) -> None:
+        self.worker_error = error
+        print(
+            "[VM-HA-HEARTBEAT] "
+            + json.dumps(
+                {
+                    "event": "worker-failed",
+                    "error_type": type(error).__name__,
+                }
+            ),
+            flush=True,
+        )
+        self.listener_stop.set()
+        self.ports.heartbeat_snapshots.resample.set()
+
+    def _sample_local_state(self) -> None:
+        try:
+            next_tick = time.monotonic()
+            while not self.listener_stop.is_set():
+                self.ports.heartbeat_snapshots.resample.clear()
+                self.ports.sample_local_health(cancelled=self.listener_stop.is_set)
+                next_tick += 1.0
+                now = time.monotonic()
+                if next_tick <= now:
+                    next_tick = now
+                self.ports.heartbeat_snapshots.resample.wait(max(0.0, next_tick - now))
+                if self.ports.heartbeat_snapshots.resample.is_set():
+                    next_tick = time.monotonic()
+        except BaseException as error:
+            self._worker_failed(error)
+
+    def _publish_peer_state(self) -> None:
+        try:
+            next_tick = time.monotonic()
+            while not self.listener_stop.is_set():
+                self._exchange_peer_state()
+                self.first_publication.set()
+                next_tick += 1.0
+                now = time.monotonic()
+                if next_tick <= now:
+                    next_tick = now + 1.0
+                self.listener_stop.wait(max(0.0, next_tick - now))
+        except BaseException as error:
+            self._worker_failed(error)
+        finally:
+            self.first_publication.set()
+
+    def _start_heartbeat_workers(self) -> None:
+        if self.publisher_thread is not None:
+            return
+        self.sampler_thread = threading.Thread(
+            target=self._sample_local_state,
+            name="nebius-vpngw-vm-ha-local-health",
+        )
+        self.publisher_thread = threading.Thread(
+            target=self._publish_peer_state,
+            name="nebius-vpngw-vm-ha-publisher",
+        )
+        self.sampler_thread.start()
+        self.publisher_thread.start()
+        # One bounded initial send may complete while the controller starts.
+        # Subsequent publications never wait for controller observations.
+        self.first_publication.wait(5.0)
 
     def step(self) -> dict[str, Any]:
         if not self.started_guarded:
             self.ports.install_shutdown_guard(boot_id=self.boot_id)
             self.started_guarded = True
         self._start_peer_listener()
-        self._exchange_peer_state()
+        self._start_heartbeat_workers()
+        if self.worker_error is not None or self.listener_error is not None:
+            raise VMHAWorkerFailure("required VM-HA heartbeat worker failed")
         if self.config is not None and self.promotion_receipt_path is not None:
             _refresh_standby_restoration_agreement(
                 config=self.config,
@@ -2374,7 +2751,7 @@ class DefaultVMHAControllerRuntime:
                             )
                     finally:
                         os.close(descriptor)
-        else:
+        elif status.get("forwarding_continuity") is not True:
             self.active_reconcile_requested = False
         if self.promotion_receipt_path is not None:
             _advance_standby_restoration_under_writer_lock(
@@ -2388,15 +2765,19 @@ class DefaultVMHAControllerRuntime:
         if self.closed:
             return
         self.listener_stop.set()
+        self.ports.heartbeat_snapshots.resample.set()
         try:
             if restore_guard:
                 self.ports.install_shutdown_guard(boot_id=self.boot_id)
         finally:
             try:
-                if self.listener_thread is not None:
-                    self.listener_thread.join(timeout=self.peer_timeout_seconds + 1.0)
-                    if self.listener_thread.is_alive():
-                        raise RuntimeError("VM-HA peer listener did not stop within its bound")
+                deadline = time.monotonic() + 10.0
+                for thread in (self.publisher_thread, self.sampler_thread, self.listener_thread):
+                    if thread is None:
+                        continue
+                    thread.join(timeout=max(0.0, deadline - time.monotonic()))
+                    if thread.is_alive():
+                        raise VMHAWorkerFailure("VM-HA heartbeat worker did not stop")
             finally:
                 self.ports.close()
         self.closed = True
@@ -2467,6 +2848,9 @@ def build_default_vm_ha_controller_runtime(
         boot_id=current_boot_id,
         identity_proof_mode=identity_proof_mode,
         systemd_invocation_id=systemd_invocation_id,
+        candidate_preparer=lambda: StrongSwanRenderer().prepare_candidate(
+            _resolved_vm_ha_data_plane_config(config_path)
+        ),
         active_preparer=lambda: _prepare_vm_ha_active_data_plane(config_path),
         blocked_preparer=lambda: _prepare_vm_ha_blocked_bgp(config_path),
     )
@@ -2477,7 +2861,7 @@ def build_default_vm_ha_controller_runtime(
             providers=VMHASnapshotProviders(
                 peer=ports.peer_runtime.observe,
                 readiness=ports.routes.readiness,
-                cloud=ports.cloud.observe,
+                cloud=ports.observe_cloud,
                 data_plane=ports.data_plane.mode,
                 routes=ports.routes.receipt_context,
                 apply_lock_operation_id=lambda: _vm_ha_apply_lock_operation_id(
@@ -2514,6 +2898,16 @@ def build_default_vm_ha_controller_runtime(
             clock=effective_monotonic_clock,
             boot_id=lambda: current_boot_id,
         )
+        original_guard = controller.guard
+
+        def observed_guard() -> Mapping[str, Any]:
+            ports.heartbeat_snapshots.mutation()
+            try:
+                return original_guard()
+            finally:
+                ports.heartbeat_snapshots.mutation(completed=True)
+
+        controller.guard = observed_guard
         return DefaultVMHAControllerRuntime(
             controller,
             ports,
@@ -2604,7 +2998,7 @@ def _vm_ha_config_from_resolved(
     if vm_ha.get("enabled") is False:
         return None
     resolved = dict(vm_ha)
-    for data_plane_key in ("gateway", "connections"):
+    for data_plane_key in ("gateway", "connections", "defaults"):
         if data_plane_key in payload:
             resolved[data_plane_key] = payload[data_plane_key]
     return resolved
@@ -2635,6 +3029,7 @@ def _blocked_vm_ha_status(
     return {
         "schema": _STATUS_SCHEMA,
         "controller_capabilities": [
+            HEARTBEAT_CAPABILITY,
             _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
             LIVE_PEER_REPLACEMENT_CAPABILITY,
             STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -2903,6 +3298,12 @@ def _standby_ready_evidence_matches(
         and evidence.get("bgp_ready") is True
         and evidence.get("xfrm_ready") is False
     )
+    repairable_readiness = bool(
+        tunnel_state == "repairable"
+        and evidence.get("static_route_repair_ready") is True
+        and evidence.get("bgp_ready") is True
+        and (evidence.get("static_ready") is False or evidence.get("xfrm_ready") is False)
+    )
     return bool(
         isinstance(evidence, dict)
         and set(evidence)
@@ -2925,6 +3326,7 @@ def _standby_ready_evidence_matches(
             "schema",
             "service_healthy",
             "static_ready",
+            "static_route_repair_ready",
             "xfrm_ready",
         }
         and evidence.get("schema") == "nebius-vpngw/vm-ha-standby-ready-v1"
@@ -2940,7 +3342,8 @@ def _standby_ready_evidence_matches(
         and evidence.get("digests") == status.get("digests")
         and evidence.get("route_runtime_id") == status.get("route_runtime_id")
         and evidence.get("service_healthy") is True
-        and (warm_readiness or cold_readiness)
+        and isinstance(evidence.get("static_route_repair_ready"), bool)
+        and (warm_readiness or cold_readiness or repairable_readiness)
         and evidence.get("apply_locked") is False
         and evidence.get("pending_operation_id") is None
         and isinstance(evidence.get("ready_at"), (int, float))
@@ -4648,6 +5051,24 @@ def _run_vm_ha_controller(
         while True:
             try:
                 status = runtime.step()
+            except VMHACloudObservationUnavailable as error:
+                if not (
+                    isinstance(runtime, DefaultVMHAControllerRuntime)
+                    and ready_notified
+                    and not once
+                ):
+                    raise
+                print("[VM-HA] Cloud observation unavailable; retrying in 5 seconds", flush=True)
+                if error.observation_status is not None:
+                    print(
+                        "[VM-HA-OBSERVATION] "
+                        + json.dumps(
+                            {"source": "cloud", **error.observation_status}, sort_keys=True
+                        ),
+                        flush=True,
+                    )
+                time.sleep(5)
+                continue
             except RuntimeError as error:
                 if not (
                     isinstance(runtime, DefaultVMHAControllerRuntime)
@@ -4784,6 +5205,9 @@ class Agent:
                 try:
                     require_vm_ha_current_boot_readiness()
                 except RuntimeError:
+                    if vm_ha_reload_deferred(cfg):
+                        print("[Agent] Deferring reload while HA preserves existing forwarding")
+                        return
                     vm_ha_blocked = True
                     try:
                         _vm_ha_materialization_authorized()
@@ -4803,7 +5227,7 @@ class Agent:
                         vm_ha_materialization = True
 
             if vm_ha_blocked and not vm_ha_materialization:
-                self.ss.render_and_apply(cfg, activate=False)
+                self.ss.render_and_apply(cfg, activate=False, standby=True)
                 self.frr.render_and_apply(cfg, activate=False)
                 print("[Agent] Rendered VM-HA configuration behind the blocked data-plane guard")
                 return
@@ -4814,9 +5238,9 @@ class Agent:
                 if vm_ha_config is None:
                     raise RuntimeError("passive materialization lost VM-HA configuration")
                 update_firewall_from_config(cfg, require_reload=True)
-                interface_endpoints = self.ss.render_and_apply(cfg)
+                interface_endpoints = self.ss.render_and_apply(cfg, standby=True)
                 if interface_endpoints:
-                    self.xfrm.setup_interfaces(interface_endpoints)
+                    self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
                 self.frr.render_and_apply(
                     cfg,
                     advertise_local_prefixes=False,
@@ -4875,7 +5299,7 @@ class Agent:
                 print("[Agent] No changes detected; skipping config render")
                 if interface_endpoints:
                     print("[Agent] Ensuring XFRM interfaces are present...")
-                    self.xfrm.setup_interfaces(interface_endpoints)
+                    self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
                 if lock_fd is not None:
                     enforce_routing_invariants_locked(cfg)
                 else:
@@ -4885,7 +5309,7 @@ class Agent:
             interface_endpoints = self.ss.render_and_apply(cfg)
             if interface_endpoints:
                 print("[Agent] Setting up XFRM interfaces...")
-                self.xfrm.setup_interfaces(interface_endpoints)
+                self.xfrm.setup_interfaces(vm_ha_static_endpoints(cfg, interface_endpoints))
             self.frr.render_and_apply(cfg)
             self.state.save_last_applied(cfg)
             print("[Agent] Applied and persisted new configuration")
@@ -5019,6 +5443,7 @@ def main() -> None:
                         "force-reconcile-v1",
                         "vm-ha-authority-bound-force-reconcile-v1",
                         "vm-ha-controller-route-reconcile-v1",
+                        HEARTBEAT_CAPABILITY,
                         _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
                         AUTO_HEALING_CAPABILITY,
                         LIVE_PEER_REPLACEMENT_CAPABILITY,

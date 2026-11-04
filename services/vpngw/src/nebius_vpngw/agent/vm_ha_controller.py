@@ -16,6 +16,10 @@ from enum import Enum
 from typing import Protocol
 
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
+from nebius_vpngw.agent.vm_ha.observation import (
+    OBSERVATION_FAILURE_LIMIT,
+    OBSERVATION_GRACE_SECONDS,
+)
 
 
 class HAState(str, Enum):
@@ -101,6 +105,8 @@ _LOCAL_SAFETY_ACTIONS = frozenset(
 _REPAIR_BUDGET_SECONDS = 5.0
 _REPAIR_FENCE_RESERVE_SECONDS = 1.0
 _REPAIR_HEALTHY_RESET_SECONDS = 60.0
+STATIC_ROUTE_REPAIR_REQUIRED = "static-route-repair-required"
+_STATIC_ROUTE_TARGET_PREFIX = "static-route-target:"
 
 
 @dataclass(frozen=True)
@@ -112,13 +118,41 @@ class LocalReadiness:
     path_degraded: bool = False
     degraded_reasons: tuple[str, ...] = ()
     candidate_preparation_required: bool = False
+    static_route_repair_ready: bool = False
     cold_standby_ready: bool = False
     routing_hygiene_ready: bool = True
+    observation_available: bool = True
+    observation_failures: int = 0
+    observation_failure_age: float = 0.0
+    partial_path_available: bool = False
+    static_route_repair_required: bool = False
+    degraded_connections: tuple[str, ...] = ()
+    static_route_repair_targets: tuple[tuple[str, str], ...] = ()
+    standby_static_tunnels_ready: bool = True
+
+    @property
+    def observation_grace_expired(self) -> bool:
+        return bool(
+            not self.observation_available
+            and self.observation_failures >= OBSERVATION_FAILURE_LIMIT
+            and self.observation_failure_age >= OBSERVATION_GRACE_SECONDS
+        )
+
+    @property
+    def forwarding_ready(self) -> bool:
+        """An existing owner may retain usable paths with a failed connection."""
+
+        return (
+            self.observation_available
+            and self.service_healthy
+            and (self.promotion_ready or self.partial_path_available)
+        )
 
     @property
     def promotion_ready(self) -> bool:
         return all(
             (
+                self.observation_available,
                 self.service_healthy,
                 self.static_ready,
                 self.bgp_ready,
@@ -131,12 +165,20 @@ class LocalReadiness:
     def transfer_ready(self) -> bool:
         """Return whether a non-owner can safely enter the fenced transfer chain."""
 
-        return self.routing_hygiene_ready and (self.promotion_ready or self.cold_standby_ready)
+        repairable = self.static_route_repair_ready and self.service_healthy and self.bgp_ready
+        return (
+            self.observation_available
+            and self.routing_hygiene_ready
+            and self.standby_static_tunnels_ready
+            and (self.promotion_ready or self.cold_standby_ready or repairable)
+        )
 
     @property
     def transfer_blocked_reasons(self) -> tuple[str, ...]:
         if self.transfer_ready:
             return ()
+        if not self.standby_static_tunnels_ready:
+            return (*self.blocked_reasons, "standby-static-tunnels-not-suspended")
         return self.blocked_reasons
 
     @property
@@ -149,6 +191,15 @@ class LocalReadiness:
             (self.routing_hygiene_ready, "routing-hygiene-not-ready"),
         )
         return tuple(reason for ready, reason in checks if not ready)
+
+    @property
+    def repair_reasons(self) -> tuple[str, ...]:
+        reasons = list(self.blocked_reasons)
+        if self.static_route_repair_required:
+            reasons.append(STATIC_ROUTE_REPAIR_REQUIRED)
+            for prefix, device in self.static_route_repair_targets:
+                reasons.append(f"{_STATIC_ROUTE_TARGET_PREFIX}{prefix}:{device}")
+        return tuple(sorted(set(reasons)))
 
 
 @dataclass(frozen=True)
@@ -248,9 +299,11 @@ class ControllerSnapshot:
     completed_effect_operation_id: str | None = None
     transfer_intent: TransferIntent | None = None
     transfer_effect_started: bool = False
+    transfer_completion_recorded: bool = False
     apply_owner_adoption: bool = False
     transfer_inhibited: bool = False
     standby_replacement_inhibited: bool = False
+    peer_observation_grace: bool = False
 
     def __post_init__(self) -> None:
         if not all(
@@ -557,6 +610,26 @@ class VMHAController:
                     replace(checkpoint, state=HAState.BLOCKED, pending_action=None),
                     guard_action,
                 )
+            if (
+                not snapshot.cloud.authoritative
+                and snapshot.guard_boot_id == snapshot.boot_id
+                and pending.kind not in _LOCAL_SAFETY_ACTIONS
+            ):
+                return self._wait_for_cloud(snapshot, checkpoint)
+            if (
+                not snapshot.readiness.observation_available
+                and pending.kind not in _LOCAL_SAFETY_ACTIONS
+                and snapshot.guard_boot_id == snapshot.boot_id
+                and not snapshot.apply_locked
+                and (
+                    snapshot.data_plane_mode is not DataPlaneMode.ACTIVE
+                    or (
+                        snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+                        and self._routes_current(snapshot, checkpoint)
+                    )
+                )
+            ):
+                return self._wait_for_local_observation(snapshot, checkpoint)
             postcondition_met = self.pending_action_postcondition(
                 pending,
                 snapshot,
@@ -653,7 +726,7 @@ class VMHAController:
             )
 
         if not snapshot.cloud.authoritative:
-            return self._block_or_disable("cloud-ownership-unavailable", snapshot, checkpoint)
+            return self._wait_for_cloud(snapshot, checkpoint)
 
         checkpoint = self._invalidate_ownership_if_lost(snapshot, checkpoint)
         cloud_reasons = self._cloud_consistency_reasons(snapshot)
@@ -772,6 +845,14 @@ class VMHAController:
                 snapshot,
                 replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
             )
+        if not snapshot.readiness.standby_static_tunnels_ready:
+            return self._action(
+                HAState.NORMAL,
+                ("standby-static-tunnels-require-suspension",),
+                snapshot,
+                checkpoint,
+                ActionKind.ENTER_PASSIVE,
+            )
         if not snapshot.readiness.transfer_ready:
             return self._result(
                 HAState.BLOCKED,
@@ -831,13 +912,38 @@ class VMHAController:
 
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
         routes_current = self._routes_current(snapshot, checkpoint)
+        if (
+            not snapshot.readiness.observation_available
+            and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+            and routes_current
+        ):
+            return self._wait_for_local_observation(snapshot, checkpoint)
         repair = checkpoint.repair_attempt
         if repair is not None and not self._repair_attempt_matches(repair, snapshot, checkpoint):
             checkpoint = replace(checkpoint, repair_attempt=None)
             repair = None
 
         if not parity_reasons and routes_current:
-            if snapshot.readiness.promotion_ready and not snapshot.readiness.path_degraded:
+            if (
+                repair is not None
+                and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                and self._static_repair_goal_resolved_or_changed(repair, snapshot.readiness)
+            ):
+                # A verified route correction is complete local work. A new
+                # selected tunnel gets a separate bounded attempt, even when
+                # the neighbor switches again before the next observation.
+                checkpoint = replace(checkpoint, repair_attempt=None)
+                repair = None
+            if (
+                snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                and snapshot.readiness.static_route_repair_required
+                and (
+                    repair is None
+                    or (snapshot.readiness.forwarding_ready and snapshot.now >= repair.deadline_at)
+                )
+            ):
+                return self._repair_action(snapshot, checkpoint)
+            if snapshot.readiness.forwarding_ready and not snapshot.readiness.path_degraded:
                 checkpoint, waiting_for_health = self._record_repair_health(snapshot, checkpoint)
                 repair = checkpoint.repair_attempt
                 if waiting_for_health:
@@ -847,7 +953,7 @@ class VMHAController:
                         snapshot,
                         replace(checkpoint, state=HAState.REPAIRING),
                     )
-            elif snapshot.readiness.promotion_ready and snapshot.readiness.path_degraded:
+            elif snapshot.readiness.forwarding_ready and snapshot.readiness.path_degraded:
                 checkpoint = self._reset_repair_health(checkpoint)
             elif repair is not None:
                 return self._existing_repair_decision(snapshot, checkpoint, repair)
@@ -872,11 +978,13 @@ class VMHAController:
                     checkpoint,
                     ActionKind.DISABLE_ACTIVE,
                 )
-            if reasons:
-                state = HAState.DEGRADED
-            elif snapshot.readiness.path_degraded:
+            if snapshot.readiness.path_degraded:
                 state = HAState.DEGRADED_PATH
-                reasons = snapshot.readiness.degraded_reasons or ("redundant-path-degraded",)
+                reasons = (
+                    reasons or snapshot.readiness.degraded_reasons or ("redundant-path-degraded",)
+                )
+            elif reasons:
+                state = HAState.DEGRADED
             else:
                 state = HAState.ACTIVE
             return self._result(
@@ -888,7 +996,15 @@ class VMHAController:
                     state=state,
                     suspect_since=None,
                     established_ownership_context=snapshot.ownership_context,
-                    transfer_continuity=None,
+                    # The runtime retires lineage only after the terminal receipt
+                    # and restoration decision are durable. A busy writer lock or
+                    # degraded path must not delete still-required transfer proof.
+                    transfer_continuity=(
+                        checkpoint.transfer_continuity
+                        if self._transfer_in_progress(snapshot, checkpoint)
+                        or snapshot.transfer_effect_started
+                        else None
+                    ),
                 ),
             )
 
@@ -962,7 +1078,7 @@ class VMHAController:
     def _repair_action(
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> ControllerResult:
-        reasons = tuple(sorted(snapshot.readiness.blocked_reasons))
+        reasons = snapshot.readiness.repair_reasons
         deadline = snapshot.now + _REPAIR_BUDGET_SECONDS
         sequence = checkpoint.sequence + 1
         operation_id = (
@@ -1008,6 +1124,26 @@ class VMHAController:
             next_checkpoint,
             action,
         )
+
+    @staticmethod
+    def _static_repair_goal_resolved_or_changed(
+        repair: RepairAttempt, readiness: LocalReadiness
+    ) -> bool:
+        if STATIC_ROUTE_REPAIR_REQUIRED not in repair.failure_fingerprint:
+            return False
+        route_reasons = {STATIC_ROUTE_REPAIR_REQUIRED, "static-routes-not-ready", "xfrm-not-ready"}
+        previous_targets = set()
+        for reason in repair.failure_fingerprint:
+            if reason.startswith(_STATIC_ROUTE_TARGET_PREFIX):
+                previous_targets.add(reason)
+            elif reason not in route_reasons:
+                return False
+        if not readiness.static_route_repair_required:
+            return readiness.static_ready and readiness.xfrm_ready
+        current_targets = set()
+        for prefix, device in readiness.static_route_repair_targets:
+            current_targets.add(f"{_STATIC_ROUTE_TARGET_PREFIX}{prefix}:{device}")
+        return bool(previous_targets and current_targets and previous_targets != current_targets)
 
     def _existing_repair_decision(
         self,
@@ -1097,6 +1233,18 @@ class VMHAController:
         cloud = snapshot.cloud
         suspect_since = checkpoint.suspect_since
         if not self._planned_transfer_requested(snapshot):
+            if (
+                snapshot.peer_observation_grace
+                and not snapshot.transfer_effect_started
+                and checkpoint.suspect_since is None
+                and cloud.former_owner_compute_state is not ComputeState.STOPPED
+            ):
+                return self._result(
+                    HAState.NORMAL,
+                    ("peer-local-observation-grace-active",),
+                    snapshot,
+                    replace(checkpoint, state=HAState.NORMAL, suspect_since=None),
+                )
             if suspect_since is None:
                 return self._result(
                     HAState.SUSPECT,
@@ -1185,9 +1333,11 @@ class VMHAController:
             heartbeat is not None
             and received_at is not None
             and 0 <= snapshot.now - received_at < self.peer_timeout_seconds
-            and heartbeat.service_healthy
-            and heartbeat.route_ready
-            and heartbeat.promotion_ready
+            and heartbeat.health_sample_age_seconds is not None
+            and heartbeat.health_sample_age_seconds + snapshot.now - received_at < 10.0
+            and heartbeat.service_healthy is True
+            and heartbeat.local_forwarding_ready is True
+            and heartbeat.data_plane_mode == "active"
         )
 
     def _peer_recent(self, snapshot: ControllerSnapshot) -> bool:
@@ -1261,6 +1411,41 @@ class VMHAController:
         if cloud.ownership_re_read_exact and not cloud.candidate_attachment_exact:
             reasons.append("ownership-confirmation-without-exact-attachment")
         return tuple(reasons)
+
+    def _wait_for_local_observation(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> ControllerResult:
+        active = snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+        if active and snapshot.readiness.observation_grace_expired:
+            return self._action(
+                HAState.REPAIR_EXHAUSTED,
+                ("local-observation-grace-exhausted",),
+                snapshot,
+                replace(checkpoint, pending_action=None),
+                ActionKind.DISABLE_ACTIVE,
+            )
+        return ControllerResult(
+            state=HAState.DEGRADED if active else HAState.BLOCKED,
+            reasons=("local-health-observation-unavailable",),
+            forwarding_enabled=active,
+            action=None,
+            checkpoint=checkpoint,
+        )
+
+    @staticmethod
+    def _wait_for_cloud(
+        snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> ControllerResult:
+        # Absence of evidence cannot authorize new effects or invalidate
+        # existing forwarding. Durable safety actions still replay above.
+        active = snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+        return ControllerResult(
+            state=HAState.DEGRADED if active else HAState.BLOCKED,
+            reasons=("cloud-ownership-unavailable",),
+            forwarding_enabled=active,
+            action=None,
+            checkpoint=checkpoint,
+        )
 
     def _block_or_disable(
         self,
@@ -1346,7 +1531,10 @@ class VMHAController:
         return {
             ActionKind.INSTALL_COLD_START_GUARD: snapshot.guard_boot_id == snapshot.boot_id
             and snapshot.data_plane_mode is DataPlaneMode.BLOCKED,
-            ActionKind.ENTER_PASSIVE: snapshot.data_plane_mode is DataPlaneMode.PASSIVE,
+            ActionKind.ENTER_PASSIVE: bool(
+                snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+                and snapshot.readiness.standby_static_tunnels_ready
+            ),
             ActionKind.DISABLE_ACTIVE: snapshot.data_plane_mode is not DataPlaneMode.ACTIVE,
             ActionKind.REPAIR_LOCAL_DATAPLANE: (
                 snapshot.completed_effect_operation_id == action.operation_id
@@ -1643,6 +1831,8 @@ class VMHAController:
     def _transfer_in_progress(
         snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> bool:
+        if snapshot.transfer_completion_recorded:
+            return False
         return bool(snapshot.transfer_intent is not None or checkpoint.suspect_since is not None)
 
     @staticmethod

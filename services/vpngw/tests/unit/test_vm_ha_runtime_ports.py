@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nebius_vpngw.agent.vm_ha.heartbeat import HealthSample
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat, ReplayState
 from nebius_vpngw.agent.vm_ha.mtls import MTLSSnapshot, PeerLeaf
 from nebius_vpngw.agent.vm_ha.runtime import (
@@ -19,6 +20,7 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
     DataPlaneCommandSet,
     LocalDataPlaneObservation,
+    LocalObservationUnavailable,
     RuntimeStateStore,
     SystemDataPlaneRuntime,
     _advertised_bgp_prefixes,
@@ -96,10 +98,13 @@ def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Pat
         certificate_fingerprint="d" * 64,
         digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=True,
+        transfer_ready=True,
+        local_forwarding_ready=True,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     store.save_replay_state("node-b", ReplayState("boot-b", 7))
     store.save_accepted_peer_heartbeat("node-b", heartbeat)
@@ -108,6 +113,9 @@ def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Pat
     replacement = replace(heartbeat, sequence=9)
 
     class Exchange:
+        last_receipt_monotonic = 10.0
+        last_delivery_age = 0.0
+
         def receive(self, *, timeout_seconds: float) -> tuple[PeerHeartbeat, ReplayState]:
             assert timeout_seconds == 2.0
             replay = ReplayState("boot-b", 9)
@@ -1120,7 +1128,7 @@ def _repair_action(*, deadline: float, reasons: tuple[str, ...]) -> ControllerAc
     )
 
 
-def test_local_repair_uses_only_the_budget_before_reserved_fence(tmp_path: Path) -> None:
+def test_bgp_path_repair_does_not_restart_frr(tmp_path: Path) -> None:
     calls: list[tuple[tuple[str, ...], float]] = []
 
     def runner(argv, timeout: float) -> CommandResult:
@@ -1138,15 +1146,10 @@ def test_local_repair_uses_only_the_budget_before_reserved_fence(tmp_path: Path)
 
     runtime.repair_local(_repair_action(deadline=15.0, reasons=("bgp-not-ready",)))
 
-    assert calls == [
-        (
-            (DataPlaneCommandSet().systemctl, "reload-or-restart", "frr"),
-            4.0,
-        )
-    ]
+    assert calls == []
 
 
-def test_xfrm_loss_repairs_the_encrypted_path_before_bgp(tmp_path: Path) -> None:
+def test_remote_xfrm_loss_does_not_restart_healthy_daemons(tmp_path: Path) -> None:
     calls: list[tuple[str, ...]] = []
 
     def runner(argv, _timeout: float) -> CommandResult:
@@ -1169,25 +1172,19 @@ def test_xfrm_loss_repairs_the_encrypted_path_before_bgp(tmp_path: Path) -> None
         )
     )
 
-    assert calls == [
-        (
-            DataPlaneCommandSet().systemctl,
-            "restart",
-            "strongswan-starter",
-            "frr",
-        ),
-        (DataPlaneCommandSet().swanctl, "--load-all", "--noprompt"),
-    ]
+    assert calls == []
 
 
-def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) -> None:
+def test_stopped_service_recovery_respects_reserved_fence(tmp_path: Path) -> None:
     now = [10.0]
     calls: list[tuple[str, ...]] = []
 
     def runner(argv, _timeout: float) -> CommandResult:
         command = tuple(argv)
         calls.append(command)
-        if command[1:] == ("reload-or-restart", "frr"):
+        if command[1:] == ("is-active", "--quiet", "frr"):
+            return CommandResult(3, "")
+        if command[1:] == ("start", "frr"):
             now[0] = 14.1
         if command[1:] == ("-n", "net.ipv4.ip_forward"):
             return CommandResult(0, "0\n")
@@ -1202,10 +1199,12 @@ def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) ->
         monotonic_clock=lambda: now[0],
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("bgp-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("local-service-unhealthy",)))
 
     assert calls == [
-        (DataPlaneCommandSet().systemctl, "reload-or-restart", "frr"),
+        (DataPlaneCommandSet().systemctl, "is-active", "--quiet", "strongswan-starter"),
+        (DataPlaneCommandSet().systemctl, "is-active", "--quiet", "frr"),
+        (DataPlaneCommandSet().systemctl, "start", "frr"),
         (DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"),
         (DataPlaneCommandSet().sysctl, "-n", "net.ipv4.ip_forward"),
     ]
@@ -1232,7 +1231,7 @@ def test_expired_local_repair_physically_fences_without_routing_lock(tmp_path: P
         monotonic_clock=lambda: 14.1,
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("xfrm-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("local-service-unhealthy",)))
 
     assert calls == [
         (DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"),
@@ -1274,7 +1273,9 @@ def test_readiness_fails_closed_while_passive_services_are_not_materialized(
         data_plane_factory=UnavailableDataPlane,
     )
 
-    assert ports.routes.readiness() == LocalReadiness(False, False, False, False)
+    assert ports.routes.readiness() == LocalReadiness(
+        False, False, False, False, observation_available=False
+    )
     ports.close()
 
 
@@ -1616,8 +1617,10 @@ def test_non_owner_observes_no_stale_route_receipt_without_blocking_snapshot(
     ports.close()
 
 
+@pytest.mark.parametrize("failed_mode", [None, DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE])
 def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
     tmp_path: Path,
+    failed_mode: DataPlaneMode | None,
 ) -> None:
     ports = build_runtime_ports(
         _runtime_config(tmp_path),
@@ -1665,6 +1668,18 @@ def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
     assert observed is not None
     assert observed.owner_node_id == "node-a"
     assert observed.ownership_incarnation == 1
+    if failed_mode is not None:
+
+        def unavailable():
+            raise RuntimeError("FRR query unavailable")
+
+        ports.data_plane.observe = unavailable
+        ports.data_plane.mode = lambda: failed_mode
+        if failed_mode is DataPlaneMode.ACTIVE:
+            with pytest.raises(LocalObservationUnavailable):
+                ports.routes.receipt_context()
+        else:
+            assert ports.routes.receipt_context() is None
     ports.close()
 
 
@@ -2400,7 +2415,11 @@ def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
     ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
     ports.data_plane.current = DataPlaneMode.ACTIVE  # type: ignore[attr-defined]
 
-    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=4, clock=10.0)
+    ports.observe_cloud()
+    ports.heartbeat_snapshots.publish_health(
+        HealthSample(ports.monotonic_clock(), True, True, True, "active"), 0
+    )
+    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=4, clock=lambda: 10.0)
     ports.install_shutdown_guard(boot_id="boot-a")
 
     assert heartbeat.node_id == "node-a"
@@ -2408,7 +2427,7 @@ def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
     assert heartbeat.observed_owner_id == "node-a"
     assert heartbeat.mtls_epoch == 1
     assert heartbeat.certificate_fingerprint == "d" * 64
-    assert heartbeat.promotion_ready is True
+    assert heartbeat.local_forwarding_ready is True
     assert "credentials" not in heartbeat.to_dict()
     assert ports.data_plane.mode() is DataPlaneMode.BLOCKED
     ports.close()
@@ -2450,10 +2469,20 @@ def test_passive_heartbeat_reports_role_neutral_exact_standby_readiness(
     ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
     ports.data_plane.current = DataPlaneMode.PASSIVE  # type: ignore[attr-defined]
 
-    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=5, clock=11.0)
+    ports.heartbeat_snapshots.publish_health(
+        HealthSample(ports.monotonic_clock(), True, True, True, "passive"), 0
+    )
 
-    assert heartbeat.promotion_ready is promotion_ready
-    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v3"
+    def no_cloud() -> CloudObservation:
+        raise AssertionError("heartbeat must not query cloud ownership")
+
+    ports.cloud.observe = no_cloud
+    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=5, clock=lambda: 11.0)
+
+    assert heartbeat.transfer_ready is True
+    assert heartbeat.local_forwarding_ready is True
+    assert heartbeat.observed_owner_id is None
+    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v4"
     assert heartbeat.auto_healing_policy_state == "blocked"
     ports.close()
 

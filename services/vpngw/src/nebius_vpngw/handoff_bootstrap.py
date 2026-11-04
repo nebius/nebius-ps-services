@@ -11,6 +11,7 @@ SOURCES = (
     ("_vpngw_tunnel_state", "tunnel_state.py"),
     ("_vpngw_ordinary_routes", "ordinary_routes.py"),
     ("nebius_vpngw.agent.vm_ha.models", "agent/vm_ha/models.py"),
+    ("nebius_vpngw.agent.vm_ha.observation", "agent/vm_ha/observation.py"),
     ("nebius_vpngw.agent.vm_ha_controller", "agent/vm_ha_controller.py"),
     ("nebius_vpngw.agent.vm_ha_checkpoint", "agent/vm_ha_checkpoint.py"),
     ("nebius_vpngw.agent.vm_ha.mtls", "agent/vm_ha/mtls.py"),

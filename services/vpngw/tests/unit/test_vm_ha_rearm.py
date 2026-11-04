@@ -287,10 +287,15 @@ def _commit_restoration_authority(
         certificate_fingerprint="d" * 64,
         digests=DigestSet.from_mapping(DIGESTS),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=False,
+        transfer_ready=True,
+        local_forwarding_ready=False,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest=policy.decision_digest,
+        data_plane_mode="active"
+        if ("passive" if peer_node_id == "node-b" else "active") == "active"
+        else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     certificate = PolicyAgreementStore(tmp_path).capture(
         policy=policy,
@@ -344,10 +349,15 @@ def _refresh_latest_agreement(tmp_path: Path, *, owner_node_id: str) -> None:
             certificate_fingerprint="d" * 64,
             digests=DigestSet.from_mapping(DIGESTS),
             service_healthy=True,
-            route_ready=True,
-            promotion_ready=False,
+            transfer_ready=True,
+            local_forwarding_ready=False,
             auto_healing_policy_state="enabled",
             auto_healing_policy_digest=policy.decision_digest,
+            data_plane_mode="active"
+            if ("passive" if peer_node_id == "node-b" else "active") == "active"
+            else "passive",
+            health_sample_age_seconds=0.0,
+            ownership_observation_age_seconds=0.0,
         ),
         captured_at=101.0,
     )

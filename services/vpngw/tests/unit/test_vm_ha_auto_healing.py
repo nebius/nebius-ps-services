@@ -924,10 +924,13 @@ def test_policy_mutation_admission_rejects_active_standby_restoration(
         certificate_fingerprint="d" * 64,
         digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
         service_healthy=True,
-        route_ready=True,
-        promotion_ready=False,
+        transfer_ready=True,
+        local_forwarding_ready=False,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest=policy.decision_digest,
+        data_plane_mode="active" if ("passive") == "active" else "passive",
+        health_sample_age_seconds=0.0,
+        ownership_observation_age_seconds=0.0,
     )
     certificate = PolicyAgreementStore(tmp_path).capture(
         policy=policy,

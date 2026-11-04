@@ -20,6 +20,7 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     MissingHAComputeError,
     NebiusSDKCloudClient,
     PermanentHACloudError,
+    RetryableHACloudError,
     VMHACloudAdapter,
     VMHACloudOperationJournal,
     clone_nebius_sdk_message,
@@ -289,6 +290,25 @@ def test_operation_status_lookup_unsupported_is_exact() -> None:
     assert not operation_status_lookup_unsupported(_request_error(StatusCode.UNAVAILABLE))
     assert not operation_status_lookup_unsupported(RuntimeError("UNIMPLEMENTED"))
     assert nebius_request_error_code_is(_request_error(StatusCode.ALREADY_EXISTS), "ALREADY_EXISTS")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("read deadline"),
+        ConnectionError("read connection"),
+        _request_error(StatusCode.ABORTED),
+        _request_error(StatusCode.DEADLINE_EXCEEDED),
+        _request_error(StatusCode.RESOURCE_EXHAUSTED),
+        _request_error(StatusCode.UNAVAILABLE),
+    ],
+)
+def test_cloud_adapter_classifies_read_availability_failures_as_retryable(error: Exception) -> None:
+    def read() -> None:
+        raise error
+
+    with pytest.raises(RetryableHACloudError):
+        VMHACloudAdapter._call("cloud observation", read)
 
 
 def test_cloud_adapter_classifies_not_found_as_exact_missing_compute() -> None:

@@ -142,6 +142,45 @@ def require_vm_ha_current_boot_ready(
         raise RuntimeError("VM-HA controller is not ready for forwarding on the current boot")
 
 
+def vm_ha_reload_deferred(
+    cfg: dict[str, Any],
+    *,
+    status_path: Path = VM_HA_STATUS_PATH,
+    boot_id_path: Path = BOOT_ID_PATH,
+    guard_path: Path | None = None,
+) -> bool:
+    """Preserve existing forwarding without granting any writer activation authority."""
+
+    if not _vm_ha_enabled(cfg):
+        return False
+    try:
+        boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        guard = json.loads(
+            (guard_path or status_path.with_name("guard.json")).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(status, dict) or not isinstance(guard, dict):
+        return False
+    vm_ha = cfg.get("vm_ha") or {}
+    generation = vm_ha.get("generation") or {}
+    if not isinstance(generation, dict) or not generation.get("generation_id"):
+        return False
+    return bool(
+        boot_id
+        and status.get("schema") == "nebius-vpngw/vm-ha-status-v1"
+        and status.get("guard_boot_id") == boot_id
+        and guard.get("guard_boot_id") == boot_id
+        and guard.get("data_plane_mode") == "active"
+        and status.get("data_plane_mode") == "active"
+        and status.get("forwarding_continuity") is True
+        and status.get("state") in {"active", "degraded", "degraded-path", "repairing"}
+        and status.get("generation_id") == generation.get("generation_id")
+        and status.get("apply_locked") is False
+    )
+
+
 def _ipv4_forwarding_disabled() -> bool:
     result = run(["sysctl", "-n", "net.ipv4.ip_forward"], capture_output=True, text=True)
     return result.returncode == 0 and result.stdout.strip() == "0"

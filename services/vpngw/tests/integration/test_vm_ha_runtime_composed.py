@@ -390,7 +390,11 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         strongswan_module.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda argv, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="list-sas reply {}" if "--list-sas" in argv else "",
+            stderr="",
+        ),
     )
     monkeypatch.setattr(frr_module, "BGPD_CONF", tmp_path / "bgpd.conf")
     monkeypatch.setattr(frr_module, "FRR_CONF", tmp_path / "frr.conf")
@@ -407,7 +411,11 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         frr_module.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda argv, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="list-sas reply {}" if "--list-sas" in argv else "",
+            stderr="",
+        ),
     )
 
     materialized_endpoints: list[dict[str, object]] = []

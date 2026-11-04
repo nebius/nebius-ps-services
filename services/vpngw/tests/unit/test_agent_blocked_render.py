@@ -36,7 +36,9 @@ def test_vm_ha_blocked_boot_renders_without_data_plane_effects(
         def __init__(self, name: str) -> None:
             self.name = name
 
-        def render_and_apply(self, cfg, *, activate=True):
+        def render_and_apply(self, cfg, *, activate=True, standby=False):
+            if self.name == "strongswan":
+                assert standby is True
             calls.append((self.name, activate))
             return []
 
@@ -292,10 +294,13 @@ def test_passive_authority_materializes_locally_without_active_effects(
             cfg,
             *,
             activate=True,
+            standby=False,
             advertise_local_prefixes=True,
             require_reload=False,
             prepare_vm_ha_controller_access=False,
         ):
+            if self.name == "strongswan":
+                assert standby is True
             calls.append(
                 (
                     self.name,

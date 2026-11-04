@@ -2759,3 +2759,129 @@ and packaging checks pass; no additional live deployment is claimed.
 <!-- /REQUIREMENT: REQ-019 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->
+
+### VM-HA heartbeat isolation acceptance
+
+Heartbeat publication must continue independently of cloud observations,
+controller effects, and local-health command stalls. The receiver and publisher
+must not grant mutation authority. A candidate uses direct local checks and fresh
+cloud fencing/ownership evidence, never its own outbound heartbeat, for transfer
+and activation. Existing state names, five-second suspicion, repair budget,
+Stopped fencing, route authority, and ordinary non-HA behavior remain unchanged.
+
+The advisory protocol must distinguish transfer readiness from forwarding
+readiness and actual mode, represent unavailable checks explicitly, report
+observation age, and reject unsupported versions. Stale delivery starts or
+continues suspicion without extending its deadline. Fresh unavailable local
+observations receive the bounded grace defined below. Cold static standby must not
+be classified as unready solely because tunnels are intentionally absent.
+
+Validation must cover concurrent blocking calls, aggregate sampling deadlines,
+mutation overlap, delayed receipt persistence, conservative freshness, recovery
+boundaries, worker failure/shutdown, replay protection, cache reset, and guarded
+same-generation protocol upgrade.
+
+### VM-HA cloud observation availability
+
+Retryable cloud read failures, including timeouts and temporary unavailability,
+must not disable established forwarding or invalidate ownership continuity.
+After bounded SDK retries, the controller waits five seconds and retries the
+observation. There is no outage-duration threshold that authorizes fencing.
+Independent local-health sampling and heartbeat publication continue.
+Read-only route-receipt validation belongs to the same boundary, including
+allocation, target-membership and route-inventory queries. A successful ownership
+read alone must not reset a failing receipt-observation streak.
+
+Unavailable cloud observations cannot authorize takeover, activation, route
+reconciliation, or replay of cloud-dependent effects. Pending operations retain
+their exact durable identity until fresh observations permit recovery. Cold
+starts remain guarded. Positive authoritative evidence of ownership loss still
+fences, as do existing local safety failures and uncertain mutation outcomes.
+Cloud read recovery must use fresh evidence, never cached ownership authority.
+
+### VM-HA local observation grace and connection isolation
+
+Cloud and local query failures use the same observation-grace mechanism with
+independent per-source timers. A failed local query is unknown, not evidence
+that every service or tunnel failed. Existing-owner forwarding continues until
+at least three consecutive failed observations span at least ten seconds.
+Successful observations reset the streak. Expired local uncertainty may fence.
+Expired cloud uncertainty remains informational and never fences by itself.
+Timers use a monotonic clock and reset on a guarded controller restart.
+Local receipt-validation query failures must receive the same grace. Continuity
+may reuse only the current process's previously verified receipt with unchanged
+fresh ownership and an active current-boot guard. It cannot authorize a new
+activation, bypass writer inhibition or conceal confirmed authority loss.
+
+Fresh unknown peer health receives the same grace before the existing
+five-second suspicion window starts. Count distinct authenticated frames, not
+repeated evaluation of the same frame. Stale samples cannot refresh the grace,
+and confirmed failure or an already-started transfer bypasses it. Missing or
+stale heartbeat delivery retains its existing detection and suspicion policy.
+
+An established owner may remain active with one failed connection when another
+configured encrypted path remains usable, services are healthy and observed
+import/export policy remains safe. Report the affected connections and degraded
+state without advertising full promotion readiness. Heartbeats must represent
+remaining forwarding capability independently of promotion/transfer readiness.
+New activation still requires all existing readiness and ownership proofs.
+
+Repair replaces only stale static routes with selected usable paths. Connection
+loss alone must not restart or reload strongSwan/FRR or clear healthy sessions.
+Keep existing protocol reconnect behavior. Confirmed stopped local services may
+be started individually, without restarting a running alternative strongSwan
+service. Failed scoped route repair does not fence healthy connections and may
+retry within bounded attempts. Complete path loss retains the existing repair
+budget and takeover policy.
+
+Static-route correction has explicit repair reasons and deterministic destination
+and interface targets, even when all general readiness checks pass. A fresh
+observation of the installed selected route retires that scoped attempt. A new
+selected target receives a separate bounded attempt so successive remote tunnel
+switches do not inherit an exhausted gateway-failure budget. Service or policy
+failures retain their existing repair budget. Failed corrections preserve usable
+forwarding and retry without restarting protocol services or requesting an
+ordinary-agent reload. Ownership loss, writer fencing and invalid route authority
+retain their safety gates. This does not infer a remote gateway's forwarding
+authority from the existence of an IPsec SA.
+
+During observation grace or repair, an ordinary agent reload may defer without
+changing services, routes, exports or forwarding. Deferral requires the current
+boot, generation, active guard and controller-granted forwarding continuity.
+It grants no authority to activate or re-enable forwarding.
+
+The guarded upgrade requires independent-heartbeat capability v2 on both agents
+and the observation helper in both wheel and package-independent recovery bundle.
+Heartbeat v4 and checkpoint formats remain unchanged. Validate query recovery,
+grace boundaries, replay/staleness, partial static/BGP loss, scoped repair errors,
+ownership loss and apply inhibition. No live qualification is implied by local
+test success.
+
+### Mixed static and BGP VM-HA standby tunnels
+
+VM ownership, shared allocation ownership, route authority and takeover remain
+whole-gateway operations. A mixed-routing standby must keep BGP tunnels available
+with exports withdrawn while suspending every enabled static tunnel. One BGP
+connection must not keep unrelated static connections available to remote peers.
+Static suspension includes removing responder configurations and terminating
+existing static IKE SAs. Merely disabling initiation is insufficient.
+
+Boot, blocked rendering, passive materialization, reload and non-owner drift
+reconciliation must retain that distinction without renumbering tunnels or XFRM
+interfaces. Preserve non-HA behavior, BGP-only warm standby, static-only cold
+standby and gateway-wide failover/failback. A standby service-status query error
+must not be interpreted as permission to restart a running strongSwan daemon.
+
+A mixed standby is transfer-ready only when its existing BGP, export, policy,
+service and routing-hygiene checks pass and static suspension is positively
+observed. It is not forwarding-ready until static paths are established on the
+new owner. Candidate preparation publishes and loads the full committed tunnel
+configuration only behind the existing ownership gates, with forwarding fenced.
+An established BGP SA cannot satisfy the static activation wait. Final route and
+forwarding activation still require fresh complete readiness.
+
+Retain existing heartbeat and persisted record formats, and add no service or
+background loop. Validate mixed standby restart/reload, responder removal,
+selective SA termination, disabled tunnels and stable numbering, preparation
+failure, observation failure and both ownership directions. Real US–UK static
+traffic after takeover and former-owner rearm remains a separate live gate.

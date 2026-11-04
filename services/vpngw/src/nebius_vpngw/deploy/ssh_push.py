@@ -31,6 +31,7 @@ from urllib.request import url2pathname, urlopen
 
 import yaml
 
+from ..agent.vm_ha.heartbeat import HEARTBEAT_CAPABILITY
 from ..agent.vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -336,16 +337,33 @@ class VMHAAgentArtifact:
         restoration: bytes,
         inhibition: bytes,
         agent_main: bytes,
+        heartbeat: bytes,
     ) -> None:
         try:
             restoration_tree = ast.parse(restoration.decode("utf-8"))
             inhibition_tree = ast.parse(inhibition.decode("utf-8"))
             main_tree = ast.parse(agent_main.decode("utf-8"))
+            heartbeat_tree = ast.parse(heartbeat.decode("utf-8"))
         except (SyntaxError, UnicodeError) as error:
             raise VMHAAgentArtifactError(
                 VMHAAgentArtifactProblem.INCOMPATIBLE,
                 "VM-HA agent artifact capability entry point is invalid",
             ) from error
+        heartbeat_declared = any(
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "HEARTBEAT_CAPABILITY"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == HEARTBEAT_CAPABILITY
+            for node in heartbeat_tree.body
+        )
+        if not heartbeat_declared:
+            raise VMHAAgentArtifactError(
+                VMHAAgentArtifactProblem.INCOMPATIBLE,
+                "VM-HA agent artifact lacks independent heartbeat support",
+            )
         declared = any(
             isinstance(node, (ast.Assign, ast.AnnAssign))
             and any(
@@ -428,6 +446,10 @@ class VMHAAgentArtifact:
                 isinstance(schema, ast.Constant)
                 and schema.value == "nebius-vpngw.agent-capabilities.v1"
                 and isinstance(features, (ast.List, ast.Tuple))
+                and any(
+                    isinstance(item, ast.Name) and item.id == "HEARTBEAT_CAPABILITY"
+                    for item in features.elts
+                )
                 and any(
                     isinstance(item, ast.Name)
                     and item.id == "STANDBY_RESTORATION_CAPABILITY"
@@ -571,6 +593,16 @@ class VMHAAgentArtifact:
                         "nebius_vpngw/agent/main.py",
                         limit=2 * 1024 * 1024,
                     ),
+                    "nebius_vpngw/agent/vm_ha/heartbeat.py": cls._read_wheel_member(
+                        wheel,
+                        "nebius_vpngw/agent/vm_ha/heartbeat.py",
+                        limit=1024 * 1024,
+                    ),
+                    "nebius_vpngw/agent/vm_ha/observation.py": cls._read_wheel_member(
+                        wheel,
+                        "nebius_vpngw/agent/vm_ha/observation.py",
+                        limit=1024 * 1024,
+                    ),
                     "nebius_vpngw/agent/vm_ha/restoration.py": cls._read_wheel_member(
                         wheel,
                         "nebius_vpngw/agent/vm_ha/restoration.py",
@@ -638,6 +670,7 @@ class VMHAAgentArtifact:
                     required["nebius_vpngw/agent/vm_ha/restoration.py"],
                     required["nebius_vpngw/agent/vm_ha/inhibition.py"],
                     required["nebius_vpngw/agent/main.py"],
+                    required["nebius_vpngw/agent/vm_ha/heartbeat.py"],
                 )
                 replay_supported = wheel_supports_replay_window(wheel)
                 if replay_supported:
@@ -677,6 +710,7 @@ class VMHAAgentArtifact:
             sha256=after_sha256,
             source=source,
             capabilities=(
+                HEARTBEAT_CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
                 *((REPLAY_WINDOW_CAPABILITY,) if replay_supported else ()),
@@ -710,6 +744,7 @@ class VMHAAgentArtifact:
                     "approved VM-HA agent artifact changed after planning",
                 )
             if not {
+                HEARTBEAT_CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
             }.issubset(self.capabilities):

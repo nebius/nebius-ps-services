@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from nebius_vpngw.nebius_pagination import NebiusPaginationError
+
 VM_HA_REQUEST_TIMEOUT_SECONDS = 30.0
 VM_HA_PER_RETRY_TIMEOUT_SECONDS = 10.0
 VM_HA_REQUEST_RETRIES = 3
@@ -41,6 +43,29 @@ def operation_status_lookup_unsupported(error: BaseException) -> bool:
     """Return whether the SDK lacks only the generic operation lookup API."""
 
     return nebius_request_error_code_is(error, "UNIMPLEMENTED")
+
+
+def is_retryable_ha_cloud_error(error: Exception) -> bool:
+    """Recognize transport failures without weakening positive authority errors."""
+
+    if isinstance(error, RetryableHACloudError):
+        return True
+    if isinstance(error, HACloudError):
+        return False
+    if isinstance(error, NebiusPaginationError):
+        cause = error.__cause__
+        return isinstance(cause, Exception) and is_retryable_ha_cloud_error(cause)
+    code = getattr(error, "code", None)
+    try:
+        code = code() if callable(code) else code
+    except Exception:
+        code = None
+    retryable_codes = {"ABORTED", "DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED", "UNAVAILABLE"}
+    return bool(
+        isinstance(error, (TimeoutError, ConnectionError))
+        or _enum_name(code) in retryable_codes
+        or any(nebius_request_error_code_is(error, name) for name in retryable_codes)
+    )
 
 
 def vm_ha_idempotency_key(operation_id: str) -> str:
@@ -775,12 +800,7 @@ class VMHACloudAdapter:
             except Exception:
                 code = None
             code_name = _enum_name(code)
-            if isinstance(exc, (TimeoutError, ConnectionError)) or code_name in {
-                "ABORTED",
-                "DEADLINE_EXCEEDED",
-                "RESOURCE_EXHAUSTED",
-                "UNAVAILABLE",
-            }:
+            if is_retryable_ha_cloud_error(exc):
                 raise RetryableHACloudError(f"{description}: {exc}") from exc
             if code_name == "NOT_FOUND" or nebius_request_error_code_is(exc, "NOT_FOUND"):
                 raise MissingHAComputeError(f"{description}: {exc}") from exc
