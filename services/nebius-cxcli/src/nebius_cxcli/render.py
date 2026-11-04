@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import tempfile
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -29,6 +33,7 @@ from .soperator_config_materialization import (
     _materialize_soperator_component_defaults,
     _materialize_soperator_render_only_values,
 )
+from .ssh_trust import DEFAULT_SSH_KNOWN_HOSTS_FILENAME
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,10 @@ class ProjectGenerationPlan:
 _LIFECYCLE_REPORT_FILENAMES = frozenset(
     {
         "deploy-report.md",
+        "wireguard-client-verification.md",
+        "wireguard-client-verification.json",
+        "tailscale-report.json",
+        "tailscale-client-verification.json",
         "ordinary-apps-baseline.json",
         "deployment-applications.json",
         # Admission is refreshed by validation during an executing lifecycle.
@@ -111,9 +120,11 @@ _TERRAFORM_RUNTIME_NAMES = frozenset(
 
 def _terraform_runtime_artifact(path: Path, paths: ProjectPaths) -> bool:
     """Classify runtime paths only inside the generated Terraform working directory."""
-    return (
-        path.is_relative_to(paths.infra_dir)
-        and path.relative_to(paths.infra_dir).parts[0] in _TERRAFORM_RUNTIME_NAMES
+    return any(
+        path.is_relative_to(root)
+        and path != root
+        and path.relative_to(root).parts[0] in _TERRAFORM_RUNTIME_NAMES
+        for root in paths.terraform_dirs
     )
 
 
@@ -183,6 +194,7 @@ def render_replaceable_generated_files(paths: ProjectPaths) -> tuple[Path, ...]:
             if path.is_file()
             and path not in preserved_reports
             and not _terraform_runtime_artifact(path, paths)
+            and path != paths.generated_dir / DEFAULT_SSH_KNOWN_HOSTS_FILENAME
         )
     )
 
@@ -246,6 +258,10 @@ def build_project_generation_plan(
     config_content: bytes | str,
 ) -> ProjectGenerationPlan:
     """Build exact writes and tombstones without targeting runtime artifacts."""
+
+    from .wireguard_dependencies import assert_rendered_access_continuity
+
+    assert_rendered_access_continuity(final_paths, staged_paths)
 
     encoded_config = (
         config_content.encode("utf-8") if isinstance(config_content, str) else bytes(config_content)
@@ -438,27 +454,84 @@ def _preserve_terraform_runtime_artifacts(
     staged_paths: ProjectPaths, final_paths: ProjectPaths
 ) -> None:
     """Carry current state and caches through promotion without following links."""
-    for name in sorted(_TERRAFORM_RUNTIME_NAMES):
-        source = final_paths.infra_dir / name
-        if not source.exists() and not source.is_symlink():
-            continue
-        target = staged_paths.infra_dir / name
-        if target.exists() or target.is_symlink():
-            raise RuntimeError(f"staged render contains conflicting Terraform runtime: {target}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source.is_dir() and not source.is_symlink():
-            shutil.copytree(source, target, symlinks=True)
-        else:
-            shutil.copy2(source, target, follow_symlinks=False)
+    for final_root, staged_root in zip(
+        final_paths.terraform_dirs, staged_paths.terraform_dirs, strict=True
+    ):
+        for name in sorted(_TERRAFORM_RUNTIME_NAMES):
+            source = final_root / name
+            if not source.exists() and not source.is_symlink():
+                continue
+            target = staged_root / name
+            if target.exists() or target.is_symlink():
+                raise RuntimeError(
+                    f"staged render contains conflicting Terraform runtime: {target}"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir() and not source.is_symlink():
+                shutil.copytree(source, target, symlinks=True)
+            else:
+                shutil.copy2(source, target, follow_symlinks=False)
+
+
+@contextmanager
+def _preserve_ssh_trust(staged_paths: ProjectPaths, final_paths: ProjectPaths) -> Iterator[None]:
+    """Keep runtime pins through publication, excluding concurrent enrollment."""
+    destination = staged_paths.generated_dir / DEFAULT_SSH_KNOWN_HOSTS_FILENAME
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeError("Staged render cannot supply SSH trust")
+    try:
+        directory = os.open(final_paths.generated_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        yield
+        return
+    try:
+        try:
+            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("SSH trust is being updated; retry render") from None
+        name = DEFAULT_SSH_KNOWN_HOSTS_FILENAME
+        try:
+            source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        except FileNotFoundError:
+            source = None
+        if source is not None:
+            with os.fdopen(source, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or info.st_nlink != 1
+                    or info.st_mode & 0o022
+                    or info.st_size > 1024 * 1024
+                ):
+                    raise RuntimeError("Cannot preserve unsafe SSH trust during render")
+                data = stream.read(1024 * 1024 + 1)
+                if len(data) > 1024 * 1024:
+                    raise RuntimeError("Cannot preserve oversized SSH trust during render")
+            target = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(target, "wb") as output:
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+        yield
+    finally:
+        os.close(directory)
 
 
 def promote_staged_generated_paths(
     staged_paths: ProjectPaths,
     final_paths: ProjectPaths,
+    *,
+    config: Any = None,
 ) -> None:
     """Swap a fully rendered staged bundle into the canonical generated/ path."""
+    from .wireguard_dependencies import assert_rendered_access_continuity
+
+    assert_rendered_access_continuity(final_paths, staged_paths, config)
     backup_dir: Path | None = None
+    runtime = ExitStack()
     try:
+        runtime.enter_context(_preserve_ssh_trust(staged_paths, final_paths))
         _preserve_lifecycle_report_artifacts(staged_paths, final_paths)
         _preserve_terraform_runtime_artifacts(staged_paths, final_paths)
         if final_paths.generated_dir.exists():
@@ -474,6 +547,7 @@ def promote_staged_generated_paths(
             backup_dir.rename(final_paths.generated_dir)
         raise
     finally:
+        runtime.close()
         if staged_paths.generated_dir.exists():
             shutil.rmtree(staged_paths.generated_dir, ignore_errors=True)
     if backup_dir is not None and backup_dir.exists():
@@ -526,7 +600,7 @@ def render_project(
             component_output_values=component_output_values,
             source_profile=source_profile,
         )
-        promote_staged_generated_paths(staged_paths, paths)
+        promote_staged_generated_paths(staged_paths, paths, config=config)
     except Exception:
         reset_generated_bundle(staged_paths)
         raise

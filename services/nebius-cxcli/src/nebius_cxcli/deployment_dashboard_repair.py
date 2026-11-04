@@ -70,7 +70,7 @@ def dashboard_input_transition(
     root = (
         next(
             row["flux_dir"]
-            for row in current.manifest["deploy"]["targets"]
+            for row in current.manifest["execution"]["targets"]
             if row["target_ref"] == target_ref
         ).rstrip("/")
         + "/"

@@ -17,7 +17,7 @@ all: env
 
 uv-check:
 	@command -v "$(UV)" >/dev/null 2>&1 || { \
-		echo "uv is required for repository development; install uv 0.12.9 or a compatible 0.12.x release." >&2; \
+		echo "uv is required for repository development; install uv 0.13.5 or a compatible 0.13.x release." >&2; \
 		exit 1; \
 	}
 

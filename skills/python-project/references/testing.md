@@ -100,9 +100,10 @@ coverage and required socket-plugin loading. Existing projects need a scoped
 compatibility review before upgrading or changing import mode.
 
 The conftest derives layer markers from directory roots and rejects conflicts.
-Register optional `contract`, `e2e` and `smoke` markers when those tests exist;
-register every generated marker under strict markers. Root-level test modules
-must move into the appropriate layer when adopting this layout.
+Always register `e2e` because the default selection expression references it,
+even when no E2E tests exist. Register optional `contract` and `smoke` markers
+when those tests exist; register every generated marker under strict markers.
+Root-level test modules must move into the appropriate layer when adopting this layout.
 
 Network access is separate from classification:
 

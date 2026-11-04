@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from nebius_cxcli.cli import _validate_enabled_chart_sources, _validate_strict_config
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.component_sources import (
     SourceProfile,
     reset_component_sources_cache,
@@ -51,7 +52,17 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
         )
     )
     assert isinstance(payload, dict)
+    for row in payload.get("infra", {}).get("components", []):
+        if row.get("id") == "wireguard-gw":
+            row["access"] = {"admin_group_id": "group-fixture"}
+    from nebius_cxcli.wireguard_dependencies import materialize_wireguard_dependencies
+
+    materialize_wireguard_dependencies(payload)
     return payload
+
+
+def _component_ssh_key_inputs(component_id: str) -> dict[str, str]:
+    return {} if component_id == "wireguard-gw" else {"ssh_public_key": _VALID_ED25519_PUBLIC_KEY}
 
 
 def _retarget_enabled_apps(payload: dict, target_ref: str = "mk8s") -> None:
@@ -91,7 +102,7 @@ def _align_infra_resource_name(payload: dict, row: dict, resource_name: str) -> 
             chart["instance_id"] = resource_name
         if chart.get("target_ref") == old_instance_id:
             chart["target_ref"] = resource_name
-    for target in payload.get("deploy", {}).get("targets", []):
+    for target in cluster_rows(payload):
         if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
             target["instance_id"] = resource_name
 
@@ -489,7 +500,7 @@ def test_strict_validation_mysterybox_requires_secrets_when_enabled(
         ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
     ],
 )
-def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(
+def test_strict_validation_personal_ssh_key_contract(
     tmp_path: Path,
     component_id: str,
     instance_name: str,
@@ -517,6 +528,10 @@ def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    if component_id == "wireguard-gw":
+        with pytest.raises(ValueError, match="SSH keys/bootstrap are lifecycle-owned"):
+            load_config(config_path)
+        return
     config = load_config(config_path)
 
     _validate_strict_config(config)
@@ -529,7 +544,7 @@ def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(
         ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
     ],
 )
-def test_strict_validation_rejects_missing_ssh_public_key_for_jumphost(
+def test_strict_validation_requires_personal_ssh_key_only_for_jumphost(
     tmp_path: Path,
     component_id: str,
     instance_name: str,
@@ -554,6 +569,9 @@ def test_strict_validation_rejects_missing_ssh_public_key_for_jumphost(
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     config = load_config(config_path)
 
+    if component_id == "wireguard-gw":
+        _validate_strict_config(config)
+        return
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
 
@@ -588,7 +606,7 @@ def test_strict_validation_requires_existing_public_ip_allocation_id_for_jump_ho
         "preset": "4vcpu-16gb",
         "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
-        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        **_component_ssh_key_inputs(component_id),
         "create_public_ip_allocation": False,
         **extra_inputs,
     }
@@ -631,7 +649,7 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
         "preset": "4vcpu-16gb",
         "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
-        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        **_component_ssh_key_inputs(component_id),
         "create_public_ip_allocation": True,
         "public_ip_allocation_id": "allocation-123",
         **extra_inputs,
@@ -675,7 +693,7 @@ def test_strict_validation_rejects_invalid_public_ip_allocation_name_for_jump_ho
         "preset": "4vcpu-16gb",
         "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
-        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        **_component_ssh_key_inputs(component_id),
         "create_public_ip_allocation": True,
         "public_ip_allocation_name": "jumpHost_Ip",
         **extra_inputs,
@@ -731,7 +749,7 @@ def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type
         "preset": "4vcpu-16gb",
         "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
-        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        **_component_ssh_key_inputs(component_id),
         "boot_disk_size_gib": 64,
         "boot_disk_type": "NETWORK_SSD",
         "boot_disk_encryption_enabled": True,
@@ -968,7 +986,7 @@ def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     config = load_config(config_path)
 
-    captured: dict[str, str] = {}
+    captured: list[dict[str, str]] = []
 
     def _fake_validate(
         *,
@@ -978,20 +996,20 @@ def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
         chart_meta_cache,
     ) -> tuple[str, ...]:
         _ = chart_meta_cache
-        captured["chart_name"] = chart_name
-        captured["chart_repo"] = chart_repo
-        captured["chart_version"] = chart_version
+        captured.append(
+            {"chart_name": chart_name, "chart_repo": chart_repo, "chart_version": chart_version}
+        )
         return ()
 
     monkeypatch.setattr("nebius_cxcli.cli._resolve_helm_chart_validation_issues", _fake_validate)
 
     issues = _validate_enabled_chart_sources(config, chart_meta_cache={})
     assert issues == []
-    assert captured == {
+    assert {
         "chart_name": network_operator.chart_name,
         "chart_repo": network_operator.source,
         "chart_version": network_operator.version,
-    }
+    } in captured
 
 
 @pytest.mark.parametrize(

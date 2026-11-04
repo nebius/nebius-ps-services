@@ -237,7 +237,7 @@ def test_real_wizard_prefills_file_and_records_confirmed_default(monkeypatch):
     from nebius_cxcli.components import ComponentEntry
 
     row = {"id": "soperator", "instance_id": "mk8s", "enabled": True, "values": {}}
-    payload = {"version": "v1", "infra": {"components": []}, "apps": {"charts": [row]}}
+    payload = {"version": "v2", "infra": {"components": []}, "apps": {"charts": [row]}}
     seed_soperator_values(payload, {"sssd": {"enabled": True}})
     entry = ComponentEntry(
         id="soperator",
@@ -306,6 +306,7 @@ def test_real_normalization_and_upgrade_keep_explicit_values(tmp_path):
             ]
         },
         "apps": {"charts": [row]},
+        "version": "v2",
     }
     expected = {
         "sssd": {"enabled": False},

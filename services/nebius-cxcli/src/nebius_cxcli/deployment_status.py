@@ -481,8 +481,11 @@ def _terminal_operation_failure_message(
 
 
 class _HeartbeatPoller:
+    def __init__(self, *, summary: str = "API unavailable; heartbeat only") -> None:
+        self._summary = summary
+
     def summary(self) -> str:
-        return "API unavailable; heartbeat only"
+        return self._summary
 
     def terminal_failure(self) -> str | None:
         return None
@@ -1523,7 +1526,9 @@ class DeploymentStatusReporter:
         else:
             target = _mk8s_deployment_target(config)
             if target is None:
-                self._poller = _HeartbeatPoller()
+                self._poller = _HeartbeatPoller(
+                    summary="no API status watcher; Terraform progress only"
+                )
             else:
                 try:
                     self._poller = _Mk8sStatusPoller(target)

@@ -46,3 +46,4 @@ design-specialist-positive-03,true,"Design the AI retrieval integration for this
 design-specialist-positive-04,true,Design this service even if a relevant specialist is unavailable; use research with official vendor documentation first and reputable community sources for missing coverage.
 design-specialist-negative-01,false,Use the approved Nebius resource plan to create the VM now; no architecture or technology decisions remain.
 design-specialist-negative-02,false,"Compare Nebius storage service constraints for this workload only; I need provider guidance, not a whole-product design or implementation plan."
+design-positive-doc-routing,true,Design a small SDK integration using current official documentation; use available vendor documentation tools or Tavily and return an implementation-ready plan without coding.

@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from .cluster_config import validate_source_contract
 from .config_model import is_dynamic_payload, to_runtime_payload
 from .deploy_targets import (
     TARGET_REF_FIELD,
@@ -24,7 +25,6 @@ from .mk8s_gpu import (
 )
 from .mk8s_node_group_defaults import prune_inactive_mk8s_node_group_defaults
 from .mysterybox_eso import (
-    ensure_mysterybox_eso_app_rows,
     normalize_mysterybox_eso_project_settings,
     strip_mysterybox_eso_app_values,
 )
@@ -78,6 +78,7 @@ def normalize_runtime_config_payload(
     base_dir: Path | None = None,
     observability_target_refs: frozenset[str] | None = None,
 ) -> bool:
+    validate_source_contract(payload)
     from .observability_routing import validate_observability_target_refs
 
     validate_observability_target_refs(payload, observability_target_refs)
@@ -111,7 +112,9 @@ def normalize_runtime_config_payload(
         changed = True
     if ensure_nfs_csi_app_rows(payload):
         changed = True
-    if normalize_observability_project_settings(payload):
+    if normalize_observability_project_settings(
+        payload, observability_target_refs=observability_target_refs
+    ):
         changed = True
     if ensure_observability_app_rows(payload, observability_target_refs=observability_target_refs):
         changed = True
@@ -122,8 +125,6 @@ def normalize_runtime_config_payload(
     if strip_observability_generated_app_values(payload):
         changed = True
     if normalize_mysterybox_eso_project_settings(payload):
-        changed = True
-    if ensure_mysterybox_eso_app_rows(payload):
         changed = True
     if strip_mysterybox_eso_app_values(payload):
         changed = True
@@ -139,6 +140,7 @@ def validate_config(
     observability_target_refs: frozenset[str] | None = None,
 ) -> AttrDict:
     """Validate payload with runtime rules and wrap for attribute access."""
+    validate_source_contract(payload)
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
@@ -176,6 +178,7 @@ def load_config(
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
         raise ValueError("config.yaml root must be a mapping")
+    validate_source_contract(payload)
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"

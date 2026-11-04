@@ -1,4 +1,6 @@
 id,should_trigger,prompt
+nebius-docs-mcp,true,Use $nebius to check documented VM and disk prerequisites through the available Nebius documentation tools with citations.
+nebius-docs-setup,false,Use config-codex to install nebiusDocs into my local agent configuration.
 nebius-compute-vm,true,Build a Python Nebius VM provisioner with explicit disk and subnet identity and bounded readiness.
 nebius-compute-gpu,true,Check exact GPU platform preset fabric and quota prerequisites for Nebius MK8s.
 nebius-kubernetes,true,List Nebius Kubernetes clusters and all node groups safely using the Python SDK.
@@ -27,3 +29,6 @@ nebius-quoted-command,false,"Treat ""/skills:nebius"" as sample text in this pun
 nebius-design-positive-01,true,"As a scoped adviser to the current design, identify Nebius GPU, storage and network constraints from documentation. No credentials or inventory are available."
 nebius-design-positive-02,true,Nebius and the application stack are fixed. Review provider integration prerequisites for the design without cloud actions or reopening model and runtime choices.
 nebius-design-negative-01,false,"Select a provider-neutral application framework and database; no Nebius services, deployment or integration are in scope."
+nebius-positive-tavily-fallback,true,Check public Nebius VM disk documentation; nebiusDocs tools are unavailable so use Tavily with official documentation.
+nebius-tenant-capacity,true,Read GPU capacity advice for my Nebius tenant across all regions using the Python SDK; preserve stale data and do not add counts across presets.
+nebius-k8s-workload-identity,true,"Use the Python SDK to let a Kubernetes workload access one Nebius SecretStash secret using an OIDC projected token; explain exact trust, roles, renewal and optional ESO."

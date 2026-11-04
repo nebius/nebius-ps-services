@@ -276,22 +276,30 @@ def installed_project(tmp_path, monkeypatch):
     payload = profiling_config()
     payload["client_info"]["client_name"] = "example"
     payload["apps"]["charts"] = payload["apps"]["charts"][:1]
-    payload["deploy"]["targets"][0].pop("profiling")
+    payload["apps"]["charts"][0].pop("profiling")
     values = payload["apps"]["charts"][0]["values"]
     docs, adapter = render_soperator_adapter_documents(values)
     target = {
         "target_ref": "cluster",
         "instance_id": "cluster",
         "component_id": "mk8s",
+        "access": "external",
+        "cluster_id_output_name": "cluster_cluster_id",
+        "component_output_ref": "cluster.cluster_id",
         "ownership": "managed",
         "flux_dir": "flux/targets/cluster",
     }
     source = cli.render_updated_source_payload(to_dynamic_payload(payload))
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
+        "schema": "nebius-cxcli-generated/v3",
         "runtime_config": payload,
-        "execution": {"backend": asdict(settings())},
-        "deploy": {"targets": [target]},
+        "execution": {
+            "backend": asdict(settings()),
+            "targets": [target],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
         "render": {"source_config_sha256": digest(yaml.safe_load(source))},
     }
     generation = DeploymentGeneration(

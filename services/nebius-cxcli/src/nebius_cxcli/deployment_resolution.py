@@ -30,7 +30,7 @@ def publish_application_inputs(
     from .project_bundle_transaction import ProjectBundleTransaction
 
     roots = {}
-    for target in generation.manifest.get("deploy", {}).get("targets", []):
+    for target in generation.manifest.get("execution", {}).get("targets", []):
         ref, raw = target["target_ref"], target["flux_dir"]
         root = _safe_relative(raw)
         if ref in roots or root.parts[0] != "flux":

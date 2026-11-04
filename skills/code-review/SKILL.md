@@ -42,6 +42,12 @@ only bounded high-confidence findings when directly authorized, and find
 structural simplifications that preserve behavior while making the
 implementation easier to reason about.
 
+For contribution review, compare with the accepted base contract and supported
+existing-user behavior. Contributor code and matching docs do not accept their
+own contract changes. Report destructive effects, regressions and unapproved
+breaking behavior; preserve the canonical implementation without speculative
+legacy shims. Nested reviewers report spec gaps to review-pr, never publish specs.
+
 ## Use This Skill For
 
 - Reviewing the current local branch, local diff, changed files, module,

@@ -26,8 +26,11 @@ from nebius_cxcli.grafana_runtime import (
 def live(monkeypatch):
     config = {
         "client_info": {},
-        "deploy": {"targets": [{"instance_id": "cluster"}]},
         "apps": {"charts": [{"id": "nsight-streamer", "values": {"tool": "not-deployed"}}]},
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
+        },
+        "version": "v2",
     }
     state = SimpleNamespace(config=config, releases=[], workloads=[], services=[], calls=[])
     for tool, http, turn in (("nsys", 31080, 31478), ("ncu", 31081, 31479)):

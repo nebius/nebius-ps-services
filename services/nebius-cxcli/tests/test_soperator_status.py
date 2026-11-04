@@ -40,7 +40,7 @@ def _paths(tmp_path: Path) -> ProjectPaths:
     reports = tmp_path / "generated" / "reports"
     reports.mkdir(parents=True)
     config = tmp_path / "config.yaml"
-    config.write_text("version: v1\n", encoding="utf-8")
+    config.write_text("version: v2\n", encoding="utf-8")
     return ProjectPaths(
         config_path=config,
         repo_root=tmp_path,
@@ -499,7 +499,20 @@ def test_campaign_status_does_not_invent_missing_deployment_controls(
     create_or_resume_campaign(path=receipt_path, intent=intent)
     receipt_before = receipt_path.read_bytes()
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     live = []
     with pytest.raises(RuntimeError, match="interrupted"):
         run_deployment(

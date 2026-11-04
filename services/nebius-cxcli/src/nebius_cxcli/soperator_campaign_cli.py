@@ -150,8 +150,7 @@ def run_upgrade_campaign(
             if is_onboarded:
                 if (
                     not isinstance(target_row, cli.Mapping)
-                    or cli._non_empty_text(target_row.get("kind")).lower() != "external-mk8s"
-                    or cli._non_empty_text(target_row.get("ownership")).lower() != "external"
+                    or not cli.deploy_target_is_external_mk8s(target_row)
                     or selected_kind != "external-mk8s"
                     or selected_ownership != "external"
                     or managed_source_component is not None

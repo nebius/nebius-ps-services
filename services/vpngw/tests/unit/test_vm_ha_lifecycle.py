@@ -27,6 +27,21 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
 )
 
 
+@pytest.mark.parametrize(
+    "observation",
+    [
+        {"routes": list(range(12))},
+        {"labels": {"a/": "slash", "a0": "digit", "a~": "tilde"}},
+        {"a": {"z": 1}, "a-": 2},
+    ],
+)
+def test_observation_normalizes_json_pointer_order(observation: object) -> None:
+    normalized = normalize_vm_ha_observation(observation)
+
+    assert normalized == tuple(sorted(normalized))
+    assert len({path for path, _value in normalized}) == len(normalized)
+
+
 def _digest(character: str) -> str:
     return character * 64
 

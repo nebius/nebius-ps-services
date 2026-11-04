@@ -14,7 +14,7 @@ from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
 
 def _runtime_payload_with_chart(chart: dict) -> dict:
     return {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -22,33 +22,19 @@ def _runtime_payload_with_chart(chart: dict) -> dict:
                 "project_id": "project-456",
                 "region_id": "eu-north1",
             },
-            "notifications": {
-                "email_enabled": False,
-                "email": None,
-            },
+            "notifications": {"email_enabled": False, "email": None},
         },
         "infra": {
             "components": [],
+            "external_clusters": [{"instance_id": "cluster1", "kube_context": "cluster1"}],
         },
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
-                    "kube_context": "cluster1",
-                }
-            ]
-        },
-        "apps": {
-            "charts": [chart],
-        },
+        "apps": {"charts": [chart]},
     }
 
 
 def test_config_loader_rejects_symlinked_config(tmp_path: Path) -> None:
     target = tmp_path / "target.yaml"
-    target.write_text("version: v1\n", encoding="utf-8")
+    target.write_text("version: v2\n", encoding="utf-8")
     config = tmp_path / "config.yaml"
     config.symlink_to(target)
 
@@ -91,7 +77,7 @@ def test_starter_template_is_runtime_valid() -> None:
     assert isinstance(payload, dict)
     assert "shared" not in payload
     config = validate_config(payload)
-    assert config.version == "v1"
+    assert config.version == "v2"
     assert config.client_info.client_name == "client-a"
     assert config.client_info.nebius.project_id == "project-456"
 
@@ -118,7 +104,7 @@ def test_starter_template_disables_email_when_recipient_is_blank() -> None:
 
 def test_existing_runtime_config_allows_missing_tenant_id(tmp_path) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {

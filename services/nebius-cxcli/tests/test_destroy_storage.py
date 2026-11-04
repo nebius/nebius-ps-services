@@ -313,9 +313,12 @@ def test_initial_plan_rejects_preserved_storage_and_wrong_cloud_ids(kind, identi
 
 def test_publication_frozen_bytes_survive_restart_and_reject_local_edits(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_bytes(b"old")
-    writes, removals = {path: b"new"}, ()
-    preimages = {path: "sha256:" + hashlib.sha256(b"old").hexdigest()}
+    path.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
+    writes, removals = {path: b"version: v2\ncompatibility: {fixture: new}\n"}, ()
+    preimages = {
+        path: "sha256:"
+        + hashlib.sha256(b"version: v2\ncompatibility: {fixture: old}\n").hexdigest()
+    }
     identity, before = project_generation_plan_fingerprints(
         project_dir=tmp_path, writes=writes, removals=removals, expected_preimages=preimages
     )
@@ -333,10 +336,10 @@ def test_publication_frozen_bytes_survive_restart_and_reject_local_edits(tmp_pat
     path.write_bytes(b"operator edit")
     with pytest.raises(RuntimeError, match="changed"):
         publish(frozen, tmp_path)
-    path.write_bytes(b"old")
+    path.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     publish(frozen, tmp_path)
     publish(frozen, tmp_path)
-    assert path.read_bytes() == b"new"
+    assert path.read_bytes() == b"version: v2\ncompatibility: {fixture: new}\n"
 
 
 @pytest.mark.parametrize("remaining", [False, True])
@@ -377,9 +380,9 @@ def test_publication_recovers_exact_committed_generation_after_crash(tmp_path):
     config = tmp_path / "config.yaml"
     generated = tmp_path / "generated/main.tf"
     generated.parent.mkdir()
-    config.write_bytes(b"old")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     generated.write_bytes(b"old tf")
-    writes = {config: b"new", generated: b"new tf"}
+    writes = {config: b"version: v2\ncompatibility: {fixture: new}\n", generated: b"new tf"}
     preimages = {path: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() for path in writes}
     identity, before = project_generation_plan_fingerprints(
         project_dir=tmp_path, writes=writes, removals=(), expected_preimages=preimages
@@ -404,15 +407,18 @@ def test_publication_recovers_exact_committed_generation_after_crash(tmp_path):
             writes, expected_preimages=preimages, generation_sha256=identity
         )
     publish(frozen, tmp_path)
-    assert config.read_bytes() == b"new" and generated.read_bytes() == b"new tf"
+    assert (
+        config.read_bytes() == b"version: v2\ncompatibility: {fixture: new}\n"
+        and generated.read_bytes() == b"new tf"
+    )
 
 
 def test_backend_publication_restores_missing_generated_cache_without_overwriting_source(tmp_path):
     config, generated = tmp_path / "config.yaml", tmp_path / "generated/main.tf"
     generated.parent.mkdir()
-    config.write_bytes(b"old")
+    config.write_bytes(b"version: v2\ncompatibility: {fixture: old}\n")
     generated.write_bytes(b"old tf")
-    writes = {config: b"new", generated: b"new tf"}
+    writes = {config: b"version: v2\ncompatibility: {fixture: new}\n", generated: b"new tf"}
     preimages = {path: "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() for path in writes}
     identity, before = project_generation_plan_fingerprints(
         project_dir=tmp_path, writes=writes, removals=(), expected_preimages=preimages

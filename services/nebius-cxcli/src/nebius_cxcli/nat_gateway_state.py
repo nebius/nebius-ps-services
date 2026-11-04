@@ -1,0 +1,253 @@
+"""Conditional shared NAT records. Locks never expire or transfer automatically."""
+
+from __future__ import annotations
+
+import copy
+import json
+import uuid
+from collections.abc import Mapping
+from typing import Any
+
+from .nat_gateway_activation_inputs import SubnetActivationContract
+from .object_storage_errors import ObjectStorageError
+
+
+def state_keys(state_key: str) -> tuple[str, str]:
+    return state_key + ".nat.json", state_key + ".nat.lock"
+
+
+def activation_pending(record: dict[str, Any]) -> bool:
+    activation = record.get("activation", {})
+    return activation.get("phase") not in {None, "complete", "restored"} or any(
+        probe.get("cleanup") != "complete" for probe in activation.get("probes", {}).values()
+    )
+
+
+class NatState:
+    def __init__(self, transport: Any, state_key: str, *, readonly: bool = False) -> None:
+        self.transport = transport
+        self.key, self.lock_key = state_keys(state_key)
+        self.readonly = readonly
+        self.owner = str(uuid.uuid4())
+        self.lock_etag = ""
+        self.etag = ""
+        self.value: dict[str, Any] = {"version": 1, "gateways": {}}
+        self.reload()
+
+    def read(self, key: str) -> tuple[str, dict[str, Any]] | None:
+        try:
+            response = self.transport.request("get_object", key, max_bytes=2 * 1024 * 1024)
+        except ObjectStorageError as exc:
+            if exc.code in {"NoSuchKey", "NotFound", "404"}:
+                return None
+            raise
+        value = json.loads(response.body)
+        if not response.etag or not isinstance(value, dict):
+            raise RuntimeError("Invalid shared NAT record")
+        return response.etag, value
+
+    def reload(self) -> None:
+        record = self.read(self.key)
+        if record is not None:
+            self.etag, self.value = record
+            if (
+                set(self.value) != {"version", "gateways"}
+                or self.value["version"] != 1
+                or not isinstance(self.value["gateways"], dict)
+            ):
+                raise RuntimeError("Unsupported shared NAT record")
+
+    def acquire(self) -> None:
+        if self.readonly or self.lock_etag:
+            return
+        body = json.dumps({"owner": self.owner}).encode()
+        try:
+            result = self.transport.request(
+                "put_object", self.lock_key, body=body, create_only=True
+            )
+        except ObjectStorageError:
+            # Reconcile a lost acknowledgement, never overwrite an existing lock.
+            record = self.read(self.lock_key)
+            if record is None or record[1] != {"owner": self.owner}:
+                holder = record[1].get("owner", "unknown") if record else "unknown"
+                raise RuntimeError(
+                    f"NAT shared lock held or acquisition uncertain (owner {holder}); stop prior writers before explicit nat unlock"
+                ) from None
+            self.lock_etag = record[0]
+        else:
+            self.lock_etag = result.etag
+        self.assert_held()
+        # A different host may have completed work between initial read and acquisition.
+        self.reload()
+
+    def assert_held(self) -> None:
+        if self.readonly or not self.lock_etag:
+            raise RuntimeError("NAT mutation requires shared execution authority")
+        observed = self.read(self.lock_key)
+        if observed != (self.lock_etag, {"owner": self.owner}):
+            raise RuntimeError("NAT shared execution authority was lost")
+
+    def save(self) -> None:
+        if self.readonly:
+            return
+        self.assert_held()
+        desired = copy.deepcopy(self.value)
+        body = json.dumps(desired, sort_keys=True, separators=(",", ":")).encode()
+        try:
+            result = self.transport.request(
+                "put_object", self.key, body=body, etag=self.etag or None, create_only=not self.etag
+            )
+        except ObjectStorageError:
+            observed = self.read(self.key)
+            if observed is None or observed[1] != desired:
+                raise RuntimeError(
+                    "NAT journal update was not confirmed; no subsequent effect is permitted"
+                ) from None
+            self.etag = observed[0]
+        else:
+            self.etag = result.etag
+
+    def release(self) -> None:
+        if not self.lock_etag:
+            return
+        self.assert_held()
+        self.transport.request("delete_object", self.lock_key, etag=self.lock_etag)
+        self.lock_etag = ""
+
+    def unlock(self, expected_owner: str) -> None:
+        record = self.read(self.lock_key)
+        if record is None:
+            return
+        if record[1] != {"owner": expected_owner}:
+            raise RuntimeError("NAT lock owner changed; refusing release")
+        self.transport.request("delete_object", self.lock_key, etag=record[0])
+
+
+def assert_quota_resolved(report: Any) -> None:
+    if (
+        report.has_confirmed_insufficiency
+        or report.errors
+        or report.coverage_gaps
+        or report.unknown_checks
+    ):
+        raise RuntimeError(
+            "NAT requires confirmed live quota headroom for every required resource; run quota-check and resolve unknown or insufficient allowances"
+        )
+
+
+def _activation_field_changed(
+    before: Any,
+    after: Any,
+    unknown: Any,
+    path: tuple[str | int, ...],
+    *,
+    canonical_vpc: bool,
+    inherited_public_pools: bool,
+) -> bool:
+    """Compare the authored fields of the canonical VPC subnet resource.
+
+    Nebius recomputes metadata and unconfigured pool defaults during updates.
+    Optional/computed is not sufficient permission to ignore a field: CIDRs,
+    pool selection and subnet identity remain protected even when unknown.
+    """
+    if path in {
+        ("created_at",),
+        ("updated_at",),
+        ("resource_version",),
+        ("status",),
+        ("labels_all",),
+    }:
+        return False
+    if path == ("metadata",) and before in (None, {}) and after in (None, {}):
+        return False  # The subnet schema exposes no writable metadata members.
+    if unknown is True:
+        if (
+            path == ("ipv4_public_pools",)
+            and inherited_public_pools
+            and isinstance(before, Mapping)
+            and before.get("use_network_pools") is True
+        ):
+            return False  # The canonical module authors null for inherited public pools.
+        # These CIDR members are never authored by the VPC module.
+        return not (
+            canonical_vpc
+            and len(path) == 6
+            and path[0] in {"ipv4_private_pools", "ipv4_public_pools"}
+            and path[1] == "pools"
+            and isinstance(path[2], int)
+            and path[3] == "cidrs"
+            and isinstance(path[4], int)
+            and path[5] in {"max_mask_length", "state"}
+        )
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        unknowns = unknown if isinstance(unknown, Mapping) else {}
+        return any(
+            _activation_field_changed(
+                before.get(key),
+                after.get(key),
+                unknowns.get(key),
+                (*path, key),
+                canonical_vpc=canonical_vpc,
+                inherited_public_pools=inherited_public_pools,
+            )
+            for key in set(before) | set(after) | set(unknowns)
+        )
+    if isinstance(before, list) and isinstance(after, list):
+        if len(before) != len(after):
+            return True
+        unknown_items = unknown if isinstance(unknown, list) else []
+        return len(unknown_items) > len(after) or any(
+            _activation_field_changed(
+                old,
+                new,
+                unknown_items[index] if index < len(unknown_items) else None,
+                (*path, index),
+                canonical_vpc=canonical_vpc,
+                inherited_public_pools=inherited_public_pools,
+            )
+            for index, (old, new) in enumerate(zip(before, after, strict=True))
+        )
+    return before != after or bool(unknown)
+
+
+def assert_activation_plan(
+    plan: Mapping[str, Any],
+    desired: Mapping[str, str],
+    *,
+    subnet_contracts: Mapping[str, SubnetActivationContract] | None = None,
+) -> None:
+    """The second Terraform stage may change only admitted subnet route fields."""
+    for resource in plan.get("resource_changes", []):
+        change = resource.get("change", {})
+        if change.get("actions") in (["no-op"], ["read"]):
+            continue
+        before, after = change.get("before") or {}, change.get("after") or {}
+        if (
+            resource.get("type") != "nebius_vpc_v1_subnet"
+            or change.get("actions") != ["update"]
+            or before.get("id") not in desired
+            or after.get("id") != before.get("id")
+            or (after.get("route_table_id") or "") != (desired[before["id"]] or "")
+            or (change.get("after_unknown") or {}).get("route_table_id") is True
+        ):
+            raise RuntimeError("NAT activation plan contains an unapproved resource action")
+        unknown = change.get("after_unknown") or {}
+        contract = (subnet_contracts or {}).get(before["id"])
+        canonical_vpc = contract is not None and contract.address == resource.get("address")
+        keys = (set(before) | set(after) | set(unknown)) - {"route_table_id"}
+        if any(
+            _activation_field_changed(
+                before.get(key),
+                after.get(key),
+                unknown.get(key),
+                (key,),
+                canonical_vpc=canonical_vpc,
+                inherited_public_pools=bool(
+                    canonical_vpc and contract is not None and contract.inherited_public_pools
+                ),
+            )
+            for key in keys
+        ):
+            raise RuntimeError(
+                "NAT activation plan changes more than the delegated route-table field"
+            )

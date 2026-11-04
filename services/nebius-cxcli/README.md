@@ -26,14 +26,14 @@ and provides MK8s, Soperator, Grafana, and access-management commands.
 
 ## Installation
 
-Use Git, an installed Python **3.12, 3.13, or 3.14**, and uv **0.12.9 or a
-compatible 0.12.x release**. Install the CLI with `uv tool` to run
+Use Git, an installed Python **3.12, 3.13, or 3.14**, and uv **0.13.5 or a
+compatible 0.13.x release**. Install the CLI with `uv tool` to run
 `nebius-cxcli` from any directory without activating a virtual environment.
 
 If uv is not installed, install it with an existing, working `pipx`:
 
 ```bash
-pipx install 'uv>=0.12.9,<0.13'
+pipx install 'uv>=0.13.5,<0.14'
 ```
 
 If `pipx` is unavailable, use an installation method from the
@@ -92,7 +92,8 @@ first use. See [authentication](docs/project-workflows.md#authentication).
 | `flux` | GitOps bootstrap; downloaded at the catalog-pinned version if absent |
 | `aws` | Guarded Terraform unlock |
 | `git` and GitHub access | CI bootstrap, repository discovery, Git chart sources, and GitOps bootstrap |
-| SSH access and a verified known-hosts file | WireGuard and SSH jump-host day-2 operations |
+| Nebius identity with SecretStash payload access | WireGuard day-2 operations |
+| SSH access and a verified known-hosts file | SSH jump-host day-2 operations |
 
 Managed tool downloads need access to official HashiCorp or GitHub releases
 and verify published checksums. Keep `kubectl` within the target server's
@@ -102,8 +103,12 @@ commands that connect to it. **MK8s `destroy --target CLUSTER_ID` uses cloud API
 and does not need Kubernetes API access.**
 
 A standalone `nebius` CLI is not required for ordinary operation; cxcli uses the
-Nebius Python SDK. Automatic quota-request submission is a separate internal
-operator capability described below.
+Nebius Python SDK. Project, Tenant, and AccessKey calls use IAM v2 directly;
+other services use their supported API versions independently. Project scope
+validation requires the exact project ID and parent tenant ID, without requiring
+tenant-read permission. Optional tenant/project names fall back to resource IDs
+for folder naming when unavailable. Automatic quota-request submission is a
+separate internal operator capability described below.
 
 ## Quick start
 
@@ -142,6 +147,14 @@ This differs from recovering an interrupted operation, which requires its
 
 ## Core concepts
 
+Configurations require `version: v2`. Infrastructure components own their
+observability, secrets integration and cluster checks. External clusters live in
+`infra.external_clusters`. Soperator application rows own smoke checks, rollout,
+profiling and registration. The old top-level `deploy` section is rejected.
+An omitted or null `observability` block uses the same default behavior.
+See the [ownership and cutover guide](docs/configuration-reference.md#project-configuration)
+before upgrading an existing project.
+
 | Concept | Meaning |
 | --- | --- |
 | `config.yaml` | Desired project identity, component instances, app values, and target settings |
@@ -162,6 +175,11 @@ config.yaml
 Do not use Terraform as an in-cluster package manager. App charts belong to
 enabled built-in MK8s targets or onboarded Nebius MK8s targets in the project.
 An app-only bundle without a cluster target is unsupported.
+Infrastructure-only bundles, such as VPC networks and subnets with no cluster
+targets or apps, complete `deploy` after Terraform convergence and local baseline
+publication. They do not require Kubernetes access. Without an applicable API
+watcher, deployment status reports Terraform progress only; this is not an API
+connection failure.
 
 Use `component list/add/remove` for day-2 selection changes. `create` starts a
 project from scratch; overwriting an existing project can remove **all files in
@@ -195,7 +213,7 @@ Use `nebius-cxcli COMMAND --help` for all flags, defaults, and examples.
 | `create` | Deployments root | Create one project through the guided wizard |
 | `discover` | Deployments root | Discover local projects for deployment/CI; `--all` ignores the Git change filter |
 | `component list` | `--config CONFIG_YAML` | List selected components |
-| `component add` | Selectors and `--config CONFIG_YAML` | Add infrastructure or target-bound apps |
+| `component add` | Optional selectors and `--config CONFIG_YAML` | Add multiple infrastructure components and target-bound apps through the wizard |
 | `component remove` | Selectors and `--config CONFIG_YAML` | Remove component selections from configuration |
 | `validate` | `CONFIG_YAML` | Check configuration, readiness, networking, and live quota/capacity |
 | `validate-generated` | `GENERATED_PATH` | Validate the rendered bundle |
@@ -204,13 +222,76 @@ Use `nebius-cxcli COMMAND --help` for all flags, defaults, and examples.
 
 ```bash
 nebius-cxcli component list --config "$CONFIG"
+nebius-cxcli component add --config "$CONFIG"
 nebius-cxcli component add infra:vm --config "$CONFIG"
 nebius-cxcli validate "$CONFIG"
 nebius-cxcli render "$CONFIG" --force
 ```
 
+With no selectors, `component add` always shows Infra then Apps multi-select
+lists. Choose multiple components with Space and Enter, or use comma-separated
+IDs/indexes in the text prompt (`all` and `none` are also supported). Leave either
+section empty to skip it; leaving both empty makes no changes. Backtracking
+retains confirmed choices. The full field wizard configures the additions while
+preserving existing component settings. Apps require an existing or newly
+selected MK8s target; Soperator uses its dedicated command group. The command
+saves configuration only, so run `validate` and `render` before deployment.
+
+Infrastructure names confirmed before the field wizard are reused without a
+second name prompt. This includes WireGuard gateways and nested scalar names
+such as MK8s cluster names; the saved name and component instance ID stay aligned.
+
+New ordinary MK8s targets default to **Nebius-managed observability**. The
+**In-cluster observability** choice installs VictoriaMetrics, VictoriaLogs,
+VictoriaTraces and Grafana locally; **Disabled** stops cxcli collection. Managed
+mode installs only the Nebius collector, using the configured project and region.
+Explicit per-signal opt-outs remain disabled across render and deploy; turning a
+signal back on reuses its saved route. Selecting the named managed mode resets
+custom write routes to Nebius defaults while retaining separately named query sources.
+Deployment requires current-run backend and Grafana query evidence before reporting
+success. Managed verification uses an explicit human `NEBIUS_PROFILE` with access
+to the project's datasources on `https://grafana.nebius.dev/`.
+See [observability](docs/observability.md#creation-wizard-defaults) for setup,
+application instrumentation, validation and retained-store behavior.
+
+Bucket labels are optional metadata: the wizard asks whether to add labels, then
+collects names and string values without YAML. Existing labels can be kept,
+edited or cleared. WireGuard shows its effective defaults: create a public IP
+`true`, client keepalive `25` seconds, and NAT for access to private resources
+`true`. Reusing an IP requires its allocation ID. The allocation name defaults
+to `<gateway-name>-public-ip` and follows gateway renaming unless overridden.
+Keepalive accepts whole seconds from `0` to `65535`; `0` disables it. Disabling
+NAT requires return routes to VPN clients. Switching from IP reuse to creation
+clears the conflicting allocation ID. Existing name overrides offer Keep,
+Change, or Use automatic name.
+
+WireGuard's `local_subnets` are private destination IPv4 CIDRs routed through
+the VPN by client `AllowedIPs`, separate from the gateway's placement subnet.
+The wizard lists current subnets through the Nebius SDK in the selected VPC,
+with names, IDs and CIDRs. Shared network pools are labelled because their
+ranges can cover multiple subnets. New destinations start unselected; saved
+routes remain selected. Manual entry supports planned or otherwise reachable
+networks. An empty selection gives tunnel-only access. See
+[WireGuard setup](docs/wireguard.md#vpn-destination-subnets).
+
 Review removals and the generated diff before applying them. `render --force`
 approves replacement of local generated artifacts, not a live-resource plan.
+
+For local source profiles, bundled WireGuard, SSH jump-host, NFS and NAT gateway
+modules retain their containing package through `platform-infra//modules/...`
+source addresses. This lets Terraform initialize their shared sibling VM module.
+After updating the catalog, rerun `render` to refresh existing generated sources.
+
+The MK8s wizard offers None, Label, Taint, or Both for each new node group and
+saves native `node_labels` and `taints` in `config.yaml`. When adding SFS and
+MK8s together, ordinary wizards configure shared storage before node groups.
+Each new group lists eligible filesystems by name under **Attach shared storage
+to node group**, with all selected initially. Uncheck any or all; the text prompt
+accepts indexes or `none`. This configures node attachments; mounting, CSI and
+PV/PVC setup remain separate. Managed VPC choices
+show confirmed existing resources once while preserving their bindings;
+unresolved ownership blocks automatic selection. See [cluster creation and
+placement](docs/mk8s.md#cluster-creation-and-node-placement).
 
 ```bash
 nebius-cxcli discover ./deployments --all
@@ -238,6 +319,25 @@ submission needs the internal `npc` CLI, Nebius CLI token acquisition, and
 Nebius internal-network/operator access; other environments receive manual
 request guidance.
 
+`validate`, `quota-check`, `quota-request`, `render` and generated deployment
+preflight check retained standalone filesystems against a fresh Terraform plan
+when generated infrastructure and its manifest are available. The generated
+filesystem inputs and Nebius scope must match the current configuration;
+changes to unrelated components do not remove filesystem credit.
+Filesystem retention uses a separate plan scoped to its exact module, so an
+unresolved first-deployment gateway bootstrap cannot discard that proof. This
+observation plan is never used to apply infrastructure.
+Unchanged filesystems need no additional quota;
+in-place growth needs only the increase. New and replacement filesystems still
+need their full quota. Missing generated artifacts, edited filesystem inputs,
+stale planned sizes and unresolved plan evidence receive no credit.
+
+A separate fresh plan credits retained public and private address allocations
+owned by unchanged WireGuard and NAT components. New or replacement allocations
+still need their full quota. NAT planning uses its read-only deployment preview
+to prepare runtime inputs; it does not activate routes or recover an interrupted
+activation. Complete interrupted NAT recovery through `deploy` before previewing.
+
 Inspection and planning commands do not apply desired infrastructure, but
 project authentication setup and local runtime preparation can still occur.
 They should not be treated as universally side-effect-free.
@@ -251,6 +351,21 @@ They should not be treated as universally side-effect-free.
 | `terraform apply` | `GENERATED_PATH` | Apply generated Terraform infrastructure |
 | `terraform destroy` | `GENERATED_PATH` | Tear down eligible projects without MK8s |
 | `terraform unlock` | `GENERATED_PATH` | Inspect and, after guarded confirmation, remove an eligible stale lock |
+| `tailscale onboarding request` | `CONFIG_YAML`, optional export directory | Print the exact administrator handoff without credentials |
+| `tailscale onboarding configure` | `CONFIG_YAML` | Guided approval and credential-reference handoff before activation |
+| `tailscale auth configure` | `CONFIG_YAML` | Store credential references |
+| `tailscale auth check` | `CONFIG_YAML` | Check delegated tailnet access |
+| `tailscale policy plan` | `CONFIG_YAML`, output path | Prepare a reviewed HuJSON policy proposal |
+| `tailscale policy apply` | `CONFIG_YAML`, proposal and digest | Conditionally apply the reviewed proposal |
+| `tailscale routes approve` | `CONFIG_YAML` | Approve exact prefixes on owned devices |
+| `tailscale status` | `CONFIG_YAML` | Inspect live readiness |
+| `tailscale doctor` | `CONFIG_YAML` | Diagnose cloud, guest and tailnet prerequisites |
+| `tailscale verify` | `CONFIG_YAML`, optional `--failover` | Prove client HTTPS traffic and optionally bounded failover |
+| `tailscale recover` | `CONFIG_YAML`, exact lock owner or enrollment operation/member | Recover a stopped writer or resume/fence enrollment |
+| `nat status` | `CONFIG_YAML` | Observe gateway, routing and optional trusted-SSH readiness |
+| `nat refresh-routes` | `CONFIG_YAML` | Refresh detached source policy snapshots in configuration |
+| `nat unlock` | `CONFIG_YAML` and exact owner | Release an abandoned shared NAT lock after writers stop |
+| `nat reconcile` | `CONFIG_YAML` | Reconcile settled ambiguous attachments without changing routes |
 | `flux apply` | `GENERATED_PATH` | Apply apps directly and wait for readiness |
 | `flux bootstrap` | `GENERATED_PATH` | Establish or reconcile continuous GitOps delivery |
 | `flux destroy` | `GENERATED_PATH` | Remove eligible rendered app resources |
@@ -262,6 +377,76 @@ nebius-cxcli deploy "$CONFIG"
 
 Use `deploy` for initial Soperator installation and protected changes. Dedicated
 Terraform mutations and Flux bootstrap/destroy reject Soperator targets.
+
+Managed CPU-only MK8s targets with no enabled apps or in-cluster integrations
+use Nebius API readiness checks, including private-only clusters. They require
+cloud API access, without a local route to the Kubernetes endpoint. Reports
+verify the cluster and node groups and explicitly leave Kubernetes workloads
+uninspected. Executed provider checks appear in the required validation report;
+deployment succeeds only when that saved report passes. App, GPU, external, and locally app-bound targets still require
+Kubernetes access; see [private-cluster deployment](docs/mk8s.md#private-cluster-deployment).
+
+The opt-in [Tailscale subnet router](docs/tailscale.md) provisions two persistent
+Nebius VMs by default and connects any customer-owned hosted tailnet. Select
+`tailscale-gw` in the standard wizard, then use ordinary validate/render/deploy
+for infrastructure readiness. `tailscale onboarding request` prints the exact
+administrator request; `onboarding configure` records the approved handoff before
+a second render/deploy activates it. OAuth custody can use direct SDK SecretStash
+access, including renewable Kubernetes workload identity, without requiring ESO.
+Interrupted enrollment resumes its original operation/key through authenticated
+guest receipts and requires the current approved intent, as does route approval.
+Independent retirement handles partially provisioned members without
+enrolling them. Tailnet configuration is organization-neutral.
+An administrator provides the [approved tag and scoped credential](docs/tailscale.md#administrator-handoff-manual-prerequisites)
+once; cxcli automates the permitted provisioning, enrollment, route approval,
+verification and retirement steps. Administrator-only policy or signing approvals
+remain explicit prerequisites.
+All tailnet operations are under `nebius-cxcli tailscale`; no parallel installer or
+deployment entry point is introduced. Policy writes and failover tests are explicit.
+Direct Terraform apply remains blocked while Tailscale resources exist in state,
+even after their component is disabled or removed; use ordinary lifecycle retirement.
+Policy commands resolve linked SecretStash containers from infrastructure outputs
+without modifying the reviewed policy intent.
+
+The opt-in [custom NAT gateway](docs/nat-gateway.md) also uses `deploy` for staged
+provisioning, trusted guest readiness, route activation and restoration. Its
+normal wizard saves activation-enabled YAML without a separate activation
+question. Validate and render the saved configuration, then deploy provisions
+the gateway, verifies readiness, activates routes and runs tests if enabled.
+Route activation accepts provider metadata recomputation while rejecting changes
+to subnet identity, CIDRs, configured pool selection and other authored fields.
+For fresh gateways, deployment generates a pinned host identity before provisioning
+and passes it through protected runtime inputs. It recovers that identity through
+authenticated Compute metadata to populate `generated/ssh_known_hosts`; SSH trust
+does not use serial logs. Existing pins remain unchanged across render. Previously deployed
+gateways with guest-generated keys retain their VM and require independently
+verified keys in that file or through `--ssh-known-hosts-file`.
+The final route summary is informational; disabling tests still activates routes.
+Explicit `routing.enabled: false` remains available in YAML for operational
+preparation or detachment; completing the wizard again enables routing. The
+wizard discovers CPU-only presets and live quotas; defaults prefer
+`cpu-d3` / `4vcpu-16gb` and a 40 GiB boot disk. After VPC selection, one gateway
+subnet picker lists suitable existing/planned subnets alongside dedicated creation;
+creation remains the default (new `/28`), and valid saved selections are preserved.
+Then select private workload subnets; each receives its own route table preserving
+non-default routes. Existing managed subnet rows omit internal ownership annotations.
+NAT SSH accepts any IPv4 source using an authorized key and temporary fail2ban
+blocks for repeated authentication failures. The wizard has no `admin_cidrs`
+prompt; existing gateways follow the guide's detached upgrade procedure.
+Backtracking and exact identity reconciliation preserve original route snapshots,
+and new workload selections are explicit. Incomplete VPC inventory requires retry;
+the gateway remains excluded from workload choices across refreshes.
+Pending probe cleanup blocks retirement even after routes are detached.
+Terraform owns permanent resources. Default-selected automatic tests use sequential
+SDK-created private probe VMs and restore this activation on failed or inconclusive
+results. Deploy automatically configures pinned SSH access to each private test VM
+through the gateway, checks its outbound public IP, and confirms cleanup. Tests
+also run when Terraform has no changes. Serial-log access and manual test setup
+are not required; see the linked guide for the verification contract. Address-space
+previews allow well-formed drafts; deployment requires confirmed contiguous
+space for the fresh plan's combined reservations. Retained subnets and
+route-only restoration do not require spare capacity.
+Planned growth of a derived pool must also fit its upstream pool reservations.
 After a successful accepted Soperator deployment, ordinary app changes can use:
 
 ```bash
@@ -434,8 +619,8 @@ nebius-cxcli grafana show --config "$CONFIG" --target TARGET_ID
 ```
 
 `grafana install` runs the normal deployment workflow, including pending
-project changes. Review those changes first. Telemetry defaults to local
-storage; supported routing can select local, remote Nebius services, or both.
+project changes. Review those changes first. This explicit installation command
+defaults telemetry to local storage; supported routing can select local, remote Nebius services, or both.
 Collectors and datasources follow that routing and the target type.
 
 `grafana import` changes the live Grafana instance and saves configuration;
@@ -460,21 +645,66 @@ browser access.
 | Command | Input | Purpose |
 | --- | --- | --- |
 | `ssh-jumphost` | One mode flag taking `CONFIG_YAML` | List/add/remove allowed SSH source CIDRs |
-| `wireguard` | One mode flag taking `CONFIG_YAML` | Generate a client configuration or change future client routes |
+| `wireguard` | One mode flag taking `CONFIG_YAML` | Generate/refresh clients, reconcile networking, verify private access, change future routes, or manage SSH access |
 
-Both commands require a deployed matching component and SSH authentication.
-Supply an independently verified host key in `generated/ssh_known_hosts`, or
-use `--ssh-known-hosts-file` for a file outside generated artifacts. There is no
-first-seen-key acceptance or machine-global known-hosts fallback. Rendering
-replaces `generated/`, so restore that verified file afterward if using the
-default location.
+Deploy checks private Kubernetes access when it can identify a connected local
+WireGuard client. Missing prerequisites produce a separate `PENDING` result; an
+exercised path failure returns nonzero while retaining infrastructure results.
+See [MTU repair and client verification](docs/wireguard.md#mtu-repair-and-client-verification).
+
+A new gateway can deploy with no bootstrap clients. First boot records an empty
+peer registry, and client issuance remains a separate day-2 operation.
+
+WireGuard uses team-owned SSH credentials and an authenticated connection record
+in SecretStash. The wizard writes a linked metadata-only `mysterybox` component
+and `access.secretstash_ref` into `config.yaml`. Terraform provisions its three
+containers, dedicated VM service account and narrow grants in `generated/infra-access`;
+the SDK owns secret versions and rotation. Select an existing administrator group from live
+Nebius SDK choices. Administrators use their own Nebius identity to retrieve the
+shared login credential temporarily; client generation needs only the source
+configuration and its published references. No Terraform/Kubernetes access,
+personal SSH key, external-secrets installation or deployer laptop is required.
+The installer must also be allowed to create grants on the selected IAM group;
+project-scoped provisioning access does not establish that authority for a tenant group.
+No group name is fixed. Any selected member can issue configurations; group
+members are trusted gateway operators with sudo access. Deployment reports
+direct broad grants without revoking them. Quota checks remain read-only, and
+credential/IAM preparation runs explicitly before the final deployment plan.
+Secret publication preserves returned metadata and verifies the primary version;
+the shared journal serializes cxcli writers when SecretStash omits a resource version.
+Initial publication accepts an unset primary version; retries reuse recorded
+versions and still reject a conflicting primary.
+
+NAT retains its protected local host identity and authenticated Compute recovery.
+SSH jump hosts require independently verified trust. All gateway SSH connections
+use strict host checking without falling back to machine-global trust.
+WireGuard additionally isolates local SSH configuration
+and agent identities. Its optional known-hosts file must agree with SecretStash.
+See [WireGuard access](docs/wireguard.md) for setup, rotation and recovery.
+
+External Secrets Operator is selected independently by the user. Selecting ESO
+automatically configures eligible application-secret synchronization on its target
+unless `secrets.mysterybox.enabled: false` is set. Selecting MysteryBox does not
+select ESO. WireGuard access containers never enter Kubernetes synchronization.
+The MysteryBox wizard asks for Kubernetes Secret names and ESO version policies
+only when synchronization is enabled on an eligible target. Otherwise it collects
+only SecretStash secret names and payload keys/types, without adding sync metadata.
+
+Ordinary MysteryBox configuration starts with
+`Sync SecretBox secrets to Kubernetes secrets using ESO? [n]:`.
+The default is No when sync is inactive, or Yes when already enabled. With several
+Kubernetes targets, choose which ones to configure first; other targets keep their
+settings. Each choice applies to all ordinary MysteryBox secrets on that target.
+Yes explicitly offers to add or enable ESO if needed, then asks for synchronization
+namespaces. No persists the target's sync opt-out while preserving its ESO chart and
+existing secret metadata. Without a Kubernetes target, choose No for standalone
+secrets. WireGuard's managed access containers never show this setup.
 
 ```bash
 nebius-cxcli ssh-jumphost --list-allowed-cidrs "$CONFIG" \
   --component ssh-jumphost@bastion --ssh-known-hosts-file ./known_hosts
 nebius-cxcli wireguard --gen-client-conf "$CONFIG" \
-  --component wireguard-gw@vpn --client-name laptop \
-  --ssh-known-hosts-file ./known_hosts
+  --component wireguard-gw@vpn --client-name laptop
 ```
 
 Use one WireGuard configuration per device. Downloaded `.conf` files contain
@@ -508,6 +738,9 @@ report and recipient/runtime settings in the generated manifest. See
 <!-- command-index:end -->
 
 ## Security and operational essentials
+
+NAT, WireGuard, and Tailscale HTTPS probes require TLS 1.2 or newer and verify
+server certificates and hostnames.
 
 - Keep deployment repositories private. Version `config.yaml` and deployable
   generated artifacts, while respecting generated runtime-file ignores.
@@ -544,10 +777,21 @@ quality gates, wheel verification, and releases. Product contracts live in
 [requirements](docs/requirements.md) and [design](docs/design.md); release history
 is in [CHANGELOG.md](CHANGELOG.md).
 
+Intentional command or CLI help changes require a reviewed fixture refresh;
+see the [CLI contract workflow](docs/development.md#quality-gates).
+
 CI retains its Python 3.12–3.14 matrix and one-build/many-consumer wheel checks.
+Its dedicated NAT probe integration step requires Docker and verifies the private
+SSH collector with two isolated Linux SSH servers, without cloud credentials.
+The fixture simulates foreign Linux input ownership on every host and stages
+known-hosts data and private keys in owner-only container runtime files, keeping
+strict SSH trust and client-identity checks active.
 Merge-identity and result-evidence jobs also verify authenticated post-merge runs.
 Workflow tests require exactly one setup-uv action pinned to a full commit SHA,
 while preserving uv version, cache inputs, conditions and setup ordering.
 Valid immutable action updates do not require a duplicated test hash change.
 File-preservation tests check content and write metadata while allowing reads to
 update access times.
+Source-contract tests use `tests/source_inspection.py` to locate current function
+definitions when edits shift imported line numbers. Rerun tests after edits to
+validate the final checkout.

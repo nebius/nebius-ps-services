@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from nebius_cxcli import grafana_runtime
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.grafana_install import configure
 from nebius_cxcli.observability_backends import metrics_destinations
 from nebius_cxcli.observability_runtime import (
@@ -225,7 +226,8 @@ def test_writer_credentials_only_for_exporting_owned_signals():
     both = configure(local, "cluster", overrides={"metrics_storage": "both"})
     assert write_secret_namespaces(both, "cluster") == ("observability",)
     custom = copy.deepcopy(both)
-    custom["deploy"]["targets"][0]["observability"]["routing"]["metrics"]["remote"][
-        "auth_secret"
-    ] = {"name": "customer-write", "key": "token"}
+    cluster_rows(custom)[0]["observability"]["routing"]["metrics"]["remote"]["auth_secret"] = {
+        "name": "customer-write",
+        "key": "token",
+    }
     assert not write_secret_namespaces(custom, "cluster")

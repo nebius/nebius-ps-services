@@ -52,14 +52,7 @@ def candidate_config(
     binding = soperator_report_binding(
         values, namespace="soperator", reports_path=settings["reports_path"]
     )
-    targets = [
-        row
-        for row in candidate.get("deploy", {}).get("targets", [])
-        if row.get("instance_id") == target_ref
-    ]
-    if len(targets) != 1:
-        raise ValueError("Profiling requires one explicit deployment target")
-    targets[0]["profiling"] = dict(settings)
+    selected[1]["profiling"] = dict(settings)
     charts = candidate.setdefault("apps", {}).setdefault("charts", [])
     for app, tool in APP_TOOLS.items():
         matches = [
@@ -206,7 +199,7 @@ def prepare_generation(cli, paths, base, *, target_ref, settings):
             omit_shared_protected_resources(directory / "ordinary", directory)
         before = {resource_identity(row): row for row in resource_documents(directory / "ordinary")}
         cli.render_flux(candidate, stage, ordinary_only=True)
-        for target in manifest.get("deploy", {}).get("targets", []):
+        for target in manifest.get("execution", {}).get("targets", []):
             directory = flux_target_dir(stage, target["target_ref"])
             omit_shared_protected_resources(directory / "ordinary", directory)
         # Compare the final digest-bound resources, including existing ordinary

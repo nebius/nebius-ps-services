@@ -17,11 +17,11 @@ import time
 from urllib.parse import quote
 import zipfile
 
-SCHEMA = "skills-review/v1"
+SCHEMA = "skills-review/v2"
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 ACTIONS_BOT_ID = 41898282  # github-actions[bot] on github.com.
 CI_CONTEXT = "Required CI"
-INTENT_SCHEMA = "merge-intent/v1"
+INTENT_SCHEMA = "merge-intent/v2"
 LIMIT = 2 * 1024 * 1024
 
 
@@ -260,12 +260,35 @@ def operator_ids():
         raise Blocked("Invalid operator configuration") from exc
 
 
+def source_identity(pr):
+    """Bind contributor provenance separately from the merge destination."""
+    head_repo, base_repo = pr["head"].get("repo"), pr["base"].get("repo")
+    require(isinstance(head_repo, dict) and isinstance(base_repo, dict), "PR repository unavailable")
+    value = {
+        "base_repository_id": base_repo.get("id"),
+        "head_repository_id": head_repo.get("id"),
+        "head_repository": head_repo.get("full_name"),
+        "head_ref": pr["head"].get("ref"),
+    }
+    validate_source_identity(value)
+    return value
+
+
+def validate_source_identity(value):
+    require(
+        all(type(value.get(k)) is int and value[k] > 0 for k in ("base_repository_id", "head_repository_id"))
+        and isinstance(value.get("head_repository"), str)
+        and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value["head_repository"])
+        and isinstance(value.get("head_ref"), str)
+        and 0 < len(value["head_ref"]) <= 255
+        and not any(ord(c) < 33 for c in value["head_ref"]),
+        "Invalid PR source identity",
+    )
+
+
 def identity(pr, repo, head, default):
     require(pr["state"] == "open" and not pr["draft"], "PR is closed or draft")
-    require(
-        pr["head"]["repo"] and pr["head"]["repo"]["full_name"] == repo,
-        "Automatic merge requires a same-repository PR",
-    )
+    source_identity(pr)
     require(
         pr["base"]["repo"]["full_name"] == repo and pr["base"]["ref"] == default,
         "PR must target the live repository default branch",
@@ -300,6 +323,34 @@ def review_record(review, pr, allowed):
         and value.get("base_sha") == pr["base"]["sha"],
         "Review identity or base drift",
     )
+    require(all(value.get(k) == v for k, v in source_identity(pr).items()), "Review source identity drift")
+    contribution = value.get("contribution")
+    require(
+        isinstance(contribution, dict)
+        and set(contribution) == {"verdict", "compatibility", "evidence"}
+        and contribution["verdict"] == "passed"
+        and contribution["compatibility"] in {"preserved", "approved-change"}
+        and isinstance(contribution["evidence"], list)
+        and contribution["evidence"]
+        and all(isinstance(v, str) and 0 < len(v.strip()) <= 1000 for v in contribution["evidence"]),
+        "Review lacks contribution and compatibility assessment",
+    )
+    specs = value.get("specs")
+    require(isinstance(specs, list) and 0 < len(specs) <= 100, "Review lacks project spec assessments")
+    projects = set()
+    for item in specs:
+        require(isinstance(item, dict) and set(item) == {"project", "outcome", "evidence"}, "Invalid spec assessment")
+        project = item["project"]
+        require(
+            isinstance(project, str) and 0 < len(project) <= 500
+            and (project == "." or all(part not in {"", ".", ".."} for part in project.split("/")))
+            and not any(ord(c) < 32 or c == "\\" for c in project)
+            and project not in projects
+            and item["outcome"] in {"aligned", "unchanged", "disabled"}
+            and isinstance(item["evidence"], str) and 0 < len(item["evidence"].strip()) <= 1000,
+            "Invalid or unresolved spec assessment",
+        )
+        projects.add(project)
     require(
         isinstance(value.get("validation"), list)
         and value["validation"]
@@ -543,6 +594,7 @@ def admitted_intent(api, number, head, review_id, method, policy):
         "head": head,
         "base": pr["base"]["ref"],
         "base_sha": pr["base"]["sha"],
+        **source_identity(pr),
         "review_id": review_id,
         "method": method,
         "run_id": int(os.environ["GITHUB_RUN_ID"]),
@@ -566,6 +618,10 @@ def execute(api, number, head, review_id, method, policy, intent=None):
             and current["base"]["ref"] == default,
             "Merged PR identity drift",
         )
+        if intent is not None:
+            require(current["base"]["repo"].get("id") == intent.get("base_repository_id"), "Merged base repository drift")
+            if current["head"].get("repo") is not None:
+                require(all(intent.get(k) == v for k, v in source_identity(current).items()), "Merged source identity drift")
         return {
             "outcome": "merged",
             "result_sha": api.merged_commit(number, head, default),

@@ -40,6 +40,16 @@ from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
 from . import kubernetes_process
+from .cluster_config import (
+    cluster_rows,
+    external_clusters,
+    require_cluster_row,
+    require_soperator_row,
+    soperator_row,
+    validate_source_contract,
+)
+from .nat_gateway_cli import app as nat_app
+from .tailscale_cli import app as tailscale_app
 
 try:
     import fcntl as _fcntl
@@ -140,6 +150,7 @@ from .compute_boot_disks import (
     resolve_compute_boot_disk_recommendation,
 )
 from .config_loader import load_config, normalize_runtime_config_payload, validate_config
+from .config_model import to_dynamic_payload
 from .config_template import starter_config_yaml
 from .credential_compensation import (
     CallbackCredentialDeliveryAdapter,
@@ -299,6 +310,7 @@ from .mk8s_node_groups import (
 from .mk8s_node_groups import (
     gpu_enabled as mk8s_gpu_enabled,
 )
+from .mk8s_placement import prompt_node_placement
 from .mk8s_preflight import (
     has_mk8s_gpu_stack_compatibility_preflight_targets,
     has_mk8s_resource_name_preflight_targets,
@@ -306,6 +318,10 @@ from .mk8s_preflight import (
     validate_mk8s_gpu_stack_compatibility_preflight,
     validate_mk8s_resource_name_preflight,
     validate_vpc_networking_preflight,
+)
+from .mk8s_storage import node_group_sfs_choices
+from .mk8s_storage import (
+    prompt_node_group_shared_storage as _prompt_node_group_shared_storage,
 )
 from .mk8s_upgrade import (
     DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
@@ -352,11 +368,11 @@ from .mysterybox_eso import (
     EXTERNAL_SECRETS_APP_ID,
     MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
     MYSTERYBOX_INFRA_COMPONENT_ID,
-    ensure_mysterybox_eso_app_rows,
     materialize_mysterybox_eso_app_values,
     mysterybox_eso_api_domains,
     mysterybox_eso_enabled,
     mysterybox_eso_runtime_secret_specs,
+    mysterybox_eso_selected_target_refs,
     mysterybox_eso_terraform_output_specs,
     mysterybox_eso_validation_specs,
     normalize_mysterybox_eso_project_settings,
@@ -976,6 +992,18 @@ from .upgrade_wizard import (
     soperator_compatibility_choice_for_hop,
     soperator_group_override,
 )
+from .vpc_choices import (
+    PLANNED_BINDING_TOKEN_PREFIX as _PLANNED_BINDING_TOKEN_PREFIX,
+)
+from .vpc_choices import (
+    PlannedBindingRef as _PlannedBindingRef,
+)
+from .vpc_choices import (
+    parse_planned_vpc_ref as _parse_planned_vpc_ref,
+)
+from .vpc_choices import (
+    resolve_wizard_provider_choices,
+)
 from .wireguard_clients import (
     WireGuardClientGenerationRequest,
     WireGuardLocalSubnetUpdateRequest,
@@ -984,9 +1012,7 @@ from .wireguard_clients import (
     normalize_dns,
     normalize_local_subnet_csv,
     normalize_local_subnets,
-    select_wireguard_component,
     update_wireguard_local_subnets,
-    wireguard_public_ip_from_outputs,
 )
 
 console = Console()
@@ -1413,11 +1439,22 @@ def _adjust_quota_report_for_existing_generated_state(
         _ensure_backend_s3_env_aliases()
         runtime_env = _terraform_runtime_env(config)
         terraform_init(paths.infra_dir, extra_env=runtime_env)
+        from .retained_quota import planned_retained_quota_credit
+
         managed_requirements = _managed_mk8s_quota_requirements_from_terraform_state(
             config,
             paths,
             manifest,
             runtime_env=runtime_env,
+        )
+        managed_requirements += planned_retained_quota_credit(
+            config,
+            paths.infra_dir,
+            manifest,
+            runtime_env=runtime_env,
+            plan_runner=terraform_plan,
+            plan_reader=terraform_show_json,
+            warn=progress_console.print,
         )
     except Exception:
         return report
@@ -2173,15 +2210,36 @@ def _raise_on_generated_bundle_live_quota_issues(
     phase: str,
 ) -> QuotaReport:
     terraform_init(paths.infra_dir, extra_env=dict(runtime_env or {}))
-    report = _assess_live_quota_report(config, phase=phase)
+    from .nat_gateway import nat_rows
+    from .nat_gateway_deploy import CURRENT_NAT
+    from .retained_quota import planned_retained_quota_credit
+
+    quota_config = to_plain_data(config)
+    if phase == "deploy" and CURRENT_NAT.get() is not None and nat_rows(quota_config):
+        # NAT/VPC demand is admitted from the fresh plan, including replacement peaks.
+        for row in quota_config.get("infra", {}).get("components", []):
+            if row.get("id") in {"nat-gateway", "vpc"}:
+                row["enabled"] = False
+    report = _assess_live_quota_report(quota_config, phase=phase)
     if manifest is not None:
         report = _adjust_quota_report_for_managed_mk8s_state(
             report,
-            managed_requirements=_managed_mk8s_quota_requirements_from_terraform_state(
-                config,
-                paths,
-                manifest,
-                runtime_env=runtime_env,
+            managed_requirements=(
+                *_managed_mk8s_quota_requirements_from_terraform_state(
+                    config,
+                    paths,
+                    manifest,
+                    runtime_env=runtime_env,
+                ),
+                *planned_retained_quota_credit(
+                    config,
+                    paths.infra_dir,
+                    manifest,
+                    runtime_env=runtime_env,
+                    plan_runner=terraform_plan,
+                    plan_reader=terraform_show_json,
+                    warn=progress_console.print,
+                ),
             ),
         )
     _print_live_quota_report(report, phase=phase)
@@ -2400,10 +2458,10 @@ _GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP = (
 )
 _DEPLOY_CONFIG_ARGUMENT_HELP = _GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP
 _WIREGUARD_CONFIG_ARGUMENT_HELP = (
-    "Path to project config.yaml under the deployments root. The command reads "
-    "the sibling generated/ Terraform state to find the deployed WireGuard VPN "
-    "gateway, and requires both files to contain the same component row."
+    "Path to source config.yaml with the published SecretStash connection reference. "
+    "Uses your Nebius identity and temporary SSH credentials; no generated bundle or Terraform is required."
 )
+
 _GENERATED_PATH_ARGUMENT_HELP = (
     "Path to generated/, one of its subdirectories, or a file under generated/."
 )
@@ -2663,6 +2721,8 @@ app.add_typer(acceptance_test_app, name="acceptance-test")
 app.add_typer(upgrade_app, name="upgrade")
 app.add_typer(migrate_app, name="migrate")
 app.add_typer(grafana_app, name="grafana")
+app.add_typer(nat_app, name="nat")
+app.add_typer(tailscale_app, name="tailscale")
 
 
 def _version_callback(value: bool) -> bool:
@@ -2761,7 +2821,7 @@ def _load_context(config_path: Path) -> tuple:
     payload = to_plain_data(config)
     if isinstance(payload, dict) and materialize_compute_boot_disk_defaults(payload):
         strip_app_chart_target_refs(payload)
-        config = validate_config(payload, base_dir=config_path.parent)
+        config = validate_config(to_dynamic_payload(payload), base_dir=config_path.parent)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
     return config, paths
@@ -2781,7 +2841,7 @@ def _load_context_readonly(config_path: Path) -> tuple:
     payload = to_plain_data(config)
     if isinstance(payload, dict) and materialize_compute_boot_disk_defaults(payload):
         strip_app_chart_target_refs(payload)
-        config = validate_config(payload, base_dir=config_path.parent)
+        config = validate_config(to_dynamic_payload(payload), base_dir=config_path.parent)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
     return config, paths
@@ -11534,8 +11594,6 @@ def _register_existing_soperator_target(
     }
     target_row: dict[str, Any] = {
         INSTANCE_ID_FIELD: target_ref,
-        DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
-        DEPLOY_TARGET_OWNERSHIP_FIELD: EXTERNAL_TARGET_OWNERSHIP,
         "access": normalized_access,
         "cluster_id": normalized_cluster_id,
         "project_id": resolved_project_id,
@@ -11544,7 +11602,6 @@ def _register_existing_soperator_target(
             "node_groups": copy.deepcopy(to_plain_data(snapshot.get("node_groups", {}))),
             "protected_storage": copy.deepcopy(to_plain_data(protected_storage_bindings)),
         },
-        "soperator_registration": registration,
     }
     if explicit_context:
         target_row["kube_context"] = explicit_context
@@ -11606,6 +11663,9 @@ def _register_existing_soperator_target(
             app_entries=app_entries,
             adoption_values=adoption_values,
             adoption_profile=adoption_profile,
+        )
+        require_soperator_row(next_payload, target_ref)["registration"] = copy.deepcopy(
+            registration
         )
         _materialize_single_target_app_bindings(next_payload)
         _materialize_soperator_component_defaults(next_payload)
@@ -13140,12 +13200,10 @@ def soperator_upgrade_command(
                 if group_target.gpu:
                     group["gpu_stack_preset"] = group_target.target_drivers_preset
         else:
-            registration = soperator_registration_target(
-                source_payload, target_ref=intent.target_ref
-            )
+            registration = require_cluster_row(source_payload, intent.target_ref)
             if not isinstance(registration, dict):
                 raise RuntimeError("Onboarded upgrade has no registration target")
-            registration["soperator_desired_platform"] = {
+            registration["desired_platform"] = {
                 "kubernetes_version": intent.target_kubernetes_version,
                 "node_groups": {
                     group.key: {
@@ -13155,14 +13213,8 @@ def soperator_upgrade_command(
                     for group in intent.node_groups
                 },
             }
-        targets = source_payload.setdefault("deploy", {}).setdefault("targets", [])
-        target_settings = next(
-            (row for row in targets if row.get("instance_id") == intent.target_ref), None
-        )
-        if target_settings is None:
-            target_settings = {"instance_id": intent.target_ref}
-            targets.append(target_settings)
-        target_settings["soperator_rollout"] = {
+        target_settings = require_soperator_row(source_payload, intent.target_ref)
+        target_settings["rollout"] = {
             "strategy": intent.node_group_strategy,
             "max_surge_count": intent.strategy_max_surge_count,
             "drain_timeout": intent.drain_timeout,
@@ -19065,6 +19117,11 @@ def _materialize_generated_terraform_tfvars(
     paths: ProjectPaths,
     manifest: Mapping[str, Any],
 ) -> Path:
+    access_payload = manifest.get("render", {}).get("access_tfvars", {})
+    if access_payload:
+        access_path = paths.access_infra_dir / "terraform.auto.tfvars.json"
+        access_path.parent.mkdir(parents=True, exist_ok=True)
+        access_path.write_text(json.dumps(access_payload, indent=2, sort_keys=True) + "\n")
     payload = terraform_tfvars_from_manifest(manifest)
     tfvars_path = paths.infra_dir / "terraform.auto.tfvars.json"
     tfvars_path.parent.mkdir(parents=True, exist_ok=True)
@@ -19750,6 +19807,7 @@ def _read_config_payload(config_path: Path) -> dict[str, Any]:
         payload = yaml.safe_load(handle) or {}
     if not isinstance(payload, dict):
         raise RuntimeError("config.yaml root must be a mapping")
+    validate_source_contract(payload)
     return payload
 
 
@@ -20126,18 +20184,32 @@ def _prompt_component_scope_selection(
     action: str,
     scope: ComponentScope,
     entries: tuple[ComponentEntry, ...],
+    defaults: set[str] | None = None,
 ) -> set[str]:
-    if not entries:
+    selectable_entries = tuple(entry for entry in entries if entry.selectable)
+    if not selectable_entries:
         console.print(
             f"{_component_selector_scope_label(scope)} components available to {action}: (none)"
         )
         return set()
-    selected = _prompt_component_with_checkboxes(
-        scope=scope,
-        entries=entries,
-        defaults=set(),
-    )
-    selected_ids = {token for token in selected if token}
+    selected_defaults = set(defaults or ()) & {entry.id for entry in selectable_entries}
+    while True:
+        selected = _prompt_component_with_checkboxes(
+            scope=scope,
+            entries=selectable_entries,
+            defaults=selected_defaults,
+        )
+        try:
+            selected_ids = _resolve_component_ids_from_tokens(
+                scope=scope,
+                tokens=selected,
+                entries=selectable_entries,
+                defaults=selected_defaults,
+            )
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"{error_markup('Invalid selection:')} {exc}")
+            continue
+        break
     _print_component_scope_selection_summary(
         scope=scope,
         selected=selected_ids,
@@ -20463,13 +20535,12 @@ def _parse_component_value_overrides(
 
 
 _SUBNET_ATTACHED_INFRA_COMPONENT_IDS = frozenset(
-    {"mk8s", "vm", "nfs", "wireguard-gw", "ssh-jumphost"}
+    {"mk8s", "vm", "nfs", "wireguard-gw", "ssh-jumphost", "tailscale-gw"}
 )
 _NETWORK_ONLY_INFRA_COMPONENT_IDS = frozenset({"managed-postgresql"})
 _NETWORK_ATTACHED_INFRA_COMPONENT_IDS = (
     _SUBNET_ATTACHED_INFRA_COMPONENT_IDS | _NETWORK_ONLY_INFRA_COMPONENT_IDS
 )
-_PLANNED_BINDING_TOKEN_PREFIX = "planned:"
 
 
 def _parse_vpc_id_overrides(
@@ -20520,66 +20591,6 @@ def _parse_vpc_id_overrides(
     if bare_values and scoped_values:
         raise RuntimeError(f"Do not mix bare and scoped {option_name} values in one command.")
     return tuple(bare_values), scoped_values
-
-
-@dataclass(frozen=True)
-class _PlannedBindingRef:
-    source_instance: str
-    source_output: str
-    key: str | None = None
-    attribute: str | None = None
-
-
-def _parse_planned_vpc_ref(value: str, *, option_name: str, field_name: str) -> _PlannedBindingRef:
-    token = value.strip()
-    if token.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
-        token = token[len(_PLANNED_BINDING_TOKEN_PREFIX) :]
-    component_selector, separator, output_selector = token.partition(".")
-    component_raw, instance_separator, instance_raw = component_selector.partition("@")
-    component_id = normalize_component_token(component_raw)
-    instance_id = normalize_component_token(instance_raw) if instance_separator else ""
-    if component_id != "vpc" or not instance_separator or not instance_id:
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Expected 'vpc@<vpc-instance>.<output>'."
-        )
-    if not INSTANCE_ID_PATTERN.fullmatch(instance_id):
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. VPC instance id must use lowercase letters, digits, and hyphens."
-        )
-    output_parts = [part.strip() for part in output_selector.split(".") if part.strip()]
-    if not separator or not output_parts:
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Expected 'vpc@<vpc-instance>.<output>'."
-        )
-    output_name = output_parts[0].replace("-", "_").lower()
-    if field_name == "network_id":
-        if output_name != "network_id" or len(output_parts) != 1:
-            raise RuntimeError(
-                f"Invalid {option_name} value '{value}'. Network refs must use "
-                "'vpc@<vpc-instance>.network_id'."
-            )
-        return _PlannedBindingRef(source_instance=instance_id, source_output="network_id")
-    if output_name != "subnets" or len(output_parts) != 3:
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Subnet refs must use "
-            "'vpc@<vpc-instance>.subnets.<subnet-key>.id'."
-        )
-    subnet_key = output_parts[1]
-    attribute = output_parts[2].replace("-", "_")
-    if not subnet_key or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", attribute):
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Subnet key and attribute must be non-empty."
-        )
-    if attribute != "id":
-        raise RuntimeError(
-            f"Invalid {option_name} value '{value}'. Subnet refs for subnet_id must end in '.id'."
-        )
-    return _PlannedBindingRef(
-        source_instance=instance_id,
-        source_output="subnets",
-        key=subnet_key,
-        attribute=attribute,
-    )
 
 
 def _selected_infra_rows_for_vpc_override(
@@ -21391,43 +21402,6 @@ def _target_aware_added_app_labels(
     return resolved
 
 
-def _ensure_mysterybox_eso_app_dependency_selection(
-    payload: dict[str, Any],
-    *,
-    selected_apps: set[str],
-    app_entries: tuple[ComponentEntry, ...],
-) -> tuple[set[str], tuple[str, ...]]:
-    before_selected_apps = set(selected_apps)
-    before_labels = set(_enabled_app_instance_labels(payload, app_id=EXTERNAL_SECRETS_APP_ID))
-    changed = ensure_mysterybox_eso_app_rows(payload, app_entries=app_entries)
-    after_selected_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
-    external_secrets_was_auto_selected = (
-        EXTERNAL_SECRETS_APP_ID in after_selected_apps
-        and EXTERNAL_SECRETS_APP_ID not in before_selected_apps
-    )
-    if not changed and not external_secrets_was_auto_selected:
-        return selected_apps, ()
-    after_labels = set(_enabled_app_instance_labels(payload, app_id=EXTERNAL_SECRETS_APP_ID))
-    auto_enabled_labels = after_labels - before_labels
-    if external_secrets_was_auto_selected and not auto_enabled_labels:
-        auto_enabled_labels = after_labels
-    return (
-        after_selected_apps,
-        tuple(sorted(auto_enabled_labels)),
-    )
-
-
-def _print_mysterybox_eso_app_dependency_adjustment(app_labels: tuple[str, ...]) -> None:
-    if not app_labels:
-        return
-    console.print(
-        f"{warning_markup('Adjusted component selection:')} enabling "
-        + ", ".join(f"'apps:{label}'" for label in app_labels)
-        + " because selected SecretStash-to-Kubernetes sync requires the External Secrets "
-        "Operator controller."
-    )
-
-
 def _ensure_nfs_csi_app_dependency_selection(
     payload: dict[str, Any],
     *,
@@ -21457,22 +21431,6 @@ def _print_nfs_csi_app_dependency_adjustment(app_labels: tuple[str, ...]) -> Non
         f"{warning_markup('Adjusted component selection:')} enabling "
         + ", ".join(f"'apps:{label}'" for label in app_labels)
         + " because VM-backed NFS for MK8s requires the NFS CSI driver."
-    )
-
-
-def _materialize_soperator_child_chart_secret_dependencies(
-    payload: dict[str, Any],
-    *,
-    selected_apps: set[str],
-    app_entries: tuple[ComponentEntry, ...],
-) -> tuple[set[str], tuple[str, ...]]:
-    """Materialize Soperator child values, then persist any ESO app dependency."""
-    materialize_soperator_child_chart_values(payload)
-    normalize_mysterybox_eso_project_settings(payload)
-    return _ensure_mysterybox_eso_app_dependency_selection(
-        payload,
-        selected_apps=selected_apps,
-        app_entries=app_entries,
     )
 
 
@@ -21661,7 +21619,7 @@ def _project_mk8s_cluster_choices(
         provider="project_mk8s_clusters",
         args={"project_id": project_id},
         payload={"client_info": {"nebius": {"project_id": project_id}}},
-        field_path="deploy.targets[].cluster_id",
+        field_path="infra.external_clusters[].cluster_id",
     )
     if choices:
         return choices
@@ -21934,8 +21892,7 @@ def _soperator_registration_target_ref_for_cluster_id(
     normalized_cluster_id = _non_empty_text(cluster_id)
     if not normalized_cluster_id or not isinstance(payload, Mapping):
         return ""
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if not isinstance(targets, list):
         return ""
     for row in targets:
@@ -21983,12 +21940,9 @@ def _upsert_soperator_registration_target(
 
     _ensure_onboarded_soperator_target_ref_available(payload, target_ref=target_ref)
 
-    deploy = payload.setdefault("deploy", {})
-    if not isinstance(deploy, dict):
-        raise RuntimeError("config payload deploy section must be a mapping")
-    targets = deploy.setdefault("targets", [])
+    targets = payload.setdefault("infra", {}).setdefault("external_clusters", [])
     if not isinstance(targets, list):
-        raise RuntimeError("config payload deploy.targets must be a list")
+        raise RuntimeError("config payload infra.external_clusters must be a list")
 
     for row in targets:
         if not isinstance(row, dict):
@@ -22072,15 +22026,14 @@ def _ensure_soperator_registration_app_row(
 def _refresh_soperator_registration_fingerprints(payload: dict[str, Any]) -> None:
     fingerprint_payload = copy.deepcopy(payload)
     _materialize_soperator_component_defaults(fingerprint_payload)
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if not isinstance(targets, list):
         return
     for row in targets:
         if not isinstance(row, dict) or not deploy_target_is_external_mk8s(row):
             continue
         target_ref = component_instance_id(row)
-        onboarding = row.get("soperator_registration")
+        onboarding = (soperator_row(payload, target_ref) or {}).get("registration")
         if (
             not target_ref
             or not isinstance(onboarding, dict)
@@ -22104,19 +22057,9 @@ def _soperator_lifecycle_target_refs(payload: Mapping[str, Any]) -> tuple[str, .
     for row in charts if isinstance(charts, list) else ():
         if not isinstance(row, Mapping):
             continue
-        if component_type_id(row) != _SOPERATOR_APP_ID and "soperator_registration" not in row:
+        if component_type_id(row) != _SOPERATOR_APP_ID and "registration" not in row:
             continue
         target_ref = app_chart_target_ref(row) or component_instance_id(row)
-        if target_ref and target_ref not in seen:
-            refs.append(target_ref)
-            seen.add(target_ref)
-
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
-    for row in targets if isinstance(targets, list) else ():
-        if not isinstance(row, Mapping) or "soperator_registration" not in row:
-            continue
-        target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
         if target_ref and target_ref not in seen:
             refs.append(target_ref)
             seen.add(target_ref)
@@ -22788,15 +22731,6 @@ def _align_new_infra_instance_ids_with_resource_names(
                 and str(values.get("clusterName", "")).strip() == target_ref
             ):
                 values["clusterName"] = new_target_ref
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
-    if isinstance(targets, list):
-        for row in targets:
-            if not isinstance(row, dict):
-                continue
-            target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
-            if target_ref in target_renames:
-                row[INSTANCE_ID_FIELD] = target_renames[target_ref]
     return renames
 
 
@@ -22954,6 +22888,7 @@ def _prompt_infra_add_resource_names(
     payload: dict[str, Any],
     add_targets: list[_ComponentAddTarget],
     infra_entries: tuple[ComponentEntry, ...],
+    confirmed_resource_names: set[tuple[str, str]],
 ) -> list[_ComponentAddTarget] | None:
     infra_lookup = {entry.id: entry for entry in infra_entries}
     infra_node = payload.get("infra")
@@ -22988,6 +22923,7 @@ def _prompt_infra_add_resource_names(
             instance_id = _prompt_new_infra_resource_name(entry=entry, rows=reserved_rows)
             if instance_id is None:
                 return None
+            confirmed_resource_names.add((entry.id, instance_id))
         elif target.component_id in enabled_infra_types:
             instance_id = next_component_instance_id(
                 component_id=entry.id,
@@ -23081,12 +23017,7 @@ def _remove_deploy_target_rows(
     if not target_refs:
         return []
 
-    deploy_node = payload.get("deploy")
-    if not isinstance(deploy_node, dict):
-        return []
-    targets = deploy_node.get("targets")
-    if not isinstance(targets, list):
-        return []
+    targets = external_clusters(payload)
 
     removed_refs: list[str] = []
     retained: list[Any] = []
@@ -23098,7 +23029,7 @@ def _remove_deploy_target_rows(
                 continue
         retained.append(row)
     if len(retained) != len(targets):
-        deploy_node["targets"] = retained
+        payload["infra"]["external_clusters"] = retained
     return removed_refs
 
 
@@ -23122,6 +23053,46 @@ def _remove_skipped_component_add_infra_rows(
     if not skipped_by_label:
         return [], []
 
+    from .wireguard_dependencies import skipped_new_dependencies
+
+    for instance_id in skipped_new_dependencies(
+        payload,
+        {
+            instance
+            for component, instance in skipped_by_label.values()
+            if component == "wireguard-gw"
+        },
+        {
+            component_instance_id(row)
+            for row in payload.get("infra", {}).get("components", [])
+            if component_type_id(row) == "mysterybox"
+            and component_instance_label("mysterybox", component_instance_id(row))
+            in added_label_set
+        },
+    ):
+        skipped_by_label[component_instance_label("mysterybox", instance_id)] = (
+            "mysterybox",
+            instance_id,
+        )
+
+    from .tailscale_dependencies import skipped_new_dependencies as skipped_tailscale_dependencies
+
+    for instance_id in skipped_tailscale_dependencies(
+        payload,
+        {
+            instance
+            for component, instance in skipped_by_label.values()
+            if component == "tailscale-gw"
+        },
+        {
+            component_instance_id(row)
+            for row in payload.get("infra", {}).get("components", [])
+            if component_type_id(row) == "mysterybox"
+            and component_instance_label("mysterybox", component_instance_id(row))
+            in added_label_set
+        },
+    ):
+        skipped_by_label[f"mysterybox@{instance_id}"] = ("mysterybox", instance_id)
     infra_lookup = {entry.id: entry for entry in infra_entries}
     removed_infra_labels: list[str] = []
     removed_cluster_targets: set[str] = set()
@@ -23449,41 +23420,9 @@ def _declared_wizard_prompt_path(
     if resolved is not None:
         return resolved
 
-    if full_path_label.startswith("deploy.targets[].") and component_path is not None:
-        component_node = (
-            _get_payload_value(payload, component_path)
-            if _payload_path_exists(payload, component_path)
-            else None
-        )
-        if isinstance(component_node, Mapping):
-            target_ref = component_instance_id(component_node)
-            deploy = payload.get("deploy")
-            if not isinstance(deploy, dict):
-                deploy = {}
-                payload["deploy"] = deploy
-            targets = deploy.get("targets")
-            if not isinstance(targets, list):
-                targets = []
-                deploy["targets"] = targets
-            if isinstance(targets, list):
-                for index, target_row in enumerate(targets):
-                    if not isinstance(target_row, Mapping):
-                        continue
-                    if normalize_component_token(target_row.get(INSTANCE_ID_FIELD)) != target_ref:
-                        continue
-                    indexed_label = full_path_label.replace(
-                        "deploy.targets[]",
-                        f"deploy.targets[{index}]",
-                        1,
-                    )
-                    return _parse_payload_path_label(indexed_label)
-                targets.append({INSTANCE_ID_FIELD: target_ref})
-                indexed_label = full_path_label.replace(
-                    "deploy.targets[]",
-                    f"deploy.targets[{len(targets) - 1}]",
-                    1,
-                )
-                return _parse_payload_path_label(indexed_label)
+    if full_path_label.startswith("infra.components[].") and component_path is not None:
+        suffix = full_path_label.removeprefix("infra.components[].")
+        return _parse_payload_path_label(f"{_format_payload_path(component_path)}.{suffix}")
 
     root_token = full_path_label.split(".", 1)[0]
     if root_token in _ABSOLUTE_WIZARD_ROOTS:
@@ -23498,7 +23437,9 @@ def _declared_wizard_prompt_path(
 
     relative = full_path_label[len(component_path_label) + 1 :]
     if entry.scope == "infra":
-        if not relative.startswith("inputs."):
+        if not relative.startswith(
+            ("inputs.", "observability.", "secrets.", "deployment_testing.")
+        ):
             return None
     elif entry.scope == "apps":
         if relative not in {
@@ -23506,7 +23447,7 @@ def _declared_wizard_prompt_path(
             "namespace",
             "profile",
             "release-name",
-        } and not relative.startswith("values."):
+        } and not relative.startswith(("values.", "deployment_testing.", "rollout.", "profiling.")):
             return None
     else:
         return None
@@ -23904,7 +23845,7 @@ _PROVIDER_ARG_PATH_KEYS = frozenset(
     }
 )
 
-_ABSOLUTE_WIZARD_ROOTS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
+_ABSOLUTE_WIZARD_ROOTS = frozenset({"version", "client_info", "infra", "apps"})
 
 
 def _dynamic_component_prefix(
@@ -24010,9 +23951,9 @@ def _wizard_field_spec_candidates(
 
     _remember(full_path_label)
 
-    target_match = re.match(r"^deploy\.targets\[[0-9]+\]\.(.+)$", full_path_label)
+    target_match = re.match(r"^infra\.components\[[0-9]+\]\.(.+)$", full_path_label)
     if target_match:
-        _remember(f"deploy.targets[].{target_match.group(1)}")
+        _remember(f"infra.components[].{target_match.group(1)}")
 
     prefix = f"{entry.config_path}."
     if full_path_label.startswith(prefix):
@@ -24111,13 +24052,16 @@ def _wizard_field_provider_default_value(
         full_path_label=full_path_label,
         args=args,
     )
-    choices = provider_lookup.resolve(
+    choices = resolve_wizard_provider_choices(
+        read_field=_read_payload_field,
+        entry=entry,
+        provider_lookup=provider_lookup,
         provider=provider,
         args=args,
         payload=payload,
-        field_path=full_path_label,
+        full_path_label=full_path_label,
     )
-    if not choices:
+    if not choices or provider_lookup.vpc_diagnostics(full_path_label):
         return _WIZARD_DEFAULT_MISSING
     if _is_string_sequence_type_hint(type_hint):
         return [choice.value for choice in choices if choice.value]
@@ -24167,21 +24111,15 @@ def _resolve_dynamic_field_choices(
         choices: list[OptionChoice] = []
         seen: set[str] = set()
         for provider, args in provider_specs:
-            provider_choices = provider_lookup.resolve(
+            provider_choices = resolve_wizard_provider_choices(
+                read_field=_read_payload_field,
+                entry=entry,
+                provider_lookup=provider_lookup,
                 provider=provider,
                 args=args,
                 payload=payload,
-                field_path=full_path_label,
+                full_path_label=full_path_label,
             )
-            if provider in {"project_networks", "project_subnets"}:
-                provider_choices = _combined_vpc_choices(
-                    payload=payload,
-                    entry=entry,
-                    full_path_label=full_path_label,
-                    provider=provider,
-                    args=args,
-                    live_choices=provider_choices,
-                )
             for item in provider_choices:
                 if item.value in seen:
                     continue
@@ -24211,11 +24149,14 @@ def _resolve_dynamic_field_choices(
                 full_path_label=full_path_label,
                 args=resolved_args,
             )
-            provider_choices = provider_lookup.resolve(
+            provider_choices = resolve_wizard_provider_choices(
+                read_field=_read_payload_field,
+                entry=entry,
+                provider_lookup=provider_lookup,
                 provider=provider,
                 args=resolved_args,
                 payload=payload,
-                field_path=full_path_label,
+                full_path_label=full_path_label,
             )
             for item in provider_choices:
                 if item.value in seen:
@@ -24250,144 +24191,6 @@ def _provider_sources_for_field(
 ) -> tuple[str, ...]:
     specs = _provider_source_specs_for_field(entry=entry, full_path_label=full_path_label)
     return tuple(dict.fromkeys(provider for provider, _args in specs))
-
-
-def _planned_vpc_rows(payload: dict[str, Any]) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
-    infra = payload.get("infra")
-    components = infra.get("components") if isinstance(infra, Mapping) else None
-    if not isinstance(components, list):
-        return []
-    rows: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
-    for row in components:
-        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
-            continue
-        if component_type_id(row) != "vpc":
-            continue
-        instance_id = component_instance_id(row)
-        if not instance_id:
-            continue
-        inputs = row.get("inputs")
-        if not isinstance(inputs, dict):
-            inputs = {}
-        rows.append((row, instance_id, inputs))
-    return rows
-
-
-def _planned_network_choice(instance_id: str, inputs: Mapping[str, Any]) -> OptionChoice:
-    network = inputs.get("network")
-    name = ""
-    if isinstance(network, Mapping):
-        name = _non_empty_text(network.get("name"))
-    label_name = name or instance_id
-    return OptionChoice(
-        value=f"{_PLANNED_BINDING_TOKEN_PREFIX}vpc@{instance_id}.network_id",
-        label=f"planned: {label_name}  (infra:vpc@{instance_id})",
-        metadata={"planned": True, "component": "vpc", "instance_id": instance_id},
-    )
-
-
-def _planned_subnet_choices_for_vpc(
-    *,
-    instance_id: str,
-    inputs: Mapping[str, Any],
-) -> list[OptionChoice]:
-    subnets = inputs.get("subnets")
-    if not isinstance(subnets, Mapping):
-        return []
-    choices: list[OptionChoice] = []
-    for subnet_key, subnet_value in subnets.items():
-        key = str(subnet_key).strip()
-        if not key:
-            continue
-        name = ""
-        cidrs: list[str] = []
-        if isinstance(subnet_value, Mapping):
-            name = _non_empty_text(subnet_value.get("name"))
-            raw_cidrs = subnet_value.get("ipv4_private_cidrs")
-            if isinstance(raw_cidrs, list):
-                cidrs = [str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip()]
-        suffix = f" ({', '.join(cidrs)})" if cidrs else ""
-        label_name = name or key
-        choices.append(
-            OptionChoice(
-                value=(f"{_PLANNED_BINDING_TOKEN_PREFIX}vpc@{instance_id}.subnets.{key}.id"),
-                label=f"planned: {label_name}  (infra:vpc@{instance_id}.subnets.{key}){suffix}",
-                metadata={
-                    "planned": True,
-                    "component": "vpc",
-                    "instance_id": instance_id,
-                    "subnet_key": key,
-                    "private_cidrs": tuple(cidrs),
-                },
-            )
-        )
-    return choices
-
-
-def _combined_vpc_choices(
-    *,
-    payload: dict[str, Any],
-    entry: ComponentEntry,
-    full_path_label: str,
-    provider: str,
-    args: Mapping[str, Any],
-    live_choices: list[OptionChoice],
-) -> list[OptionChoice]:
-    choices = list(live_choices)
-    seen = {choice.value for choice in choices}
-    planned: list[OptionChoice] = []
-    if provider == "project_networks":
-        include_planned_networks = not (
-            entry.scope == "infra"
-            and entry.id == "vpc"
-            and full_path_label.endswith(".inputs.network.existing_id")
-        )
-        if include_planned_networks:
-            for _row, instance_id, inputs in _planned_vpc_rows(payload):
-                network = inputs.get("network")
-                existing_id = ""
-                if isinstance(network, Mapping):
-                    existing_id = _non_empty_text(network.get("existing_id"))
-                if existing_id:
-                    continue
-                planned.append(_planned_network_choice(instance_id, inputs))
-    elif provider == "project_subnets":
-        network_id_path = _non_empty_text(args.get("network_id_path"))
-        selected_network = (
-            _non_empty_text(_read_payload_field(payload, network_id_path))
-            if network_id_path
-            else _non_empty_text(args.get("network_id"))
-        )
-        if selected_network:
-            selected_planned_ref: _PlannedBindingRef | None = None
-            if selected_network.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
-                try:
-                    selected_planned_ref = _parse_planned_vpc_ref(
-                        selected_network,
-                        option_name="planned network choice",
-                        field_name="network_id",
-                    )
-                except RuntimeError:
-                    selected_planned_ref = None
-            for _row, instance_id, inputs in _planned_vpc_rows(payload):
-                network = inputs.get("network")
-                existing_id = ""
-                if isinstance(network, Mapping):
-                    existing_id = _non_empty_text(network.get("existing_id"))
-                if selected_planned_ref is not None:
-                    if instance_id != selected_planned_ref.source_instance:
-                        continue
-                elif existing_id != selected_network:
-                    continue
-                planned.extend(
-                    _planned_subnet_choices_for_vpc(instance_id=instance_id, inputs=inputs)
-                )
-    for choice in planned:
-        if choice.value in seen:
-            continue
-        choices.append(choice)
-        seen.add(choice.value)
-    return choices
 
 
 def _private_ipv4_network(value: str) -> ipaddress.IPv4Network | None:
@@ -25066,11 +24869,14 @@ def _provider_allowed_values_for_field(
 
     allowed: set[str] = set()
     for provider, resolved_args in provider_specs:
-        for item in provider_lookup.resolve(
+        for item in resolve_wizard_provider_choices(
+            read_field=_read_payload_field,
+            entry=entry,
+            provider_lookup=provider_lookup,
             provider=provider,
             args=resolved_args,
             payload=payload,
-            field_path=full_path_label,
+            full_path_label=full_path_label,
         ):
             allowed.update(_provider_choice_allowed_values(item))
     return allowed, providers
@@ -25081,6 +24887,9 @@ def _provider_choice_allowed_values(choice: OptionChoice) -> set[str]:
     value = str(choice.value).strip()
     if value:
         values.add(value)
+    live_id = choice.metadata.get("live_id")
+    if isinstance(live_id, str) and live_id:
+        values.add(live_id)
     if bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
         preset = _non_empty_text(choice.metadata.get("preset"))
         if preset:
@@ -25479,6 +25288,8 @@ def _field_requires_live_vpc_choices(
     full_path_label: str,
     required: bool,
 ) -> bool:
+    if entry.id == "wireguard-gw" and full_path_label.endswith(".access.admin_group_id"):
+        return True
     if not required:
         return False
     leaf_name = _normalize_leaf_name(full_path_label.rsplit(".", maxsplit=1)[-1])
@@ -25499,13 +25310,22 @@ def _provider_required_live_options_error(
     provider_names: str,
     provider_lookup: ProviderOptionLookup | None,
 ) -> str:
+    if "wireguard_admin_groups" in provider_names:
+        return (
+            "Complete live IAM group choices are required for WireGuard. "
+            "Check the selected identity's tenant/project group-list permissions; "
+            "partial, cached and manually guessed choices are not accepted."
+        )
     message = (
         f"Live Nebius VPC provider options are required for '{field_path_label}' "
         f"via provider source(s): {provider_names}."
     )
     if provider_lookup is not None:
+        diagnostics = provider_lookup.vpc_diagnostics(field_path_label)
         last_error = provider_lookup.last_error()
-        if last_error:
+        if diagnostics:
+            message += " " + " ".join(diagnostics)
+        elif last_error:
             message += f" {last_error}"
     message += (
         " Resolve live project access or pass explicit --network-id/--subnet-id "
@@ -25565,19 +25385,20 @@ def _prompt_path_sort_key(
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
-        "deploy.observability.enabled": 19,
-        "deploy.targets[].observability.enabled": 200,
-        "deploy.targets[].observability.kubernetes.logs.enabled": 201,
-        "deploy.targets[].observability.kubernetes.metrics.enabled": 202,
-        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 203,
-        "deploy.targets[].observability.kubernetes.traces.enabled": 204,
-        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": 220,
-        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": 221,
-        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": 222,
-        "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": 223,
-        "deploy.targets[].secrets.mysterybox.enabled": 240,
-        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
-        "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
+        "infra.components[].observability.enabled": 200,
+        "infra.components[].observability.vm.logs.enabled": 201,
+        "infra.components[].observability.vm.logs.systemd_units": 202,
+        "infra.components[].observability.kubernetes.logs.enabled": 201,
+        "infra.components[].observability.kubernetes.metrics.enabled": 202,
+        "infra.components[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 203,
+        "infra.components[].observability.kubernetes.traces.enabled": 204,
+        "infra.components[].deployment_testing.mk8s_gpu.operator_readiness.enabled": 220,
+        "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": 221,
+        "infra.components[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": 222,
+        "infra.components[].deployment_testing.mk8s_gpu.health_checker.enabled": 223,
+        "infra.components[].secrets.mysterybox.enabled": 240,
+        "infra.components[].secrets.mysterybox.allow_all_namespaces": 241,
+        "infra.components[].secrets.mysterybox.sync_namespaces": 242,
         "infra.components[].inputs.type": 90,
         "infra.components[].inputs.node_group_defaults.cpu.platform": 21,
         "infra.components[].inputs.node_group_defaults.cpu.preset": 22,
@@ -25610,12 +25431,7 @@ def _prompt_path_sort_key(
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
-    normalized_full_label = re.sub(r"deploy\.targets\[[0-9]+\]", "deploy.targets[]", full_label)
-    normalized_full_label = re.sub(
-        r"infra\.components\[[0-9]+\]",
-        "infra.components[]",
-        normalized_full_label,
-    )
+    normalized_full_label = re.sub(r"infra\.components\[[0-9]+\]", "infra.components[]", full_label)
     required_rank = (
         0
         if (required_prompt_labels and full_label in required_prompt_labels)
@@ -25626,9 +25442,17 @@ def _prompt_path_sort_key(
         required_rank = 0
     if re.search(r"\.inputs\.cluster\.public_endpoint$", full_label):
         required_rank = 0
-    if normalized_full_label.startswith("deploy.targets[]."):
+    if leaf_name == "public_ip_allocation_id":
         required_rank = 1
-    if normalized_full_label.startswith("deploy.targets[].secrets.mysterybox."):
+    if normalized_full_label.startswith(
+        (
+            "infra.components[].observability.",
+            "infra.components[].secrets.",
+            "infra.components[].deployment_testing.",
+        )
+    ):
+        required_rank = 1
+    if normalized_full_label.startswith("infra.components[].secrets.mysterybox."):
         required_rank = 1
     toggle_rank = (
         0
@@ -25812,7 +25636,7 @@ def _choice_by_value(
     if not selected:
         return None
     for choice in choices or ():
-        if choice.value == selected:
+        if choice.value == selected or choice.metadata.get("live_id") == selected:
             return choice
     return None
 
@@ -25909,23 +25733,23 @@ def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
 def _is_mk8s_gpu_deployment_testing_field(full_path_label: str) -> bool:
     return bool(
         re.match(
-            r"^deploy\.targets\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.",
+            r"^infra\.components\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.",
             full_path_label,
         )
-        or full_path_label.startswith("deploy.targets[].deployment_testing.mk8s_gpu.")
+        or full_path_label.startswith("infra.components[].deployment_testing.mk8s_gpu.")
     )
 
 
 def _is_observability_field(full_path_label: str) -> bool:
-    return full_path_label.startswith("deploy.observability.") or bool(
-        re.match(r"^deploy\.targets(?:\[[0-9]+\]|\[\])\.observability\.", full_path_label)
+    return full_path_label.startswith("infra.components[].observability.") or bool(
+        re.match(r"^infra\.components(?:\[[0-9]+\]|\[\])\.observability\.", full_path_label)
     )
 
 
 def _is_mysterybox_eso_field(full_path_label: str) -> bool:
     return bool(
         re.match(
-            r"^deploy\.targets(?:\[[0-9]+\]|\[\])\.secrets\.mysterybox(?:\.|$)",
+            r"^infra\.components(?:\[[0-9]+\]|\[\])\.secrets\.mysterybox(?:\.|$)",
             full_path_label,
         )
     )
@@ -26249,6 +26073,7 @@ def _payload_has_enabled_mysterybox(payload: dict[str, Any]) -> bool:
         isinstance(item, dict)
         and bool(item.get("enabled", False))
         and component_type_id(item) == MYSTERYBOX_INFRA_COMPONENT_ID
+        and item.get("inputs", {}).get("create_initial_versions") is not False
         for item in components
     )
 
@@ -26323,13 +26148,13 @@ def _maybe_print_observability_prompt_guidance(
         )
         emitted_guidance.add("observability")
     specific_guidance = {
-        "deploy.observability.vm.logs.enabled": (
+        "infra.components[].observability.vm.logs.enabled": (
             "Collect VM journald logs: answering yes applies the Nebius Compute "
             "journald labels to the VM. Blank systemd units collect all units; "
             "explicit units are written as a semicolon-separated allowlist."
         ),
     }
-    message = specific_guidance.get(full_path_label)
+    message = specific_guidance.get(re.sub(r"\[\d+\]", "[]", full_path_label))
     if message is None:
         return
     guidance_key = f"observability:{full_path_label}"
@@ -26769,7 +26594,7 @@ def _observability_prompt_target_ref(
     full_path_label: str,
 ) -> str:
     match = re.match(
-        r"^(deploy\.targets\[[0-9]+\])\.observability\.enabled$",
+        r"^(infra\.components\[[0-9]+\])\.observability\.enabled$",
         full_path_label,
     )
     if not match:
@@ -26854,9 +26679,20 @@ def _skip_observability_prompt(
     if not (mk8s_enabled or vm_enabled):
         return True
     target_observability_match = re.match(
-        r"^(deploy\.targets\[[0-9]+\]\.observability)(?:\.|$)",
+        r"^(infra\.components\[[0-9]+\]\.observability)(?:\.|$)",
         full_path_label,
     )
+    if target_observability_match and entry.id == "vm":
+        prefix = target_observability_match.group(1)
+        if full_path_label == f"{prefix}.enabled":
+            return False
+        if not _read_payload_field(payload, f"{prefix}.enabled"):
+            return True
+        return bool(
+            full_path_label.startswith(f"{prefix}.vm.logs.")
+            and full_path_label != f"{prefix}.vm.logs.enabled"
+            and not _read_payload_field(payload, f"{prefix}.vm.logs.enabled")
+        )
     if target_observability_match:
         if entry.id != "mk8s" or not mk8s_enabled:
             return True
@@ -26883,23 +26719,6 @@ def _skip_observability_prompt(
                 and not _read_payload_field(payload, f"{kubernetes_prefix}.metrics.enabled")
             )
         return False
-    if full_path_label == "deploy.observability.enabled":
-        return bool(entry.id != "vm" or not vm_enabled)
-    if full_path_label.startswith("deploy.observability.vm."):
-        if entry.id != "vm":
-            return True
-        if not vm_enabled:
-            return True
-    observability_enabled = bool(_read_payload_field(payload, "deploy.observability.enabled"))
-    if not observability_enabled:
-        return True
-    if full_path_label == "deploy.observability.vm.logs.enabled":
-        return False
-    if full_path_label.startswith("deploy.observability.vm.logs."):
-        return bool(
-            full_path_label != "deploy.observability.vm.logs.enabled"
-            and not _read_payload_field(payload, "deploy.observability.vm.logs.enabled")
-        )
     return False
 
 
@@ -26916,12 +26735,21 @@ def _skip_mysterybox_eso_prompt(
     if not _payload_has_enabled_mysterybox(payload):
         return True
     target_match = re.match(
-        r"^(deploy\.targets\[[0-9]+\]\.secrets\.mysterybox)(?:\.|$)",
+        r"^(infra\.components\[[0-9]+\]\.secrets\.mysterybox)(?:\.|$)",
         full_path_label,
     )
     if not target_match:
         return False
     target_prefix = target_match.group(1)
+    target = _read_payload_field(payload, target_prefix.removesuffix(".secrets.mysterybox"))
+    target_ref = component_instance_id(target)
+    if not any(
+        row.get("enabled")
+        and component_type_id(row) == EXTERNAL_SECRETS_APP_ID
+        and (app_chart_target_ref(row) or component_instance_id(row)) == target_ref
+        for row in payload.get("apps", {}).get("charts", [])
+    ):
+        return True
     if full_path_label == f"{target_prefix}.enabled":
         return False
     return not bool(_read_payload_field(payload, f"{target_prefix}.enabled"))
@@ -27532,7 +27360,7 @@ def _skip_sfs_multi_filesystem_prompt(
 
 def _mk8s_gpu_deployment_testing_prompt_section(full_path_label: str) -> str:
     match = re.match(
-        r"^deploy\.targets\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.([^.]+)\.",
+        r"^infra\.components\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.([^.]+)\.",
         full_path_label,
     )
     return match.group(1) if match else ""
@@ -27542,11 +27370,10 @@ def _mk8s_gpu_deployment_testing_prompt_target_ref(
     payload: Mapping[str, Any],
     full_path_label: str,
 ) -> str:
-    match = re.match(r"^deploy\.targets\[([0-9]+)\]\.", full_path_label)
+    match = re.match(r"^infra\.components\[([0-9]+)\]\.", full_path_label)
     if match is None:
         return ""
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = payload.get("infra", {}).get("components", [])
     if not isinstance(targets, list):
         return ""
     index = int(match.group(1))
@@ -27946,17 +27773,17 @@ _WIZARD_REDACTED_FIELD_TOKENS = (
 
 def _wizard_field_is_sensitive(path_label: str) -> bool:
     normalized_label = re.sub(
-        r"deploy\.targets\[[0-9]+\]",
-        "deploy.targets[]",
+        r"infra\.components\[[0-9]+\]",
+        "infra.components[]",
         path_label.lower(),
     )
     public_mysterybox_sync_fields = {
-        "deploy.targets[].secrets.mysterybox.enabled",
-        "deploy.targets[].secrets.mysterybox.store_name",
-        "deploy.targets[].secrets.mysterybox.api_domain",
-        "deploy.targets[].secrets.mysterybox.allow_all_namespaces",
-        "deploy.targets[].secrets.mysterybox.refresh_interval",
-        "deploy.targets[].secrets.mysterybox.sync_namespaces",
+        "infra.components[].secrets.mysterybox.enabled",
+        "infra.components[].secrets.mysterybox.store_name",
+        "infra.components[].secrets.mysterybox.api_domain",
+        "infra.components[].secrets.mysterybox.allow_all_namespaces",
+        "infra.components[].secrets.mysterybox.refresh_interval",
+        "infra.components[].secrets.mysterybox.sync_namespaces",
     }
     if normalized_label in public_mysterybox_sync_fields:
         return False
@@ -27981,7 +27808,7 @@ def _ssh_public_key_summary(value: str) -> str:
     return f"{key_type} {comment}".strip()
 
 
-def _mysterybox_secrets_summary(value: object) -> str:
+def _mysterybox_secrets_summary(value: object, *, include_sync: bool = False) -> str:
     if not isinstance(value, list):
         return ""
     parts: list[str] = []
@@ -27990,7 +27817,7 @@ def _mysterybox_secrets_summary(value: object) -> str:
             continue
         name = _non_empty_text(item.get("name")) or "<unnamed>"
         kubernetes_secret_name = _non_empty_text(item.get("kubernetes_secret_name"))
-        if kubernetes_secret_name and kubernetes_secret_name != name:
+        if include_sync and kubernetes_secret_name and kubernetes_secret_name != name:
             name = f"{name}->{kubernetes_secret_name}"
         payload = item.get("payload")
         payload_keys = (
@@ -28840,6 +28667,7 @@ def _prompt_mysterybox_secrets_override(
     current: object,
     *,
     required: bool,
+    eso_sync: bool,
 ) -> tuple[object, bool]:
     existing = copy.deepcopy(current) if isinstance(current, list) else []
     secrets: list[dict[str, Any]] = [
@@ -28853,7 +28681,7 @@ def _prompt_mysterybox_secrets_override(
     if secrets:
         console.print(
             f"[dim]Current {escape(path_label)}: "
-            f"{escape(_mysterybox_secrets_summary(secrets))}[/dim]"
+            f"{escape(_mysterybox_secrets_summary(secrets, include_sync=eso_sync))}[/dim]"
         )
     while True:
         secret_prompt = (
@@ -28883,17 +28711,25 @@ def _prompt_mysterybox_secrets_override(
             console.print(f"{error_markup('Invalid value')}. Secret names must be unique.")
             continue
 
-        kubernetes_secret_name, should_stop = _prompt_mysterybox_kubernetes_secret_name(secret_name)
-        if should_stop:
-            return current, True
-        if _wizard_backtrack_requested(kubernetes_secret_name):
-            continue
+        sync_metadata: dict[str, str] = {}
+        if eso_sync:
+            kubernetes_secret_name, should_stop = _prompt_mysterybox_kubernetes_secret_name(
+                secret_name
+            )
+            if should_stop:
+                return current, True
+            if _wizard_backtrack_requested(kubernetes_secret_name):
+                continue
 
-        eso_version_policy, should_stop = _prompt_mysterybox_eso_version_policy(secret_name)
-        if should_stop:
-            return current, True
-        if _wizard_backtrack_requested(eso_version_policy):
-            continue
+            eso_version_policy, should_stop = _prompt_mysterybox_eso_version_policy(secret_name)
+            if should_stop:
+                return current, True
+            if _wizard_backtrack_requested(eso_version_policy):
+                continue
+            sync_metadata = {
+                "kubernetes_secret_name": kubernetes_secret_name,
+                "eso_version_policy": str(eso_version_policy),
+            }
 
         payload: dict[str, dict[str, str]] = {}
         restart_secret_prompt = False
@@ -28946,16 +28782,20 @@ def _prompt_mysterybox_secrets_override(
             {
                 "name": secret_name,
                 "version_id": "n/a",
-                "eso_version_policy": str(eso_version_policy),
-                "kubernetes_secret_name": kubernetes_secret_name,
+                **sync_metadata,
                 "payload": payload,
             }
         )
         seen_names.add(secret_name)
+        sync_summary = (
+            ", configured to sync to Kubernetes Secret "
+            f"{escape(sync_metadata['kubernetes_secret_name'])}"
+            if eso_sync
+            else ""
+        )
         console.print(
             f"[dim]Added MysteryBox Secret {escape(secret_name)} with "
-            f"{len(payload)} payload key(s), syncing to Kubernetes Secret "
-            f"{escape(kubernetes_secret_name)}.[/dim]"
+            f"{len(payload)} payload key(s){sync_summary}.[/dim]"
         )
 
 
@@ -28969,6 +28809,7 @@ def _prompt_scalar_override(
     unset_on_skip: bool = False,
     prompt_hint: str | None = None,
     blank_text: str | None = None,
+    mysterybox_eso_sync: bool = False,
 ) -> tuple[object, bool]:
     if path_label.endswith(".values.slurmNodes.login.sshRootPublicKeys"):
         console.print(
@@ -29010,6 +28851,7 @@ def _prompt_scalar_override(
             path_label,
             current,
             required=required,
+            eso_sync=mysterybox_eso_sync,
         )
     rendered_label = _prompt_label_with_type(
         path_label,
@@ -29218,6 +29060,8 @@ def _run_component_field_wizard(
     soperator_install: bool = False,
     skipped_components: set[tuple[ComponentScope, str, str]] | None = None,
     existing_grafana_targets: frozenset[str] = frozenset(),
+    new_mk8s_target_refs: frozenset[str] = frozenset(),
+    confirmed_infra_resource_names: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[str, bool]:
     payload = yaml.safe_load(config_yaml) or {}
     if not isinstance(payload, dict):
@@ -29225,6 +29069,19 @@ def _run_component_field_wizard(
     selected_infra = {
         token for item in selected_infra if (token := normalize_component_token(item))
     }
+
+    from .wireguard_dependencies import materialize_wireguard_dependencies
+
+    selected_infra.update(
+        materialize_wireguard_dependencies(payload, selected_instances=selected_infra)
+    )
+    from .tailscale_dependencies import materialize as materialize_tailscale
+
+    tailscale_created_dependencies = set(
+        materialize_tailscale(payload, selected_instances=selected_infra)
+    )
+    selected_infra.update(tailscale_created_dependencies)
+    normalize_mysterybox_eso_project_settings(payload)
 
     infra_lookup = {entry.id: entry for entry in infra_entries}
     app_lookup = {entry.id: entry for entry in app_entries}
@@ -29236,6 +29093,25 @@ def _run_component_field_wizard(
     wizard_auto_enabled_app_rows: set[tuple[str, str]] = set()
     wizard_configured_grafana_targets: set[str] = set()
     wizard_created_routing_targets: set[str] = set()
+    new_telemetry_targets = set(new_mk8s_target_refs)
+    wizard_telemetry_modes: dict[str, bool] = {}
+    wizard_configured_telemetry_modes: dict[str, bool] = {}
+    wizard_original_app_rows: dict[tuple[str, str], dict[str, Any]] = {}
+
+    from .mysterybox_wizard import MysteryBoxSyncWizard
+
+    mysterybox_sync_wizard = MysteryBoxSyncWizard()
+
+    def _confirm_mysterybox_sync(label: str, default: bool) -> str:
+        try:
+            decision = _wizard_continue_phase(label, default=default, allow_back=True)
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return "quit"
+        if _wizard_phase_stop_requested(decision):
+            return "quit"
+        if _wizard_phase_back_requested(decision):
+            return "back"
+        return "yes" if decision else "no"
 
     warned_provider_fallbacks: set[str] = set()
     provider_allowed_cache: dict[str, tuple[set[str], tuple[str, ...]]] = {}
@@ -29269,6 +29145,12 @@ def _run_component_field_wizard(
                     )
                 else:
                     console.print(f"Soperator '{escape(target)}': standard deployment profile.")
+        tailscale_created_dependencies.update(
+            materialize_tailscale(payload, selected_instances=selected_infra)
+        )
+        from .tailscale_dependencies import prune_unreferenced
+
+        prune_unreferenced(payload, tailscale_created_dependencies)
         return yaml.safe_dump(payload, sort_keys=False)
 
     def _selected_infra_component_ids() -> set[str]:
@@ -29290,10 +29172,15 @@ def _run_component_field_wizard(
                 instance_id = str(row["instance_id"])
                 if instance_id not in selected_infra:
                     continue
+                from .wireguard_dependencies import metadata_only
+
+                if metadata_only(row):
+                    continue
                 entry = infra_lookup.get(str(row["id"]))
                 if entry is not None:
                     selected_components.append((entry, instance_id))
-            selected_components.sort(key=lambda item: 0 if item[0].id == "vpc" else 1)
+            priorities = {"vpc": 0} if soperator_install else {"vpc": 0, "sfs": 1}
+            selected_components.sort(key=lambda item: priorities.get(item[0].id, 2))
             return selected_components
         for row in _dynamic_enabled_app_chart_rows(payload):
             instance_id = str(row["instance_id"])
@@ -29336,7 +29223,7 @@ def _run_component_field_wizard(
             instance_id = component_instance_id(row)
             if component_id != "mk8s" or not instance_id:
                 continue
-            if instance_id not in selected_tokens and component_id not in selected_tokens:
+            if instance_id not in selected_tokens:
                 continue
             if instance_id in seen:
                 continue
@@ -29444,6 +29331,50 @@ def _run_component_field_wizard(
             if old in selected_infra:
                 selected_infra.remove(old)
                 selected_infra.add(new)
+        for targets in (
+            new_telemetry_targets,
+            wizard_created_routing_targets,
+            wizard_configured_grafana_targets,
+        ):
+            renamed_targets = {renames.get(target, target) for target in targets}
+            targets.clear()
+            targets.update(renamed_targets)
+        for modes in (wizard_telemetry_modes, wizard_configured_telemetry_modes):
+            for old, new in renames.items():
+                if old in modes:
+                    modes[new] = modes.pop(old)
+        for identities in (
+            wizard_auto_enabled_app_rows,
+            wizard_auto_enabled_observability_app_rows,
+        ):
+            renamed = {(app, renames.get(instance, instance)) for app, instance in identities}
+            identities.clear()
+            identities.update(renamed)
+        renamed_originals = {
+            (app, renames.get(instance, instance)): row
+            for (app, instance), row in wizard_original_app_rows.items()
+        }
+        wizard_original_app_rows.clear()
+        wizard_original_app_rows.update(renamed_originals)
+        for row in wizard_original_app_rows.values():
+            for key in ("instance_id", "target_ref"):
+                if row.get(key) in renames:
+                    row[key] = renames[row[key]]
+        active_tokens = {
+            component_instance_label(
+                token.split("@", 1)[0], renames.get(token.split("@", 1)[1], token.split("@", 1)[1])
+            )
+            if "@" in token
+            else token
+            for token in active_selected_apps
+        }
+        active_selected_apps.clear()
+        active_selected_apps.update(active_tokens)
+        # Alignment can rename both pending rows and prior backtracking targets.
+        infra_components[:] = [
+            (entry, renames.get(instance_id, instance_id))
+            for entry, instance_id in infra_components
+        ]
         _materialize_single_target_app_bindings(payload)
         _retarget_soperator_sfs_profile_defaults(payload, target_renames=renames)
         _materialize_soperator_component_defaults(payload)
@@ -29557,12 +29488,11 @@ def _run_component_field_wizard(
         entry: ComponentEntry,
         instance_id: str,
     ) -> tuple[str, str] | None:
-        target_match = re.match(r"^deploy\.targets\[([0-9]+)\]\.(.+)$", full_path_label)
+        target_match = re.match(r"^infra\.components\[([0-9]+)\]\.(.+)$", full_path_label)
         if not target_match:
             return None
         target_ref = ""
-        deploy = payload.get("deploy")
-        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        targets = payload.get("infra", {}).get("components", [])
         index = int(target_match.group(1))
         if isinstance(targets, list) and 0 <= index < len(targets):
             target_row = targets[index]
@@ -29572,13 +29502,15 @@ def _run_component_field_wizard(
             target_ref = component_instance_id({"id": entry.id, INSTANCE_ID_FIELD: instance_id})
 
         remainder = target_match.group(2)
+        if not remainder.startswith(("observability.", "secrets.", "deployment_testing.")):
+            return None
         if remainder.startswith("secrets.mysterybox."):
-            return "deploy target", f"{target_ref} / MysteryBox ESO sync"
+            return "infra", f"{target_ref} / MysteryBox ESO sync"
         if remainder.startswith("observability."):
-            return "deploy target", f"{target_ref} / observability"
+            return "infra", f"{target_ref} / observability"
         if remainder.startswith("deployment_testing.mk8s_gpu."):
-            return "deploy target", f"{target_ref} / MK8s GPU deployment testing"
-        return "deploy target", target_ref
+            return "infra", f"{target_ref} / MK8s GPU deployment testing"
+        return "infra", target_ref
 
     def _wizard_prompt_context(
         full_path_label: str,
@@ -29649,39 +29581,6 @@ def _run_component_field_wizard(
                     provider_lookup=provider_lookup,
                 )
             )
-        return choices
-
-    def _mk8s_node_group_sfs_choices(*, target_ref: str) -> list[OptionChoice]:
-        sfs_rows = [
-            row
-            for row in _dynamic_enabled_infra_component_rows(payload)
-            if component_type_id(row) == "sfs"
-        ]
-        if not sfs_rows:
-            return []
-        target_sfs_rows = [row for row in sfs_rows if component_instance_id(row) == target_ref]
-        if target_sfs_rows:
-            candidate_rows = target_sfs_rows
-        elif len(sfs_rows) == 1:
-            candidate_rows = sfs_rows
-        else:
-            return []
-
-        choices: list[OptionChoice] = []
-        seen: set[str] = set()
-        for row in candidate_rows:
-            row_label = component_instance_label("sfs", component_instance_id(row) or "sfs")
-            inputs = row.get("inputs")
-            filesystems = inputs.get("filesystems") if isinstance(inputs, Mapping) else None
-            if isinstance(filesystems, Mapping) and filesystems:
-                keys = [str(key).strip() for key in filesystems if str(key).strip()]
-            else:
-                keys = ["default"]
-            for key in keys:
-                if key in seen:
-                    continue
-                seen.add(key)
-                choices.append(OptionChoice(value=key, label=f"{key}  ({row_label})"))
         return choices
 
     def _choice_by_value(
@@ -29857,44 +29756,16 @@ def _run_component_field_wizard(
                 return ()
             return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
 
-        def _planned_vpc_subnet_cidrs(value: str) -> tuple[str, ...]:
-            try:
-                binding_ref = _parse_planned_vpc_ref(
-                    value,
-                    option_name="planned subnet choice",
-                    field_name="subnet_id",
-                )
-            except RuntimeError:
-                return ()
-            if binding_ref.key is None:
-                return ()
-            for _row, instance_id, inputs in _planned_vpc_rows(payload):
-                if instance_id != binding_ref.source_instance:
-                    continue
-                subnet = read_component_path(inputs, f"subnets.{binding_ref.key}")
-                if not isinstance(subnet, Mapping):
-                    return ()
-                raw_cidrs = subnet.get("ipv4_private_cidrs")
-                if not isinstance(raw_cidrs, Sequence) or isinstance(raw_cidrs, str):
-                    return ()
-                return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
-            return ()
-
         def _selected_cluster_subnet_cidrs() -> tuple[str, ...]:
             subnet_label = f"{component_path_label}.inputs.cluster.subnet_id"
             subnet_id = _non_empty_text(_read_payload_field(payload, subnet_label))
             if not subnet_id:
                 return ()
-            if subnet_id.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
-                return _planned_vpc_subnet_cidrs(subnet_id)
-
-            network_id = _non_empty_text(
-                _read_payload_field(payload, f"{component_path_label}.inputs.cluster.network_id")
-            )
-            subnet_choices = _mk8s_provider_choices(
-                provider="project_subnets",
-                args={"network_id": network_id} if network_id else {},
-                field_path=subnet_label,
+            subnet_choices = _resolve_dynamic_field_choices(
+                payload=payload,
+                entry=entry,
+                full_path_label=subnet_label,
+                provider_lookup=provider_lookup,
             )
             return _choice_private_cidrs(_choice_by_value(subnet_choices, subnet_id))
 
@@ -30030,6 +29901,19 @@ def _run_component_field_wizard(
                     group_prefix=group_prefix,
                     node_count=int(node_count),
                 )
+
+            placement, status = prompt_node_placement(
+                prefix=group_prefix,
+                group_name=group_key,
+                prompt=_prompt_loop_value,
+                emit=lambda message: console.print(escape(message)),
+            )
+            if status != "ok":
+                _restart_group_creation(group_key)
+                if status == "quit":
+                    return None, True
+                continue
+            group.update(placement)
 
             resource, status = _prompt_loop_value(
                 f"{group_prefix}.resource",
@@ -30354,23 +30238,18 @@ def _run_component_field_wizard(
                 if isinstance(disk_size, int | float) and int(disk_size) > 0:
                     group.setdefault("boot_disk", {})["size_gibibytes"] = int(disk_size)
 
-            sfs_choices = _mk8s_node_group_sfs_choices(target_ref=instance_id)
+            sfs_choices = node_group_sfs_choices(payload, target_ref=instance_id)
             if sfs_choices:
-                filesystem_keys, status = _prompt_loop_value(
-                    f"{group_prefix}.sfs_filesystem_keys",
-                    [],
+                filesystem_keys, should_stop = _prompt_node_group_shared_storage(
+                    group_name=group_key,
                     choices=sfs_choices,
-                    type_hint="list(string)",
-                    unset_on_skip=True,
                 )
-                if status == "quit":
+                if should_stop:
                     return None, True
-                if status == "back":
+                if _wizard_backtrack_requested(filesystem_keys):
                     _restart_group_creation(group_key)
                     continue
-                selected_keys = _choice_current_values(filesystem_keys)
-                if selected_keys:
-                    group["sfs_filesystem_keys"] = selected_keys
+                group["sfs_filesystem_keys"] = _choice_current_values(filesystem_keys)
 
             attach_ssh, status = _prompt_loop_value(
                 f"{group_prefix}.ssh.enabled",
@@ -31138,6 +31017,8 @@ def _run_component_field_wizard(
                 row
             ):
                 removed.add(identity)
+                if identity in wizard_original_app_rows:
+                    retained.append(copy.deepcopy(wizard_original_app_rows.pop(identity)))
                 continue
             retained.append(row)
         if removed:
@@ -31145,8 +31026,7 @@ def _run_component_field_wizard(
             wizard_auto_enabled_app_rows.difference_update(removed)
 
     def _observability_enabled_for_target(target_ref: str) -> bool:
-        deploy = payload.get("deploy")
-        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        targets = cluster_rows(payload)
         if not isinstance(targets, list):
             return False
         for row in targets:
@@ -31159,9 +31039,12 @@ def _run_component_field_wizard(
         return False
 
     def _top_level_observability_enabled() -> bool:
-        deploy = payload.get("deploy")
-        observability = deploy.get("observability") if isinstance(deploy, Mapping) else None
-        return bool(isinstance(observability, Mapping) and observability.get("enabled") is True)
+        return any(
+            row.get("id") == "vm"
+            and row.get("enabled")
+            and row.get("observability", {}).get("enabled") is True
+            for row in payload.get("infra", {}).get("components", [])
+        )
 
     def _observability_enabled_for_selected_mk8s_target() -> bool:
         target_refs = _selected_mk8s_target_refs()
@@ -31173,11 +31056,12 @@ def _run_component_field_wizard(
         nonlocal active_selected_apps
         for target_ref in tuple(wizard_created_routing_targets):
             if not _observability_enabled_for_target(target_ref):
-                for row in payload.get("deploy", {}).get("targets", []):
+                for row in cluster_rows(payload):
                     if row.get("instance_id") == target_ref:
                         row.get("observability", {}).pop("routing", None)
                 wizard_created_routing_targets.discard(target_ref)
                 wizard_configured_grafana_targets.discard(target_ref)
+                wizard_configured_telemetry_modes.pop(target_ref, None)
         candidate_rows = set(wizard_auto_enabled_observability_app_rows)
         candidate_rows.update(
             (app_id, instance_id)
@@ -31199,14 +31083,13 @@ def _run_component_field_wizard(
         apps_node = payload.get("apps")
         charts = apps_node.get("charts") if isinstance(apps_node, dict) else None
         if isinstance(charts, list):
-            apps_node["charts"] = [
-                row
-                for row in charts
-                if not (
-                    isinstance(row, Mapping)
-                    and (component_type_id(row), component_instance_id(row)) in stale_rows
-                )
-            ]
+            from .wizard_defaults import retained_wizard_app_rows
+
+            apps_node["charts"] = retained_wizard_app_rows(
+                charts, stale_rows, wizard_original_app_rows
+            )
+            for identity in stale_rows:
+                wizard_original_app_rows.pop(identity, None)
         stale_tokens = {
             component_instance_label(app_id, instance_id) for app_id, instance_id in stale_rows
         }
@@ -31226,12 +31109,30 @@ def _run_component_field_wizard(
             return
         if "mk8s" not in _selected_infra_component_ids():
             return
+        if not soperator_install:
+            from .observability_routing import app_row
+
+            for target_ref in _selected_mk8s_target_refs():
+                if (
+                    target_ref in new_telemetry_targets
+                    and target_ref not in soperator_target_refs(payload)
+                    and target_ref not in wizard_telemetry_modes
+                ):
+                    wizard_telemetry_modes[target_ref] = bool(
+                        app_row(payload, target_ref, "grafana")
+                    )
+                    # A new target can skip field editing and still accept defaults.
+                    target_row = require_cluster_row(payload, target_ref)
+                    target_row.setdefault("observability", {})["enabled"] = True
         _remove_stale_wizard_observability_apps()
         if not _observability_enabled_for_selected_mk8s_target():
             return
         for target_ref in _selected_mk8s_target_refs():
             if _observability_enabled_for_target(target_ref):
-                _configure_wizard_grafana(target_ref)
+                if target_ref in wizard_telemetry_modes:
+                    _configure_wizard_telemetry(target_ref)
+                else:
+                    _configure_wizard_grafana(target_ref)
         observability_selection = resolve_observability_app_selection(
             payload,
             selected_app_ids=_active_selected_app_component_ids(),
@@ -31259,6 +31160,7 @@ def _run_component_field_wizard(
         ensure_observability_app_rows(
             payload,
             app_entries=app_entries,
+            observability_target_refs=frozenset(selected_target_refs),
         )
         _record_new_auto_enabled_app_rows(
             before=before_rows,
@@ -31286,6 +31188,75 @@ def _run_component_field_wizard(
             "only controls chart value customization; answering 'n' keeps the selected app defaults."
         )
         _print_wizard_component_selection_context()
+
+    def _configure_wizard_telemetry(target_ref: str) -> None:
+        nonlocal active_selected_apps
+        from .grafana_install import configure as configure_grafana
+        from .observability_routing import app_row_for_activation, target_settings
+        from .wizard_defaults import (
+            print_remote_telemetry_summary,
+            remote_telemetry_candidate,
+            retained_wizard_app_rows,
+        )
+
+        local = wizard_telemetry_modes[target_ref]
+        if wizard_configured_telemetry_modes.get(target_ref) is local:
+            return
+        candidate = copy.deepcopy(payload)
+        removed: set[tuple[str, str]] = set()
+        if target_ref in wizard_configured_telemetry_modes:
+            removed = {
+                identity
+                for identity in wizard_auto_enabled_observability_app_rows
+                if _app_target_ref_for_instance(*identity) == target_ref
+            }
+            candidate["apps"]["charts"] = retained_wizard_app_rows(
+                candidate.get("apps", {}).get("charts", []),
+                removed,
+                wizard_original_app_rows,
+            )
+            if target_ref in wizard_created_routing_targets:
+                for row in cluster_rows(candidate):
+                    if row.get("instance_id") == target_ref:
+                        row.get("observability", {}).pop("routing", None)
+        before_rows = _enabled_app_row_identities() - removed
+        previous_apps = {"apps": copy.deepcopy(candidate.get("apps", {}))}
+        had_routing = bool(target_settings(candidate, target_ref))
+        if local:
+            candidate = configure_grafana(
+                candidate,
+                target_ref,
+                interactive=True,
+                preserve_existing_access=target_ref in existing_grafana_targets,
+            )
+        else:
+            candidate = remote_telemetry_candidate(candidate, target_ref)
+        payload.clear()
+        payload.update(candidate)
+        active_selected_apps.difference_update(
+            component_instance_label(*identity) for identity in removed
+        )
+        wizard_auto_enabled_app_rows.difference_update(removed)
+        wizard_auto_enabled_observability_app_rows.difference_update(removed)
+        added = _enabled_app_row_identities() - before_rows
+        for identity in removed:
+            wizard_original_app_rows.pop(identity, None)
+        for identity in added:
+            original = app_row_for_activation(previous_apps, target_ref, identity[0])
+            if original is not None and not original.get("enabled"):
+                wizard_original_app_rows[identity] = original
+        wizard_auto_enabled_app_rows.update(added)
+        wizard_auto_enabled_observability_app_rows.update(added)
+        wizard_auto_enabled_observability_apps.update(app_id for app_id, _ in added)
+        active_selected_apps.update(component_instance_label(*identity) for identity in added)
+        wizard_configured_telemetry_modes[target_ref] = local
+        if local:
+            wizard_configured_grafana_targets.add(target_ref)
+        else:
+            wizard_configured_grafana_targets.discard(target_ref)
+            print_remote_telemetry_summary(payload, target_ref)
+        if not had_routing:
+            wizard_created_routing_targets.add(target_ref)
 
     def _configure_wizard_grafana(target_ref: str) -> None:
         if not target_ref or target_ref in wizard_configured_grafana_targets:
@@ -31464,6 +31435,34 @@ def _run_component_field_wizard(
                 _print_soperator_sfs_summary(component_node["inputs"])
             return _WizardComponentOutcome.CONTINUE
 
+        if entry.scope == "infra" and entry.id == "mysterybox" and component_path is not None:
+            eso_entry = app_lookup.get(EXTERNAL_SECRETS_APP_ID)
+            sync_component_node = _get_payload_value(payload, component_path)
+            if not isinstance(sync_component_node, dict):
+                raise ValueError("MysteryBox wizard component must be a mapping")
+            outcome = mysterybox_sync_wizard.configure(
+                payload,
+                sync_component_node,
+                confirm=_confirm_mysterybox_sync,
+                prompt=_prompt_scalar_override,
+                is_back=_wizard_backtrack_requested,
+                append_eso=(
+                    lambda candidate, target: _append_component_instance_row(
+                        payload=candidate, entry=eso_entry, requested_instance_id=target
+                    )
+                )
+                if eso_entry is not None
+                else None,
+                emit=lambda message: console.print(message, markup=False),
+            )
+            active_selected_apps.update(
+                component_instance_label(EXTERNAL_SECRETS_APP_ID, target)
+                for target in mysterybox_sync_wizard.activated_targets
+            )
+            materialize_app_chart_target_refs(payload)
+            if outcome != _WizardComponentOutcome.CONTINUE:
+                return outcome
+
         required_leaf_names = _required_leaf_names_for_entry(entry)
         required_leaf_names -= set(shared_default_input_sources(entry))
         _seed_component_prompt_fields(
@@ -31482,6 +31481,30 @@ def _run_component_field_wizard(
                 include_shared=False,
             )
             _set_payload_value(payload, component_path, resolved_component_node)
+        if entry.scope == "infra" and entry.id == "nat-gateway":
+            from .nat_gateway_wizard import WizardNavigation, configure_nat
+
+            if component_path is None or provider_lookup is None:
+                raise RuntimeError("NAT wizard requires live provider discovery")
+            try:
+                updated = configure_nat(
+                    payload,
+                    _get_payload_value(payload, component_path),
+                    prefix=_format_payload_path(component_path),
+                    lookup=provider_lookup,
+                    entry=entry,
+                    prompt=_prompt_scalar_override,
+                    is_back=lambda value: value is _WIZARD_BACKTRACK,
+                    emit=lambda message: console.print(message, markup=False),
+                )
+            except WizardNavigation as navigation:
+                return (
+                    _WizardComponentOutcome.QUIT
+                    if navigation.stopped
+                    else _WizardComponentOutcome.BACK
+                )
+            _set_payload_value(payload, component_path, updated)
+            return _WizardComponentOutcome.CONTINUE
         if soperator_install and entry.scope == "infra" and entry.id == "sfs":
             if component_path is None:
                 raise RuntimeError("Soperator filesystem component is missing")
@@ -31547,8 +31570,14 @@ def _run_component_field_wizard(
             if component_path is not None
             else set()
         )
+        confirmed_name_path: PayloadPath | None = None
         if component_path is not None:
             bound_prompt_paths |= managed_input_binding_payload_paths(component_path, entry)
+            if entry.scope == "infra" and (entry.id, instance_id) in confirmed_infra_resource_names:
+                name_input = _entry_scalar_resource_name_input(entry)
+                if name_input:
+                    confirmed_name_path = (*component_path, "inputs", *name_input.split("."))
+                    bound_prompt_paths.add(confirmed_name_path)
         bound_prompt_paths |= pre_prompted_app_paths
 
         declared_prompt_paths: list[PayloadPath] = []
@@ -31603,6 +31632,10 @@ def _run_component_field_wizard(
             if isinstance(wizard_spec, dict) and wizard_spec.get("required") is True:
                 declared_required_prompt_paths.add(resolved_declared)
             declared_prompt_paths.append(resolved_declared)
+
+        if confirmed_name_path is not None:
+            # A handled child must still suppress the raw containing-object prompt.
+            declared_prompt_paths.append(confirmed_name_path)
 
         prompt_paths: list[PayloadPath] = []
         seen_prompt_labels: set[str] = set()
@@ -32401,6 +32434,14 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                 ):
                     continue
+                if (
+                    entry.scope == "infra"
+                    and entry.id == "mk8s"
+                    and instance_id in mysterybox_sync_wizard.handled_targets
+                    and _is_mysterybox_eso_field(full_path_label)
+                    and full_path[-1] in {"enabled", "sync_namespaces"}
+                ):
+                    continue
                 if _skip_soperator_child_chart_prompt(
                     payload=payload,
                     entry=entry,
@@ -32550,25 +32591,28 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     provider_lookup=provider_lookup,
                 )
-                if (
-                    _provider_auto_select_single_enabled(
-                        entry=entry,
-                        full_path_label=full_path_label,
+                if not (provider_lookup and provider_lookup.vpc_diagnostics(full_path_label)) and (
+                    (
+                        _provider_auto_select_single_enabled(
+                            entry=entry,
+                            full_path_label=full_path_label,
+                        )
+                        and len(field_choices) == 1
+                        and not _has_required_prompt_value(
+                            current,
+                            type_hint=field_type_hints.get(full_path_label),
+                        )
                     )
-                    and len(field_choices) == 1
-                    and not _has_required_prompt_value(
-                        current,
-                        type_hint=field_type_hints.get(full_path_label),
-                    )
-                ) or (
-                    _provider_auto_select_first_enabled(
-                        entry=entry,
-                        full_path_label=full_path_label,
-                    )
-                    and field_choices
-                    and not _has_required_prompt_value(
-                        current,
-                        type_hint=field_type_hints.get(full_path_label),
+                    or (
+                        _provider_auto_select_first_enabled(
+                            entry=entry,
+                            full_path_label=full_path_label,
+                        )
+                        and field_choices
+                        and not _has_required_prompt_value(
+                            current,
+                            type_hint=field_type_hints.get(full_path_label),
+                        )
                     )
                 ):
                     current = field_choices[0].value
@@ -32576,8 +32620,25 @@ def _run_component_field_wizard(
                     full_path_label,
                     (set(), ()),
                 )
+                vpc_diagnostics = (
+                    provider_lookup.vpc_diagnostics(full_path_label) if provider_lookup else ()
+                )
+                for diagnostic in vpc_diagnostics:
+                    console.print(warning_markup(escape(diagnostic)))
+                if any(
+                    source in {"project_networks", "project_subnets"}
+                    for source in _provider_sources_for_field(
+                        entry=entry, full_path_label=full_path_label
+                    )
+                ):
+                    allowed_provider_values, providers = set(), ()
                 if field_choices:
-                    allowed_provider_values = {choice.value for choice in field_choices}
+                    allowed_provider_values = set().union(
+                        *(_provider_choice_allowed_values(choice) for choice in field_choices)
+                    )
+                    selected_current = _choice_by_value(field_choices, current)
+                    if selected_current is not None:
+                        current = selected_current.value
                     providers = _provider_sources_for_field(
                         entry=entry,
                         full_path_label=full_path_label,
@@ -32659,10 +32720,11 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
-                _maybe_print_observability_prompt_guidance(
-                    full_path_label=full_path_label,
-                    emitted_guidance=emitted_prompt_guidance,
-                )
+                if not new_telemetry_targets:
+                    _maybe_print_observability_prompt_guidance(
+                        full_path_label=full_path_label,
+                        emitted_guidance=emitted_prompt_guidance,
+                    )
                 _maybe_print_ssh_jumphost_allowed_cidrs_guidance(
                     entry=entry,
                     full_path_label=full_path_label,
@@ -32711,19 +32773,160 @@ def _run_component_field_wizard(
                     and full_path_label.endswith(".values.slurmNodes.login.sshRootPublicKeys")
                 ):
                     current = explicit_root_keys(_get_payload_value(payload, component_path))
-                updated, should_stop = _prompt_scalar_override(
-                    full_path_label,
-                    current,
-                    choices=field_choices,
-                    type_hint=field_type_hints.get(full_path_label),
-                    required=prompt_required,
-                    unset_on_skip=(
-                        not prompt_required
-                        and not path_existed_before_prompt
-                        and not write_default_to_config
-                        and not is_soperator_worker_bulk_prompt
-                    ),
+                from .wizard_defaults import (
+                    prompt_bucket_labels,
+                    prompt_telemetry_mode,
+                    prompt_wireguard_input,
                 )
+
+                target_ref = _observability_prompt_target_ref(
+                    payload,
+                    full_path_label.split(".kubernetes.", 1)[0] + ".enabled"
+                    if ".observability.kubernetes." in full_path_label
+                    else full_path_label,
+                )
+                new_telemetry_prompt = (
+                    entry.id == "mk8s"
+                    and not soperator_install
+                    and target_ref in new_telemetry_targets
+                    and target_ref not in soperator_target_refs(payload)
+                    and full_path_label.endswith(".observability.enabled")
+                )
+                if new_telemetry_prompt:
+                    from .observability_routing import app_row, target_settings
+
+                    routing = target_settings(payload, target_ref)
+                    local_default = bool(app_row(payload, target_ref, "grafana")) or any(
+                        routing.get(signal, {}).get("storage") in {"local", "both"}
+                        for signal in ("metrics", "logs", "traces")
+                    )
+                    answer, should_stop = prompt_telemetry_mode(
+                        target=target_ref,
+                        enabled=bool(current) if target_ref in wizard_telemetry_modes else True,
+                        local=wizard_telemetry_modes.get(target_ref, local_default),
+                    )
+                    updated = answer
+                    if isinstance(answer, dict):
+                        updated = answer["enabled"]
+                        wizard_telemetry_modes[target_ref] = answer["local"]
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "object-storage"
+                    and full_path_label.endswith(".inputs.labels")
+                ):
+                    updated, should_stop = prompt_bucket_labels(current)
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "tailscale-gw"
+                    and full_path_label.endswith((".tailscale.auth", ".tailscale.policy.rules"))
+                ):
+                    from .tailscale_wizard import prompt_auth, prompt_rules
+
+                    component_node = (
+                        _get_payload_value(payload, component_path) if component_path else {}
+                    )
+                    if not isinstance(component_node, dict):
+                        raise ValueError("Tailscale component must be a mapping")
+                    if full_path_label.endswith(".tailscale.auth"):
+                        updated, should_stop = prompt_auth(
+                            current, component_node, payload, full_path_label
+                        )
+                    else:
+                        updated, should_stop = prompt_rules(
+                            current, component_node, full_path_label
+                        )
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "tailscale-gw"
+                    and full_path_label.endswith(".tailscale.routes")
+                ):
+                    from .tailscale_wizard import prompt_routes
+
+                    component_node = (
+                        _get_payload_value(payload, component_path) if component_path else {}
+                    )
+                    updated, should_stop = prompt_routes(
+                        current, component_node, payload, provider_lookup, full_path_label
+                    )
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "wireguard-gw"
+                    and full_path[-1] == "local_subnets"
+                ):
+                    from .wireguard_subnets import prompt_local_subnets
+
+                    component_node = (
+                        _get_payload_value(payload, component_path) if component_path else {}
+                    )
+                    updated, should_stop = prompt_local_subnets(
+                        current=current,
+                        row=component_node if isinstance(component_node, Mapping) else {},
+                        payload=payload,
+                        lookup=provider_lookup,
+                    )
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "wireguard-gw"
+                    and full_path[-1]
+                    in {
+                        "create_public_ip_allocation",
+                        "public_ip_allocation_name",
+                        "client_default_persistent_keepalive",
+                        "nat_mode",
+                    }
+                ):
+                    component_node = (
+                        _get_payload_value(payload, component_path) if component_path else {}
+                    )
+                    updated, should_stop = prompt_wireguard_input(
+                        str(full_path[-1]),
+                        current,
+                        component_node.get("inputs", {})
+                        if isinstance(component_node, Mapping)
+                        else {},
+                        instance_id,
+                    )
+                elif (
+                    entry.id == MYSTERYBOX_INFRA_COMPONENT_ID
+                    and _is_mysterybox_secrets_guided_prompt(
+                        full_path_label, field_type_hints.get(full_path_label)
+                    )
+                ):
+                    updated, should_stop = _prompt_scalar_override(
+                        full_path_label,
+                        current,
+                        choices=field_choices,
+                        type_hint=field_type_hints.get(full_path_label),
+                        required=prompt_required,
+                        mysterybox_eso_sync=(
+                            bool(mysterybox_eso_selected_target_refs(payload))
+                            and _read_payload_field(
+                                payload,
+                                full_path_label.removesuffix(".secrets")
+                                + ".create_initial_versions",
+                            )
+                            is not False
+                        ),
+                    )
+                else:
+                    updated, should_stop = _prompt_scalar_override(
+                        full_path_label,
+                        current,
+                        choices=field_choices,
+                        type_hint=field_type_hints.get(full_path_label),
+                        required=prompt_required,
+                        unset_on_skip=(
+                            not prompt_required
+                            and not path_existed_before_prompt
+                            and not write_default_to_config
+                            and not is_soperator_worker_bulk_prompt
+                        ),
+                    )
                 if should_stop:
                     return _WizardComponentOutcome.QUIT
                 if _wizard_backtrack_requested(updated):
@@ -32848,6 +33051,16 @@ def _run_component_field_wizard(
                 else:
                     _set_payload_value(payload, full_path, updated)
                 if (
+                    entry.scope == "infra"
+                    and entry.id == "wireguard-gw"
+                    and full_path[-1] == "create_public_ip_allocation"
+                    and updated is True
+                    and component_path is not None
+                ):
+                    _delete_payload_value(
+                        payload, component_path + ("inputs", "public_ip_allocation_id")
+                    )
+                if (
                     entry.id == _SOPERATOR_APP_ID
                     and entry.scope == "apps"
                     and component_path is not None
@@ -32891,6 +33104,27 @@ def _run_component_field_wizard(
                     emitted_guidance=emitted_prompt_guidance,
                 )
                 if _is_observability_field(full_path_label):
+                    if target_ref in wizard_telemetry_modes and ".kubernetes." in full_path_label:
+                        from .observability_routing import SIGNALS, save_settings, target_settings
+
+                        routing = target_settings(payload, target_ref)
+                        if routing:
+                            target_prefix = full_path_label.split(".kubernetes.", 1)[0]
+                            signals = [
+                                signal
+                                for signal in SIGNALS
+                                if _read_payload_field(
+                                    payload, f"{target_prefix}.kubernetes.{signal}.enabled"
+                                )
+                                is not False
+                            ]
+                            routing["signals"] = signals
+                            if signals:
+                                save_settings(payload, target_ref, routing)
+                            else:
+                                enabled_path = _parse_payload_path_label(f"{target_prefix}.enabled")
+                                if enabled_path is not None:
+                                    _set_payload_value(payload, enabled_path, False)
                     _materialize_wizard_auto_enabled_observability_apps()
                 if module_dependency_expander is not None:
                     before_expand = len(prompt_paths)
@@ -34744,6 +34978,8 @@ def _materialize_singleton_provider_defaults(
                 full_path_label=full_path_label,
                 provider_lookup=provider_lookup,
             )
+            if provider_lookup.vpc_diagnostics(full_path_label):
+                continue
             if auto_select_single and len(choices) != 1:
                 continue
             if auto_select_first and not choices:
@@ -34819,6 +35055,11 @@ def _require_vpc_networking_for_noninteractive(
                     )
                 )
             )
+            diagnostics = provider_lookup.vpc_diagnostics(field_label)
+            if diagnostics:
+                raise RuntimeError(
+                    "Cannot automatically select VPC networking: " + " ".join(diagnostics)
+                )
             if len(choices) == 1:
                 _set_payload_value_creating_containers(payload, field_path, choices[0].value)
                 continue
@@ -37124,6 +37365,10 @@ def _wait_for_mysterybox_eso_token_ready(
 
 def _terraform_runtime_env(config: Any) -> dict[str, str]:
     runtime_env: dict[str, str] = {}
+    from .nat_gateway_deploy import CURRENT_NAT
+
+    if CURRENT_NAT.get() is not None:
+        runtime_env["TF_VAR_cxcli_nat_execution_authorized"] = "true"
 
     project_id = str(config.client_info.nebius.project_id).strip()
     client_name = str(config.client_info.client_name).strip()
@@ -37173,7 +37418,11 @@ def _mysterybox_unset_version_targets(
             continue
         instance_id = component_instance_id(row)
         inputs = row.get("inputs")
-        if not instance_id or not isinstance(inputs, Mapping):
+        if (
+            not instance_id
+            or not isinstance(inputs, Mapping)
+            or inputs.get("create_initial_versions") is False
+        ):
             continue
         secrets = inputs.get("secrets")
         if not isinstance(secrets, list):
@@ -37185,7 +37434,11 @@ def _mysterybox_unset_version_targets(
             if secret_name and _mysterybox_version_id_unset(secret.get("version_id")):
                 targets.append((instance_id, secret_name, secret))
     flat_row = infra.get("mysterybox")
-    if isinstance(flat_row, dict) and bool(flat_row.get("enabled", False)):
+    if (
+        isinstance(flat_row, dict)
+        and bool(flat_row.get("enabled", False))
+        and flat_row.get("create_initial_versions") is not False
+    ):
         secrets = flat_row.get("secrets")
         if isinstance(secrets, list):
             for secret in secrets:
@@ -37482,6 +37735,7 @@ def _sync_mysterybox_primary_version_ids_to_config(
     if config_content is not None:
         loaded_payload = yaml.safe_load(config_content.decode("utf-8")) or {}
         if isinstance(loaded_payload, dict):
+            validate_source_contract(loaded_payload)
             raw_payload = loaded_payload
             source_target_keys = _mysterybox_unset_version_target_keys(raw_payload)
 
@@ -37493,6 +37747,9 @@ def _sync_mysterybox_primary_version_ids_to_config(
         except (UnicodeDecodeError, json.JSONDecodeError):
             candidate = None
         if isinstance(candidate, dict) and candidate.get("schema") == GENERATED_MANIFEST_SCHEMA:
+            from .generated_manifest import validate_manifest_contract
+
+            validate_manifest_contract(candidate)
             manifest_payload = candidate
 
     manifest_runtime = None
@@ -38526,19 +38783,21 @@ def _try_generate_terraform_lock_file(
     config: Any,
     paths: ProjectPaths,
 ) -> bool:
-    try:
-        # Render keeps lockfile generation backendless so the canonical generated bundle
-        # does not retain local Terraform workdir state.
-        terraform_init(paths.infra_dir, backend=False)
-    except Exception as exc:
-        console.print(
-            f"{warning_markup('WARNING:', bold=True)} "
-            f"Unable to generate Terraform lock file at {paths.infra_dir / '.terraform.lock.hcl'}: {exc}"
-        )
-        return False
-    finally:
-        _cleanup_render_terraform_workdir(paths.infra_dir)
-    return (paths.infra_dir / ".terraform.lock.hcl").exists()
+    from .terraform_roots import owned_roots
+
+    complete = True
+    for root in owned_roots(paths, config):
+        try:
+            terraform_init(root, backend=False)
+        except Exception as exc:
+            console.print(
+                f"Unable to generate Terraform lock file at {root / '.terraform.lock.hcl'}: {exc}"
+            )
+            complete = False
+        finally:
+            _cleanup_render_terraform_workdir(root)
+        complete = complete and (root / ".terraform.lock.hcl").exists()
+    return complete
 
 
 def _first_non_empty_line(text: str) -> str | None:
@@ -38560,6 +38819,7 @@ def _rendered_module_source_payload(
             "instance_id": item.instance_id,
             "module_name": item.module_name,
             "source": item.source,
+            "root": item.root,
         }
         for item in rendered_module_sources(config, source_profile=source_profile)
     ]
@@ -38660,6 +38920,11 @@ def _write_generated_runtime_manifest(
         source_profile=source_profile.value,
         module_sources=_rendered_module_source_payload(config, source_profile=source_profile),
         terraform_tfvars=terraform_tfvars,
+        access_tfvars=json.loads(
+            (paths.access_infra_dir / "terraform.auto.tfvars.json").read_text()
+        )
+        if (paths.access_infra_dir / "terraform.auto.tfvars.json").is_file()
+        else {},
         flux_version=sources.cli.flux.version,
         terraform_version=sources.cli.terraform.version,
         compatibility=compatibility,
@@ -38701,17 +38966,10 @@ def _payload_has_soperator_lifecycle(config: Any) -> bool:
     payload = to_plain_data(config)
     apps = payload.get("apps") if isinstance(payload, Mapping) else None
     charts = apps.get("charts") if isinstance(apps, Mapping) else None
-    if isinstance(charts, list) and any(
+    return isinstance(charts, list) and any(
         isinstance(row, Mapping)
-        and (component_type_id(row) == _SOPERATOR_APP_ID or "soperator_registration" in row)
+        and (component_type_id(row) == _SOPERATOR_APP_ID or "registration" in row)
         for row in charts
-    ):
-        return True
-
-    deploy = payload.get("deploy") if isinstance(payload, Mapping) else None
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
-    return isinstance(targets, list) and any(
-        isinstance(row, Mapping) and "soperator_registration" in row for row in targets
     )
 
 
@@ -38906,9 +39164,12 @@ def _runtime_component_output_values(
 
     try:
         from .deployment_recovery import is_deployment_preview
+        from .terraform_roots import merged_outputs
 
-        terraform_outputs = terraform_output_json(
-            paths.infra_dir,
+        terraform_outputs = merged_outputs(
+            sys.modules[__name__],
+            paths,
+            config,
             extra_env=_terraform_runtime_env(config),
             initialize=initialize_terraform and not is_deployment_preview(),
         )
@@ -38953,6 +39214,11 @@ def _requires_flux_terraform_state(config: Any) -> bool:
 
 
 def _config_has_enabled_infra_components(config: Any) -> bool:
+    from .nat_gateway_deploy import CURRENT_NAT
+
+    nat = CURRENT_NAT.get()
+    if nat is not None and nat.retirement_required:
+        return True
     payload = to_plain_data(config)
     infra = payload.get("infra") if isinstance(payload, Mapping) else None
     components = infra.get("components") if isinstance(infra, Mapping) else None
@@ -38986,16 +39252,16 @@ def _enabled_deploy_targets(config: Any, paths: ProjectPaths) -> list[dict[str, 
 
 
 def _manifest_deploy_targets(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
-    deploy_node = manifest.get("deploy")
+    deploy_node = manifest.get("execution")
     if deploy_node is None:
         return []
     if not isinstance(deploy_node, Mapping):
-        raise ValueError("Generated manifest deploy must be a mapping")
+        raise ValueError("Generated manifest execution must be a mapping")
     raw_targets = deploy_node.get("targets")
     if raw_targets is None:
         return []
     if not isinstance(raw_targets, list):
-        raise ValueError("Generated manifest deploy.targets must be a list")
+        raise ValueError("Generated manifest execution.targets must be a list")
     return [
         normalize_generated_deploy_target(item, index=index)
         for index, item in enumerate(raw_targets)
@@ -39011,7 +39277,7 @@ def _manifest_managed_deploy_targets(manifest: Mapping[str, Any]) -> list[dict[s
 
 
 def _manifest_required_component_output_specs(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
-    deploy_node = manifest.get("deploy")
+    deploy_node = manifest.get("execution")
     if not isinstance(deploy_node, Mapping):
         return []
     raw_specs = deploy_node.get("required_component_outputs")
@@ -39043,7 +39309,7 @@ def _manifest_required_component_output_specs(manifest: Mapping[str, Any]) -> li
 
 
 def _manifest_status_watchers(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
-    deploy_node = manifest.get("deploy")
+    deploy_node = manifest.get("execution")
     if not isinstance(deploy_node, Mapping):
         return []
     raw_watchers = deploy_node.get("status_watchers")
@@ -39077,7 +39343,7 @@ def _manifest_status_watchers(manifest: Mapping[str, Any]) -> list[dict[str, str
 
 
 def _manifest_deploy_validations(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
-    deploy_node = manifest.get("deploy")
+    deploy_node = manifest.get("execution")
     if not isinstance(deploy_node, Mapping):
         return []
     raw_validations = deploy_node.get("validations")
@@ -39610,7 +39876,7 @@ def _run_acceptance_smoke_command(
     config, paths, manifest = _load_deploy_context_readonly(config_path)
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
-            "Generated manifest is missing deploy.validations metadata. "
+            "Generated manifest is missing execution.validations metadata. "
             f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
         )
     effective_all_targets = all_targets or requested_target_ref is None
@@ -39813,7 +40079,7 @@ def _run_acceptance_benchmark_command(
     config, paths, manifest = _load_deploy_context_readonly(config_path)
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
-            "Generated manifest is missing deploy.validations metadata. "
+            "Generated manifest is missing execution.validations metadata. "
             f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
         )
     effective_all_targets = all_targets or requested_target_ref is None
@@ -40243,7 +40509,7 @@ def _filter_deploy_validations(
 
 
 def _manifest_missing_deploy_validations(manifest: Mapping[str, Any]) -> bool:
-    deploy_node = manifest.get("deploy")
+    deploy_node = manifest.get("execution")
     if not isinstance(deploy_node, Mapping):
         return True
     return not isinstance(deploy_node.get("validations"), list)
@@ -40616,8 +40882,7 @@ def _enabled_external_cluster_targets(config: Any) -> list[dict[str, str]]:
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping):
         return []
-    deploy = payload.get("deploy")
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     if not isinstance(targets, list):
         return []
     resolved: list[dict[str, str]] = []
@@ -40630,7 +40895,7 @@ def _enabled_external_cluster_targets(config: Any) -> list[dict[str, str]]:
         access = _normalize_handoff_access_value(
             row.get("access") or "external",
             component_label=f"deploy target '{target_ref}'",
-            source_label="deploy.targets[].access",
+            source_label="infra.external_clusters[].access",
         )
         target = {
             DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
@@ -42935,6 +43200,7 @@ def _apply_rendered_flux(
     paths: ProjectPaths,
     *,
     config: Any | None = None,
+    _observability_staged: bool = False,
     require_existing_flux: bool = False,
     extra_env: dict[str, str] | None = None,
     target_ref: str = "",
@@ -42978,6 +43244,29 @@ def _apply_rendered_flux(
     upgrade_progress: SoperatorUpgradeProgress | None = None,
 ) -> SoperatorOperationAnchor | None:
     """Apply rendered Flux manifests in local deploy mode."""
+    if config is not None and target_ref and not _observability_staged:
+        from .observability_handover import handover
+
+        if not (paths.flux_dir / "configmap-terraform-fluxcd-values.yaml").is_file():
+            handled = handover(
+                paths,
+                config=config,
+                target_ref=target_ref,
+                env=extra_env,
+                assert_authority=assert_authority or assert_app_mutation_authority,
+                emit=lambda message: console.print(escape(message)),
+                apply=lambda staged: _apply_rendered_flux(
+                    staged,
+                    config=config,
+                    _observability_staged=True,
+                    require_existing_flux=require_existing_flux,
+                    extra_env=extra_env,
+                    target_ref=target_ref,
+                    assert_authority=assert_authority,
+                ),
+            )
+            if handled:
+                return None
     if not flux_dir_has_rendered_resources(paths.flux_dir):
         if strategy is not None:
             raise SoperatorSafetyPauseError(
@@ -49542,7 +49831,7 @@ def _deploy_generated_artifacts(
         )
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
-            "Generated manifest is missing deploy.validations metadata. "
+            "Generated manifest is missing execution.validations metadata. "
             f"Rerender with `nebius-cxcli render {paths.config_path}` before deploy."
         )
     declared_validations = _manifest_deploy_validations(manifest)
@@ -49637,12 +49926,12 @@ def _deploy_generated_artifacts(
     if terraform_required:
         # A retry can observe a no-op plan after losing the apply acknowledgement.
         # Materialize app inputs from authoritative outputs before any target effect.
+        if on_terraform_complete is not None:
+            on_terraform_complete()
         if prepare_application_inputs is not None:
             prepare_application_inputs()
         else:
             _refresh_mysterybox_eso_flux_after_terraform(config, paths)
-        if on_terraform_complete is not None:
-            on_terraform_complete()
     write_inventory(config, paths, validations=report_validations)
     if skip_validations and deploy_declared_validations:
         if deploy_validations:
@@ -49698,7 +49987,8 @@ def _deploy_generated_artifacts(
                     on_inputs=on_target_inputs,
                     report_paths=report_paths,
                 )
-                cluster_identities[str(target["target_ref"])] = result["identity"]
+                if result.get("identity"):
+                    cluster_identities[str(target["target_ref"])] = result["identity"]
                 grafana_statuses.extend(result["grafana_statuses"])
                 gitops_bootstrap_commands.extend(result["bootstrap_commands"])
             except Exception as exc:
@@ -49932,6 +50222,15 @@ def _run_deploy_preflight(
     *,
     manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
+    from .observability_e2e import preflight
+
+    validations = (
+        _manifest_deploy_validations(manifest)
+        if manifest is not None
+        else observability_validation_specs(config)
+    )
+    clear_deploy_validation_artifacts(validations, reports_dir=paths.reports_dir)
+    preflight(validations, reports_dir=paths.reports_dir)
     return _run_generated_bundle_validation(
         config,
         paths,
@@ -50053,11 +50352,12 @@ def _run_generated_bundle_validation(
                     paths,
                     runtime_env=runtime_env,
                 )
-                terraform_validate(
-                    paths.infra_dir,
-                    extra_env=runtime_env,
-                    initialize=False,
-                )
+                from .terraform_roots import owned_roots
+
+                for root in owned_roots(paths, config):
+                    terraform_validate(
+                        root, extra_env=runtime_env, initialize=root != paths.infra_dir
+                    )
 
             progress.run(
                 "terraform",
@@ -50297,6 +50597,16 @@ def _run_terraform_apply_with_status(
     runtime_env = _terraform_runtime_env(config)
     if extra_env:
         runtime_env.update(dict(extra_env))
+    from . import cli as cli_module
+    from .nat_gateway_deploy import guard_direct_mutation
+
+    guard_direct_mutation(cli_module, config, paths, runtime_env, initialize=initialize)
+    from .wireguard_commands import guard_direct_apply
+
+    guard_direct_apply(cli_module, config, paths, runtime_env, initialize=initialize)
+    from .tailscale_deploy import guard_direct_apply as guard_tailscale_apply
+
+    guard_tailscale_apply(cli_module, config, paths, runtime_env, initialize=initialize)
     validation_env = os.environ.copy()
     validation_env.update(runtime_env)
     _validate_mysterybox_runtime_payload_values(config, environ=validation_env)
@@ -50361,13 +50671,24 @@ def _run_terraform_destroy_with_status(
     status_watchers: list[dict[str, str]] | None = None,
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
+    from . import cli as cli_module
+    from .nat_gateway_deploy import guard_direct_mutation
+
+    guard_direct_mutation(cli_module, config, paths, runtime_env, initialize=initialize)
     reporting_kwargs: dict[str, Any] = {
         "emit": _print_deployment_status_message,
         "operation": "destroy",
     }
     if status_watchers:
         reporting_kwargs["status_watchers"] = status_watchers
-    with deployment_status_reporting(config, **reporting_kwargs) as reporter:
+    from .tailscale_deploy import retire_for_destroy as retire_tailscale
+    from .wireguard_commands import retire_for_destroy
+
+    with (
+        retire_tailscale(config, paths, runtime_env) as runtime_env,
+        retire_for_destroy(config, paths, runtime_env) as runtime_env,
+        deployment_status_reporting(config, **reporting_kwargs) as reporter,
+    ):
         try:
             abort_check = reporter.abort_reason if hasattr(reporter, "abort_reason") else None
             destroy_kwargs: dict[str, Any] = {
@@ -50526,15 +50847,26 @@ def _unlock_terraform_state_lock(
     paths: ProjectPaths,
     *,
     force: bool,
+    root_name: str = "infra",
 ) -> TerraformStateLockInfo | None:
-    if not paths.infra_dir.exists():
+    from .terraform_roots import access_backend
+    from .wireguard_dependencies import access_owner_rows
+
+    if root_name not in {"infra", "infra-access"}:
+        raise ValueError("Terraform root must be infra or infra-access")
+    if root_name == "infra-access" and not access_owner_rows(config):
+        raise ValueError("This project has no declared WireGuard access root")
+    root = paths.infra_dir if root_name == "infra" else paths.access_infra_dir
+    if not root.exists():
         raise RuntimeError(
-            f"Rendered infra directory does not exist: {paths.infra_dir}. "
+            f"Rendered infra directory does not exist: {root}. "
             "Rerun `nebius-cxcli render <config.yaml>` first."
         )
     _ensure_terraform_backend_ready(config)
     runtime_env = _terraform_runtime_env(config)
     settings = backend_settings_from_config(config)
+    if root_name == "infra-access":
+        settings = access_backend(settings)
     lock_info = read_state_lock_info(settings, extra_env=runtime_env)
     if lock_info is None:
         return None
@@ -50561,7 +50893,7 @@ def _unlock_terraform_state_lock(
                 "Rerun with `terraform unlock --force` only after you have confirmed that operation is no longer running."
             )
 
-    terraform_force_unlock(paths.infra_dir, lock_info.lock_id, extra_env=runtime_env)
+    terraform_force_unlock(root, lock_info.lock_id, extra_env=runtime_env)
     return lock_info
 
 
@@ -50930,6 +51262,18 @@ _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     "*/*/generated/infra/terraform.auto.tfvars.json",
     "*/*/generated/infra/*.auto.tfvars",
     "*/*/generated/infra/*.auto.tfvars.json",
+    "*/*/generated/infra-access/.terraform/",
+    "*/*/generated/infra-access/*.tfstate",
+    "*/*/generated/infra-access/*.tfstate.*",
+    "*/*/generated/infra-access/.terraform.tfstate.lock.info",
+    "*/*/generated/infra-access/crash.log",
+    "*/*/generated/infra-access/crash.*.log",
+    "*/*/generated/infra-access/*.tfplan",
+    "*/*/generated/infra-access/plan.out",
+    "*/*/generated/infra-access/terraform.auto.tfvars.json",
+    "*/*/generated/infra-access/*.auto.tfvars",
+    "*/*/generated/infra-access/*.auto.tfvars.json",
+    "*/*/generated/infra-access/.access-plan-*/",
     _DEPLOYMENTS_GITIGNORE_END,
 )
 
@@ -51471,6 +51815,15 @@ def _selection_change_issues(
             include_app_chart_dependencies=include_app_chart_dependencies,
         )
     )
+    from .wireguard_dependencies import access_dependencies
+
+    try:
+        access_dependencies(payload)
+        from .tailscale_dependencies import dependencies as tailscale_dependencies
+
+        tailscale_dependencies(payload)
+    except ValueError as error:
+        issues.append(str(error))
     issues.extend(_active_infra_resource_identity_issues(payload))
     issues.extend(_active_component_input_binding_issues(payload))
     issues.extend(_target_bound_app_issues_from_payload(payload))
@@ -51602,7 +51955,7 @@ def _seed_infra_shared_admin_ssh_public_key(
         if not bool(item.get("enabled", False)):
             continue
         component_id = _non_empty_text(item.get("id")).lower()
-        if not component_id:
+        if not component_id or component_id == "wireguard-gw":
             continue
         inputs = item.get("inputs")
         if not isinstance(inputs, dict):
@@ -51861,6 +52214,7 @@ def _resolve_soperator_onboard_config_target(
             loaded_payload = yaml.safe_load(handle) or {}
         if not isinstance(loaded_payload, dict):
             raise RuntimeError("Existing config.yaml payload must be a mapping")
+        validate_source_contract(loaded_payload)
         (
             _existing_client_name,
             existing_tenant_id,
@@ -52271,7 +52625,6 @@ _create_project = ProjectCreationWorkflow(
         dependency_seed_payload=_dependency_seed_payload,
         enabled_ids_from_runtime_payload=_enabled_ids_from_runtime_payload,
         ensure_deployments_gitignore=_ensure_deployments_gitignore,
-        ensure_mysterybox_eso_app_dependency_selection=_ensure_mysterybox_eso_app_dependency_selection,
         ensure_nfs_csi_app_dependency_selection=_ensure_nfs_csi_app_dependency_selection,
         ensure_payload_contains_component_rows=_ensure_payload_contains_component_rows,
         ensure_project_auth_identity=_ensure_project_auth_identity,
@@ -52282,7 +52635,6 @@ _create_project = ProjectCreationWorkflow(
         materialize_mk8s_image_defaults=_materialize_mk8s_image_defaults,
         materialize_planned_vpc_binding_tokens=_materialize_planned_vpc_binding_tokens,
         materialize_singleton_provider_defaults=_materialize_singleton_provider_defaults,
-        materialize_soperator_child_chart_secret_dependencies=_materialize_soperator_child_chart_secret_dependencies,
         materialize_vm_image_defaults=_materialize_vm_image_defaults,
         normalize_component_dependencies=_normalize_component_dependencies,
         optional_email_or_prompt=_optional_email_or_prompt,
@@ -52290,7 +52642,6 @@ _create_project = ProjectCreationWorkflow(
         print_create_next_steps=_print_create_next_steps,
         print_incomplete_wizard_no_write_warning=_print_incomplete_wizard_no_write_warning,
         print_mk8s_gpu_validation_warnings=_print_mk8s_gpu_validation_warnings,
-        print_mysterybox_eso_app_dependency_adjustment=_print_mysterybox_eso_app_dependency_adjustment,
         print_nfs_csi_app_dependency_adjustment=_print_nfs_csi_app_dependency_adjustment,
         print_quota_remediation_hint=_print_quota_remediation_hint,
         print_soperator_selection_adjustments=_print_soperator_selection_adjustments,
@@ -52445,8 +52796,8 @@ def component_add_command(
             help=(
                 "Optional infra module or app chart selector(s) to add. Use "
                 "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', or "
-                "'<id>@<resource-name-or-target-id>'. Omit to prompt "
-                "interactively. Pass the project config with --config; config.yaml "
+                "'<id>@<resource-name-or-target-id>'. Omit to select multiple Infra "
+                "and Apps components interactively. Pass the project config with --config; config.yaml "
                 "is not a positional argument. The app scope prefix is plural "
                 "'apps:', not 'app:'. "
                 "For target-bound app charts, use 'apps:<app-id>@<target-id>' "
@@ -52570,6 +52921,12 @@ def component_add_command(
 ) -> None:
     """Add source-defined components to an existing project config.yaml.
 
+    Omit component selectors to choose multiple Infra components, then multiple
+    Apps components, and configure the additions through the full field wizard.
+    Leave either selection empty to skip it. Existing component settings are
+    preserved. Apps require an existing or newly selected MK8s target.
+    This command saves configuration only; validate and render before deployment.
+
     Flags:
 
       --config <config.yaml>
@@ -52638,6 +52995,7 @@ def component_add_command(
             option_name="--app-version",
         )
         provider_lookup = ProviderOptionLookup()
+        provider_lookup.configure_vpc_identity(_paths)
         provider_scope_validated = False
 
         def _ensure_provider_scope_validated() -> None:
@@ -52673,42 +53031,31 @@ def component_add_command(
 
         raw_tokens = _split_multi_value_tokens(component_ids)
         if not raw_tokens and interactive_mode:
+            requested_infra: set[str] = set()
+            requested_apps: set[str] = set()
             while True:
                 try:
                     requested_infra = _prompt_component_scope_selection(
                         action="add",
                         scope="infra",
                         entries=infra_entries,
+                        defaults=requested_infra,
                     )
                 except (_WizardBackRequested, _WizardQuitRequested):
                     console.print("No component changes applied.")
                     return
-                requested_apps: set[str] = set()
-                select_apps = not requested_infra
-                if requested_infra:
-                    apps_decision = _wizard_continue_phase(
-                        "Select apps components to add too?",
-                        default=None,
-                        allow_back=True,
+                try:
+                    requested_apps = _prompt_component_scope_selection(
+                        action="add",
+                        scope="apps",
+                        entries=app_entries,
+                        defaults=requested_apps,
                     )
-                    if _wizard_phase_back_requested(apps_decision):
-                        continue
-                    if _wizard_phase_stop_requested(apps_decision):
-                        console.print("No component changes applied.")
-                        return
-                    select_apps = bool(apps_decision)
-                if select_apps:
-                    try:
-                        requested_apps = _prompt_component_scope_selection(
-                            action="add",
-                            scope="apps",
-                            entries=app_entries,
-                        )
-                    except _WizardBackRequested:
-                        continue
-                    except _WizardQuitRequested:
-                        console.print("No component changes applied.")
-                        return
+                except _WizardBackRequested:
+                    continue
+                except _WizardQuitRequested:
+                    console.print("No component changes applied.")
+                    return
                 app_target_issue = _app_selection_without_cluster_target_issue(
                     selected_infra=set(enabled_infra) | requested_infra,
                     selected_apps=set(enabled_apps) | requested_apps,
@@ -52810,11 +53157,13 @@ def component_add_command(
             for component_id in sorted(auto_added_apps_types)
         )
 
+        confirmed_infra_resource_names: set[tuple[str, str]] = set()
         if interactive_mode:
             resolved_add_targets = _prompt_infra_add_resource_names(
                 payload=payload,
                 add_targets=add_targets,
                 infra_entries=infra_entries,
+                confirmed_resource_names=confirmed_infra_resource_names,
             )
             if resolved_add_targets is None:
                 console.print("No component changes applied.")
@@ -52947,21 +53296,25 @@ def component_add_command(
             next_payload,
             provider_lookup=provider_lookup,
         )
-        selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
-            next_payload,
-            selected_apps=selected_apps,
-            app_entries=app_entries,
+        from .wireguard_dependencies import materialize_wireguard_dependencies
+
+        dependencies = materialize_wireguard_dependencies(
+            next_payload, selected_instances=set(added_infra_instances)
         )
-        if mysterybox_eso_app_labels:
-            for app_label in mysterybox_eso_app_labels:
-                if app_label not in added_apps_selectors:
-                    added_apps_selectors.append(app_label)
-                if app_label not in added_apps_labels:
-                    added_apps_labels.append(app_label)
-            _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
+        from .tailscale_dependencies import materialize as materialize_tailscale
+
+        dependencies += materialize_tailscale(
+            next_payload, selected_instances=set(added_infra_instances)
+        )
+        for dependency in dependencies:
+            added_infra_instances.append(dependency)
+            added_infra_labels.append(f"mysterybox@{dependency}")
+        normalize_mysterybox_eso_project_settings(next_payload)
         config_yaml_override = yaml.safe_dump(next_payload, sort_keys=False)
+        wizard_added_eso_labels: tuple[str, ...] = ()
         if interactive_mode:
             skipped_components: set[tuple[ComponentScope, str, str]] = set()
+            before_wizard_app_labels = set(_enabled_app_instance_labels(next_payload))
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
                 selected_infra=set(added_infra_instances),
@@ -52972,11 +53325,30 @@ def component_add_command(
                 skipped_components=skipped_components,
                 prompt_app_version_before_app_config=True,
                 existing_grafana_targets=existing_grafana_targets,
+                new_mk8s_target_refs=frozenset(added_infra_instances),
+                confirmed_infra_resource_names=frozenset(confirmed_infra_resource_names),
             )
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
                 raise RuntimeError("Updated config payload must be a mapping")
+            known_infra = {
+                component_instance_id(r)
+                for r in next_payload.get("infra", {}).get("components", [])
+            }
             next_payload = parsed_override
+            for new_row in next_payload.get("infra", {}).get("components", []):
+                identity = component_instance_id(new_row)
+                if component_type_id(new_row) == "mysterybox" and identity not in known_infra:
+                    added_infra_instances.append(identity)
+                    added_infra_labels.append(f"mysterybox@{identity}")
+            wizard_added_eso_labels = _new_enabled_app_instance_labels(
+                next_payload,
+                before_labels=before_wizard_app_labels,
+                app_ids=(EXTERNAL_SECRETS_APP_ID,),
+            )
+            for label in wizard_added_eso_labels:
+                if label not in added_apps_labels:
+                    added_apps_labels.append(label)
             _materialize_planned_vpc_binding_tokens(next_payload)
             skipped_infra_labels, skipped_infra_app_labels = (
                 _remove_skipped_component_add_infra_rows(
@@ -53042,18 +53414,20 @@ def component_add_command(
                 payload=next_payload, entries=app_entries
             )
 
-        selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
-            next_payload,
-            selected_apps=selected_apps,
-            app_entries=app_entries,
+        from .wireguard_dependencies import materialize_wireguard_dependencies
+
+        dependencies = materialize_wireguard_dependencies(
+            next_payload, selected_instances=set(added_infra_instances)
         )
-        if mysterybox_eso_app_labels:
-            for app_label in mysterybox_eso_app_labels:
-                if app_label not in added_apps_selectors:
-                    added_apps_selectors.append(app_label)
-                if app_label not in added_apps_labels:
-                    added_apps_labels.append(app_label)
-            _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
+        from .tailscale_dependencies import materialize as materialize_tailscale
+
+        dependencies += materialize_tailscale(
+            next_payload, selected_instances=set(added_infra_instances)
+        )
+        for dependency in dependencies:
+            added_infra_instances.append(dependency)
+            added_infra_labels.append(f"mysterybox@{dependency}")
+        normalize_mysterybox_eso_project_settings(next_payload)
         _materialize_mk8s_image_defaults(
             payload=next_payload,
             selected_infra=set(added_infra_instances),
@@ -53237,11 +53611,7 @@ def component_add_command(
             next_payload,
             provider_lookup=provider_lookup,
         )
-        if ensure_mysterybox_eso_app_rows(next_payload, app_entries=app_entries):
-            selected_apps = _enabled_ids_from_runtime_payload(
-                payload=next_payload,
-                entries=app_entries,
-            )
+        normalize_mysterybox_eso_project_settings(next_payload)
         selected_apps, nfs_csi_app_labels = _ensure_nfs_csi_app_dependency_selection(
             next_payload,
             selected_apps=selected_apps,
@@ -53351,14 +53721,13 @@ def component_add_command(
             console.print(f"Updated: {config_path.resolve()}")
         else:
             console.print(f"Config up-to-date: {config_path.resolve()}")
-        if not interactive_mode:
-            if added_infra_labels:
-                console.print("Added infra components: " + ", ".join(added_infra_labels))
-            if added_apps_labels:
-                console.print(
-                    "Added apps components: "
-                    + ", ".join(_target_aware_added_app_labels(next_payload, added_apps_labels))
-                )
+        if not interactive_mode and added_infra_labels:
+            console.print("Added infra components: " + ", ".join(added_infra_labels))
+        if added_apps_labels and (not interactive_mode or wizard_added_eso_labels):
+            console.print(
+                "Added apps components: "
+                + ", ".join(_target_aware_added_app_labels(next_payload, added_apps_labels))
+            )
         if skipped_add_labels:
             console.print(
                 f"{warning_markup('Skipped already-enabled components:')} "
@@ -53392,7 +53761,7 @@ def component_add_command(
         "to create a project config under the deployments root, then choose one existing "
         "Nebius MK8s cluster from the project. "
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
-        "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
+        "the optional cxcli logical target id saved as infra.external_clusters[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
         "Core onboarded Soperator operations use Nebius API and Kubernetes "
         "API/kubeconfig access; they do not SSH from the operator workstation "
@@ -53472,7 +53841,7 @@ def soperator_onboard_command(
         typer.Option(
             "--target-id",
             help=(
-                "Optional cxcli logical target id to save as deploy.targets[].instance_id. "
+                "Optional cxcli logical target id to save as infra.external_clusters[].instance_id. "
                 "When omitted, cxcli derives it from the live MK8s cluster name."
             ),
         ),
@@ -53591,7 +53960,7 @@ def component_remove_command(
                 "selectors are skipped. If multiple rows match the same component "
                 "type, pass the exact row id or '<id>@<resource-name-or-target-id>' "
                 "to remove one config.yaml row. Removing a cluster target also "
-                "removes app rows and deploy.targets[] settings bound to that target."
+                "removes app rows and infra.components[] settings bound to that target."
             ),
         ),
     ] = None,
@@ -53729,11 +54098,32 @@ def component_remove_command(
             console.print("No component changes applied.")
             return
 
+        from .wireguard_dependencies import assert_access_removal_allowed
+
+        assert_access_removal_allowed(
+            payload, {target.instance_id for target in remove_targets if target.scope == "infra"}
+        )
+        from .tailscale_dependencies import assert_removal_allowed as tailscale_removal_allowed
+
+        tailscale_removal_allowed(
+            payload, {target.instance_id for target in remove_targets if target.scope == "infra"}
+        )
+
         next_payload = copy.deepcopy(payload)
         removed_infra_labels: list[str] = []
         removed_app_labels: list[str] = []
         removed_cluster_targets: set[str] = set()
         for target in remove_targets:
+            if target.scope == "infra" and target.component_id == "nat-gateway":
+                row = next(
+                    r
+                    for r in payload["infra"]["components"]
+                    if r["instance_id"] == target.instance_id
+                )
+                if row.get("routing", {}).get("enabled"):
+                    raise RuntimeError(
+                        "Restore NAT routes first: set routing.enabled=false, render and deploy before removing the component"
+                    )
             removed = _remove_component_instance_row(
                 payload=next_payload,
                 scope=target.scope,
@@ -53754,7 +54144,7 @@ def component_remove_command(
                     target.component_id == "nebius-observability-agent"
                     and target.instance_id in soperator_target_refs
                 ):
-                    for deploy_target in next_payload.get("deploy", {}).get("targets", []):
+                    for deploy_target in cluster_rows(next_payload):
                         if deploy_target.get("instance_id") == target.instance_id:
                             deploy_target.setdefault("observability", {})["enabled"] = False
         if removed_cluster_targets:
@@ -54363,6 +54753,55 @@ def ssh_jumphost_command(
     ),
 )
 def wireguard_command(
+    reconcile_network: Annotated[
+        Path | None,
+        typer.Option(
+            "--reconcile-network",
+            metavar="CONFIG_YAML",
+            help="Reconcile the rendered MTU/MSS revision in place, preserving gateway identity and peers.",
+        ),
+    ] = None,
+    refresh_client_conf: Annotated[
+        Path | None,
+        typer.Option(
+            "--refresh-client-conf",
+            metavar="CONFIG_YAML",
+            help="Refresh only the MTU of an existing --client-config; reconnect it afterward.",
+        ),
+    ] = None,
+    verify_client: Annotated[
+        Path | None,
+        typer.Option(
+            "--verify-client",
+            metavar="CONFIG_YAML",
+            help="Verify private Kubernetes access through a connected --client-config.",
+        ),
+    ] = None,
+    client_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--client-config",
+            help="Existing private WireGuard client file for refresh or verification.",
+        ),
+    ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option("--target", help="Verification only. Managed Kubernetes target reference."),
+    ] = None,
+    kubeconfig: Annotated[
+        Path | None,
+        typer.Option(
+            "--kubeconfig",
+            help="Verification only. Existing kubeconfig file; never changes current-context.",
+        ),
+    ] = None,
+    context: Annotated[
+        str | None,
+        typer.Option(
+            "--context",
+            help="Verification only. Existing Kubernetes context matching the private endpoint and CA.",
+        ),
+    ] = None,
     gen_client_conf: Annotated[
         Path | None,
         typer.Option(
@@ -54460,19 +54899,24 @@ def wireguard_command(
         typer.Option(
             "--ssh-user",
             help=(
-                "All modes. SSH username for the WireGuard VPN gateway. Defaults to "
-                "component inputs.ssh_user_name."
+                "Client and subnet modes only. Optional SSH username assertion; "
+                "must match the authenticated SecretStash connection record."
             ),
         ),
     ] = None,
-    ssh_private_key: Annotated[
+    credentials_file: Annotated[
         Path | None,
         typer.Option(
-            "--ssh-private-key",
-            help=(
-                "All modes. Optional SSH private key path. When omitted, ssh uses "
-                "the agent/default keys."
-            ),
+            "--credentials-file",
+            help="Explicit renewable Nebius service-account credentials for automation. Default: the human operator identity.",
+        ),
+    ] = None,
+    rotate_login_key: Annotated[
+        Path | None,
+        typer.Option(
+            "--rotate-login-key",
+            metavar="CONFIG_YAML",
+            help="Rotate the shared SSH login key under the existing remote operation journal. Requires provisioning authority.",
         ),
     ] = None,
     ssh_known_hosts_file: Annotated[
@@ -54480,10 +54924,39 @@ def wireguard_command(
         typer.Option(
             "--ssh-known-hosts-file",
             help=(
-                "All modes. OpenSSH known-hosts file containing an independently "
-                "verified key for the selected host. Defaults to "
-                "<project>/generated/ssh_known_hosts."
+                "Client and subnet modes only. OpenSSH known-hosts file containing an independently "
+                "verified key for the selected host. If supplied it must agree with "
+                "the authenticated SecretStash host identity."
             ),
+        ),
+    ] = None,
+    recover_access: Annotated[
+        Path | None,
+        typer.Option(
+            "--recover-access",
+            metavar="CONFIG_YAML",
+            help="Reconcile an interrupted gateway operation and release only its exact stopped writer lock.",
+        ),
+    ] = None,
+    lock_owner: Annotated[
+        str | None,
+        typer.Option(
+            "--lock-owner",
+            help="Recovery only. Exact remote owner reported by the blocked command.",
+        ),
+    ] = None,
+    prior_writer_stopped: Annotated[
+        bool,
+        typer.Option(
+            "--prior-writer-stopped",
+            help="Recovery only. Confirm independent verification that the old process and children have stopped.",
+        ),
+    ] = False,
+    operation_id: Annotated[
+        str | None,
+        typer.Option(
+            "--operation-id",
+            help="Recovery only. Exact cloud operation ID when its acknowledgement was lost.",
         ),
     ] = None,
     force: Annotated[
@@ -54504,14 +54977,23 @@ def wireguard_command(
     - --gen-client-conf CONFIG_YAML generates and downloads one client .conf.
     - --add-local-subnets CONFIG_YAML adds future-client route defaults.
     - --remove-local-subnets CONFIG_YAML removes future-client route defaults.
+    - --rotate-login-key CONFIG_YAML rotates shared SSH access.
+    - --recover-access CONFIG_YAML reconciles an interrupted access operation.
+    - --reconcile-network CONFIG_YAML applies the rendered networking revision in place.
+    - --refresh-client-conf CONFIG_YAML --client-config FILE refreshes its MTU.
+    - --verify-client CONFIG_YAML --client-config FILE qualifies private Kubernetes access.
 
     Generation mode uses a wg-quick-safe filename/interface name, prints the
     local wg-quick up/down commands, and warns with an OS-specific install hint
     when wg-quick is missing.
     Add/remove subnet modes require one comma-separated --local-subnet value.
     Existing downloaded client configs are not rewritten automatically.
-    The current config.yaml and sibling generated bundle must both contain the
-    same selected component row.
+    Client issuance, refresh and subnet modes need source config and authenticated SecretStash
+    references, without Terraform, Kubernetes or the original deployer laptop.
+    Rotation/recovery also require provisioning authority and backend credentials.
+    Network reconciliation and verification need a rendered bundle and existing
+    backend credentials. Verification also needs a connected client and an
+    existing kubeconfig for the private Kubernetes endpoint.
 
     Examples:
 
@@ -54525,7 +55007,12 @@ def wireguard_command(
         selected_modes = [
             (name, path)
             for name, path in (
+                ("reconcile-network", reconcile_network),
+                ("refresh-client-conf", refresh_client_conf),
+                ("verify-client", verify_client),
                 ("gen-client-conf", gen_client_conf),
+                ("rotate-login-key", rotate_login_key),
+                ("recover-access", recover_access),
                 ("add-local-subnets", add_local_subnets),
                 ("remove-local-subnets", remove_local_subnets),
             )
@@ -54534,9 +55021,126 @@ def wireguard_command(
         if len(selected_modes) != 1:
             raise RuntimeError(
                 "Use exactly one of --gen-client-conf, --add-local-subnets, "
-                "or --remove-local-subnets with CONFIG_YAML."
+                "--remove-local-subnets, --rotate-login-key, --recover-access, "
+                "--reconcile-network, --refresh-client-conf, or --verify-client with CONFIG_YAML."
             )
         mode, config_path = selected_modes[0]
+        if mode in {"reconcile-network", "refresh-client-conf", "verify-client"}:
+            if any(
+                (
+                    client_name,
+                    dns,
+                    persistent_keepalive is not None,
+                    output_dir,
+                    force,
+                    local_subnet,
+                    ssh_user,
+                    ssh_known_hosts_file,
+                    lock_owner,
+                    prior_writer_stopped,
+                    operation_id,
+                )
+            ):
+                raise RuntimeError(
+                    "Generation, subnet, SSH override and recovery options do not apply to network modes"
+                )
+            if mode != "verify-client" and any((target, kubeconfig, context)):
+                raise RuntimeError("--target, --kubeconfig and --context require --verify-client")
+            from . import wireguard_network_commands as networking
+
+            credentials = str(credentials_file) if credentials_file else None
+            if mode == "reconcile-network":
+                if client_config:
+                    raise RuntimeError("--client-config does not apply to --reconcile-network")
+                networking.reconcile(config_path, component, credentials)
+                console.print(
+                    "[green]WireGuard networking reconciled; gateway identity and peers preserved.[/green]"
+                )
+            else:
+                if client_config is None:
+                    raise RuntimeError("--client-config is required for refresh and verification")
+                if mode == "refresh-client-conf":
+                    mtu = networking.refresh(config_path, component, client_config, credentials)
+                    console.print(
+                        f"Client MTU refreshed to {mtu}. Reconnect with wg-quick down/up before verification."
+                    )
+                else:
+                    report = networking.verify(
+                        config_path,
+                        component,
+                        client_config,
+                        credentials,
+                        target=target,
+                        kubeconfig=kubeconfig,
+                        context=context,
+                    )
+                    console.print(
+                        f"WireGuard client verification: {report['status']} (wireguard-client-verification.md)"
+                    )
+                    if report["status"] != "PASS":
+                        raise RuntimeError(
+                            "WireGuard client verification did not pass; see wireguard-client-verification.md"
+                        )
+            return
+        if any((client_config, target, kubeconfig, context)):
+            raise RuntimeError(
+                "Client verification options require --refresh-client-conf or --verify-client"
+            )
+        if mode == "recover-access":
+            if any(
+                (
+                    client_name,
+                    dns,
+                    persistent_keepalive is not None,
+                    output_dir,
+                    force,
+                    local_subnet,
+                    ssh_user,
+                    ssh_known_hosts_file,
+                )
+            ):
+                raise RuntimeError(
+                    "Client/subnet/SSH override options do not apply to access recovery"
+                )
+            from .wireguard_commands import recover_from_config
+
+            recover_from_config(
+                config_path,
+                component,
+                lock_owner=lock_owner or "",
+                prior_writer_stopped=prior_writer_stopped,
+                operation_id=operation_id or "",
+                credentials_file=str(credentials_file) if credentials_file else None,
+            )
+            console.print(
+                "[green]WireGuard operation reconciled; resume the original command.[/green]"
+            )
+            return
+        if lock_owner or prior_writer_stopped or operation_id:
+            raise RuntimeError("Recovery controls only apply to --recover-access")
+        if mode == "rotate-login-key":
+            if any(
+                (
+                    client_name,
+                    dns,
+                    persistent_keepalive is not None,
+                    output_dir,
+                    force,
+                    local_subnet,
+                    ssh_user,
+                    ssh_known_hosts_file,
+                )
+            ):
+                raise RuntimeError(
+                    "Client/subnet/SSH override options do not apply to login rotation"
+                )
+            from .wireguard_commands import rotate_from_config
+
+            rotate_from_config(
+                config_path, component, str(credentials_file) if credentials_file else None
+            )
+            console.print("[green]WireGuard login key rotated; the old key is rejected.[/green]")
+            return
         is_subnet_update_mode = mode in {"add-local-subnets", "remove-local-subnets"}
         update_local_subnets: tuple[str, ...] = ()
         generation_local_subnets: tuple[str, ...] = ()
@@ -54557,98 +55161,99 @@ def wireguard_command(
             generation_local_subnets = normalize_local_subnets(local_subnet or [])
             generation_dns = normalize_dns(dns or [])
 
-        source_config_path = config_path
-        source_config = load_config(source_config_path, persist_normalized=False)
-        source_component = select_wireguard_component(source_config, component_selector=component)
-        config, paths, _manifest = _load_deploy_context(source_config_path)
-        component_selection = _select_deployed_day2_component(
-            config_path=source_config_path,
-            generated_config=config,
-            component_label=source_component.label,
-            select_component=select_wireguard_component,
-            operation_label="WireGuard",
-        )
-        _ensure_terraform_backend_ready(config)
-        runtime_env = _terraform_runtime_env(config)
-        terraform_outputs = terraform_output_json(paths.infra_dir, extra_env=runtime_env)
-        public_ip = wireguard_public_ip_from_outputs(terraform_outputs, component_selection)
-        resolved_known_hosts = resolve_ssh_known_hosts_file(paths, ssh_known_hosts_file)
+        from .wireguard_access import client_access
+        from .wireguard_commands import load_wireguard_context
+        from .wireguard_secret_api import wireguard_api
 
-        resolved_ssh_user = (
-            ssh_user or str(component_selection.inputs.get("ssh_user_name") or "")
-        ).strip()
-        if not resolved_ssh_user:
-            raise RuntimeError(
-                f"{component_selection.label} is missing inputs.ssh_user_name for SSH access"
+        _payload, paths, component_selection, row, project = load_wireguard_context(
+            config_path, component
+        )
+        with (
+            wireguard_api(
+                credentials_file=str(credentials_file) if credentials_file else None
+            ) as api,
+            client_access(
+                api,
+                project=project,
+                component=component_selection.instance_id,
+                access=row["access"],
+                known_hosts=ssh_known_hosts_file,
+            ) as access,
+        ):
+            public_ip = access.public_ip
+            resolved_ssh_user = access.ssh_user
+            if ssh_user and ssh_user != resolved_ssh_user:
+                raise RuntimeError("SSH username must match the authenticated WireGuard connection")
+            ssh_private_key = access.private_key
+            resolved_known_hosts = access.known_hosts
+            if is_subnet_update_mode:
+                operation = "add" if mode == "add-local-subnets" else "remove"
+                update_result = update_wireguard_local_subnets(
+                    WireGuardLocalSubnetUpdateRequest(
+                        component=component_selection,
+                        public_ip=public_ip,
+                        ssh_user=resolved_ssh_user,
+                        ssh_private_key=ssh_private_key,
+                        ssh_known_hosts_file=resolved_known_hosts,
+                        operation=operation,
+                        local_subnets=update_local_subnets,
+                    )
+                )
+                console.print("[green]WireGuard local subnets updated.[/green]")
+                if update_result.added:
+                    console.print(f"Added: {', '.join(update_result.added)}")
+                if update_result.removed:
+                    console.print(f"Removed: {', '.join(update_result.removed)}")
+                if update_result.unchanged:
+                    console.print(f"Unchanged: {', '.join(update_result.unchanged)}")
+                console.print(
+                    f"Current local subnets: {', '.join(update_result.local_subnets) or '(none)'}"
+                )
+                return
+
+            selected_output_dir = (
+                output_dir.expanduser().resolve()
+                if output_dir is not None
+                else default_wireguard_client_output_dir(paths)
             )
-        if is_subnet_update_mode:
-            operation = "add" if mode == "add-local-subnets" else "remove"
-            update_result = update_wireguard_local_subnets(
-                WireGuardLocalSubnetUpdateRequest(
+            _ensure_wireguard_output_gitignore(selected_output_dir, paths)
+            result = generate_wireguard_client_config(
+                WireGuardClientGenerationRequest(
                     component=component_selection,
                     public_ip=public_ip,
                     ssh_user=resolved_ssh_user,
                     ssh_private_key=ssh_private_key,
                     ssh_known_hosts_file=resolved_known_hosts,
-                    operation=operation,
-                    local_subnets=update_local_subnets,
+                    client_name=client_name,
+                    local_subnets=generation_local_subnets,
+                    dns=generation_dns,
+                    persistent_keepalive=persistent_keepalive,
+                    output_dir=selected_output_dir,
+                    force=force,
                 )
             )
-            console.print("[green]WireGuard local subnets updated.[/green]")
-            if update_result.added:
-                console.print(f"Added: {', '.join(update_result.added)}")
-            if update_result.removed:
-                console.print(f"Removed: {', '.join(update_result.removed)}")
-            if update_result.unchanged:
-                console.print(f"Unchanged: {', '.join(update_result.unchanged)}")
+
+            console.print(f"[green]WireGuard client config written:[/green] {result.output_path}")
+            console.print(f"Client: {result.client_name}")
+            console.print(f"Tunnel address: {result.client_wg_tunnel_address}")
+            if result.local_subnets:
+                console.print(f"Local subnets: {', '.join(result.local_subnets)}")
+            console.print(f"Server copy: {result.remote_config_path}")
             console.print(
-                f"Current local subnets: {', '.join(update_result.local_subnets) or '(none)'}"
+                f"Server allocation state: {result.clients_created} client(s), "
+                f"{result.remaining_client_slots} tunnel address(es) remaining"
             )
-            return
-
-        selected_output_dir = (
-            output_dir.expanduser().resolve()
-            if output_dir is not None
-            else default_wireguard_client_output_dir(paths)
-        )
-        _ensure_wireguard_output_gitignore(selected_output_dir, paths)
-        result = generate_wireguard_client_config(
-            WireGuardClientGenerationRequest(
-                component=component_selection,
-                public_ip=public_ip,
-                ssh_user=resolved_ssh_user,
-                ssh_private_key=ssh_private_key,
-                ssh_known_hosts_file=resolved_known_hosts,
-                client_name=client_name,
-                local_subnets=generation_local_subnets,
-                dns=generation_dns,
-                persistent_keepalive=persistent_keepalive,
-                output_dir=selected_output_dir,
-                force=force,
-            )
-        )
-
-        console.print(f"[green]WireGuard client config written:[/green] {result.output_path}")
-        console.print(f"Client: {result.client_name}")
-        console.print(f"Tunnel address: {result.client_wg_tunnel_address}")
-        if result.local_subnets:
-            console.print(f"Local subnets: {', '.join(result.local_subnets)}")
-        console.print(f"Server copy: {result.remote_config_path}")
-        console.print(
-            f"Server allocation state: {result.clients_created} client(s), "
-            f"{result.remaining_client_slots} tunnel address(es) remaining"
-        )
-        connect_command = f"wg-quick up {shlex.quote(str(result.output_path))}"
-        disconnect_command = f"wg-quick down {shlex.quote(str(result.output_path))}"
-        console.print("Run this command to connect:")
-        print_copy_paste_command(console, connect_command)
-        console.print("Run this command to disconnect:")
-        print_copy_paste_command(console, disconnect_command)
-        if _wireguard_client_tool_missing():
-            install_command = _wireguard_client_install_command()
-            console.print("[yellow]WireGuard client tool not found locally:[/yellow] wg-quick")
-            console.print("Install it with:")
-            print_copy_paste_command(console, install_command)
+            connect_command = f"wg-quick up {shlex.quote(str(result.output_path))}"
+            disconnect_command = f"wg-quick down {shlex.quote(str(result.output_path))}"
+            console.print("Run this command to connect:")
+            print_copy_paste_command(console, connect_command)
+            console.print("Run this command to disconnect:")
+            print_copy_paste_command(console, disconnect_command)
+            if _wireguard_client_tool_missing():
+                install_command = _wireguard_client_install_command()
+                console.print("[yellow]WireGuard client tool not found locally:[/yellow] wg-quick")
+                console.print("Install it with:")
+                print_copy_paste_command(console, install_command)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -55972,6 +56577,19 @@ def deploy_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    ssh_private_key: Annotated[
+        Path | None,
+        typer.Option(
+            "--ssh-private-key", help="NAT readiness SSH private key; otherwise use the SSH agent."
+        ),
+    ] = None,
+    ssh_known_hosts_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--ssh-known-hosts-file",
+            help="Independently verified gateway SSH host keys; strict checking is required.",
+        ),
+    ] = None,
 ) -> None:
     """Plan and execute the workflow selected by the rendered configuration.
 
@@ -55997,6 +56615,8 @@ def deploy_command(
             )
         _require_soperator_lifecycle_scope(config, command="deploy")
         options = DeployOptions(
+            ssh_private_key=ssh_private_key,
+            ssh_known_hosts_file=ssh_known_hosts_file,
             dry_run=dry_run,
             skip_validations=skip_validations,
             skip_validation_kinds=frozenset(
@@ -56136,11 +56756,11 @@ def destroy_command(
 
 @terraform_app.command(
     "plan",
-    short_help="Use GENERATED_PATH to run Terraform plan from generated/infra.",
+    short_help="Use GENERATED_PATH to plan declared Terraform roots.",
     epilog=(
         "Examples: "
         "nebius-cxcli terraform plan ./deployments/tenant/project/generated "
-        "(equivalent to `terraform -chdir=generated/infra plan` with cxcli's runtime env wiring). "
+        "(plans the access root first when declared, then the main root with frozen bootstrap). "
         "Run after `nebius-cxcli render` to preview infra diffs (MK8s, SFS, VMs) before `deploy`."
     ),
 )
@@ -56153,7 +56773,7 @@ def terraform_plan_command(
         ),
     ],
 ) -> None:
-    """Run Terraform plan against an existing generated/infra bundle."""
+    """Plan declared Terraform roots without creating WireGuard credentials."""
     try:
         config, paths, manifest = _load_generic_soperator_lifecycle_context(
             _load_generated_infra_context,
@@ -56185,8 +56805,15 @@ def terraform_plan_command(
                 runtime_env=runtime_env,
                 initialize=False,
             )
-            terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
-            terraform_plan(paths.infra_dir, extra_env=runtime_env, initialize=False)
+            from .deployment_cli import quota_plan_runtime_env
+            from .wireguard_dependencies import access_owner_rows
+
+            if access_owner_rows(config):
+                terraform_validate(paths.access_infra_dir, extra_env=runtime_env)
+                terraform_plan(paths.access_infra_dir, extra_env=runtime_env)
+            with quota_plan_runtime_env(paths.infra_dir, manifest, runtime_env) as prepared:
+                terraform_validate(paths.infra_dir, extra_env=prepared, initialize=False)
+                terraform_plan(paths.infra_dir, extra_env=prepared, initialize=False)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -56325,7 +56952,7 @@ def terraform_destroy_command(
 
 @terraform_app.command(
     "unlock",
-    short_help="Use GENERATED_PATH to clear a stale Terraform lock in generated/infra.",
+    short_help="Use GENERATED_PATH and --root to clear a stale Terraform state lock.",
     epilog=(
         "Examples: "
         "nebius-cxcli terraform unlock ./deployments/tenant/project/generated "
@@ -56342,6 +56969,9 @@ def terraform_unlock_command(
             help=_GENERATED_INFRA_ARGUMENT_HELP,
         ),
     ],
+    root_name: Annotated[
+        str, typer.Option("--root", help="State root to unlock: infra or infra-access.")
+    ] = "infra",
     force: Annotated[
         bool,
         typer.Option(
@@ -56353,7 +56983,7 @@ def terraform_unlock_command(
         ),
     ] = False,
 ) -> None:
-    """Clear a stale remote Terraform state lock for an existing generated/infra bundle."""
+    """Clear a stale lock for the explicitly selected Terraform state root."""
     try:
         config, paths, _manifest = _load_generic_soperator_lifecycle_context(
             _load_generated_infra_context,
@@ -56368,9 +56998,14 @@ def terraform_unlock_command(
                 config,
                 paths,
                 force=force,
+                root_name=root_name,
             )
             if lock_info is None:
                 settings = backend_settings_from_config(config)
+                if root_name == "infra-access":
+                    from .terraform_roots import access_backend
+
+                    settings = access_backend(settings)
                 console.print(
                     "No remote Terraform state lock is present for "
                     f"{settings.bucket}/{settings.key}.tflock."

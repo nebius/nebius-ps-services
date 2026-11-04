@@ -127,6 +127,62 @@
         "The output does not select models, runtimes, retrieval, evaluation, observability, or other AI components and does not synthesize a complete subsystem architecture.",
         "The originating ai-stack remains the sole component-selection owner and executes that selection exactly once."
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "Design context governance for an existing bounded investigation agent. It produces summaries and caches answers from protected sources. One uncited source later loses access; the provider continuation may still contain it. A query cache can become stale when a new record becomes eligible by time alone. Large tool results need offload, and repeated compaction must fit a smaller fallback model. Keep the provider and stack fixed; no implementation or live actions.",
+      "expected_output": "A provider-neutral context design preserving complete input lineage, current authorization, mandatory context and tool coherence, bounded artifact retrieval, temporal/corpus-aware cache eligibility, clean reconstruction, and evaluated compaction without adding unjustified infrastructure.",
+      "files": [],
+      "assertions": [
+        "Derived-data eligibility tracks all protected inputs supplied to the producer, including uncited and transitive sources; citations and redaction cannot grant broader disclosure.",
+        "Revocation invalidates affected summaries, cached outputs, and opaque continuation state; unavailable lineage or unverifiable authority prevents protected reuse, with reconstruction from currently authorized inputs.",
+        "The complete serialized request includes tools, wrappers, and output reservation; mandatory scope, unresolved effects, contradictions, and required tool-call/result groups survive compaction. Mandatory overflow blocks or safely partitions rather than silently truncating.",
+        "Offload uses governed immutable references, reauthorization on every bounded read/page, scan-work limits, and explicit partial coverage; failure cannot return the oversized protected payload.",
+        "Cache validation covers current authorization, changed eligible corpus including previously absent rows, effective-time boundaries, missed invalidation, and restore; a TTL or authorization-key revision alone is insufficient.",
+        "Repeated-compaction and fallback-route checks compare with an uncompacted baseline; model summaries remain untrusted data, and the design preserves the fixed stack and advisory scope."
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Design the lifecycle contract for an existing long-running agent product that permits reopening terminal work. Two callers may request reopening concurrently; an old worker may survive lease loss; a child may start during parent completion; cancellation may time out after an external operation was submitted. Preserve cumulative cost and capacity limits. Keep technology choices fixed and return a logical design only.",
+      "expected_output": "A conditional atomic successor-admission and fencing contract with idempotent retry receipts, immutable history, authoritative effect reconciliation, closed child admission, current authority, and retained reservations.",
+      "files": [],
+      "assertions": [
+        "The design distinguishes ownership generation from lease renewal and checks fences at state/result/effect boundaries; it does not claim a fence can undo an already-submitted external effect.",
+        "A nonterminal closing/draining transition atomically closes child admission, existing descendants are settled/cancelled/reconciled, and only then may the parent commit terminal status. A callback, timeout, or empty child snapshot does not prove quiescence.",
+        "A successor requires a settled or effectively fenced predecessor and explicit disposition for ambiguous effects, fresh authority, and immutable predecessor history.",
+        "At most one successor is admitted atomically with durable start intent and an idempotency receipt. After caller authorization, matching retry receipts are resolved before rechecking the original expected version, without bypassing receipt disclosure authorization; changed intent conflicts.",
+        "Cumulative spend and outstanding execution/model reservations survive cancellation and reopening until termination or authoritative reconciliation; a reopen is not a budget reset.",
+        "Acceptance cases include duplicate/concurrent requests, crash between admission and delivery, stale results, late children, and unknown external outcomes. No implementation or live authority is inferred."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Review and revise an agent subsystem where generated diagnostic code shares a process with the coordinator, an SDK modifies context after preparation, and streamed tool arguments are dispatched early. Product telemetry and target-system diagnostics share one credential. Define a safer logical design without selecting vendors, provisioning infrastructure, or running queries.",
+      "expected_output": "A design with enforceable execution/credential separation, distinct telemetry authority, final request enforcement after transformations, complete tool validation, and capability-specific runtime gates.",
+      "files": [],
+      "assertions": [
+        "The design identifies process-environment, filesystem, callback, and child-worker exposure of orchestration credentials; prompt invisibility and a tool allowlist alone do not isolate generated code.",
+        "Execution uses an enforceable least-privilege boundary with brokered or tightly scoped delegated actions and independently scoped product telemetry versus target diagnostic authority.",
+        "The actual final request is bound to current authorized context and lineage, tool catalog, route/release, owner generation, expiry, cancellation, and full input/output budgets after every adapter transformation and on retries/fallback.",
+        "Incomplete tool arguments or effect-capable batches cannot dispatch; streaming content remains provisional under an explicit output policy until its required validation and completion conditions hold.",
+        "SDK session, compaction, tracing, discovery, guardrail, and background capabilities are independently conditional and need compatibility/authority evidence; availability does not transfer canonical state ownership.",
+        "The output retains an advisory scope, fixed technology choices, and explicit unverified runtime/isolation gates."
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Define production readiness for a bounded asynchronous agent. Dashboards currently show zero errors when collection disappears, cancellation releases capacity immediately, and an operator manually completes a product-owned step during an acceptance trial. Synthetic schema checks pass. Distinguish the remaining evidence and design corrected monitoring, admission, and validation policies without operating live systems.",
+      "expected_output": "A readiness design with explicit telemetry unknown states, independent observation authority and failure domains, separate reservation classes, and uncontaminated product acceptance trials.",
+      "files": [],
+      "assertions": [
+        "Observed zero, empty eligible results, denied, missing, partial, stale, and unavailable telemetry are distinct; missing samples cannot prove success or free capacity.",
+        "Admitted sessions, running/starting/draining/unknown execution with descendants, and queued/in-flight model reservations have separate counters, lifetimes, and authoritative reconciliation.",
+        "The design separates product telemetry from target diagnostics and audit; reviews content/credential export and puts watchdog/notification outside the monitored failure domain when that outage is in scope, without granting repair privileges.",
+        "Design/static, runtime compatibility, controlled execution, and live qualification remain distinct evidence gates for an exact release and environment; schema checks cannot establish runtime success.",
+        "Manual completion of a product-owned step marks the affected trial and dependent evidence as intervened. A clean rerun starts before the first divergence/intervention with prior writers quiescent or effectively fenced, observes the product transition, and checks authoritative postconditions.",
+        "The output uses synthetic public-safe evaluation cases, preserves historical failed/intervened evidence, and neither claims a verified product fix nor grants live-operation authority."
+      ]
     }
   ]
 }

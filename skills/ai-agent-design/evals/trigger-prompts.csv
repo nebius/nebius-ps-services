@@ -20,3 +20,7 @@ ai-agent-design-negative-09,false,"Scaffold the approved agent architecture into
 ai-agent-design-codex-portability,true,"$ai-agent-design Design a production support agent that can search authorized knowledge, draft replies, and require human approval before sending."
 ai-agent-design-claude-portability,true,"/ai-agent-design Design a production support agent that can search authorized knowledge, draft replies, and require human approval before sending."
 ai-agent-design-quoted-command,false,"Treat ""/skills:ai-agent-design"" as sample text in this punctuation exercise; count its punctuation characters only."
+ai-agent-design-positive-10,true,"Design how an agent revokes summaries and cached answers when an uncited source loses permission, and how it compacts context without dropping restrictions."
+ai-agent-design-positive-11,true,"Design safe restart generations for an agent with concurrent reopen requests, surviving child workers, cumulative budgets, and unknown cancellation outcomes."
+ai-agent-design-positive-12,true,"Define the trust boundary between agent orchestration and generated code, including the final provider request, telemetry permissions, and admission reservations."
+ai-agent-design-negative-10,false,Implement the approved cache invalidation algorithm and database transaction for restarting jobs; the architecture and authority rules are already fixed.

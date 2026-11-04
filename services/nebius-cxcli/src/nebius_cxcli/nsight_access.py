@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import kubernetes_process
+from .cluster_config import cluster_rows
 from .grafana_database import OWNER_ANNOTATION, app_owner
 from .grafana_runtime import GRAFANA_TARGET_CLUSTER_ID_ENV, GRAFANA_TARGET_KUBE_CONTEXT_ENV
 from .nsight import CHART_NAME, kubernetes_name, namespace_name
@@ -382,11 +383,7 @@ def discover_nsight_access(
 
     target = dict(
         _one(
-            [
-                t
-                for t in to_plain_data(config).get("deploy", {}).get("targets", [])
-                if t.get("instance_id") == target_ref
-            ],
+            [t for t in cluster_rows(to_plain_data(config)) if t.get("instance_id") == target_ref],
             "configured target",
         )
     )

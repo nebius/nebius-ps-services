@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from .cluster_config import cluster_rows
 from .compatibility_schema import (
     kubernetes_minor,
     required_adapters,
@@ -155,7 +156,7 @@ def validate_selection(payload: Mapping[str, Any]) -> None:
     declared = {
         str(row.get("instance_id", row.get("id", "")))
         for row in [
-            *payload.get("deploy", {}).get("targets", []),
+            *cluster_rows(payload),
             *payload.get("infra", {}).get("components", []),
         ]
         if isinstance(row, Mapping)

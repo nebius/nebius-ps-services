@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from .cluster_config import soperator_row
 from .deployment_state import digest
 from .nsight import REPORTS_PATH, TOOL_VERSIONS, kubernetes_name, soperator_report_binding
 from .nsight_jail import encode_payload
@@ -104,12 +105,7 @@ def validate_settings(value: Any) -> None:
 
 
 def profiling_settings(config: Any, target_ref: str) -> dict[str, Any] | None:
-    rows = [
-        row
-        for row in (to_plain_data(config) or {}).get("deploy", {}).get("targets", [])
-        if row.get("instance_id") == target_ref
-    ]
-    value = rows[0].get("profiling") if len(rows) == 1 else None
+    value = (soperator_row(to_plain_data(config) or {}, target_ref) or {}).get("profiling")
     validate_settings(value)
     if value is not None and value["installer_sha256"] != default_settings()["installer_sha256"]:
         raise RuntimeError(

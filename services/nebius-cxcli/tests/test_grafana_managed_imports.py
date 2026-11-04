@@ -124,7 +124,10 @@ def project_config(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(
         yaml.safe_dump(
-            {"apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]}}
+            {
+                "version": "v2",
+                "apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]},
+            }
         )
     )
     return path

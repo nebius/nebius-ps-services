@@ -26,7 +26,28 @@ def bundles():
 
     def generation(content):
         return DeploymentGeneration(
-            {"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}]}},
+            {
+                "execution": {
+                    "targets": [
+                        {
+                            "target_ref": "cluster",
+                            "flux_dir": "flux/cluster",
+                            "instance_id": "cluster",
+                            "access": "external",
+                            "component_id": "mk8s",
+                            "ownership": "managed",
+                            "cluster_id_output_name": "cluster" + "_cluster_id",
+                            "component_output_ref": "cluster" + ".cluster_id",
+                        }
+                    ],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            },
             {"flux/cluster/" + k: base64.b64encode(v).decode() for k, v in content.items()},
         )
 
@@ -305,10 +326,29 @@ def test_empty_application_journal_does_not_adopt_a_changed_frozen_bundle(monkey
                 "runtime_config": {
                     "apps": {
                         "charts": [{"id": "soperator", "target_ref": "cluster", "enabled": True}]
-                    }
+                    },
+                    "version": "v2",
                 },
                 "render": {"application_inputs": {"mk8s.cluster_id": "frozen-id"}},
-                "deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux/cluster"}]},
+                "execution": {
+                    "targets": [
+                        {
+                            "target_ref": "cluster",
+                            "flux_dir": "flux/cluster",
+                            "instance_id": "cluster",
+                            "access": "external",
+                            "component_id": "mk8s",
+                            "ownership": "managed",
+                            "cluster_id_output_name": "cluster" + "_cluster_id",
+                            "component_output_ref": "cluster" + ".cluster_id",
+                        }
+                    ],
+                    "backend": {},
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
+                "schema": "nebius-cxcli-generated/v3",
             },
             {
                 "flux/cluster/kustomization.yaml": base64.b64encode(
@@ -438,12 +478,27 @@ def test_execution_refresh_preserves_sealed_oci_bundle(tmp_path, monkeypatch, dr
     raw_render()
     bind_flux_artifacts(local, inputs)
     manifest = {
-        "deploy": {
-            "targets": [
-                {"target_ref": "cluster", "flux_dir": flux.relative_to(local.repo_root).as_posix()}
-            ]
-        },
         "render": {"compatibility": {"chart_inputs": inputs}},
+        "execution": {
+            "targets": [
+                {
+                    "target_ref": "cluster",
+                    "flux_dir": flux.relative_to(local.repo_root).as_posix(),
+                    "instance_id": "cluster",
+                    "access": "external",
+                    "component_id": "mk8s",
+                    "ownership": "managed",
+                    "cluster_id_output_name": "cluster" + "_cluster_id",
+                    "component_output_ref": "cluster" + ".cluster_id",
+                }
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
     }
     desired = DeploymentGeneration.capture(local, manifest)
     manifest = desired.manifest_for_paths(local)

@@ -211,9 +211,15 @@ def materialize_backend_values(payload: dict[str, Any]) -> bool:
             from .observability import _additional_target_config, _selected_app_metric_targets
 
             targets = _selected_app_metric_targets(payload, target_ref=target)
-            owned_jobs = {target.job_name for _, target in targets} | {"cxcli-pushgateway"}
+            owned_jobs = {target.job_name for _, target in targets} | {
+                "cxcli-pushgateway",
+                "cxcli-annotated-pods",
+            }
             jobs = [job for job in jobs if job.get("job_name") not in owned_jobs]
             if owners.get("metrics") == STORE_APPS["metrics"]:
+                from .observability_collectors import application_scrape_job
+
+                jobs.append(application_scrape_job())
                 jobs.extend(
                     _additional_target_config(namespace=row["namespace"], target=scrape)
                     for row, scrape in targets

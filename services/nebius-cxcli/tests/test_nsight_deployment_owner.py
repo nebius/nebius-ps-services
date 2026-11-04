@@ -23,7 +23,20 @@ from test_nsight_recovery import failed_attempt
 def interrupted_upgrade(tmp_path, monkeypatch):
     local = paths(tmp_path / "project")
     store = LocalObjectStore(tmp_path / "journals")
-    generation = DeploymentGeneration({"runtime_config": profiling_config()}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": profiling_config(),
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     identity = {"cluster_id": "cluster-id", "kubernetes_uid": "kube-uid"}
     controls = DeployOptions(target_ref="cluster").controls()
     attempt = digest({"generation": generation.identity, "controls": _semantic_controls(controls)})[

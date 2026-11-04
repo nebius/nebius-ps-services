@@ -14,7 +14,28 @@ from nebius_cxcli.deployment_state import DeploymentGeneration
 
 def _generation(document):
     return DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "target", "flux_dir": "flux/target"}]}},
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "target",
+                        "flux_dir": "flux/target",
+                        "instance_id": "target",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "target" + "_cluster_id",
+                        "component_output_ref": "target" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
         {
             "flux/target/kustomization.yaml": base64.b64encode(
                 b"resources: [resource.yaml]"

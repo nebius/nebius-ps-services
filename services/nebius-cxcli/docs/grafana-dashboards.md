@@ -236,7 +236,7 @@ Two stateless Grafana replicas share PostgreSQL and one encryption key. Sessions
 and dashboards survive Grafana pod replacement. A single PostgreSQL primary stores
 data on a **10Gi ReadWriteOnce PVC** using **compute-csi-default-sc**. PostgreSQL
 pod replacement reuses that claim. Change `values.persistence.size` and
-`values.persistence.storageClass` on the `postgresql` component before installation
+`values.persistence.storageClass` on the `grafana-postgresql` component before installation
 to choose storage. Existing-claim attachment is unsupported. Claim expansion and
 storage-class changes remain subject to Kubernetes/CSI constraints.
 
@@ -244,8 +244,9 @@ Deployment generates separate runtime Kubernetes Secrets for the database
 administrator, the ordinary `grafana` database owner, Grafana administrator and
 shared encryption key. Configuration contains only Secret references. Owned,
 complete Secrets are reused; missing or partial credentials with retained state
-stop deployment rather than generating replacements. PostgreSQL can be selected
-alone and bootstraps its database credentials independently. Attaching Grafana to
+stop deployment rather than generating replacements. The `grafana-postgresql`
+dependency can bootstrap before Grafana. Generic `postgresql` is a separate
+Database-group app with user-managed credentials. Attaching Grafana to
 an already initialized standalone database without the original Grafana Secrets
 is unsupported; select both for a fresh Grafana installation.
 

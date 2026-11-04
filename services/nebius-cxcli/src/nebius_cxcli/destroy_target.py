@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .cluster_config import external_clusters
 from .component_instances import component_instance_id, component_type_id
 from .destroy_generation import resources
 from .runtime_config import to_plain_data
@@ -30,14 +31,16 @@ def has_mk8s(config: Any, manifest: Mapping[str, Any] | None = None) -> bool:
             for row in infra.get("components", [])
         ):
             return True
-        deploy = value.get("deploy") or {}
+        if external_clusters(value):
+            return True
+        deploy = value.get("execution") or {}
         if isinstance(deploy, Mapping) and any(
             isinstance(row, Mapping)
             and (
                 row.get("component_id") in {"mk8s", "external-mk8s"}
                 or row.get("kind") == "external-mk8s"
                 or row.get("cluster_id")
-                or "soperator_registration" in row
+                or "registration" in row
             )
             for row in deploy.get("targets", [])
         ):
@@ -89,7 +92,7 @@ def resolve_destroy_target(
     """Never derive destructive identity from context names or discovery reports."""
     if not cluster_id or cluster_id != cluster_id.strip():
         raise ValueError("--target requires an exact immutable Nebius cluster ID")
-    source_targets = (source.get("deploy") or {}).get("targets", [])
+    source_targets = external_clusters(source)
     components = (source.get("infra") or {}).get("components", [])
     state = resources(state_values)
     outputs = state_values.get("outputs", {})
@@ -125,7 +128,7 @@ def resolve_destroy_target(
         if external:
             if owned_rows or modules:
                 raise ValueError(f"Destroy has conflicting managed/onboarded ownership for {ref}")
-            if len(source_rows) != 1 or source_rows[0].get("kind") != "external-mk8s":
+            if len(source_rows) != 1:
                 raise ValueError(f"Destroy source and generated registration differ for {ref}")
             registered_id = str(source_rows[0].get("cluster_id") or "")
             if not registered_id or not row.get("cluster_id"):
@@ -133,10 +136,7 @@ def resolve_destroy_target(
                 continue
             ids.add(registered_id)
         else:
-            if any(
-                value.get("kind") == "external-mk8s" or value.get("ownership") == "external"
-                for value in source_rows
-            ):
+            if source_rows:
                 raise ValueError(f"Destroy has conflicting managed/onboarded ownership for {ref}")
             if len(owned_rows) != 1 or len(modules) != 1 or len(source_rows) > 1:
                 raise ValueError(f"Destroy managed source/module ownership is ambiguous for {ref}")

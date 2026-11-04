@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -243,8 +244,20 @@ def _build_validation_result(
             footer_summary=summary,
         )
     passed = bool(payload.get("passed"))
+    acceptance_error = ""
+    if passed and spec.get("required") and (payload.get("skipped") or not payload.get("checks")):
+        passed = False
+        acceptance_error = "Required validation was skipped or has no executed checks."
+    if (
+        passed
+        and spec.get("e2e")
+        and payload.get("contract_sha256")
+        != hashlib.sha256(json.dumps(spec["e2e"], sort_keys=True).encode()).hexdigest()
+    ):
+        passed = False
+        acceptance_error = "Observability evidence does not match the frozen validation contract."
     target_ref = _validation_target_ref(spec, payload=payload)
-    summary = _validation_summary(kind, payload)
+    summary = acceptance_error or _validation_summary(kind, payload)
     return DeployValidationResult(
         kind=kind,
         name=_validation_display_name(kind, spec=spec, payload=payload),
@@ -303,6 +316,8 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
     error = str(payload.get("error", "") or "").strip()
     if error:
         return f"Failed before completion: {error}"
+    if kind == "mk8s_cluster_smoke" and payload.get("evidence_source") == "nebius-api":
+        return str(payload.get("summary") or "Nebius API infrastructure readiness verified.")
     if kind == "mk8s_gpu_operator_readiness":
         return _operator_readiness_summary(payload)
     if kind == "mk8s_cluster_smoke":
@@ -327,6 +342,8 @@ def _validation_footer_summary(
 ) -> str:
     error = str(payload.get("error", "") or "").strip()
     if error or bool(payload.get("skipped")):
+        return fallback
+    if payload.get("evidence_source") == "nebius-api":
         return fallback
     if kind == "mk8s_gpu_operator_readiness":
         return _operator_readiness_footer_summary(payload)
@@ -370,6 +387,8 @@ def _validation_display_name(
     spec: Mapping[str, Any],
     payload: Mapping[str, Any] | None = None,
 ) -> str:
+    if kind == "mk8s_cluster_smoke" and (payload or {}).get("evidence_source") == "nebius-api":
+        return "MK8s infrastructure readiness (Nebius API)"
     spec_name = str(spec.get("name", "") or "").strip()
     if kind == "mk8s_gpu_operator_readiness" and spec_name:
         return spec_name

@@ -66,6 +66,7 @@ def test_apps_dependency_resolution_uses_release_install_after(
             ]
         },
         "apps": {"charts": rows},
+        "version": "v2",
     }
     selected, adjustments, warnings = _resolve_apps_chart_dependencies(
         payload=payload,

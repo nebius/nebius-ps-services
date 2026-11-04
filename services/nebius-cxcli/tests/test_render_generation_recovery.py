@@ -18,7 +18,7 @@ from nebius_cxcli.render import (
 @pytest.mark.parametrize("deleted_name", ["obsolete.json", "compatibility-admission.json"])
 def test_completed_render_recovery_preserves_original_authority(tmp_path, deleted_name):
     config = tmp_path / "config.yaml"
-    config.write_text("old: true\n")
+    config.write_text("version: v2\ncompatibility: {fixture: old}\n")
     paths = resolve_project_paths(config)
     paths.reports_dir.mkdir(parents=True)
     deleted = paths.reports_dir / deleted_name
@@ -27,7 +27,10 @@ def test_completed_render_recovery_preserves_original_authority(tmp_path, delete
     staged.infra_dir.mkdir(parents=True)
     (staged.infra_dir / "main.tf").write_text("terraform {}\n")
     plan = build_project_generation_plan(
-        final_paths=paths, staged_paths=staged, config_path=config, config_content="new: true\n"
+        final_paths=paths,
+        staged_paths=staged,
+        config_path=config,
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
     # Model the exact admitted tombstone, including a receipt once misclassified
     # as render-owned. Preserve its original admission and transaction digests.
@@ -51,7 +54,10 @@ def test_completed_render_recovery_preserves_original_authority(tmp_path, delete
         deleted.write_text('{"admitted": true}\n')
         assert transaction.current_generation_sha256() is None
     desired = build_project_generation_plan(
-        final_paths=paths, staged_paths=staged, config_path=config, config_content="new: true\n"
+        final_paths=paths,
+        staged_paths=staged,
+        config_path=config,
+        config_content="version: v2\ncompatibility: {fixture: new}\n",
     )
     assert desired.sha256 != sha
     kwargs = dict(
@@ -87,7 +93,7 @@ def test_completed_render_recovery_preserves_original_authority(tmp_path, delete
 
 def test_incomplete_publication_is_not_a_completed_recovery_checkpoint(tmp_path):
     config = tmp_path / "config.yaml"
-    config.write_text("old")
+    config.write_text("version: v2\ncompatibility: {fixture: old}\n")
     paths = resolve_project_paths(config)
     assert ProjectBundleTransaction(paths.project_dir).completed_generation() is None
 
@@ -97,20 +103,20 @@ def test_incomplete_publication_is_not_a_completed_recovery_checkpoint(tmp_path)
 
     transaction = ProjectBundleTransaction(paths.project_dir, failpoint=interrupt)
     with pytest.raises(RuntimeError, match="interrupted"):
-        transaction.commit({config: b"new"})
+        transaction.commit({config: b"version: v2\ncompatibility: {fixture: new}\n"})
     before = transaction.journal_path.read_bytes()
     assert transaction.completed_generation() is None
-    assert config.read_text() == "old"
+    assert config.read_text() == "version: v2\ncompatibility: {fixture: old}\n"
     assert transaction.journal_path.read_bytes() == before
 
 
 def test_fast_smoke_receipt_created_after_publication_is_not_a_render_tombstone(tmp_path):
     config = tmp_path / "config.yaml"
-    config.write_text("{}\n")
+    config.write_text("version: v2\n")
     paths = resolve_project_paths(config)
     staged = staged_generated_paths(paths)
     plan = build_project_generation_plan(
-        final_paths=paths, staged_paths=staged, config_path=config, config_content="{}\n"
+        final_paths=paths, staged_paths=staged, config_path=config, config_content="version: v2\n"
     )
     transaction = ProjectBundleTransaction(paths.project_dir)
     transaction.commit(
@@ -121,7 +127,7 @@ def test_fast_smoke_receipt_created_after_publication_is_not_a_render_tombstone(
     receipt.write_text('{"status":"complete","job":"42"}\n')
     before = receipt.read_bytes()
     desired = build_project_generation_plan(
-        final_paths=paths, staged_paths=staged, config_path=config, config_content="{}\n"
+        final_paths=paths, staged_paths=staged, config_path=config, config_content="version: v2\n"
     )
     assert receipt not in desired.writes and receipt not in desired.removals
     assert completed_render_generation_matches(

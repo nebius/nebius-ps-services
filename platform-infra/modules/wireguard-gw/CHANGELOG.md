@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+- Persist an empty peer registry during WireGuard initialization so fresh gateways
+  without bootstrap clients pass network reconciliation. Keep missing-registry
+  checks strict for existing gateways.
+
+- Keep WireGuard server and client MTUs within the detected uplink limit and
+  persist scoped TCP MSS clamps. Reconcile guest networking without replacing
+  the VM, boot disk, address, keys or peers; freeze the original bootstrap payload
+  in the owned backend. Add explicit client MTU refresh and private Kubernetes
+  verification, including automatic connected-client checks after deployment.
+
+- Identify guest SecretStash requests with the cxcli user-agent so API edge
+  filtering does not reject Python's default urllib client before authorization.
+- Compress cloud-init file contents with `gz+b64` so the SecretStash bootstrap and
+  client helper fit the Compute 32 KiB user-data limit without changing decoded
+  scripts, permissions or boot ordering.
+- New WireGuard deployments use SDK-owned SecretStash login/host/connection
+  secrets, live IAM group selection and a dedicated attached VM identity.
+  Remove personal-key and private-host-key Terraform paths. Gate guest SSH on
+  pinned identity, publish verified connection references, support login-key
+  rotation/recovery, and retire access before destroy. Client issuance reads
+  SecretStash directly without Terraform, Kubernetes or deployer-local keys.
+  Expose boot disk identity for authenticated binding checks and document the
+  cxcli client connection workflow.
 
 - Refactored the module into a wrapper around `../vm`; the shared VM module now
   owns Compute disk/instance/network behavior, and this module keeps the

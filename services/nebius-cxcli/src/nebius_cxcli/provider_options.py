@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .capacity_dashboard import (
     CapacityAdviceAvailability,
@@ -25,13 +25,19 @@ from .capacity_dashboard import (
     filter_capacity_resource_advice,
     list_capacity_resource_advice,
 )
+from .cluster_config import cluster_rows
 from .deploy_targets import deploy_target_is_external_mk8s
 from .sdk_auth import init_nebius_sdk
 from .soperator_install_progress import install_phase, install_progress_step
 from .soperator_wizard import soperator_wizard_settings
 
+if TYPE_CHECKING:
+    from .paths import ProjectPaths
+    from .vpc_identity import VpcIdentityReader, VpcIdentitySnapshot
+
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
     {
+        "wireguard_admin_groups",
         "mk8s_compatible_platforms",
         "mk8s_gpu_stack_presets",
         "mk8s_node_group_os_values",
@@ -682,6 +688,44 @@ class ProviderOptionLookup:
         ] = {}
         self._capacity_resource_advice_cache: dict[str, tuple[CapacityResourceAdvice, ...]] = {}
         self._last_error: str | None = None
+        self._vpc_identity_reader: VpcIdentityReader | None = None
+        self._vpc_diagnostics: dict[str, tuple[str, ...]] = {}
+        self._last_vpc_complete = False
+
+    def configure_vpc_identity(self, paths: ProjectPaths) -> None:
+        from .vpc_identity import VpcIdentityReader
+
+        self._vpc_identity_reader = VpcIdentityReader(paths)
+        self._vpc_diagnostics.clear()
+
+    def refresh(self) -> None:
+        """Invalidate discovery snapshots without replacing authentication or state ownership."""
+        self._cache.clear()
+        if self._vpc_identity_reader is not None:
+            self._vpc_identity_reader.refresh()
+        self._compute_platform_preset_cache.clear()
+        self._compute_public_image_family_cache.clear()
+        self._mk8s_compatibility_cache.clear()
+        self._capacity_resource_advice_cache.clear()
+        self._vpc_diagnostics.clear()
+        self._last_vpc_complete = False
+        self._last_error = None
+
+    def vpc_identity(self, payload: Mapping[str, Any]) -> VpcIdentitySnapshot:
+        from .vpc_identity import VpcIdentitySnapshot
+
+        if self._vpc_identity_reader is None:
+            return VpcIdentitySnapshot()
+        return self._vpc_identity_reader.read(payload)
+
+    def vpc_diagnostics(self, field_path: str) -> tuple[str, ...]:
+        return self._vpc_diagnostics.get(field_path, ())
+
+    def record_vpc_diagnostics(self, field_path: str, diagnostics: tuple[str, ...]) -> None:
+        self._vpc_diagnostics[field_path] = diagnostics
+
+    def vpc_discovery_complete(self) -> bool:
+        return self._last_vpc_complete
 
     def resolve(
         self,
@@ -692,6 +736,33 @@ class ProviderOptionLookup:
         field_path: str,
     ) -> list[OptionChoice]:
         self._last_error = None
+        if provider == "wireguard_admin_groups":
+            # Identity-sensitive choices are always fresh and never use plugins/cache.
+            from .wireguard_secret_api import wireguard_api
+
+            nebius = payload.get("client_info", {}).get("nebius", {})
+            try:
+                with wireguard_api() as api:
+                    groups = api.admin_groups(
+                        nebius.get("tenant_id", ""), nebius.get("project_id", "")
+                    )
+                return [
+                    OptionChoice(
+                        value=item["id"],
+                        label=f"{item['name']} — {item['scope']} — {item['id']}",
+                        metadata={
+                            "live_id": item["id"],
+                            "parent_id": item["parent_id"],
+                            "scope": item["scope"],
+                        },
+                    )
+                    for item in groups
+                ]
+            except Exception:
+                self._last_error = "Complete live IAM group discovery failed for the selected tenant/project identity"
+                return []
+        if provider in {"project_networks", "project_subnets"}:
+            self._last_vpc_complete = False
         try:
             resolver = {
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
@@ -728,10 +799,21 @@ class ProviderOptionLookup:
                         builtin_choices,
                         filter_pattern=_as_str(args.get("_filter")),
                     )
+                    if provider in {"project_networks", "project_subnets"}:
+                        # Filtered presentation cannot prove that a resource is absent.
+                        self._last_vpc_complete = not self._last_error and len(resolved) == len(
+                            builtin_choices
+                        )
                     if resolved:
                         self._last_error = None
                         return resolved
 
+            if args.get("cpu_only") is True and provider in {
+                "compute_platforms",
+                "compute_platform_presets",
+            }:
+                # Opaque plugin choices cannot prove the live zero-GPU resource contract.
+                return []
             plugin_specs = os.environ.get(_OPTION_PLUGIN_ENV, "")
             for plugin in _load_option_plugins(plugin_specs):
                 try:
@@ -749,6 +831,8 @@ class ProviderOptionLookup:
                     filter_pattern=_as_str(args.get("_filter")),
                 )
                 if resolved:
+                    if provider in {"project_networks", "project_subnets"}:
+                        self._last_vpc_complete = False
                     self._last_error = None
                     return resolved
             return []
@@ -892,7 +976,7 @@ class ProviderOptionLookup:
             )
 
         try:
-            from nebius.api.nebius.iam.v1 import (
+            from nebius.api.nebius.iam.v2 import (
                 GetProjectRequest,
                 ProjectServiceClient,
             )
@@ -912,17 +996,17 @@ class ProviderOptionLookup:
                 )
                 .wait()
             )
-        except Exception as exc:
+        except Exception:
             return TenantProjectValidationResult(
                 valid=False,
                 message=(
                     f"Project '{normalized_project_id}' does not exist or is not accessible "
-                    f"with current credentials: {exc}"
+                    "with current credentials."
                 ),
             )
 
         resolved_project_id = _as_str(getattr(getattr(project, "metadata", None), "id", None))
-        if resolved_project_id and resolved_project_id != normalized_project_id:
+        if not resolved_project_id or resolved_project_id != normalized_project_id:
             return TenantProjectValidationResult(
                 valid=False,
                 message=(
@@ -967,7 +1051,7 @@ class ProviderOptionLookup:
             return "", ""
 
         try:
-            from nebius.api.nebius.iam.v1 import (
+            from nebius.api.nebius.iam.v2 import (
                 GetProjectRequest,
                 GetTenantRequest,
                 ProjectServiceClient,
@@ -1442,8 +1526,7 @@ class ProviderOptionLookup:
             payload=payload,
             field_path=field_path,
         )
-        deploy = payload.get("deploy")
-        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        targets = cluster_rows(payload)
         if isinstance(targets, list):
             for row in targets:
                 if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
@@ -2068,13 +2151,27 @@ class ProviderOptionLookup:
         if not project_id:
             return ()
         prefix = _as_str(args.get("platform_prefix"))
-        cache_key = ("compute_platforms", project_id, prefix)
+        cpu_only = args.get("cpu_only") is True
+        cache_key = ("compute_platforms", project_id, prefix, cpu_only)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         inventory = self._resolve_project_compute_platform_inventory(project_id)
         resolved = tuple(
-            choice for choice in inventory if not prefix or choice.value.startswith(prefix)
+            choice
+            for choice in inventory
+            if (not prefix or choice.value.startswith(prefix))
+            and (
+                not cpu_only
+                or any(
+                    preset.gpu_count == 0
+                    and preset.vcpu_count is not None
+                    and preset.vcpu_count > 0
+                    for preset in self._compute_platform_preset_cache.get(
+                        (project_id, choice.value), ()
+                    )
+                )
+            )
         )
         self._cache[cache_key] = resolved
         return resolved
@@ -2103,6 +2200,7 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
+        cpu_only = args.get("cpu_only") is True
         require_gpu_clustering = False
         gpu_cluster_required_path = _as_str(args.get("gpu_cluster_required_path"))
         if gpu_cluster_required_path:
@@ -2122,6 +2220,7 @@ class ProviderOptionLookup:
             project_id,
             platform_name,
             require_gpu_clustering,
+            cpu_only,
             reservation_policy,
             tenant_id,
             region_id,
@@ -2138,6 +2237,8 @@ class ProviderOptionLookup:
         if (project_id, platform_name) not in self._compute_platform_preset_cache:
             return ()
         for preset in presets:
+            if cpu_only and (preset.gpu_count != 0 or not preset.vcpu_count):
+                continue
             preset_name = preset.name
             allow_gpu_clustering = preset.allow_gpu_clustering
             if require_gpu_clustering and not allow_gpu_clustering:
@@ -2495,6 +2596,7 @@ class ProviderOptionLookup:
     ) -> tuple[OptionChoice, ...]:
         project_id = self._resolve_project_id(payload, args)
         if not project_id:
+            self._last_error = "VPC discovery requires a project ID"
             return ()
         network_id = _as_str(args.get("network_id"))
         network_id_path = _as_str(args.get("network_id_path"))
@@ -2506,6 +2608,7 @@ class ProviderOptionLookup:
 
         sdk = self._sdk_or_none()
         if sdk is None:
+            self._last_error = self._last_error or "VPC SDK discovery unavailable"
             return ()
         from nebius.api.nebius.vpc.v1 import ListSubnetsRequest, SubnetServiceClient
 
@@ -2570,6 +2673,9 @@ class ProviderOptionLookup:
                     metadata={
                         "private_cidrs": explicit_private_cidrs,
                         "use_network_private_pools": use_network_private_pools,
+                        "name": name,
+                        "parent_id": _as_str(getattr(metadata, "parent_id", None)),
+                        "network_id": item_network_id,
                     },
                 )
             )
@@ -2802,6 +2908,7 @@ class ProviderOptionLookup:
     ) -> tuple[OptionChoice, ...]:
         project_id = self._resolve_project_id(payload, args)
         if not project_id:
+            self._last_error = "VPC discovery requires a project ID"
             return ()
         cache_key = ("project_networks", project_id)
         if cache_key in self._cache:
@@ -2809,6 +2916,7 @@ class ProviderOptionLookup:
 
         sdk = self._sdk_or_none()
         if sdk is None:
+            self._last_error = self._last_error or "VPC SDK discovery unavailable"
             return ()
         from nebius.api.nebius.vpc.v1 import (
             GetPoolRequest,
@@ -2880,6 +2988,8 @@ class ProviderOptionLookup:
                     recommended=_is_default_project_network_name(name),
                     metadata={
                         "name": name or "",
+                        "parent_id": _as_str(getattr(metadata, "parent_id", None)),
+                        "network_id": network_id,
                         "private_pool_ids": private_pool_ids,
                         "private_cidrs": private_cidrs,
                     },
@@ -2908,7 +3018,7 @@ class ProviderOptionLookup:
         sdk = self._sdk_or_none()
         if sdk is None:
             return ()
-        from nebius.api.nebius.iam.v1 import ListProjectsRequest, ProjectServiceClient
+        from nebius.api.nebius.iam.v2 import ListProjectsRequest, ProjectServiceClient
 
         client = ProjectServiceClient(sdk)
         items = self._paged_list(

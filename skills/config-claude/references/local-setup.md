@@ -172,3 +172,12 @@ post-change identity/digest. If a user or Claude changed it meanwhile, inspect
 and construct a new narrow reverse patch. For newly created files, report
 their ownership before any removal. Never roll back authentication, transcripts,
 MCP app state or unrelated settings by restoring a broad home snapshot.
+
+## Selected Tavily Bridge Check
+
+After explicitly selected bridge setup, add `--require-tavily-bridge` to the
+existing checker. It validates exact bridge wiring, pinned runtime integrity,
+private credential modes and authentication timeouts without starting processes
+or reading credentials. For Claude, also supply `--mcp-config PATH`; generic
+`--require-mcp` remains presence/shape-only. Ordinary setup still permits Tavily
+to be absent. See [bridge setup and recovery](tavily-bridge.md).

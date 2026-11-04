@@ -14,7 +14,7 @@ from typing import Any
 from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import component_output_root_name
 from .runtime_config import to_plain_data
-from .ssh_trust import ssh_trust_options
+from .ssh_trust import ssh_failure_detail, ssh_host_trust_options
 
 SSH_JUMPHOST_COMPONENT_ID = "ssh-jumphost"
 
@@ -189,7 +189,7 @@ def _ssh_command_parts(
         "-o",
         "BatchMode=yes",
     ]
-    command.extend(ssh_trust_options(ssh_known_hosts_file))
+    command.extend(ssh_host_trust_options(ssh_known_hosts_file, public_ip))
     if ssh_private_key is not None:
         command.extend(["-i", str(ssh_private_key.expanduser())])
     command.extend([f"{ssh_user}@{public_ip}", remote_command])
@@ -238,14 +238,14 @@ def update_ssh_jumphost_allowed_cidrs(
             timeout=120,
         )
     except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "").strip()
+        detail = ssh_failure_detail(exc)
         message = (
             f"SSH jump-host allowed CIDR operation failed for {request.component.label} "
             f"at {request.public_ip}"
         )
         if detail:
             message = f"{message}: {detail}"
-        raise RuntimeError(message) from exc
+        raise RuntimeError(message) from None
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"SSH jump-host allowed CIDR operation timed out for {request.component.label} "

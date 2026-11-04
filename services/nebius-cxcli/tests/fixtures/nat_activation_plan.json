@@ -1,0 +1,121 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.17.0",
+  "resource_changes": [
+    {
+      "address": "nebius_vpc_v1_subnet.work",
+      "mode": "managed",
+      "type": "nebius_vpc_v1_subnet",
+      "name": "work",
+      "provider_name": "registry.terraform.io/nebius/nebius",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "created_at": "2026-01-01T00:00:00Z",
+          "id": "subnet-fixture",
+          "ipv4_private_pools": {
+            "pools": [
+              {
+                "cidrs": [
+                  {
+                    "cidr": "192.0.2.0/24",
+                    "max_mask_length": 32,
+                    "state": "AVAILABLE"
+                  }
+                ]
+              }
+            ],
+            "use_network_pools": false
+          },
+          "ipv4_public_pools": {
+            "pools": null,
+            "use_network_pools": true
+          },
+          "labels": null,
+          "labels_all": {},
+          "metadata": {},
+          "name": "work",
+          "network_id": "network-fixture",
+          "parent_id": "project-fixture",
+          "resource_version": 1,
+          "route_table_id": null,
+          "status": null,
+          "updated_at": null
+        },
+        "after": {
+          "id": "subnet-fixture",
+          "ipv4_private_pools": {
+            "pools": [
+              {
+                "cidrs": [
+                  {
+                    "cidr": "192.0.2.0/24"
+                  }
+                ]
+              }
+            ],
+            "use_network_pools": false
+          },
+          "labels": null,
+          "labels_all": {},
+          "name": "work",
+          "network_id": "network-fixture",
+          "parent_id": "project-fixture",
+          "route_table_id": "table-new"
+        },
+        "after_unknown": {
+          "created_at": true,
+          "ipv4_private_pools": {
+            "pools": [
+              {
+                "cidrs": [
+                  {
+                    "max_mask_length": true,
+                    "state": true
+                  }
+                ]
+              }
+            ]
+          },
+          "ipv4_public_pools": true,
+          "labels_all": {},
+          "metadata": true,
+          "resource_version": true,
+          "status": true,
+          "updated_at": true
+        },
+        "before_sensitive": {
+          "ipv4_private_pools": {
+            "pools": [
+              {
+                "cidrs": [
+                  {}
+                ]
+              }
+            ]
+          },
+          "ipv4_public_pools": {},
+          "labels_all": {},
+          "metadata": {}
+        },
+        "after_sensitive": {
+          "ipv4_private_pools": {
+            "pools": [
+              {
+                "cidrs": [
+                  {}
+                ]
+              }
+            ]
+          },
+          "ipv4_public_pools": {},
+          "labels_all": {},
+          "metadata": {},
+          "status": {}
+        }
+      }
+    }
+  ]
+}

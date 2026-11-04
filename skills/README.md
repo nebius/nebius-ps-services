@@ -1,5 +1,13 @@
 # Skills
 
+Ordinary PR review now assesses accepted behavior, safety and existing-user
+compatibility before safe repairs and root-owned canonical spec reconciliation.
+[The review contract](review-pr/references/contribution-assessment.md) covers
+missing specs and justified no-change outcomes. Fork updates retain the original
+PR through [bound publication](create-pr/references/pr-publication.md). The
+[protected protocol](merge-pr/references/actions-protocol.md) documents the
+coordinated schema cutover; source changes do not activate installed workflows.
+
 This folder contains public, reusable Agent Skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
@@ -50,7 +58,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 71 flat skill folders with shared execution instructions,
+The catalog contains 73 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -94,9 +102,9 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with headless Playwright Test GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
-| `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations and recovery. |
-| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
-| `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, rotating token state, and enforced read-only tools. |
+| `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations, including Nebius Docs, and recovery. |
+| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, selected MCP integrations such as Nebius Docs, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
+| `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, protected token cache, and enforced read-only tools. |
 | `nosleep4mac` | Explicit only | Converge one per-user macOS LaunchAgent that keeps the logged-in Mac awake on AC power, including while its screen is locked. |
 
 ### Git, Pull Requests, and Publishing
@@ -110,6 +118,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
+| `review-github-issues` | Explicit only | Triage selected GitHub issues, apply justified decisions, and save accepted plans only to project files; never implement work. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -123,7 +132,7 @@ measuring performance.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `ai-agent-design` | Implicit allowed | Classify deterministic, direct-call, workflow, and agent capabilities; separate trusted control, model-directed execution, and durable session state; define governed provider-neutral contracts; and freeze an `ai-stack` handoff only when a model-backed capability remains. |
+| `ai-agent-design` | Implicit allowed | Classify AI behavior and design provider-neutral agent contracts for authorized context, derived-data lineage, tools, execution isolation, durable recovery, and independently verified outcomes; use `ai-stack` only when a model-backed capability remains. |
 | `ai-stack` | Implicit allowed | Consume a frozen four-class AI behavior contract, or mark a stack-only classification provisional, then select bounded model, runtime, durability, interoperability, retrieval, evaluation, safety, and operations components with explicit evidence. |
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
@@ -135,7 +144,8 @@ measuring performance.
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, and migrate or validate specs without gating tools, Stop, or workflow completion. |
-| `nebius` | Implicit allowed | Advise on Nebius provider constraints without requiring credentials or cloud actions; build and inspect compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
+| `nebius` | Implicit allowed | Advise on Nebius provider constraints using documentation MCP reads with official-page fallback; build and inspect compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
+| `nebius-capacity-planning` | Implicit or explicit; quota submission explicit only | Derive Nebius resources from conversation/design docs, compare tenant totals across all regions by default, and save a capacity report. |
 | `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
@@ -251,6 +261,8 @@ $worktree Create an isolated worktree from my current clean feature branch for t
 $worktree integrate project-fix-trigger-validation-a7c2f9 from the primary checkout; safely commit eligible ordinary child and source dirt before validating the combined result.
 
 $worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
+
+$review-github-issues 123 --repo example-org/example-repo
 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
@@ -949,9 +961,12 @@ processes need provider-native renewal, bounded helper calls, or restart.
 Read-only runtime diagnosis uses `agent-nebius-auth-setup.sh verify` and never
 requires a human/admin profile. It verifies token mint, project access,
 authoritative project-to-tenant ancestry, and one tenant quota-allowance list
-call. Exact IAM planning remains separate and returns `blocked-admin-auth` when
-the required non-agent administrative profile cannot authenticate
-non-interactively.
+call. Explicit live setup allows bounded browser sign-in for its human profile
+and suppresses raw authentication diagnostics; it does not hand an expired
+login back as a manual terminal task before attempting that authorized flow.
+Preview and repair-lease checks remain non-browser. Setup rejects unexpected
+members before adding missing group permissions. A failed human sign-in is
+`blocked-admin-auth`, separate from agent runtime credential failure.
 
 ### Agentic SDLC Skills
 
@@ -1160,6 +1175,19 @@ access, delegation policy, Implement storage and MCP integrations remain
 explicit options. See [Config Claude](config-claude/README.md) for native scope,
 recovery, checker options and evidence boundaries.
 
+Both setup skills support optional pinned Tavily OAuth bridges with separate
+private per-host credential stores, ordinary client launch and compact global research
+routing: vendor documentation MCP tools available in the current session first,
+then Tavily against official sources, then disclosed official-web fallback.
+Small documentation lookups follow the same order; builtin search remains
+available for unrelated quick facts. Substantial work uses adaptive evidence
+checkpoints. The research skill optionally uses Tavily Research with public
+briefs, supported completion handling and independent source verification;
+job counts do not guarantee internal work or cost limits. Selected removals preserve other servers
+and credentials; ordinary setup never deletes unselected integrations.
+Registration, native OAuth, fresh tool discovery and output quality are separate
+verification lanes. Payload-only skill updates do not register runtime hooks.
+
 ### `config-codex`
 
 `config-codex` bootstraps, recovers, or aligns a user's local Codex runtime
@@ -1237,10 +1265,11 @@ templates, schema, and validation.
 
 `install-grafana-mcp-for-nebius` installs and configures the official Grafana
 MCP server for Codex. It pins and validates one human Nebius CLI profile,
-stores a private profile/user binding, isolates rotating token state per
-server/profile, renews stale startup credentials before MCP launch under a
-bounded Codex timeout, clears agent and competing Grafana credentials, and
-always enforces read-only MCP arguments. External Grafana
+stores a private profile/user binding and protected token cache per server/profile,
+retrieves older cache state before MCP launch under a bounded Codex timeout,
+reports sanitized startup phases and always enforces read-only MCP arguments.
+Scheduled retrieval requires restart; file age does not prove token expiry.
+External Grafana
 service-account/static-key setup remains separate. Routine observability
 questions are handed to `nebius-grafana-query`; the installer retains no second
 query path.
@@ -1373,6 +1402,18 @@ before reporting the release URL. See its [README](publish-release/README.md).
 dependency workflow for new projects, generated and reviewed `uv.lock`,
 profile-selected dependencies, `src/` layout, Ruff, pytest, and locked CI. It
 preserves an existing package manager unless migration is explicitly requested.
+
+### `review-github-issues`
+
+`review-github-issues` assesses selected GitHub issues against their owning
+project's supported scope, evidence and priorities. It asks for an unknown
+repository and for issue numbers/links when multiple issues remain unselected.
+Explicit invocation applies justified comments and closures; valid low-priority
+issues stay open. Accepted work uses `research` and `design`, saves and verifies
+`<project>/docs/github-issues/<number>-<title-slug>.md`, then posts acceptance.
+Plans never appear in chat or issue comments. The maintainer owns implementation,
+commits, pushes, PRs and merges. Existing plan edits and unrelated work remain
+protected. See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
 
@@ -1629,7 +1670,7 @@ diagnostic; it is never imported from the current directory.
 ## Skills Installer
 
 With no arguments, `./install-skills.sh` installs all sibling skills, copies all
-seven reviewed hook bundles and their shared runtime, and merges their hook
+reviewed hook bundles and their shared runtime, and merges their hook
 registrations for Codex. `--agent claude` performs the same operation for Claude.
 Existing explicit hook-only and skill-removal modes remain available.
 
@@ -1714,6 +1755,13 @@ installer preflight.
 Reruns converge with rsync. Unmanaged or other-source-owned skill folders are
 skipped. A local individual skill and its parent catalog count as the same
 source only when both resolve to the exact same physical skill directory.
+`Skip (existing unmanaged directory)` means the destination has no nonempty
+`.install-source-id` ownership marker. A separate copy installer can replace
+the directory and discard that marker even when the skill content still
+matches. Use this installer consistently for managed skills; do not refresh
+the same destination through a different copy installer. If a marker was lost,
+verify the prior source and the entire installed tree before restoring that
+exact source identity. Matching names alone are not ownership evidence.
 Reinstallation updates the ownership marker to the selected source; installing
 one skill preserves catalog-owned siblings. Obsolete same-source skills are
 removed. Other extra skills and hook
@@ -1721,7 +1769,8 @@ files/registrations are reported for review, not automatically removed.
 `--remove-skill` removes the selected skill and its installer manifest entries;
 it does not uninstall hooks. Reinstalling a source that still contains that
 skill adds it back. Unmanaged copies require deliberate removal through their
-owning route before changing installation ownership.
+owning route before changing installation ownership, unless verified prior
+ownership is being restored without replacing their content.
 
 Differing hook payloads are backed up under the selected home's
 `.install-hooks-state/backups/` before refresh. Registration preflight rejects
@@ -1729,6 +1778,10 @@ malformed settings and conflicting handlers before installing skills or hooks.
 Identical shared payloads in standalone bundles converge on one installed file
 and registration without a duplicate-destination notice. Differing payloads
 targeting the same filename still fail preflight before installation.
+Shared runtime helpers are included in the expected-file inventory and hook
+update totals. A change confined to those helpers still triggers the restart
+notice, including installation of a skill without its own hook bundle. Extra
+files without proven ownership remain visible for review and are preserved.
 Ordinary merges preserve unrelated registrations and Claude settings keys.
 `--refresh-hook-registrations` permits only the same event/script with unchanged
 handlers apart from status metadata and an exact managed command's host binding.
@@ -1809,3 +1862,6 @@ Publication YAML templates and deterministic evidence utilities are owned by
 skills retain their local preparation, protected merge, exact-result tagging
 and verification responsibilities. Existing artifacts require original evidence;
 existence alone is not success.
+
+The Nebius skill includes an [SDK-first Kubernetes workload identity workflow](nebius/references/kubernetes-workload-identity.md)
+for direct SecretStash and other IAM APIs, with optional ESO synchronization.

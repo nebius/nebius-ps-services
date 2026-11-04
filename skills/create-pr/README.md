@@ -1,5 +1,12 @@
 # Create PR
 
+Ordinary publication uses the transaction owner's
+[bound PR intake and publication](references/pr-publication.md). Existing PRs
+bind separate base/head repository identities and refs. Fork repairs use unique
+local aliases and preserve the original PR/history. Every push is journaled,
+non-force, protected against advertised-head races and independently read back.
+The private task/checkpoint/closure v3 rollout requires draining old transactions.
+
 `create-pr` turns local work or named branches into reviewable GitHub pull
 requests. It is designed for branch-safe PR creation without hand-driving Git
 and GitHub steps.
@@ -37,9 +44,11 @@ and GitHub steps.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
 
 Ordinary completion gives PR readiness, merge settlement and post-merge
-verification independent, fixed 10,800-second budgets. Gate changes, repairs and
-reruns retain their deadlines. Release callers persist them in their checkpoint;
-only explicit release resume renews them. Timeout preserves progress and leaves
+verification independent, fixed 86,400-second (24-hour) budgets. Gate changes,
+repairs and reruns retain their deadlines. An explicit user continuation can start
+a new ordinary observation attempt while preserving the original transaction.
+Caller-supplied checkpoint deadlines remain authoritative; release callers retain
+their own phase budgets and explicit resume rules. Timeout preserves progress and leaves
 GitHub work running, with the exact resume command in the completion report.
 
 ## Commit Continuation
@@ -115,8 +124,8 @@ Explicit merge intent only -> merge-pr -> actual merge and result CI
 ## Core Concepts
 
 - Do not leave new work on the default branch.
-- Do not create another branch when the current branch is already non-default;
-  commit, push, and open or reuse the PR from that branch.
+- For new PR creation, reuse the current non-default branch. Existing PR repairs
+  select their bound target, including the namespaced alias for a fork.
 - Resolve the actual `origin` default branch and bind both authorization and PR
   creation to that exact base; do not guess a default branch name.
 - Do not guess when GitHub authentication, remotes, or branch ownership are
@@ -128,8 +137,8 @@ Explicit merge intent only -> merge-pr -> actual merge and result CI
 - Refresh base refs, then use the shared helper's private `sync` before PR
   creation. Review/check the actual result and acknowledge its exact tree.
   The helper owns the normal merge without rewriting history.
-- Use explicit push refspecs such as `git push origin HEAD:<branch>`; do not
-  use a plain ambiguous `git push`.
+- Use the owner's private `publish-target` for ordinary publication. Active
+  SDLC retains its separately scoped direct explicit-ref publication.
 - Do not rebase or force-push inside this skill.
 - Use draft PRs for incomplete work when that better matches readiness.
 - Preserve one PR per branch.

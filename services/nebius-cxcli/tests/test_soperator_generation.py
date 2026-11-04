@@ -35,11 +35,8 @@ def test_old_snapshot_cutover_preserves_unfinished_local_evidence(
         )
     config = {
         "infra": {"components": []},
-        "apps": {
-            "charts": [
-                {"id": "soperator", "instance_id": "cluster0", "enabled": True},
-            ]
-        },
+        "apps": {"charts": [{"id": "soperator", "instance_id": "cluster0", "enabled": True}]},
+        "version": "v2",
     }
     if complete:
         require_current_active_soperator_snapshots(config, paths)
@@ -66,7 +63,21 @@ def generation(*snapshots):
             json.dumps(snapshot.canonical_payload()).encode()
         ).decode()
     return SimpleNamespace(
-        manifest={"runtime_config": {"infra": {"components": []}, "apps": {"charts": rows}}},
+        manifest={
+            "runtime_config": {
+                "infra": {"components": []},
+                "apps": {"charts": rows},
+                "version": "v2",
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
         files=files,
     )
 

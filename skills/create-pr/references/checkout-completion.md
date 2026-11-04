@@ -3,7 +3,7 @@
 This is a private create-pr handoff to the canonical installed commit transaction,
 not a public flag or a second Git implementation. Read it before ordinary PR
 intake, checkout-dependent review, or returning from a PR batch. Report-only,
-fork/nondefault admission, already-merged observation and Agentic SDLC limits
+nondefault admission, already-merged observation and Agentic SDLC limits
 remain authoritative. An invocation that only observes an already-merged PR
 starts no local mutation transaction.
 

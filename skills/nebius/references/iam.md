@@ -17,9 +17,9 @@ administrator role is necessary. Project creation and invitations are IAM writes
 Authentication follows `api-sdk.md`; renewable SDK credentials are preferred for
 long workflows. Authorized keys, S3 access keys, service-specific static tokens,
 user access tokens and federation are different mechanisms. Do not exchange one
-for another by trial-and-error fallback. Federation/SSO and outbound workload
-identity require the documented trust direction, audience and region; do not
-assume an AWS-style role or general inbound OIDC integration.
+for another by trial-and-error fallback. Human federation/SSO and workload identity use different flows. For inbound
+Kubernetes OIDC trust, follow [Kubernetes workload identity](kubernetes-workload-identity.md):
+exact issuer, subject, audience and IAM account, followed by separate resource-scoped permits.
 
 ## IAM asset workflow
 

@@ -167,13 +167,13 @@
     {
       "id": "ci-deadline",
       "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-deadline.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
-      "expected_output": "CI pending at the original three-hour deadline despite a recent rerun.",
+      "expected_output": "CI pending at the original 24-hour deadline despite a recent rerun.",
       "files": [
         "evals/fixtures/ci-deadline.json"
       ],
       "assertions": [
-        "Reports pending with the outstanding run and the 12:00 start / 15:00 deadline.",
-        "Does not reset the 10,800-second deadline for an external rerun, issue a rerun, or continue waiting beyond the supplied deadline.",
+        "Reports pending with the outstanding run and the January 1 12:00 start / January 2 12:00 deadline.",
+        "Does not reset the 86,400-second deadline for an external rerun, issue a rerun, or continue waiting beyond the supplied deadline.",
         "Uses only the supplied offline observations and does not perform external writes or real waiting."
       ]
     },
@@ -199,7 +199,7 @@
       ],
       "assertions": [
         "Does not classify the early empty observations as not configured or passed.",
-        "Uses the later complete expected results to report passed before the three-hour deadline.",
+        "Uses the later complete expected results to report passed before the 24-hour deadline.",
         "Uses only the supplied offline observations and does not perform external writes or real waiting."
       ]
     },
@@ -468,6 +468,54 @@
         "Uses temporary owner switch-back without integrating default history or advancing the unfinished original target.",
         "Retains the original grant, saved targets and policy for resume; never recaptures the current checkout as the starting context.",
         "Nested calls return evidence and do not finalize independently; report-only and already-merged observation restrictions remain."
+      ]
+    },
+    {
+      "id": "ci-after-three-hours",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-after-three-hours.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Continue observing pending CI after three hours within the original 24-hour budget.",
+      "files": [
+        "evals/fixtures/ci-after-three-hours.json"
+      ],
+      "assertions": [
+        "Keeps observing at January 1 15:00 until the original January 2 12:00 deadline; does not treat three hours as expiry or reset the clock for the rerun.",
+        "Preserves merged and destination verified while reporting CI pending; no merge, CI rerun or publication effects.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "caller-ci-deadline",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/caller-ci-deadline.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Report pending when the supplied release checkpoint deadline expires.",
+      "files": [
+        "evals/fixtures/caller-ci-deadline.json"
+      ],
+      "assertions": [
+        "Honors the caller checkpoint deadline of January 1 15:00 rather than extending it to the ordinary 24-hour default.",
+        "Preserves merged and destination verified while reporting CI pending; no merge, CI rerun or publication effects.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "fork-contribution-spec-handoff",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $merge-pr for a permitted contributor fork with a safe regression and missing specs.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Delegates once to parent-owned review-pr for contribution assessment, repair and root spec reconciliation.",
+        "Uses bound fork publication then fresh v2 identity/assessment evidence and protected broker.",
+        "Does not duplicate spec writing, replace the PR or directly push/merge."
+      ]
+    },
+    {
+      "id": "deleted-fork-result",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $merge-pr to resume a confirmed merge whose fork was deleted after admission; immutable intent and authoritative base result exist.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Performs result verification without another repair or merge.",
+        "Binds retained head/base identities and result containment through trusted completion.",
+        "Does not require a live fork after confirmed merge or mistake absence before merge for permission."
       ]
     }
   ]

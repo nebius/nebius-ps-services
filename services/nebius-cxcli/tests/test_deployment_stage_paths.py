@@ -49,19 +49,27 @@ def test_staged_admission_binds_manifest_to_staged_target_paths(tmp_path, monkey
     (staged.flux_dir / "targets/cluster/expected.yaml").write_text("kind: ConfigMap\n")
     runtime = to_runtime_payload(source_payload())
     manifest = {
-        "schema": "nebius-cxcli-generated/v2",
-        "execution": {"backend": {}},
-        "runtime_config": runtime,
-        "paths": {"generated_dir": str(final.generated_dir)},
-        "deploy": {
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
             "targets": [
                 {
                     "instance_id": "cluster",
                     "target_ref": "cluster",
                     "flux_dir": str(final.flux_dir / "targets/cluster"),
+                    "access": "external",
+                    "component_id": "mk8s",
+                    "ownership": "managed",
+                    "cluster_id_output_name": "cluster" + "_cluster_id",
+                    "component_output_ref": "cluster" + ".cluster_id",
                 }
-            ]
+            ],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
         },
+        "runtime_config": runtime,
+        "paths": {"generated_dir": str(final.generated_dir)},
     }
     frozen = DeploymentGeneration.capture(staged, manifest)
     before = frozen.as_payload()
@@ -86,7 +94,7 @@ def test_staged_admission_binds_manifest_to_staged_target_paths(tmp_path, monkey
         pass
 
     def preflight(self):
-        target = self.manifest["deploy"]["targets"][0]
+        target = self.manifest["execution"]["targets"][0]
         actual = cli._manifest_target_flux_dir(paths=self.paths, target=target)
         assert actual == (staged.flux_dir / "targets/cluster").resolve()
         assert (actual / "expected.yaml").read_text() == "kind: ConfigMap\n"
@@ -98,16 +106,40 @@ def test_staged_admission_binds_manifest_to_staged_target_paths(tmp_path, monkey
         executor._admit_coordinated_stages(executor.plan)
     assert frozen.as_payload() == before
     assert cleaned == [True]
-    assert manifest["deploy"]["targets"][0]["flux_dir"] == str(final.flux_dir / "targets/cluster")
+    assert manifest["execution"]["targets"][0]["flux_dir"] == str(
+        final.flux_dir / "targets/cluster"
+    )
 
 
 @pytest.mark.parametrize("locator", ["../escape", "/escape", "flux/targets/foreign"])
 def test_manifest_binding_cannot_bypass_target_path_ownership(tmp_path, locator):
     project = paths(tmp_path)
     generation = DeploymentGeneration(
-        {"deploy": {"targets": [{"target_ref": "cluster", "flux_dir": locator}]}}, {}
+        {
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": locator,
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+                "backend": {},
+            },
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+        },
+        {},
     )
     with pytest.raises((ValueError, RuntimeError)):
         bound = generation.manifest_for_paths(project)
-        cli._manifest_target_flux_dir(paths=project, target=bound["deploy"]["targets"][0])
+        cli._manifest_target_flux_dir(paths=project, target=bound["execution"]["targets"][0])
     assert not project.generated_dir.exists()

@@ -63,16 +63,37 @@ def bundle(values):
     docs, _ = render_soperator_adapter_documents(values)
     return DeploymentGeneration(
         {
-            "schema": "nebius-cxcli-generated/v2",
-            "execution": {"backend": {}},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": "flux/targets/cluster",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    },
+                    {
+                        "target_ref": "other",
+                        "flux_dir": "flux/targets/other",
+                        "instance_id": "other",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "other" + "_cluster_id",
+                        "component_output_ref": "other" + ".cluster_id",
+                    },
+                ],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
             "runtime_config": payload,
             "render": {"inputs": freeze_catalog(payload), "application_inputs": {}},
-            "deploy": {
-                "targets": [
-                    {"target_ref": "cluster", "flux_dir": "flux/targets/cluster"},
-                    {"target_ref": "other", "flux_dir": "flux/targets/other"},
-                ]
-            },
         },
         {
             "flux/targets/cluster/soperator-nebius-adapter.yaml": base64.b64encode(

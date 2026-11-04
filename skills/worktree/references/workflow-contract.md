@@ -66,6 +66,13 @@ criteria and Rollback or stop conditions. Claims are exact/prefix repo-relative
 paths. Unknown ownership serializes scheduling. SDLC keeps its existing requirement
 traceability and TDD responsibilities.
 
+Task headings are exactly `### TASK-NNN`. Each top-level `- Label:` occurs
+once; indent continuation text, nested bullets and fenced examples under it.
+Complete field bodies survive assignment serialization. List fields use
+comma/semicolon separators even when wrapped across lines. Empty or duplicate
+fields and malformed task headings are rejected, and a following plan heading
+ends the task's fields.
+
 `prepared-bases/FEAT-NNN.json` freezes the actual committed Git base.
 `bases/FEAT-NNN/<sha256>.json` freezes objective revision, spec receipt, locked plan,
 base, effective instruction/helper identities, run ownership, assignments and

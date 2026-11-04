@@ -213,7 +213,10 @@ def test_cluster_file_and_directory_import_with_optional_attachment(
     config = root / "config.yaml"
     config.write_text(
         yaml.safe_dump(
-            {"apps": {"charts": [{"id": "grafana", "enabled": True, "instance_id": "cluster"}]}}
+            {
+                "version": "v2",
+                "apps": {"charts": [{"id": "grafana", "enabled": True, "instance_id": "cluster"}]},
+            }
         )
     )
     inputs = tmp_path / "inputs"

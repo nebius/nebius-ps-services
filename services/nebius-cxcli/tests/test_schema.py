@@ -36,7 +36,7 @@ def test_schema_valid_dynamic_file(tmp_path: Path) -> None:
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     loaded = load_config(config_path)
-    assert loaded.version == "v1"
+    assert loaded.version == "v2"
     assert loaded.client_info.client_name == "client-a"
     assert isinstance(loaded.infra.components, list)
     assert isinstance(loaded.apps.charts, list)
@@ -55,7 +55,7 @@ def test_schema_enforces_filesystem_mount_tag_limit(tmp_path: Path, mapped, tag)
         {"id": "sfs", "instance_id": "sfs", "enabled": True, "inputs": inputs}
     ]
     payload["apps"]["charts"] = []
-    payload.pop("deploy", None)
+    payload["apps"]["charts"] = []
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     if len(tag.encode("utf-8")) > 36:
@@ -72,8 +72,8 @@ def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["infra"]["components"] = [
         {
-            "id": "wireguard-gw",
-            "instance_id": "wireguard-gw",
+            "id": "ssh-jumphost",
+            "instance_id": "ssh-jumphost",
             "enabled": True,
             "inputs": {
                 "ssh_user_name": "ubuntu",
@@ -81,7 +81,7 @@ def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
             },
         }
     ]
-    payload.pop("deploy", None)
+    payload["apps"]["charts"] = []
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -96,7 +96,7 @@ def test_schema_rejects_static_shape(tmp_path: Path) -> None:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "version": "v1",
+                "version": "v2",
                 "client_info": {"client_name": "x"},
                 "infra": {"mk8s": {"enabled": True}},
                 "apps": {"workloads": {}},
@@ -293,26 +293,21 @@ def test_schema_rejects_root_mk8s_gpu_deploy_validations(tmp_path: Path) -> None
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "deploy has unsupported field(s): validations" in str(exc_info.value)
+    assert "The deploy section is unsupported" in str(exc_info.value)
 
 
-def test_schema_rejects_external_mk8s_target_fields_without_external_kind(tmp_path: Path) -> None:
+def test_schema_rejects_external_cluster_with_duplicate_managed_identity(tmp_path: Path) -> None:
     payload = _dynamic_payload()
-    payload["deploy"] = {
-        "targets": [
-            {
-                "instance_id": "mk8s",
-                "kube_context": "nebius-cluster1-mk8scluster-123-external",
-            }
-        ],
-    }
+    payload["infra"].setdefault("external_clusters", []).append(
+        {"instance_id": "mk8s", "kube_context": "nebius-cluster1-mk8scluster-123-external"}
+    )
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "deploy.targets[0] has unsupported field(s): kube_context" in str(exc_info.value)
+    assert "Cluster identity 'mk8s' is duplicated" in str(exc_info.value)
 
 
 def test_schema_rejects_missing_infra_instance_id(tmp_path: Path) -> None:
@@ -357,7 +352,6 @@ def test_schema_rejects_app_chart_target_ref(tmp_path: Path) -> None:
             "inputs": {},
         }
     ]
-    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
@@ -386,7 +380,9 @@ def test_schema_rejects_enabled_app_without_mk8s_target(tmp_path: Path) -> None:
             "inputs": {},
         }
     ]
-    payload["deploy"] = {"observability": {"enabled": False}}
+    for component in payload["infra"]["components"]:
+        if component["id"] == "vm":
+            component["observability"] = {"enabled": False}
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
@@ -414,7 +410,6 @@ def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) ->
             "inputs": {},
         }
     ]
-    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
@@ -449,7 +444,6 @@ def test_schema_rejects_legacy_soperator_child_app_rows(
             "inputs": {},
         }
     ]
-    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
     payload["apps"]["charts"] = [
         {
             "id": "soperator-notifier",
@@ -478,7 +472,6 @@ def test_schema_rejects_legacy_k8up_app_row(tmp_path: Path) -> None:
             "inputs": {},
         }
     ]
-    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
     payload["apps"]["charts"] = [
         {
             "id": "k8up",
@@ -497,26 +490,24 @@ def test_schema_rejects_legacy_k8up_app_row(tmp_path: Path) -> None:
     assert "values.soperator-backup-config.enabled" in str(exc_info.value)
 
 
-def test_schema_rejects_root_kubernetes_observability(tmp_path: Path) -> None:
+def test_schema_rejects_disabled_vm_kubernetes_observability(tmp_path: Path) -> None:
     payload = _dynamic_payload()
-    payload["deploy"] = {
-        "observability": {
-            "enabled": True,
-            "kubernetes": {"metrics": {"enabled": True}},
-        }
-    }
+    for component in payload["infra"]["components"]:
+        if component["id"] == "vm":
+            component["observability"] = {
+                "enabled": True,
+                "kubernetes": {"metrics": {"enabled": True}},
+            }
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "deploy.observability is only supported for enabled infra:vm components" in str(
-        exc_info.value
-    )
+    assert "vm[vm].observability has unsupported field(s): kubernetes" in str(exc_info.value)
 
 
-def test_schema_rejects_root_kubernetes_observability_with_vm(tmp_path: Path) -> None:
+def test_schema_rejects_vm_kubernetes_observability(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["infra"]["components"] = [
         {
@@ -526,19 +517,19 @@ def test_schema_rejects_root_kubernetes_observability_with_vm(tmp_path: Path) ->
             "inputs": {},
         }
     ]
-    payload["deploy"] = {
-        "observability": {
-            "enabled": True,
-            "kubernetes": {"metrics": {"enabled": True}},
-        }
-    }
+    for component in payload["infra"]["components"]:
+        if component["id"] == "vm":
+            component["observability"] = {
+                "enabled": True,
+                "kubernetes": {"metrics": {"enabled": True}},
+            }
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "deploy.observability has unsupported field(s): kubernetes" in str(exc_info.value)
+    assert "vm[vm].observability has unsupported field(s): kubernetes" in str(exc_info.value)
 
 
 def test_schema_rejects_vm_observability_collector_branch(tmp_path: Path) -> None:
@@ -551,19 +542,19 @@ def test_schema_rejects_vm_observability_collector_branch(tmp_path: Path) -> Non
             "inputs": {},
         }
     ]
-    payload["deploy"] = {
-        "observability": {
-            "enabled": True,
-            "vm": {
-                "logs": {"enabled": True, "systemd_units": []},
-                "collector": {"enabled": False},
-            },
-        }
-    }
+    for component in payload["infra"]["components"]:
+        if component["id"] == "vm":
+            component["observability"] = {
+                "enabled": True,
+                "vm": {
+                    "logs": {"enabled": True, "systemd_units": []},
+                    "collector": {"enabled": False},
+                },
+            }
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
-    assert "deploy.observability.vm has unsupported field(s): collector" in str(exc_info.value)
+    assert "vm[vm].observability.vm has unsupported field(s): collector" in str(exc_info.value)

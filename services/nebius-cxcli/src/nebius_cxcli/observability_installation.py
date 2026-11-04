@@ -6,13 +6,14 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .cluster_config import cluster_rows
 from .observability_routing import STORE_APPS
 
 OBSERVABILITY_APPS = frozenset(
     {
         *STORE_APPS.values(),
         "grafana",
-        "postgresql",
+        "grafana-postgresql",
         "gateway-helm",
         "nebius-observability-agent",
         "opentelemetry-collector",
@@ -43,7 +44,7 @@ def _outside_scope(config: Mapping[str, Any], target: str) -> dict[str, Any]:
             row.get("values", {}).pop("observability", None)
         charts.append(row)
     result.setdefault("apps", {})["charts"] = charts
-    for row in result.get("deploy", {}).get("targets", []):
+    for row in cluster_rows(result):
         if row.get("instance_id") == target:
             row.pop("observability", None)
     return result

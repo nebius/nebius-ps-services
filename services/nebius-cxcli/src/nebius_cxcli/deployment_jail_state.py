@@ -129,7 +129,7 @@ def merge_config_jail_state(
 def _target_root(generation: DeploymentGeneration, target_ref: str) -> str:
     rows = [
         row
-        for row in generation.manifest.get("deploy", {}).get("targets", [])
+        for row in generation.manifest.get("execution", {}).get("targets", [])
         if row.get("target_ref") == target_ref
     ]
     if len(rows) != 1:
@@ -147,7 +147,7 @@ def overlay_accepted_target(
 
     other_roots = [
         str(row.get("flux_dir") or "flux").rstrip("/") + "/"
-        for row in base.manifest.get("deploy", {}).get("targets", [])
+        for row in base.manifest.get("execution", {}).get("targets", [])
         if row.get("target_ref") != target_ref
     ]
     if root in other_roots:

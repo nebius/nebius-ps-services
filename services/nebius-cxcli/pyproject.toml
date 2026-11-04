@@ -41,7 +41,7 @@ dev = [
 ]
 
 [tool.uv]
-required-version = ">=0.12.9,<0.13"
+required-version = ">=0.13.5,<0.14"
 default-groups = ["dev"]
 
 [project.scripts]
@@ -61,6 +61,10 @@ nebius_cxcli = [
   "compatibility-matrix.yaml",
   "soperator_wizard.yaml",
   "grafana_dashboards/*.json",
+  "hujson_helper/*.go",
+  "hujson_helper/go.mod",
+  "hujson_helper/go.sum",
+  "hujson_helper/*.txt",
 ]
 
 [tool.setuptools_scm]

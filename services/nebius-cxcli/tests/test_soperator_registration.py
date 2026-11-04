@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import copy
-import inspect
 
 import pytest
 
 import nebius_cxcli.soperator_config_materialization as soperator_config
 import nebius_cxcli.soperator_registration_projection as registration_projection
 from nebius_cxcli import cli, flux_render
+from nebius_cxcli.cluster_config import cluster_rows, soperator_row
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_registration import (
     SOPERATOR_REGISTRATION_SCHEMA,
@@ -17,6 +17,7 @@ from nebius_cxcli.soperator_registration import (
     validate_soperator_registration,
 )
 from soperator_fixtures import sample_infrastructure_receipt
+from source_inspection import function_source
 
 
 @pytest.mark.parametrize("group_cpu", [128000, None])
@@ -37,7 +38,7 @@ def test_gpu_gres_materialization_does_not_depend_on_cpu_resize(group_cpu, gres)
 
 def _registered_payload() -> dict:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -47,13 +48,11 @@ def _registered_payload() -> dict:
             },
             "notifications": {"email_enabled": False, "email": None},
         },
-        "infra": {"components": []},
-        "deploy": {
-            "targets": [
+        "infra": {
+            "components": [],
+            "external_clusters": [
                 {
                     "instance_id": "existing-a",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
                     "cluster_id": "mk8scluster-a",
                     "access": "external",
                     "project_id": "project-a",
@@ -61,7 +60,20 @@ def _registered_payload() -> dict:
                         "cluster_identity": {"kubernetes_uid": "cluster-uid-a"},
                         "node_groups": {"worker-a": {"node_count": 1}},
                     },
-                    "soperator_registration": {
+                }
+            ],
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "existing-a",
+                    "enabled": True,
+                    "namespace": "flux-system",
+                    "release-name": "soperator-fluxcd",
+                    "version": "4.1.7",
+                    "values": {},
+                    "registration": {
                         "schema": SOPERATOR_REGISTRATION_SCHEMA,
                         "accepted": True,
                         "state": SOPERATOR_REGISTRATION_STATE_SUPPORTED,
@@ -85,21 +97,8 @@ def _registered_payload() -> dict:
                 }
             ]
         },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "existing-a",
-                    "enabled": True,
-                    "namespace": "flux-system",
-                    "release-name": "soperator-fluxcd",
-                    "version": "4.1.7",
-                    "values": {},
-                }
-            ]
-        },
     }
-    registration = payload["deploy"]["targets"][0]["soperator_registration"]
+    registration = soperator_row(payload, cluster_rows(payload)[0]["instance_id"])["registration"]
     registration["analysis_fingerprint"] = soperator_registration_fingerprint(
         payload,
         target_ref="existing-a",
@@ -117,7 +116,7 @@ def test_exact_official_registration_is_the_only_registration_authority() -> Non
 
 def test_unsupported_registration_schema_fails_without_migration_guidance() -> None:
     payload = _registered_payload()
-    payload["deploy"]["targets"][0]["soperator_registration"]["schema"] = (
+    soperator_row(payload, cluster_rows(payload)[0]["instance_id"])["registration"]["schema"] = (
         "nebius-cxcli.soperator-registration.unsupported"
     )
 
@@ -132,7 +131,7 @@ def test_unsupported_registration_schema_fails_without_migration_guidance() -> N
 
 def test_registration_has_no_upgrade_target_or_retired_workflow_state() -> None:
     payload = _registered_payload()
-    registration = payload["deploy"]["targets"][0]["soperator_registration"]
+    registration = soperator_row(payload, cluster_rows(payload)[0]["instance_id"])["registration"]
 
     assert "target_version" not in registration
     assert "upgrade_path" not in registration
@@ -171,7 +170,9 @@ def test_registered_source_release_renders_only_the_release_neutral_handoff() ->
 def test_registration_fingerprint_fails_closed_on_source_identity_drift(field: str) -> None:
     payload = _registered_payload()
     changed = copy.deepcopy(payload)
-    changed["deploy"]["targets"][0]["soperator_registration"][field] = "changed"
+    soperator_row(changed, cluster_rows(changed)[0]["instance_id"])["registration"][field] = (
+        "changed"
+    )
 
     assert not soperator_registration_is_accepted(changed, target_ref="existing-a")
     with pytest.raises(ValueError, match="unsupported or invalid"):
@@ -183,12 +184,19 @@ def test_registration_fingerprint_allows_desired_app_version_transition() -> Non
     payload["apps"]["charts"][0]["version"] = "4.2.0"
 
     assert soperator_registration_is_accepted(payload, target_ref="existing-a")
-    assert payload["deploy"]["targets"][0]["soperator_registration"]["source_version"] == "4.1.7"
+    assert (
+        soperator_row(payload, cluster_rows(payload)[0]["instance_id"])["registration"][
+            "source_version"
+        ]
+        == "4.1.7"
+    )
 
 
 def test_runtime_rejects_historical_workflow_fields() -> None:
     payload = _registered_payload()
-    payload["deploy"]["targets"][0]["soperator_registration"]["upgrade_path"] = {}
+    soperator_row(payload, cluster_rows(payload)[0]["instance_id"])["registration"][
+        "upgrade_path"
+    ] = {}
 
     with pytest.raises(ValueError, match="unsupported field.*upgrade_path"):
         validate_runtime_payload(payload)
@@ -452,7 +460,7 @@ def test_registration_materialization_compiles_live_default_partitions_for_stati
     None
 ):
     payload = _registered_payload()
-    payload["deploy"]["targets"][0]["inventory"]["node_groups"]["worker-a"] = {
+    cluster_rows(payload)[0]["inventory"]["node_groups"]["worker-a"] = {
         "node_count": 1,
         "allocatable": {
             "cpu": "15950m",
@@ -615,7 +623,7 @@ def test_registered_all_node_partition_preimage_suppresses_profile_partitions() 
 
 def test_registration_rejects_conflicting_adopted_gpu_resource_aliases() -> None:
     payload = _registered_payload()
-    payload["deploy"]["targets"][0]["inventory"]["node_groups"]["worker-a"] = {
+    cluster_rows(payload)[0]["inventory"]["node_groups"]["worker-a"] = {
         "node_count": 1,
         "allocatable": {"nvidia.com/gpu": "2"},
         "selector": {
@@ -1005,7 +1013,7 @@ def test_registration_rejects_ambiguous_live_slurmclusters() -> None:
 
 
 def test_onboard_persists_registration_before_rendering_upgrade_handoff() -> None:
-    source = inspect.getsource(cli._register_existing_soperator_target)
+    source = function_source(cli._register_existing_soperator_target)
 
     assert "SoperatorOperationLocalLock(config_lock_path)" in source
     assert source.index("_deployment_execution(") < source.index(

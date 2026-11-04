@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.soperator_child_charts import (
     materialize_soperator_child_chart_values,
     soperator_child_chart_warnings,
@@ -296,19 +297,6 @@ def test_soperator_null_chart_values_are_pruned_before_render() -> None:
 
 def test_notifier_mysterybox_source_preserves_explicitly_disabled_target_sync() -> None:
     payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "secrets": {
-                        "mysterybox": {
-                            "enabled": False,
-                            "sync_namespaces": ["default"],
-                        }
-                    },
-                }
-            ]
-        },
         "apps": {
             "charts": [
                 {
@@ -325,35 +313,36 @@ def test_notifier_mysterybox_source_preserves_explicitly_disabled_target_sync() 
                                 "webhookSource": "mysterybox",
                                 "existingSecret": "soperator-notifier-slack-webhook",
                                 "existingSecretKey": "url",
-                                "mysterybox": {
-                                    "secretId": "mbsec-e00slack",
-                                    "property": "url",
-                                },
+                                "mysterybox": {"secretId": "mbsec-e00slack", "property": "url"},
                             },
-                        },
+                        }
                     },
-                },
+                }
             ]
         },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                    "secrets": {"mysterybox": {"enabled": False, "sync_namespaces": ["default"]}},
+                }
+            ]
+        },
+        "version": "v2",
     }
 
     assert materialize_soperator_child_chart_values(payload) is False
 
-    mysterybox = payload["deploy"]["targets"][0]["secrets"]["mysterybox"]
+    mysterybox = cluster_rows(payload)[0]["secrets"]["mysterybox"]
     assert mysterybox["enabled"] is False
     assert mysterybox["sync_namespaces"] == ["default"]
 
 
 def test_notifier_mysterybox_source_preserves_scalar_disabled_target_sync() -> None:
     payload = {
-        "deploy": {
-            "targets": [
-                {
-                    "instance_id": "cluster1",
-                    "secrets": {"mysterybox": False},
-                }
-            ]
-        },
         "apps": {
             "charts": [
                 {
@@ -370,21 +359,30 @@ def test_notifier_mysterybox_source_preserves_scalar_disabled_target_sync() -> N
                                 "webhookSource": "mysterybox",
                                 "existingSecret": "soperator-notifier-slack-webhook",
                                 "existingSecretKey": "url",
-                                "mysterybox": {
-                                    "secretId": "mbsec-e00slack",
-                                    "property": "url",
-                                },
+                                "mysterybox": {"secretId": "mbsec-e00slack", "property": "url"},
                             },
-                        },
+                        }
                     },
-                },
+                }
             ]
         },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                    "secrets": {"mysterybox": False},
+                }
+            ]
+        },
+        "version": "v2",
     }
 
     assert materialize_soperator_child_chart_values(payload) is False
 
-    assert payload["deploy"]["targets"][0]["secrets"]["mysterybox"] is False
+    assert cluster_rows(payload)[0]["secrets"]["mysterybox"] is False
 
 
 def test_activechecks_writes_preserve_existing_underscore_value_keys() -> None:

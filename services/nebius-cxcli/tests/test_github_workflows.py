@@ -8,7 +8,7 @@ import yaml
 
 _SETUP_UV_REPOSITORY = "astral-sh/setup-uv"
 _SETUP_UV_INPUTS = {
-    "version": "0.12.9",
+    "version": "0.13.5",
     "enable-cache": "true",
     "cache-dependency-glob": "services/nebius-cxcli/uv.lock",
 }
@@ -285,7 +285,13 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     workflow_text = _workflow_path("nebius-cxcli-ci.yml").read_text(encoding="utf-8")
     assert ".venv/bin/python" not in workflow_text
     assert "python -m pip" not in workflow_text
-    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 7
+    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 10
+    wg_step = _named_step(steps, "Verify WireGuard rendered cloud-init size and decoded scripts")
+    assert "-m integration tests/test_wireguard_guest_access.py" in wg_step["run"]
+    policy_step = _named_step(steps, "Qualify native Tailscale policy preservation")
+    assert "-m integration tests/test_tailscale_policy.py" in policy_step["run"]
+    module_step = _named_step(steps, "Verify Tailscale module without cloud access")
+    assert "scripts/verify_tailscale_module.py" in module_step["run"]
 
     makefile = _service_file("Makefile")
     assert "$(MAKE) -j2 check verify-wheel-cli" in makefile

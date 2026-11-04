@@ -37,8 +37,8 @@ class RenderedTests(unittest.TestCase):
         self.write(
             "pyproject.toml",
             render("pyproject.toml.template").replace(
-                "  # Register contract, e2e and smoke when generating those tests.",
-                '  "contract: interface", "e2e: workflow", "smoke: critical subset",',
+                "  # Register contract and smoke when generating those tests.",
+                '  "contract: interface", "smoke: critical subset",',
             ),
         )
         self.write("tests/conftest.py", render("tests-conftest.py.template"))
@@ -81,6 +81,11 @@ class RenderedTests(unittest.TestCase):
     def passed(self, result, expected: str) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(expected, result.stdout)
+
+    def test_unmodified_template_default_selection(self) -> None:
+        self.write("pyproject.toml", render("pyproject.toml.template"))
+        self.write("tests/unit/test_behavior.py", "def test_behavior(): pass\n")
+        self.passed(self.pytest(), "1 passed")
 
     def test_default_full_and_layer_selections(self) -> None:
         for layer in ("unit", "integration", "contract", "e2e"):

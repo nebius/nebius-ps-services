@@ -46,6 +46,21 @@ def test_mk8s_deployment_target_resolves_enabled_cluster() -> None:
     )
 
 
+def test_deployment_status_reporting_without_api_watchers_is_not_an_api_failure() -> None:
+    messages: list[str] = []
+    config = {
+        "infra": {"components": [{"id": "vpc", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": []},
+        "version": "v2",
+    }
+    with deployment_status_reporting(config, status_watchers=[], emit=messages.append):
+        pass
+
+    assert any("no API status watcher; Terraform progress only" in message for message in messages)
+    assert not any("API unavailable" in message for message in messages)
+    assert any("[bold yellow]TF [/bold yellow]" in message for message in messages)
+
+
 def test_deployment_status_reporting_falls_back_to_heartbeat_on_sdk_init_error(
     monkeypatch,
 ) -> None:

@@ -1,0 +1,32 @@
+{
+  "skill_name": "brainstorm",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use $brainstorm in report-only mode. Brainstorm options for a small SDK integration and keep the response exploratory and chat-only. Vendor documentation MCP tools are available in this session, and Tavily is also available. Describe the documentation lookup choices without external calls or file edits; read-only loading of this skill and its references is allowed.",
+      "expected_output": "Available vendor tools routing within the existing brainstorm workflow.",
+      "files": [],
+      "assertions": [
+        "Selects the available relevant vendor documentation tools first.",
+        "Does not mistake an operational MCP for a documentation source or run redundant Tavily queries.",
+        "Preserves higher-priority host rules, checks relevant versions and cites original official pages for retrieved claims.",
+        "Does not install integrations, repair authentication, use Context7 or include confidential content in public queries.",
+        "Retains the existing brainstorm output and scope boundaries."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use $brainstorm in report-only mode. Brainstorm options for a small SDK integration and keep the response exploratory and chat-only. The vendor MCP appears in config but its tools are unavailable. Explain the route for a known official URL with Tavily available, then the case where Tavily authentication is unavailable. Describe the documentation lookup choices without external calls or file edits; read-only loading of this skill and its references is allowed. This is a small single-source documentation question; no source conflict or deeper research was requested.",
+      "expected_output": "Vendor and Tavily fallback routing within the existing brainstorm workflow.",
+      "files": [],
+      "assertions": [
+        "Loads source-priority.md for the small vendor-documentation question rather than bypassing the routing policy.",
+        "Uses Tavily Extract directly for the known official URL and Search scoped to official domains when discovery is needed.",
+        "Does not treat configured MCP as session availability; when Tavily cannot help, discloses the limitation and uses built-in official web retrieval.",
+        "Preserves higher-priority host rules, checks relevant versions and cites original official pages for retrieved claims.",
+        "Does not install integrations, repair authentication, use Context7 or include confidential content in public queries.",
+        "Retains the existing brainstorm output and scope boundaries."
+      ]
+    }
+  ]
+}

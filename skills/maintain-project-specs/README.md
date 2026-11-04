@@ -1,5 +1,12 @@
 # Maintain Project Specs
 
+Ordinary PR review supplies exact affected project roots and accepted baseline,
+intent and validated delivery evidence to the root spec owner. Reconciliation
+follows safe code repairs unless a contract-changing remedy needs an accepted
+ready design first. Bootstrap missing pairs, repair clear drift, or record a
+justified unchanged/accepted-disabled result. Contributor docs and policy edits
+do not accept themselves. See [contribution assessment](../review-pr/references/contribution-assessment.md).
+
 `maintain-project-specs` owns the canonical requirements/design contract for
 ordinary root-agent sessions, Implement, and Agentic SDLC. Every direct
 root-user prompt is classified at statement level. Durable product intent is

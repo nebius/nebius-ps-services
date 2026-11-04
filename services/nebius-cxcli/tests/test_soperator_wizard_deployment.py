@@ -189,8 +189,9 @@ def test_noninteractive_materialization_does_not_infer_waiver():
 
 def test_registered_target_keeps_explicit_diagnostics_policy():
     payload = payload_for(1)
-    payload.setdefault("deploy", {})["targets"] = [
-        {"instance_id": "mk8s", "kind": "external-mk8s", "ownership": "external"}
+    payload["infra"]["components"] = []
+    payload["infra"]["external_clusters"] = [
+        {"instance_id": "mk8s", "kube_context": "registered-context"}
     ]
     before = copy.deepcopy(soperator_rows(payload))
     result = run_wizard(payload)

@@ -90,7 +90,7 @@ Choose one MCP authentication path before editing config:
 
 | Target Grafana | Token source for MCP | Refresh behavior |
 | --- | --- | --- |
-| Nebius-managed Grafana at `https://grafana.nebius.dev/` | Nebius IAM access token minted only through a pinned human profile whose user ID matches a private binding. The wrapper requires a profile-scoped token file and clears ambient agent/Grafana credentials. | Setup pre-mints a startup token. The wrapper reuses it for at most one hour, then renews it before MCP launch; foreground renewal may open browser authentication. After ten hours, noninteractive background renewal refreshes the file, closes stdio, and returns a restart-required failure. Start a new chat or restart Codex to load that background-rotated token. Older binaries without token-file support must be updated. |
+| Nebius-managed Grafana | Pinned human CLI identity and protected profile-scoped token file. | One-hour file-age cache heuristic at startup; bounded browser authentication only in the foreground. Best-effort noninteractive retrieval after ten hours closes stdio with status 75; restart Codex or start a new chat. Retrieval may return the same token and does not prove a new lifetime. |
 | Generic self-hosted Grafana or Grafana Cloud | Grafana service-account token, preferably stored in `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` when the installed binary supports token-file auth. Use `GRAFANA_SERVICE_ACCOUNT_TOKEN` for released binaries that lack token-file support. | Rotate by creating a new Grafana service-account token; existing token values cannot be read back |
 | External Grafana data source calling Nebius read endpoints | Nebius Observability static key in the data source HTTP header | Static key lifecycle is separate from the MCP token and is not used by MCP |
 
@@ -140,7 +140,7 @@ The helper is intentionally conservative:
   malformed, or duplicate-name discovery fails closed without config writes.
 - It checks registration eligibility before creating private identity state
   or renewing a token. Unapproved registration drift does not refresh even an
-  expired token or create a new binding.
+  old cache or create a new binding.
 - It uses `codex mcp get "$MCP_SERVER_NAME" --json` to compare the exact URL,
   profile, identity path, token path, args, and command without printing those
   values. Masked human-readable output is not sufficient. For timeout-only
@@ -161,8 +161,8 @@ The helper is intentionally conservative:
   rollback. If structured post-write verification sees drift, the helper
   leaves that entry intact for inspection rather than deleting potentially
   concurrent state.
-- Repeated check/apply on canonical state preserves config, binding, fresh token,
-  and private-directory metadata. A stale token renews once and is then reused.
+- Repeated check/apply on canonical state preserves config, binding, acceptable token cache,
+  and private-directory metadata. A cache older than one hour is retrieved once and is then reused.
   Registration rechecks detect observed races but do not serialize independent
   installers or external config editors.
 
@@ -188,12 +188,12 @@ private binding and non-secret Codex MCP environment values:
 ```text
 $HOME/.config/grafana-mcp/nebius/<server>/<profile>/
   identity  # mode 0600; profile plus expected human user ID
-  token     # mode 0600; renewable access token
+  token     # mode 0600; retrieved access token
 ```
 
 The wrapper requires both files to share the same owned, non-symlinked,
 mode-`0700` leaf directory below `HOME`. It compares the binding with
-`iam whoami` before and after every token mint. If the named profile resolves to
+`iam whoami` before and after every token retrieval. If the named profile resolves to
 another human, a service account, or anonymous auth, it fails without replacing
 the binding. Create and select a distinct human profile instead.
 
@@ -249,7 +249,7 @@ The wrapper:
   `GRAFANA_TOKEN_FILE` registered by the setup helper;
 - clears project selectors, ambient Nebius tokens/profiles/credentials,
   impersonation state, and competing Grafana credentials for every validation
-  and mint;
+  and retrieval;
 - validates `.user_profile.id` against the binding before and after
   `nebius iam get-access-token`;
 - serializes refreshes per token path, waits up to 90 seconds in the background
@@ -258,12 +258,12 @@ The wrapper:
   old incomplete locks, writes atomically, and fails if ownership or mode
   `0600` cannot be enforced;
 - requires the installed `mcp-grafana` binary to advertise
-  `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE`, reuses a valid startup token for at
-  most one hour without a network call, renews it before launching MCP when it
+  `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE`, uses a one-hour file-age cache heuristic
+  without a network call, retrieves the token before launching MCP when the cache
   is missing or older, permits browser authentication only for that foreground
-  renewal's initial identity check, then mints and revalidates noninteractively
+  retrieval's initial identity check, then retrieves and revalidates noninteractively
   against the authenticated session, and rejects older inline-only builds;
-- refreshes the token file after 10 hours, retries failures after 60, 300, and
+- attempts scheduled retrieval after 10 hours, retries failures after 60, 300, and
   900 seconds, then stops stdio after success with a restart-required nonzero
   result; it also stops MCP with failure if retries exhaust or the worker exits
   unexpectedly, and never assumes same-chat automatic recovery;
@@ -469,21 +469,29 @@ the repo.
 
 ## MCP Token Sources
 
-`mcp-grafana` sends bearer authentication to the Grafana API. Current Grafana
-docs support both `GRAFANA_SERVICE_ACCOUNT_TOKEN` and
-`GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE`, and prefer the file form because the
-server can read the file fresh on every request and pick up rotations without
-restart. The Nebius-managed path capability-checks the binary and rejects an
-older build without token-file support. Upstream issue
-[`#987`](https://github.com/grafana/mcp-grafana/issues/987) records the stdio
-limitation. Source review of `v2.0.2` confirms that
-[stdio constructs its context once](https://github.com/grafana/mcp-grafana/blob/0eb7e0adf9235720fdc7a8a390e145a8bcc6a152/cmd/mcp-grafana/main.go#L1184-L1194),
-while [per-call client refresh is restricted to HTTP transports](https://github.com/grafana/mcp-grafana/blob/0eb7e0adf9235720fdc7a8a390e145a8bcc6a152/mcpgrafana.go#L1840-L1875).
-The wrapper therefore closes stdio after a
-scheduled refresh and reports that a new chat or Codex restart is required;
-the next process then reads the new token. Generic Grafana may still use its
-separate service-account inline-token configuration. This source evidence does
-not substitute for a live long-running renewal test.
+`mcp-grafana` sends bearer authentication to the Grafana API. Upstream supports
+`GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE`, but its generic per-request reload claim
+must be qualified by transport. Source review of `v2.1.1` confirms that
+[stdio constructs its context once](https://github.com/grafana/mcp-grafana/blob/v2.1.1/cmd/mcp-grafana/main.go#L1193-L1204).
+The [stdio context and HTTP middleware](https://github.com/grafana/mcp-grafana/blob/v2.1.1/mcpgrafana.go)
+use different client lifecycles; upstream issue
+[#987](https://github.com/grafana/mcp-grafana/issues/987) tracks the limitation.
+The wrapper closes stdio after scheduled retrieval so a new process loads the
+file. Generic Grafana retains its separate service-account-token configuration.
+
+Nebius documents a [12-hour IAM token lifetime](https://docs.nebius.com/iam/authorization/access-tokens).
+Do not infer remaining lifetime from file mtime or assume `get-access-token`
+forces issuance. A successful retrieval may return identical bytes. The
+one-hour startup cache and ten-hour schedule are best-effort heuristics, not
+expiry checks or guarantees, including across laptop suspend/resume. Browser
+sign-in is needed when the pinned CLI session cannot authenticate; this is not
+a guaranteed prompt every twelve hours or verified silent refresh forever.
+
+Keep the protected file (`0600` within a `0700` directory); no Keychain is
+required. [`mcp-remote`](https://github.com/geelen/mcp-remote) bridges to an HTTP
+MCP server and owns its OAuth storage. It cannot turn a Grafana web/API URL into
+an OAuth MCP endpoint or refresh the Nebius CLI's credentials. A remote gateway
+would be a separate deployment and is outside this local setup.
 
 ### Nebius-Managed Grafana
 
@@ -491,7 +499,7 @@ For `https://grafana.nebius.dev/`, use the wrapper and private binding created
 by the setup helper. Do not call `nebius iam get-access-token` through ambient
 auth or register a raw token directly. Nebius access tokens expire after
 12 hours; `--print-config` reports whether the installed MCP build will use
-rotating token-file mode or is unsupported, without printing credentials.
+token-file mode or is unsupported, without printing credentials.
 
 Use `scripts/test-run-nebius-grafana-mcp.sh` for local wrapper validation. It
 uses fake commands and private temporary state rather than a live user token.
@@ -569,7 +577,7 @@ required startup timeout. The setup helper uses `codex mcp add` for registration
 fields and then verifies every structured field through
 `codex mcp get --json`. Codex does not expose a pre-start command or a
 `codex mcp add` startup-timeout option. The registered wrapper is therefore the
-prelaunch renewal boundary, and the helper atomically sets only
+prelaunch retrieval boundary, and the helper atomically sets only
 `startup_timeout_sec = 300.0` in the exact simple server table. It preserves
 unrelated `config.toml` content, digest-binds its structured check to the
 inspected bytes, rechecks those bytes immediately before replacement, and
@@ -628,12 +636,12 @@ observability questions.
   with Codex; run `codex mcp add` or add `[mcp_servers.<name>]` manually.
 - Codex config ignored: verify `~/.codex/config.toml` TOML syntax and the
   `mcp_servers` key.
-- `connection closed: initialize response` with an old or missing startup
-  token: ensure the server table has `startup_timeout_sec = 300.0`, restart
-  Codex, and complete the pinned profile's browser login if it opens. The
-  wrapper captures `nebius iam get-access-token --profile <human_profile>` into
-  the private token file before starting `mcp-grafana`; never put command
-  substitution or a token value in TOML.
+- `connection closed: initialize response`: inspect the phase/code on wrapper
+  stderr first. The message means the process closed before initialization;
+  it does not identify authentication as the cause. Validate local config and
+  private state with check mode, then address the reported phase. Keep the
+  canonical `startup_timeout_sec = 300.0`; complete browser sign-in only if
+  foreground setup opens it. Never put command substitution or tokens in TOML.
 - Nebius-managed Grafana auth failure: rerun the helper in check mode, verify
   the pinned profile is still a human user, and confirm the binding and token
   paths remain private. Never fall back to an agent token.
@@ -658,3 +666,33 @@ observability questions.
 - Missing project data, Prometheus/Loki query tools, or trace tools: hand the
   operational diagnosis to `$nebius-grafana-query`; keep setup repair here only
   when the server configuration or authentication is the cause.
+
+## Diagnostic And Readiness Contract
+
+Diagnostics use `[grafana-mcp phase=<phase> code=<code>]` on stderr; stdout is
+reserved for MCP protocol traffic (or explicit helper reporting modes). Raw CLI
+stderr, browser authorization URLs and child log payloads are suppressed.
+Child categories are hints, not authoritative HTTP responses. A child diagnostic
+alone does not establish failure; validate initialization and a bounded read.
+
+| Phase / code | Meaning and next action |
+| --- | --- |
+| `config / CONFIG_INVALID`, `COMMAND_MISSING` | Fix local configuration, registration or missing dependencies before authentication. |
+| `private-state / PRIVATE_STATE_INVALID` | Inspect ownership, modes, paths and binding format; do not print credential contents. |
+| `identity / AUTH_FOREGROUND` | Foreground identity validation may open the browser; complete sign-in if requested. |
+| `identity / AUTH_REQUIRED`, `IDENTITY_INVALID`, `IDENTITY_MISMATCH` | Identity validation failed, returned a nonhuman identity or differs from the binding. Inspect the pinned profile; never silently rebind. `AUTH_REQUIRED` alone does not distinguish network failure from expired login. |
+| `lock / LOCK_UNSAFE`, `LOCK_TIMEOUT`, `LOCK_FAILED`, `LOCK_RECOVERED` | Unsafe, busy or recovered token-retrieval coordination state; inspect exact ownership before intervention. |
+| `token / TOKEN_CACHE_RETRIEVAL`, `TOKEN_CACHE_REUSED`, `TOKEN_RETRY`, `TOKEN_RETRIEVAL_FAILED`, `TOKEN_PAYLOAD_INVALID` | Cache retrieval or payload result, not issuance/expiry evidence. |
+| `child-startup / CHILD_STARTING`, `CHILD_STARTUP_FAILED` | Launch attempted or local binary/capability check failed; initialization is still a separate gate. |
+| `child / UPSTREAM_401`, `UPSTREAM_403`, `UPSTREAM_TIMEOUT`, `CHILD_DIAGNOSTIC` | Sanitized child log category; confirm against a bounded MCP tool response. |
+| `child-exit / CHILD_EXIT` | Natural child exit; wrapper preserves the numeric exit status, including zero. |
+| `restart / RESTART_REQUIRED` | Scheduled retrieval completed; wrapper exits 75 after stopping its child. Start a new chat or restart Codex. |
+| `restart / TOKEN_RETRIEVAL_EXHAUSTED`, `REFRESH_WORKER_FAILED` | Background retrieval/supervision failed; wrapper stops MCP and exits nonzero. Foreground recovery may need sign-in. |
+
+Readiness requires initialization and a successful bounded datasource listing.
+Report an observed HTTP 401 as rejected authentication, HTTP 403 as denied
+access (do not trigger login loops), and timeout as network/service uncertainty.
+Local initialization failure is a separate outcome. Never swap identities,
+expand access, or claim the original warning's cause from a later successful
+read. Controlled restart tests, browser reauthentication and natural twelve-hour
+operation are separate evidence lanes.

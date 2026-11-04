@@ -1,0 +1,27 @@
+{
+  "skill_name": "agent-nebius-auth-diagnose",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Diagnose only: the selected project's agent profile passes runtime verify, but the human bootstrap login has expired.",
+      "expected_output": "Distinguish working agent runtime authentication from the human bootstrap prerequisite.",
+      "files": [],
+      "assertions": [
+        "Does not rotate agent credentials or modify IAM or profiles.",
+        "Does not launch browser authentication.",
+        "Reports the human login as relevant only to a later explicitly authorized setup."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I already explicitly invoked agent-nebius-auth-setup for project-test and authorized its browser sign-in. Diagnose the expired human login, then return to that setup workflow.",
+      "expected_output": "Keep diagnosis read-only and hand control back to the existing authorized setup for its bounded browser attempt.",
+      "files": [],
+      "assertions": [
+        "Does not ask for a repeated permission or magic confirmation phrase.",
+        "Does not replace authorized setup with a manual terminal-command handoff before an actual browser blocker is observed.",
+        "Keeps browser sign-in owned by setup and never exposes authorization URLs."
+      ]
+    }
+  ]
+}

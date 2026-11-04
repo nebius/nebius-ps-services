@@ -43,6 +43,12 @@ fail instead of guessing containment.
 
 The module outputs `network_id`, `network`, `subnets`, and `subnet_ids`. Consumers should use `module.vpc.network_id` and `module.vpc.subnets["worker"].id`.
 
+This module requires `nebius/nebius >= 0.6.74, < 0.7.0`. Subnet
+`ipv4_private_cidrs` and `ipv4_public_cidrs` outputs flatten the provider's
+supported status pool CIDRs; they do not read deprecated status CIDR fields.
+Existing consumer roots locked to an older provider must run `terraform init
+-upgrade` after reviewing their provider constraints.
+
 New networks require either `network.ipv4_private_cidrs` or
 `network.ipv4_private_pool_ids`. `network.ipv4_private_pool_ids` is the
 existing-pool path: the module attaches already-created private IPv4 pools to

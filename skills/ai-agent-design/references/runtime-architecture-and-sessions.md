@@ -9,6 +9,7 @@ technology and deployment choices that implement them.
 
 - Trusted reference architecture
 - Provider-neutral interfaces
+- Final model request boundary
 - Durable session contract
 - Bounded agent loop
 - User and operator controls
@@ -64,6 +65,34 @@ capability negotiation and reject a profile that cannot meet a hard contract.
 Provider sessions, caches, background jobs, or hosted sandboxes remain
 replaceable implementation details unless independently proven as canonical
 for the selected product boundary.
+
+## Final Model Request Boundary
+
+Enforce the context and authority contract at the last trusted point before
+provider dispatch. An earlier preparation hook is insufficient if adapters,
+middleware, sessions, retries, or fallbacks can later add or transform inputs.
+Bind the actual request to:
+
+- current principal, tenant, task, and authorized context dependency closure;
+- approved tool catalog and schemas, model route, and release identity;
+- current owner generation, expiry, cancellation state, and remaining budgets;
+- complete serialized input and output reservation.
+
+Use an immutable request record or equivalent trusted binding, then reject
+material drift and rebuild under current policy. Apply the same boundary to
+retries and fallback routes. Fail closed when a required runtime hook cannot
+enforce it; SDK convenience is not evidence of equivalent semantics.
+
+Keep streamed text and tool proposals provisional until their required schema,
+policy, and transport completion conditions validate. In particular, never
+dispatch partial tool arguments or incomplete effect-capable batches. A product
+may display provisional text only under its explicit output-safety policy.
+
+Treat native session storage, compaction, tool discovery, tracing, background
+execution, and guardrails as separate optional capabilities. Adopt each only
+after checking its data, authority, cancellation, recovery, and compatibility
+contract. A feature being available does not justify enabling it or transferring
+application-owned state to it.
 
 ## Durable Session Contract
 
@@ -169,7 +198,9 @@ as verified progress.
 
 ## Recovery And Operational Review
 
-- Use leases and heartbeats when more than one worker could claim a session.
+- Use leases and heartbeats when more than one worker could claim a session;
+  distinguish lease renewal from the ownership generation that fences stale
+  workers. See the durability reference for quiescence and successor admission.
 - Commit after every external effect and meaningful verified milestone.
 - Bound tenant concurrency, queue depth, fan-out, provider demand, and retries.
 - Reconcile sessions left between dispatch and acknowledgement.

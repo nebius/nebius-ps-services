@@ -1,0 +1,47 @@
+# Issue <number>: <title>
+
+- Repository: <verified repository identity>
+- Issue: <number and public URL, or permitted sanitized identifier>
+- Owning project: <repository-relative project path>
+- Affected projects: <repository-relative paths>
+- Reviewed revision: <commit or source revision and relevant local limitations>
+- Review date: <date>
+- Planning status: <incomplete until independently verified complete>
+- Implementation status: Not started by this skill
+- Priority: <project scale or critical/high/normal/low, with rationale below>
+
+## Problem and evidence
+
+<Expected/observed behavior or substantiated unmet need; affected versions;
+verified evidence and sources; confidence and remaining nonblocking limits.>
+
+## Decision and scope
+
+<Why implementation is justified; severity, urgency, reach, workarounds,
+effort and maintenance implications; scope, non-goals and resolved decisions.>
+
+## Design
+
+<Selected approach, affected components/interfaces/data, failure behavior,
+alternatives and trade-offs. No unresolved implementation-changing decisions.>
+
+## Implementation work
+
+<Ordered steps with concrete files/modules, dependencies and intended behavior.
+Identify any canonical-spec handoff to maintain-project-specs for the maintainer.>
+
+## Tests and acceptance
+
+<Specific scenarios, commands and observable acceptance conditions; distinguish
+checks already performed during investigation from future implementation tests.>
+
+## Rollout and risks
+
+<Rollout/recovery steps appropriate to the change, operational risks,
+documentation updates and remaining verification needs.>
+
+## Maintainer handoff
+
+The maintainer implements, validates, commits, pushes and submits a PR through
+the repository's workflow. This plan does not implement or publish the change,
+schedule delivery, or certify completion.

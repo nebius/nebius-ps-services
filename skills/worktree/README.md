@@ -43,6 +43,9 @@ integration checkout before initial specification publication. The following
 execution and creates worker waves. This preserves the accepted source and
 keeps initial spec changes out of uncommitted worker inputs. These are internal
 workflow transitions, not additional public Worktree actions.
+The shared plan parser preserves multiline task contracts and ownership lists,
+and rejects empty fields, duplicate fields and malformed task headings before
+preparation. Implement and SDLC consume this same parser.
 
 `--project` selects the returned starting directory; it is not a sparse
 checkout, branch argument, staging boundary, or changed-path restriction.

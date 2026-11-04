@@ -43,6 +43,12 @@ def evidence():
         "head": HEAD,
         "base": "main",
         "base_sha": BASE,
+        "base_repository_id": 1,
+        "head_repository_id": 1,
+        "head_repository": REPO,
+        "head_ref": "feature",
+        "contribution": {"verdict": "passed", "compatibility": "preserved", "evidence": ["Existing consumer regression passed."]},
+        "specs": [{"project": ".", "outcome": "unchanged", "evidence": "Accepted contract already covers this repair."}],
         "validation": ["Focused tests passed; full diff reviewed locally."],
     }
 
@@ -56,9 +62,9 @@ class API:
             "state": "open",
             "draft": False,
             "merged": False,
-            "head": {"sha": HEAD, "ref": "feature", "repo": {"full_name": REPO}},
+            "head": {"sha": HEAD, "ref": "feature", "repo": {"full_name": REPO, "id": 1}},
             "created_at": "2026-01-01T00:00:00Z",
-            "base": {"sha": BASE, "ref": "main", "repo": {"full_name": REPO}},
+            "base": {"sha": BASE, "ref": "main", "repo": {"full_name": REPO, "id": 1}},
             "user": {"id": 123},
             "changed_files": 1,
             "commits": 1,
@@ -697,10 +703,36 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(len(self.api.effects), 1)
         self.assertEqual(self.api.effects[0][0], "pulls/1/reviews")
 
-    def test_fork_blocks(self):
+    def test_unbound_source_identity_blocks(self):
         self.api.pr["head"]["repo"]["full_name"] = "fork/project"
         with self.assertRaises(gate.Blocked):
             self.check()
+
+    def test_bound_fork_can_be_admitted(self):
+        self.api.pr["head"]["repo"] = {"full_name": "contributor/fork", "id": 2}
+        self.api.runs[0]["head_repository"]["full_name"] = "contributor/fork"
+        record = evidence()
+        record.update(head_repository="contributor/fork", head_repository_id=2)
+        self.api.review["body"] = json.dumps(record)
+        self.check()
+
+    def test_missing_contribution_or_specs_cannot_attest(self):
+        for field in ("contribution", "specs", "head_repository_id", "head_ref"):
+            with self.subTest(field=field):
+                record = evidence()
+                del record[field]
+                self.api.review["body"] = json.dumps(record)
+                with self.assertRaises(gate.Blocked):
+                    self.check()
+
+    def test_incomplete_semantic_assessments_block(self):
+        for change in ({"specs": []}, {"specs": [{"project": "../other", "outcome": "aligned", "evidence": "ok"}]}, {"contribution": {"verdict": "passed", "compatibility": "unknown", "evidence": ["CI green"]}}):
+            with self.subTest(change=change):
+                record = evidence()
+                record.update(change)
+                self.api.review["body"] = json.dumps(record)
+                with self.assertRaises(gate.Blocked):
+                    self.check()
 
     def test_incomplete_files_block(self):
         self.api.pr["changed_files"] = 2

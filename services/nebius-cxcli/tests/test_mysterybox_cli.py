@@ -41,13 +41,18 @@ def test_terraform_runtime_env_does_not_materialize_mysterybox_payload_values(
 
     runtime_env = _terraform_runtime_env(cfg)
 
-    assert runtime_env == {
+    provider_keys = {
+        "TF_VAR_nebius_provider_module_name",
+        "TF_VAR_nebius_provider_parent_id",
+    }
+    assert {key: runtime_env[key] for key in provider_keys} == {
         "TF_VAR_nebius_provider_module_name": build_provider_module_name(
             client_name="client-a",
             project_id="project-456",
         ),
         "TF_VAR_nebius_provider_parent_id": "project-456",
     }
+    assert "TF_VAR_mysterybox_payload_values" not in runtime_env
 
 
 def test_terraform_runtime_env_does_not_require_mysterybox_payload_values(
@@ -56,10 +61,16 @@ def test_terraform_runtime_env_does_not_require_mysterybox_payload_values(
     cfg = _build_config(tmp_path)
     monkeypatch.delenv("TF_VAR_mysterybox_payload_values", raising=False)
 
-    assert _terraform_runtime_env(cfg) == {
+    runtime_env = _terraform_runtime_env(cfg)
+    provider_keys = {
+        "TF_VAR_nebius_provider_module_name",
+        "TF_VAR_nebius_provider_parent_id",
+    }
+    assert {key: runtime_env[key] for key in provider_keys} == {
         "TF_VAR_nebius_provider_module_name": build_provider_module_name(
             client_name="client-a",
             project_id="project-456",
         ),
         "TF_VAR_nebius_provider_parent_id": "project-456",
     }
+    assert "TF_VAR_mysterybox_payload_values" not in runtime_env

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "upstream": "https://github.com/geelen/mcp-remote/tree/373f7320f6afd1fdb00e0168826a3cea99102241",
+  "patches": [
+    {
+      "target": "node_modules/mcp-remote/dist/proxy.js",
+      "sha256_before": "975e794543db003faa54dd2c7b58ecfbdf2df9c6078e2d5aa077fce3f373dd59",
+      "sha256_after": "7019a12ffb66f79c8e3deae99ae693d8d1d6603caba7c12b273046a12fb853eb",
+      "before": "  const signsInWithoutACallbackPort = useDeviceCode || useClientCredentials;\n",
+      "after": "  const signsInWithoutACallbackPort = useDeviceCode || useClientCredentials;\n  const redirectToAuthorization = authProvider.redirectToAuthorization.bind(authProvider);\n  authProvider.redirectToAuthorization = async (authorizationUrl) => {\n    if (!signsInWithoutACallbackPort) {\n      const { skipBrowserAuth } = await authInitializer();\n      if (skipBrowserAuth) {\n        await authProvider.invalidateCredentials(\"verifier\");\n        return;\n      }\n    }\n    return redirectToAuthorization(authorizationUrl);\n  };\n"
+    },
+    {
+      "target": "node_modules/mcp-remote/dist/chunk-UZ6Y4QJH.js",
+      "sha256_before": "0e90204dfcf5f7892e119cf3d2ef451531a56355e1785f9b575dd8d8d58a883d",
+      "sha256_after": "2f77fc38a99fa1acd5329d7d5c86e9911f36393b33d077ecfbdb4d2f97c58337",
+      "before": "await testClient.connect(testTransport);",
+      "after": "await testClient.connect(testTransport, { timeout: 360000 });"
+    }
+  ]
+}

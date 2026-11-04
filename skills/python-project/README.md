@@ -26,6 +26,8 @@ apply. Existing Python maintenance runs directly. See the
   regression placement, boundary mocks, isolated fixtures and meaningful coverage.
 - Separates test layers from speed and network permission; uses pytest-socket
   for accidental socket protection with explicit enforcement limits.
+- Registers every marker used by the default test selection, including `e2e`
+  before any E2E tests exist, so strict marker checks accept a fresh scaffold.
 - Runs fast hermetic tests on PRs and validates the installed wheel separately;
   external tests require opt-in and a selected non-production target preflight.
 - Makes xdist conditional on measured benefit. See [testing](references/testing.md).

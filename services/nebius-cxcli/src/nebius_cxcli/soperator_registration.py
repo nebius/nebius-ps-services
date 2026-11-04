@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from . import kubernetes_process
+from .cluster_config import cluster_rows, soperator_row
 from .component_instances import normalize_component_token
 from .deploy_targets import deploy_target_is_external_mk8s
 from .runtime_config import to_plain_data
@@ -736,7 +737,7 @@ def soperator_registration_fingerprint(
         payload = {}
     target = soperator_registration_target(payload, target_ref=target_ref)
     app_row = soperator_registration_app_row(payload, target_ref=target_ref)
-    registration = (target or {}).get("soperator_registration", {})
+    registration = (app_row or {}).get("registration", {})
     if not isinstance(registration, Mapping):
         registration = {}
     material = {
@@ -797,8 +798,7 @@ def soperator_registration_target(
     target_ref: str,
 ) -> Mapping[str, Any] | None:
     payload = to_plain_data(payload_or_config)
-    deploy = payload.get("deploy") if isinstance(payload, Mapping) else None
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     normalized_target = normalize_component_token(target_ref)
     if not isinstance(targets, list) or not normalized_target:
         return None
@@ -837,7 +837,9 @@ def soperator_registration_is_accepted(
     target = soperator_registration_target(payload_or_config, target_ref=target_ref)
     if not isinstance(target, Mapping):
         return False
-    registration = target.get("soperator_registration")
+    registration = (soperator_row(to_plain_data(payload_or_config), target_ref) or {}).get(
+        "registration"
+    )
     if not isinstance(registration, Mapping):
         return False
     if registration.get("schema") != SOPERATOR_REGISTRATION_SCHEMA:
@@ -1109,8 +1111,7 @@ def _helm_release_storage_namespace(
 
 def soperator_registration_target_refs(payload_or_config: Any) -> tuple[str, ...]:
     payload = to_plain_data(payload_or_config)
-    deploy = payload.get("deploy") if isinstance(payload, Mapping) else None
-    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    targets = cluster_rows(payload)
     external_refs = {
         normalize_component_token(row.get("instance_id"))
         for row in targets or ()

@@ -12,7 +12,7 @@ from nebius_cxcli.frozen_catalog import freeze_catalog
 
 
 def test_generated_validation_rejects_missing_or_changed_inputs_before_work():
-    config = {"infra": {"components": []}, "apps": {"charts": []}}
+    config = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     frozen = {"schema": "invalid"}
     calls = []
 

@@ -34,6 +34,12 @@ Goal, Depends on, Write claims (exact/prefix), Conflict domains, Validation,
 Done criteria and Rollback or stop conditions. Dependencies and conflicting
 resources form deterministic frozen waves. Do not modify a locked plan.
 
+Use exact `### TASK-NNN` headings and one top-level `- Label:` per field.
+Indent continuation paragraphs, nested bullets and fenced examples beneath
+their field; the shared parser retains the complete field body in assignments.
+List fields retain comma/semicolon separators across lines. Empty or duplicate
+fields and malformed task headings fail before execution preparation.
+
 Before locking IDs, audit each task for self-contained execution context.
 The coordinator translates the accepted objective and canonical specs into the
 task's concrete interfaces, schema/data types, fixed values, resource constraints,

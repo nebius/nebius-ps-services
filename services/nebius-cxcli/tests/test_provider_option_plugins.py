@@ -1293,7 +1293,7 @@ def test_project_mk8s_clusters_lists_live_project_clusters(monkeypatch) -> None:
         provider="project_mk8s_clusters",
         args={},
         payload={"client_info": {"nebius": {"project_id": "project-123"}}},
-        field_path="deploy.targets[].cluster_id",
+        field_path="infra.components[].cluster_id",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
@@ -2540,11 +2540,7 @@ def test_soperator_node_group_mapping_choices_follow_profile_role() -> None:
                     "enabled": True,
                     "inputs": {
                         "node_groups": {
-                            "cpu-a": {
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
+                            "cpu-a": {"gpu": False, "platform": "cpu-d3", "preset": "4vcpu-16gb"},
                             "h100": {
                                 "gpu": True,
                                 "platform": "gpu-h100-sxm",
@@ -2565,6 +2561,7 @@ def test_soperator_node_group_mapping_choices_follow_profile_role() -> None:
                 }
             ]
         },
+        "version": "v2",
     }
 
     worker_choices = lookup.resolve(
@@ -2587,20 +2584,15 @@ def test_soperator_node_group_mapping_choices_follow_profile_role() -> None:
 def test_soperator_node_group_mapping_choices_use_external_target_inventory() -> None:
     lookup = ProviderOptionLookup()
     payload = {
-        "deploy": {
-            "targets": [
+        "infra": {
+            "components": [],
+            "external_clusters": [
                 {
                     "instance_id": "cluster1",
-                    "kind": "external-mk8s",
-                    "ownership": "external",
                     "kube_context": "nebius-cluster1-mk8scluster-123-external",
                     "inventory": {
                         "node_groups": {
-                            "cpu-a": {
-                                "gpu": False,
-                                "platform": "cpu-d3",
-                                "preset": "4vcpu-16gb",
-                            },
+                            "cpu-a": {"gpu": False, "platform": "cpu-d3", "preset": "4vcpu-16gb"},
                             "h100": {
                                 "gpu": True,
                                 "platform": "gpu-h100-sxm",
@@ -2609,9 +2601,8 @@ def test_soperator_node_group_mapping_choices_use_external_target_inventory() ->
                         }
                     },
                 }
-            ]
+            ],
         },
-        "infra": {"components": []},
         "apps": {
             "charts": [
                 {
@@ -2622,6 +2613,7 @@ def test_soperator_node_group_mapping_choices_use_external_target_inventory() ->
                 }
             ]
         },
+        "version": "v2",
     }
 
     worker_choices = lookup.resolve(

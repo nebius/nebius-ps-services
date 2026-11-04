@@ -33,7 +33,7 @@ def test_prerequisites_use_resolved_inputs_without_changing_parent(
         {
             "runtime_config": payload,
             "render": {"inputs": freeze_catalog(payload)},
-            "deploy": {
+            "execution": {
                 "targets": [
                     {
                         "target_ref": "cluster",
@@ -43,9 +43,15 @@ def test_prerequisites_use_resolved_inputs_without_changing_parent(
                         "cluster_id_output_name": "cluster_id",
                         "component_output_ref": "mk8s.cluster",
                         "flux_dir": "flux/targets/cluster",
+                        "ownership": "managed",
                     }
-                ]
+                ],
+                "backend": {},
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
             },
+            "schema": "nebius-cxcli-generated/v3",
         },
         {"flux/targets/cluster/values.yaml": base64.b64encode(b"unresolved: true\n").decode()},
     )

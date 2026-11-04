@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import nebius.api.nebius.iam.v1 as iam_v1
+import nebius.api.nebius.iam.v2 as iam_v2
 import pytest
 
 import nebius_cxcli.cli as cli
@@ -56,8 +56,8 @@ def test_provider_scope_validation_uses_project_parent_with_project_scoped_auth(
 
     lookup = ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
-    monkeypatch.setattr(iam_v1, "ProjectServiceClient", _ProjectServiceClient)
-    monkeypatch.setattr(iam_v1, "TenantServiceClient", _TenantServiceClient)
+    monkeypatch.setattr(iam_v2, "ProjectServiceClient", _ProjectServiceClient)
+    monkeypatch.setattr(iam_v2, "TenantServiceClient", _TenantServiceClient)
 
     result = lookup.validate_tenant_project_scope(
         tenant_id="tenant-1",
@@ -82,7 +82,7 @@ def test_provider_scope_validation_rejects_project_parent_mismatch(
 
     lookup = ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
-    monkeypatch.setattr(iam_v1, "ProjectServiceClient", _ProjectServiceClient)
+    monkeypatch.setattr(iam_v2, "ProjectServiceClient", _ProjectServiceClient)
 
     result = lookup.validate_tenant_project_scope(
         tenant_id="tenant-1",

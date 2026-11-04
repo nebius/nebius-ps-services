@@ -517,3 +517,58 @@ def test_failed_payload_cannot_be_hidden_by_skipped_marker(tmp_path):
     )
     assert report.overall_status == "failed"
     assert report.failed_count == 1
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"passed": True, "checks": []},
+        {"passed": True, "skipped": True, "checks": [{"passed": True}]},
+    ],
+)
+def test_required_observability_cannot_pass_without_executed_checks(tmp_path, result):
+    (tmp_path / "result.json").write_text(json.dumps(result))
+    report = build_deploy_validation_report(
+        [{"kind": "mk8s_observability_ingestion", "report_file": "result.json", "required": True}],
+        reports_dir=tmp_path,
+    )
+    assert report.overall_status == "failed"
+
+
+def test_observability_report_from_different_frozen_contract_fails(tmp_path):
+    (tmp_path / "result.json").write_text(
+        json.dumps({"passed": True, "checks": [{"passed": True}], "contract_sha256": "stale"})
+    )
+    report = build_deploy_validation_report(
+        [
+            {
+                "kind": "mk8s_observability_ingestion",
+                "report_file": "result.json",
+                "required": True,
+                "e2e": {"configuration_sha256": "current"},
+            }
+        ],
+        reports_dir=tmp_path,
+    )
+    assert report.overall_status == "failed"
+
+
+def test_observability_preflight_error_is_not_hidden_by_missing_evidence(tmp_path):
+    (tmp_path / "result.json").write_text(
+        json.dumps(
+            {"passed": False, "checks": [], "error": "Human profile read access is unavailable"}
+        )
+    )
+    report = build_deploy_validation_report(
+        [
+            {
+                "kind": "mk8s_observability_ingestion",
+                "report_file": "result.json",
+                "required": True,
+                "e2e": {"configuration_sha256": "current"},
+            }
+        ],
+        reports_dir=tmp_path,
+    )
+    assert report.overall_status == "failed"
+    assert "Human profile read access is unavailable" in report.results[0].summary

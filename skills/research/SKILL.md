@@ -81,15 +81,14 @@ where the source plan and output shape are obvious.
 
 ## Source Priority
 
-Follow this order for every non-trivial research task. Always consider
-internal context first; search it when the question is tied to an organization,
-project, deployment, customer environment, policy, prior decision, or local
-operating practice. If internal context is clearly irrelevant, say it was
-skipped as not relevant.
+Follow this order for every non-trivial research task. Inspect relevant local
+files first when project context matters. Search internal connectors only for
+unresolved organizational questions that could change the answer; do not visit
+every source class by default. Briefly label skipped or unavailable evidence.
 
-1. Internal sources first. Search available agent connectors for the
-   organization's Slack channels and Confluence pages before relying on
-   external sources for organization-specific context. Use internal sources to
+1. Local and internal context. Inspect relevant repository evidence, then search
+   available Slack and Confluence connectors for unresolved organization-specific
+   context before relying on external sources for it. Use internal sources to
    find local architecture decisions, runbooks, incident notes, operating
    constraints, project conventions, owner intent, and accepted exceptions.
 2. Alternative internal connectivity. If the agent connectors are not
@@ -144,10 +143,9 @@ limitations, and leads to verify. Never treat it as authoritative.
 1. Understand the question: identify what the user is trying to learn, why it
    matters, what decision it should inform, and how deep the research needs to
    be.
-2. Search internal sources: use available Slack and Confluence connectors
-   first for organization-specific context. If those connectors are
-   unavailable, use the relevant MCP servers or app tools for internal systems
-   when available. Record what internal source classes were checked or skipped.
+2. Inspect relevant local evidence, then search internal connectors only for
+   unresolved organizational context. Use authorized MCP/app alternatives if
+   needed; record source classes checked, skipped or unavailable.
 3. Build foundational understanding: explain the problem the subject solves,
    why it was created, and what existed before.
 4. Study authoritative external sources: use official docs, specs, RFCs,
@@ -167,17 +165,44 @@ limitations, and leads to verify. Never treat it as authoritative.
    vendor documentation and general best practices. State when to use it, when
    not to use it, key risks, what to avoid, and what evidence is still missing.
 
+## Adaptive Retrieval and Synthesis
+
+- Before substantial retrieval, name the subquestions, decision-changing gaps,
+  relevant versions/timeframe and user limits. Choose a small initial batch;
+  expand only for a named gap, reuse findings and stop when evidence suffices
+  or further retrieval cannot resolve the stated uncertainty. Counts are
+  illustrative checkpoints, never fixed defaults or minimum quotas.
+- Keep narrow questions on the documentation/Search/Extract route below.
+  Optionally use Tavily Research for substantial public-source synthesis on
+  one focal topic. This skill owns framing, verification and recommendations.
+- Follow the Research procedure in `references/research-methodology.md` before
+  launching a job: sanitize the brief, choose an explicit supported model,
+  discover actual controls, reuse supported completion mechanisms, and never
+  resubmit equivalent work after ambiguous completion.
+- Separate direct retrieval allowances from opaque service-internal work.
+  Never promise unsupported query, page, domain, duration or spending limits;
+  if a hard constraint cannot be enforced, use a suitable direct path or
+  report the limitation. One Research job is not a cost guarantee.
+- Verify decisive generated claims in original sources before recommending
+  action. Preserve uncertainty and disclose failed or incomplete research;
+  use bounded direct retrieval when feasible without repairing authentication.
+
 ## Research Standards
 
 - Always continue from "what" to "why", "how", "when", "why not", and
   "what are the tradeoffs".
-- For organization-tied questions, search internal Slack and Confluence sources
-  first through available connectors. If connectors are unavailable, use
-  authorized MCP access paths for the internal systems when present; otherwise
-  state that internal evidence was unavailable.
+- For organization-tied questions, inspect relevant local evidence before
+  searching Slack/Confluence for unresolved organizational context. Use
+  authorized MCP alternatives when needed; distinguish unavailable evidence
+  from source classes skipped because they cannot change the answer.
 - Use current official documentation for version-sensitive behavior. Prefer
-  configured official-documentation MCP tools when available; otherwise use web
-  search restricted toward official sources first.
+  relevant vendor documentation MCP tools already available in the current
+  session. A configuration entry alone is not availability. If absent, failing
+  or insufficient, use Tavily Search/Extract against official version-appropriate
+  sources, including for small documentation questions. If Tavily cannot help,
+  disclose the limitation and use official-web search/retrieval. Preserve
+  higher-priority host rules; never install integrations or repair auth merely
+  to satisfy a lookup. Use only nonconfidential public-query inputs.
 - Search GitHub source when internals or actual implementation behavior matter.
   Prefer official repositories and cite files, symbols, commits, issues, or PRs
   when relevant.

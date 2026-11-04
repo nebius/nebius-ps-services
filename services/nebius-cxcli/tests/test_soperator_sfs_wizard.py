@@ -319,6 +319,7 @@ def wizard(monkeypatch):
                 ]
             },
             "apps": {"charts": []},
+            "version": "v2",
         }
         updated, complete = cli._run_component_field_wizard(
             config_yaml=yaml.safe_dump(payload),
@@ -497,6 +498,7 @@ def test_saved_choices_survive_real_profile_normalization_and_runtime_conversion
                 }
             ]
         },
+        "version": "v2",
     }
     normalize_runtime_config_payload(payload)
     sfs = payload["infra"]["components"][1]

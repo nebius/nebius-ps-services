@@ -4,6 +4,7 @@ import copy
 
 import pytest
 
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.destroy_target import (
     check_retired_target_references,
     require_non_mk8s_destroy,
@@ -42,15 +43,12 @@ def binding(*, external=False):
             cluster_id="mk8scluster-one",
         )
         source = {
-            "deploy": {
-                "targets": [
-                    {
-                        "kind": "external-mk8s",
-                        "instance_id": "training",
-                        "cluster_id": "mk8scluster-one",
-                    }
-                ]
-            }
+            "infra": {
+                "components": [],
+                "external_clusters": [{"instance_id": "training", "cluster_id": "mk8scluster-one"}],
+            },
+            "apps": {"charts": []},
+            "version": "v2",
         }
         state, modules = {}, []
     return dict(
@@ -82,7 +80,7 @@ def test_alias_or_arbitrary_cloud_id_cannot_select_a_cluster(value):
 def test_conflicting_source_state_or_output_id_is_rejected(external):
     args = binding(external=external)
     if external:
-        args["source"]["deploy"]["targets"][0]["cluster_id"] = "other-cluster"
+        args["source"]["infra"]["external_clusters"][0]["cluster_id"] = "other-cluster"
     else:
         args["state_values"]["outputs"]["training_cluster_id"]["value"] = "other-cluster"
     with pytest.raises(ValueError, match="conflicting"):
@@ -91,8 +89,8 @@ def test_conflicting_source_state_or_output_id_is_rejected(external):
 
 def test_context_only_onboarding_requires_explicit_registration():
     args = binding(external=True)
-    del args["source"]["deploy"]["targets"][0]["cluster_id"]
-    args["source"]["deploy"]["targets"][0]["kube_context"] = "mk8scluster-one"
+    del args["source"]["infra"]["external_clusters"][0]["cluster_id"]
+    args["source"]["infra"]["external_clusters"][0]["kube_context"] = "mk8scluster-one"
     with pytest.raises(ValueError, match="explicit cluster_id"):
         resolve_destroy_target(**args)
 
@@ -102,7 +100,7 @@ def test_duplicate_cloud_id_does_not_select_first_match():
     duplicate = copy.deepcopy(args["targets"][0])
     duplicate.update(instance_id="other", target_ref="other")
     args["targets"].append(duplicate)
-    args["source"]["deploy"]["targets"].append(
+    args["source"]["infra"]["external_clusters"].append(
         {"instance_id": "other", "kind": "external-mk8s", "cluster_id": "mk8scluster-one"}
     )
     with pytest.raises(ValueError, match="duplicate immutable"):
@@ -122,7 +120,19 @@ def test_generic_teardown_rejects_mk8s_in_every_authority(location):
     with pytest.raises(ValueError, match="--target CLUSTER_ID"):
         require_non_mk8s_destroy(
             args["source"] if location == "source" else {},
-            {"deploy": {"targets": args["targets"]}} if location == "manifest" else {},
+            {
+                "execution": {
+                    "targets": args["targets"],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
+                },
+                "schema": "nebius-cxcli-generated/v3",
+                "runtime_config": {"version": "v2"},
+            }
+            if location == "manifest"
+            else {},
             args["state_values"] if location == "state" else {},
         )
 
@@ -164,12 +174,10 @@ def test_cleanup_removes_only_selected_target_and_apps_without_soperator(tmp_pat
                 "inputs": {},
             }
         )
-    source["deploy"] = {
-        "targets": [
-            {"instance_id": ref, "kind": "external-mk8s", "cluster_id": f"mk8scluster-{ref}"}
-            for ref in ("retired", "retained")
-        ]
-    }
+    source["infra"]["external_clusters"] = [
+        {"instance_id": ref, "cluster_id": f"mk8scluster-{ref}"}
+        for ref in (("retired", "retained") if ownership == "external" else ("retained",))
+    ]
     source["apps"]["charts"] = [
         {"id": "gateway-helm", "instance_id": ref, "enabled": False, "values": {}}
         for ref in ("retired", "retained")
@@ -181,7 +189,7 @@ def test_cleanup_removes_only_selected_target_and_apps_without_soperator(tmp_pat
     validate_config(copy.deepcopy(cleaned), base_dir=tmp_path)
     assert source == original
     assert [row["instance_id"] for row in cleaned["infra"]["components"]] == ["archive"]
-    assert [row["instance_id"] for row in cleaned["deploy"]["targets"]] == ["retained"]
+    assert [row["instance_id"] for row in cluster_rows(cleaned)] == ["retained"]
     assert [row["instance_id"] for row in cleaned["apps"]["charts"]] == ["retained"]
 
 
@@ -199,14 +207,8 @@ def test_mixed_managed_and_onboarded_ownership_is_rejected(conflict):
             {"component_id": "mk8s", "instance_id": "training", "module_name": "training"}
         ]
     else:
-        args["source"]["deploy"] = {
-            "targets": [
-                {
-                    "instance_id": "training",
-                    "kind": "external-mk8s",
-                    "cluster_id": "mk8scluster-one",
-                }
-            ]
-        }
+        args["source"]["infra"].setdefault("external_clusters", []).append(
+            {"instance_id": "training", "cluster_id": "mk8scluster-one"}
+        )
     with pytest.raises(ValueError, match="ownership"):
         resolve_destroy_target(**args)

@@ -24,7 +24,6 @@ from test_deployment_plan import config
 
 def profiling_config():
     payload = config()
-    payload["deploy"] = {"targets": [{"instance_id": "cluster"}]}
     payload["apps"]["charts"][0]["values"] = initial()
     return candidate_config(payload, target_ref="cluster", settings=default_settings())
 

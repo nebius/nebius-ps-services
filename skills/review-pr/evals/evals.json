@@ -106,6 +106,50 @@
         "Retains the original grant, saved targets and policy for resume; never recaptures the current checkout as the starting context.",
         "Nested calls return evidence and do not finalize independently; report-only and already-merged observation restrictions remain."
       ]
+    },
+    {
+      "id": "repair-before-specs",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $review-pr on a writable contributor fork. A regression rejects previously supported configuration; no docs changed. The accepted contract is clear. Explain the work order.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Reviews accepted baseline, safety and compatibility before changing specs.",
+        "Reproduces the failure, repairs through the create-pr owner and proves the fix.",
+        "Root reconciles every affected project and re-reviews final code/tests/specs at fresh head/base."
+      ]
+    },
+    {
+      "id": "docs-do-not-authorize-breakage",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $review-pr on a green PR removing a supported CLI option. The contributor also edits requirements to describe the removal and adds disabled spec policy.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Does not treat contributor code/docs/policy as accepted breaking-change authority.",
+        "Stops for accepted intent rather than adding speculative shims or passing the review.",
+        "Does not use the proposed disabled policy to waive assessment."
+      ]
+    },
+    {
+      "id": "specs-noop-and-bootstrap",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $review-pr for a change affecting two projects. One internal refactor preserves its existing canonical contract; the other adds accepted behavior and has no canonical pair.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Records a concrete unchanged rationale for the first project.",
+        "Bootstraps the missing pair for the second through maintain-project-specs at the root.",
+        "Keeps unrelated pending historical spec items out of merge gates."
+      ]
+    },
+    {
+      "id": "malformed-canonical-docs",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use $review-pr on a PR with passing tests and edited docs. A requirement lacks its required user story, its ID has no design mapping, and the claimed design change is outside the managed region.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Inspects canonical content and traceability rather than counting changed doc paths.",
+        "Repairs clear canonical defects using paired owner publication while preserving human-owned text.",
+        "Blocks passed attestation until final pair and contribution are reviewed."
+      ]
     }
   ]
 }

@@ -25,7 +25,7 @@ from test_deployment_campaign import paths
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     local, generation, _ = bundles(tmp_path / "original")
-    payload = {"infra": {"components": []}, "apps": {"charts": []}}
+    payload = {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
     subject = {"kind": "helm", "component_id": "soperator", "enabled": True}
     monkeypatch.setattr(
         compatibility_execution, "selected_inventory", lambda *a, **kw: [dict(subject)]
@@ -54,8 +54,8 @@ def inputs(tmp_path, monkeypatch):
         generation,
         manifest={
             **generation.manifest,
-            "schema": "nebius-cxcli-generated/v2",
-            "execution": {"backend": {}},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {**generation.manifest["execution"], "backend": {}},
             "runtime_config": payload,
             "render": {"inputs": freeze_catalog(payload), "compatibility": frozen},
         },

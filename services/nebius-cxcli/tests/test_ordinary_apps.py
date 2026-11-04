@@ -18,6 +18,72 @@ from nebius_cxcli.paths import resolve_project_paths
 
 
 @pytest.fixture
+def infrastructure_baseline(tmp_path):
+    config_path = tmp_path / "deployments" / "tenant" / "project" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    paths = resolve_project_paths(config_path)
+    payload = {
+        "client_info": {
+            "client_name": "example",
+            "nebius": {"project_id": "project-example", "region_id": "eu-north2"},
+        },
+        "infra": {"components": [{"id": "vpc", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": []},
+        "version": "v2",
+    }
+    config_path.write_text(yaml.safe_dump(payload))
+    paths.infra_dir.mkdir(parents=True)
+    (paths.infra_dir / "main.tf").write_text("# VPC-only fixture\n")
+    manifest = build_generated_manifest(
+        config=payload, paths=paths, targets=[], required_component_outputs=[]
+    )
+    manifest_path_for_generated_dir(paths.generated_dir).write_text(json.dumps(manifest))
+    return paths, manifest
+
+
+@pytest.mark.parametrize("selected_target_refs", [None, ()])
+def test_infrastructure_only_completion_publishes_baseline_without_cluster_access(
+    infrastructure_baseline, monkeypatch, selected_target_refs
+):
+    from nebius_cxcli.deployment_state import DeploymentGeneration
+
+    paths, manifest = infrastructure_baseline
+    generation = DeploymentGeneration.capture(paths, manifest)
+
+    def unexpected_cluster_access(*args, **kwargs):
+        pytest.fail("Infrastructure-only completion must not access Kubernetes")
+
+    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", unexpected_cluster_access)
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", unexpected_cluster_access)
+
+    assert (
+        cli.accept_ordinary_app_baseline(
+            paths,
+            selected_target_refs=selected_target_refs,
+            deployment_generation=generation.identity,
+            expected_generation=generation,
+        )
+        is True
+    )
+    baseline = json.loads((paths.reports_dir / ordinary_apps.BASELINE_FILENAME).read_text())
+    assert baseline["identities"] == {}
+    assert baseline["ordinary_files"] == {}
+    assert baseline["deployment_generation"] == generation.identity
+    assert baseline["protected_files"]["infra/main.tf"]
+
+
+@pytest.mark.parametrize("requested_target_ref,all_targets", [("cluster", False), (None, True)])
+def test_infrastructure_only_explicit_cluster_selection_still_fails(
+    infrastructure_baseline, requested_target_ref, all_targets
+):
+    _paths, manifest = infrastructure_baseline
+    with pytest.raises(RuntimeError, match="No built-in cluster targets"):
+        cli._resolve_selected_deploy_targets(
+            manifest, requested_target_ref=requested_target_ref, all_targets=all_targets
+        )
+
+
+@pytest.fixture
 def project(tmp_path, monkeypatch):
     def accepted(config, paths, manifest, baseline, refs, **kwargs):
         kwargs["assert_held"]()
@@ -54,7 +120,6 @@ def project(tmp_path, monkeypatch):
         "infra": {
             "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
         },
-        "deploy": {"targets": [{"instance_id": "cluster"}]},
         "apps": {
             "charts": [
                 {
@@ -67,6 +132,7 @@ def project(tmp_path, monkeypatch):
                 }
             ]
         },
+        "version": "v2",
     }
     config_path.write_text(yaml.safe_dump(payload))
     paths.infra_dir.mkdir(parents=True)
@@ -736,7 +802,6 @@ def test_mixed_project_keeps_normal_mk8s_apps_in_ordinary_scope(project, monkeyp
     payload["infra"]["components"].append(
         {"id": "mk8s", "instance_id": "other", "enabled": True, "inputs": {}}
     )
-    payload["deploy"]["targets"].append({"instance_id": "other"})
     payload["apps"]["charts"].append(
         {
             **copy.deepcopy(payload["apps"]["charts"][-1]),
@@ -769,10 +834,31 @@ def test_mixed_project_keeps_normal_mk8s_apps_in_ordinary_scope(project, monkeyp
     from nebius_cxcli.deployment_target import apply_ordinary_bundle
 
     targets = [
-        {"target_ref": ref, "flux_dir": str(flux_target_dir(staged, ref))}
+        {
+            "target_ref": ref,
+            "instance_id": ref,
+            "kind": "external-mk8s",
+            "ownership": "external",
+            "kube_context": ref,
+            "access": "external",
+            "flux_dir": str(flux_target_dir(staged, ref)),
+        }
         for ref in ("cluster", "other")
     ]
-    frozen = DeploymentGeneration.capture(staged, {"deploy": {"targets": targets}})
+    frozen = DeploymentGeneration.capture(
+        staged,
+        {
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": payload,
+            "execution": {
+                "backend": {},
+                "targets": targets,
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+    )
     calls = []
     monkeypatch.setattr(
         cli,
@@ -847,7 +933,12 @@ def test_explicit_grafana_routing_publication_preserves_native_admission(project
         paths, candidate, observability_target_refs=frozenset({"cluster"})
     )
     saved = yaml.safe_load(paths.config_path.read_text())
-    assert saved["infra"] == source["infra"]
+    saved_cluster = saved["infra"]["components"][0]
+    original_cluster = source["infra"]["components"][0]
+    assert {
+        key: value for key, value in saved_cluster.items() if key != "observability"
+    } == original_cluster
+    assert saved_cluster["observability"] == candidate["infra"]["components"][0]["observability"]
     assert saved["apps"]["charts"][0] == source["apps"]["charts"][0]
     # Native routing still forces full lifecycle admission after config-only save.
     assert ordinary_apps.protected_config_digest(saved) != before
@@ -912,7 +1003,6 @@ def test_lifecycle_accepts_and_applies_both_mixed_target_identities(project, mon
     payload["infra"]["components"].append(
         {"id": "mk8s", "instance_id": "other", "enabled": True, "inputs": {}}
     )
-    payload["deploy"]["targets"].append({"instance_id": "other"})
     payload["apps"]["charts"].append(
         {
             **copy.deepcopy(payload["apps"]["charts"][-1]),
@@ -923,9 +1013,9 @@ def test_lifecycle_accepts_and_applies_both_mixed_target_identities(project, mon
     paths.config_path.write_text(yaml.safe_dump(payload))
     manifest = load_generated_manifest(paths.generated_dir)
     manifest["runtime_config"] = payload
-    manifest["deploy"]["targets"].append(
+    manifest["execution"]["targets"].append(
         {
-            **manifest["deploy"]["targets"][0],
+            **manifest["execution"]["targets"][0],
             "target_ref": "other",
             "instance_id": "other",
             "flux_dir": str(flux_target_dir(paths, "other")),
@@ -1034,3 +1124,42 @@ def test_unsupported_helm_fails_before_live_ownership_inventory(monkeypatch, tmp
     monkeypatch.setattr(ordinary_apps, "_live_json", live)
     with pytest.raises(RuntimeError, match="require Helm 4"):
         ordinary_apps.validate_live_app_ownership(tmp_path, extra_env={})
+
+
+def test_failed_ordinary_handoff_clears_only_selected_validation_report(project):
+    paths, payload = project
+    payload = add_app(paths, payload)
+    ordinary_apps.render_ordinary_apps(payload, paths)
+    manifest = load_generated_manifest(paths.generated_dir)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    selected = paths.reports_dir / "selected.json"
+    peer = paths.reports_dir / "peer.json"
+    for path in (selected, peer):
+        path.write_text(json.dumps({"passed": True}))
+    services = ordinary_apps.OrdinaryAppServices(
+        prepare_handoff=lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("handoff failed")
+        ),
+        read_kubernetes_uid=lambda **kwargs: "uid-example",
+        ensure_grafana=lambda *args, **kwargs: None,
+        apply_flux=lambda *args, **kwargs: None,
+        collect_grafana=lambda *args, **kwargs: [],
+        emit=lambda *args: None,
+        emit_command=lambda *args: None,
+    )
+    validations = [
+        {"kind": "mk8s_observability_ingestion", "target_ref": target, "report_file": name}
+        for target, name in [("cluster", "selected.json"), ("peer", "peer.json")]
+    ]
+    with pytest.raises(RuntimeError, match="handoff failed"):
+        ordinary_apps.apply_ordinary_apps(
+            payload,
+            paths,
+            manifest,
+            targets=[{"target_ref": "cluster"}],
+            services=services,
+            validations=validations,
+            assert_project_authority=lambda: None,
+        )
+    assert not selected.exists()
+    assert json.loads(peer.read_text())["passed"] is True

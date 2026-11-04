@@ -37,3 +37,8 @@ output "wireguard_client_generator_path" {
   description = "Path on the VM for the day-2 WireGuard client generator command."
   value       = "/usr/local/sbin/nebius-wireguard-client"
 }
+
+output "boot_disk_id" {
+  description = "Gateway boot disk identity for authenticated SSH host binding."
+  value       = module.vm.boot_disk_id
+}

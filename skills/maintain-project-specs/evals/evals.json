@@ -1,0 +1,27 @@
+{
+  "skill_name": "maintain-project-specs",
+  "evals": [
+    {
+      "id": "pr-root-handoff",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. A root review-pr coordinator supplies two exact affected project roots, accepted baseline and validated repairs. One canonical pair is missing. Reconcile project specs.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Uses supplied project roots rather than startup cwd.",
+        "Bootstraps missing specs from accepted evidence through paired owner publication.",
+        "Reports spec outcomes without committing, pushing or invoking PR owners."
+      ]
+    },
+    {
+      "id": "pr-contract-restoration",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. An ordinary PR repair restores documented behavior with focused passing regression proof. Requirements remain accurate. Reconcile the handoff.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Avoids inventing new requirements solely because code changed.",
+        "Updates delivery evidence only if project truth changes, otherwise gives a concrete unchanged rationale.",
+        "Preserves root ownership, stable IDs and human-owned regions."
+      ]
+    }
+  ]
+}

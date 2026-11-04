@@ -107,10 +107,10 @@ class GrafanaSkillContractTest(unittest.TestCase):
         self.assertIn("cleanup_worker_timer", wrapper)
         self.assertIn("cleanup_refresh_worker", wrapper)
         self.assertIn("refresh_token interactive", wrapper)
-        self.assertIn("renewing it before MCP startup", wrapper)
+        self.assertIn("retrieving it before MCP startup", wrapper)
         self.assertIn("refresh_token noninteractive", wrapper)
         self.assertIn(
-            "start a new chat or restart Codex before using grafana-nebius",
+            "diagnostic restart RESTART_REQUIRED",
             wrapper,
         )
 

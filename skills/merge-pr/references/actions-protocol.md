@@ -14,17 +14,39 @@ validating and re-reviewing, write a private JSON file with observed evidence:
 
 ```json
 {
-  "schema": "skills-review/v1",
+  "schema": "skills-review/v2",
   "repository": "owner/repository",
   "pr": 123,
+  "base_repository_id": 101,
+  "head_repository_id": 202,
+  "head_repository": "contributor/repository",
+  "head_ref": "feature-branch",
   "head": "<full-reviewed-head-sha>",
   "base": "<live-default-branch>",
   "base_sha": "<full-reviewed-base-sha>",
   "verdict": "passed",
   "unresolved_findings": 0,
-  "validation": ["Relevant command and its observed passing result"]
+  "validation": ["Relevant command and its observed passing result"],
+  "contribution": {
+    "verdict": "passed",
+    "compatibility": "preserved",
+    "evidence": ["Accepted behavior and focused regression proof"]
+  },
+  "specs": [{
+    "project": "services/example",
+    "outcome": "aligned",
+    "evidence": "Paired owner validation and accepted delivery evidence"
+  }]
 }
 ```
+
+Contribution compatibility is `preserved` or `approved-change`, with the accepted
+decision cited for the latter. Specs must enumerate every affected project using
+a normalized repository-relative path (`.` for repository root), an `aligned`,
+`unchanged` or `disabled` outcome and concrete evidence. Unchanged requires a
+no-impact rationale; disabled requires accepted policy. Blocked projects cannot
+be attested as passed. The root owns semantic sufficiency; Actions validates the
+required shape and exact identity, not the truth of natural-language claims.
 
 Do not record a passing verdict with unsafe findings, unresolved human
 objections/threads, failed checks or incomplete review. Keep secrets, private
@@ -60,7 +82,7 @@ schedules produce no merge candidates; they continue updating Required CI.
 
 The trusted default workflow separates permissions by job: CI status writes,
 read-only admission, then Contents/PR write for approval and merge. Before any
-approval it uploads an immutable exact-head/base `merge-intent/v1` artifact.
+approval it uploads an immutable exact-head/base `merge-intent/v2` artifact.
 The effect job requires that receipt, independently repeats CI/review gates,
 reuses an existing exact-head Actions approval, then rechecks before requesting
 `PUT /pulls/{number}/merge-async` with `sha`, `merge_action: direct_merge`,
@@ -148,6 +170,24 @@ and conversation resolution. A push restriction that cannot admit the built-in
 identity requires an explicitly authorized protection redesign; never remove
 it opportunistically. Additional human/CODEOWNER/environment requirements remain
 blockers. Do not delete old credentials as part of migration.
+
+### Coordinated schema cutover
+
+Review and intent v2 require separate numeric base/head repository identities,
+head ref and contribution/spec assessments. Task/checkpoint/closure v3 adds bound
+PR publication. Old schemas fail closed; there is no compatibility reader.
+Before activation, stop new old-version admissions, settle outstanding pushes
+and completed merges with the old trusted helpers, drain open grants/intents,
+and prove old broker/completion runs quiescent. Then use a protected maintainer
+bootstrap to update trusted helpers, workflows/templates and operator installs
+together. Independently verify bootstrap CI because the old broker cannot
+admit a new-schema attestation. Source tests do not activate this migration.
+Keep old trusted helpers available only to finish their existing operations;
+never translate authority, reopen closures or remove protections to bootstrap.
+
+Confirmed merged forks can complete after fork deletion using the immutable
+intent and authoritative base result. Missing source metadata before merge,
+repository-ID/ref drift or absent result proof blocks effects.
 
 ## Reviewed dependency updates
 

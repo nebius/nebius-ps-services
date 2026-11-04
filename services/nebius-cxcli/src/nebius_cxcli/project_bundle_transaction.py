@@ -281,6 +281,7 @@ def normalize_project_bundle_target(project_dir: Path, raw_path: Path) -> Path:
                 f"project transaction target escapes the project directory: {raw_path}"
             ) from exc
         candidate = project_dir / relative
+    assert relative is not None
     if not relative.parts:
         raise ProjectBundleSafetyError("project transaction cannot replace the project directory")
     if any(part in {"", ".", ".."} for part in relative.parts):
@@ -444,6 +445,12 @@ class ProjectBundleTransaction:
 
     def _materialize(self, payload: dict[str, Any]) -> None:
         entries = self._validated_entries(payload)
+        # Validate every postimage before recovery can publish any member of the bundle.
+        from .deployment_recovery import _validate_journal_bytes
+
+        for _item, target, staged in entries:
+            if staged is not None:
+                _validate_journal_bytes(target.relative_to(self.project_dir), staged.read_bytes())
         states: list[tuple[Mapping[str, Any], Path, Path | None, str]] = []
         for item, target, staged in entries:
             current_digest, _mode = _target_state(self.project_dir, target)
@@ -645,6 +652,9 @@ class ProjectBundleTransaction:
                 content = (
                     raw_content.encode("utf-8") if isinstance(raw_content, str) else raw_content
                 )
+                from .deployment_recovery import _validate_journal_bytes
+
+                _validate_journal_bytes(target.relative_to(self.project_dir), bytes(content))
                 normalized.append(
                     ProjectBundleTarget(
                         path=target,

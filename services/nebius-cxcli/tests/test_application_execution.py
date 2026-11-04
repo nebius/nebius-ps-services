@@ -14,6 +14,7 @@ from nebius_cxcli.application_compatibility import (
     captured_application_execution,
 )
 from nebius_cxcli.application_upgrade import prepare_chart_upgrade
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.compatibility_artifacts import capture_chart, frozen_chart
 from nebius_cxcli.compatibility_execution import freeze_compatibility
 from nebius_cxcli.deploy_targets import flux_target_dir
@@ -105,7 +106,7 @@ def application_project(tmp_path, monkeypatch):
             },
             "infra": {"components": []},
             "apps": {"charts": []},
-            "deploy": {"targets": []},
+            "version": "v2",
         }
         targets = []
         for n, (repo, version) in enumerate(zip(repos, versions, strict=True)):
@@ -118,7 +119,6 @@ def application_project(tmp_path, monkeypatch):
                     "inputs": {"cluster": {"k8s_version": kubernetes}},
                 }
             )
-            payload["deploy"]["targets"].append({"instance_id": ref})
             payload["apps"]["charts"].append(
                 {
                     "id": component,
@@ -283,7 +283,7 @@ def render_application_project(payload, paths, prior, outputs):
         paths=paths,
         targets=[
             {**row, "flux_dir": str(flux_target_dir(paths, row["target_ref"]))}
-            for row in prior["deploy"]["targets"]
+            for row in prior["execution"]["targets"]
         ],
         required_component_outputs=cli._required_runtime_component_output_specs(payload),
         compatibility=frozen,
@@ -366,7 +366,7 @@ def test_mysterybox_binding_admission(application_project, binding, api_version)
             },
         }
     )
-    payload["deploy"]["targets"][0]["secrets"] = {
+    cluster_rows(payload)[0]["secrets"] = {
         "mysterybox": {"enabled": True, "sync_namespaces": ["default"]}
     }
     secret_ids = {} if binding == "unresolved" else {"database": "secret-database"}
@@ -449,6 +449,7 @@ def test_local_nfs_binding_checks_native_storage_class(tmp_path, monkeypatch, bi
             ]
         },
         "apps": {"charts": [row]},
+        "version": "v2",
     }
     materialized = copy.deepcopy(row)
     outputs = (
@@ -537,6 +538,9 @@ def test_full_admission_checks_http_content(application_project):
 
     payload, _, paths, _ = application_project(repos=("https://charts.example.test",))
     payload["infra"]["components"] = []
+    payload["infra"]["external_clusters"] = [
+        {"instance_id": "cluster0", "kube_context": "external"}
+    ]
     frozen = freeze_compatibility(payload, paths)
     assert admit_compatibility(payload, paths, frozen, terraform_validated=True)
     application_project.constraints["1.0.0"] = ">=1.0.0"
@@ -884,7 +888,7 @@ def accepted_soperator_project(application_project):
         paths=paths,
         targets=[
             {**row, "flux_dir": str(flux_target_dir(paths, row["target_ref"]))}
-            for row in manifest["deploy"]["targets"]
+            for row in manifest["execution"]["targets"]
         ],
         required_component_outputs=[],
         compatibility=frozen,

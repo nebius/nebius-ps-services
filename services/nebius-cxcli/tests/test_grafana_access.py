@@ -22,7 +22,14 @@ from nebius_cxcli.grafana_runtime import (
 
 @pytest.fixture
 def live(monkeypatch):
-    config = {"client_info": {}, "deploy": {"targets": [{"instance_id": "cluster"}]}}
+    config = {
+        "client_info": {},
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
+        },
+        "apps": {"charts": []},
+        "version": "v2",
+    }
     metadata = {
         "name": "live-grafana",
         "namespace": "monitoring",
@@ -465,6 +472,12 @@ def test_report_includes_private_access_without_cloud_collection(tmp_path, monke
     path.parent.mkdir(parents=True)
     data = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     _enable_mk8s_observability(data)
+    from nebius_cxcli.grafana_install import configure
+
+    data = configure(data, "mk8s")
+    from nebius_cxcli.deploy_targets import strip_app_chart_target_refs
+
+    strip_app_chart_target_refs(data)
     path.write_text(yaml.safe_dump(data))
     config, paths = load_config(path), resolve_project_paths(path)
     result = access_result(tmp_path, target_ref="mk8s")

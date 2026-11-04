@@ -38,3 +38,4 @@ been selected and preserves only workflow-state expectations.
 | Current evidence contains two project IDs | Ask the user; do not choose from profiles, filenames, or memory. |
 | Valid selector and runtime auth already work | Do not trigger unnecessary setup. |
 | Agent is asked to enumerate or manage tenant IAM | Refuse; diagnosis is limited to auth and quota-read checks. |
+| Human bootstrap login expires during already authorized setup | Distinguish human bootstrap from agent runtime auth; return to setup for its bounded browser attempt without another permission prompt. Diagnosis never launches login or prints authorization URLs. |

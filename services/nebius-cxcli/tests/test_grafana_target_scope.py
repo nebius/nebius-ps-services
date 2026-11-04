@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from nebius_cxcli import grafana_install, observability_installation, soperator_release_resolver
+from nebius_cxcli.cluster_config import cluster_rows
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.observability_routing import (
@@ -32,11 +33,7 @@ def mixed_config(tmp_path):
     plain = copy.deepcopy(native)
     plain.update(instance_id="plain", inputs=_mk8s_inputs(cluster_name="plain"))
     data["infra"]["components"].append(plain)
-    targets = data.setdefault("deploy", {}).setdefault("targets", [])
-    target = next((row for row in targets if row["instance_id"] == "mk8s"), None)
-    if target is None:
-        target = {"instance_id": "mk8s"}
-        targets.append(target)
+    target = native
     target.setdefault("observability", {})["routing"] = {"metrics": {"storage": "local"}}
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(to_dynamic_payload(data)))
@@ -128,7 +125,7 @@ def test_scoped_load_preserves_unrelated_routing(mixed_config, forbid_native_res
 )
 def test_scoped_load_validates_unrelated_routing(mixed_config, forbid_native_resolution, routing):
     data = yaml.safe_load(mixed_config.read_text())
-    next(row for row in data["deploy"]["targets"] if row["instance_id"] == "mk8s")["observability"][
+    next(row for row in cluster_rows(data) if row["instance_id"] == "mk8s")["observability"][
         "routing"
     ] = routing
     mixed_config.write_text(yaml.safe_dump(data))
@@ -137,7 +134,7 @@ def test_scoped_load_validates_unrelated_routing(mixed_config, forbid_native_res
 
 
 def test_invalid_setup_target_fails_before_source_lookup(mixed_config, forbid_native_resolution):
-    with pytest.raises(ValueError, match="missing.*not an enabled managed MK8s target"):
+    with pytest.raises(ValueError, match="missing.*not a declared cluster"):
         load_config(mixed_config, observability_target_refs=frozenset({"missing"}))
 
 
@@ -324,7 +321,7 @@ def test_selected_target_keeps_peer_grafana_and_database_values(forbid_native_re
             "release-name": "peer-" + component,
             "values": {"authored": "retain"},
         }
-        for component in ("grafana", "postgresql")
+        for component in ("grafana", "grafana-postgresql")
     ]
     before = copy.deepcopy(source)
     candidate = grafana_install.configure(source, "cluster")
@@ -333,7 +330,7 @@ def test_selected_target_keeps_peer_grafana_and_database_values(forbid_native_re
         row for row in candidate["apps"]["charts"] if row.get("target_ref") == "peer"
     ] == before["apps"]["charts"]
     assert app_row(candidate, "cluster", "grafana")
-    assert app_row(candidate, "cluster", "postgresql")
+    assert app_row(candidate, "cluster", "grafana-postgresql")
 
 
 @pytest.mark.parametrize("interactive", [False, True])

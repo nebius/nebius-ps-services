@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from nebius_cxcli import cli, deployment_cli
-from nebius_cxcli.deployment_plan import DeploymentAction
+from nebius_cxcli.deployment_plan import DeploymentAction, DeploymentStageKind
 from nebius_cxcli.deployment_state import DeploymentGeneration, DeploymentState
 from nebius_cxcli.generated_manifest import runtime_config_from_manifest
 from test_deployment_campaign import generation, paths
@@ -32,6 +32,17 @@ def test_adapter_recovers_partial_creation_without_reclassifying_it_as_unowned(
     tmp_path, monkeypatch
 ):
     _exercise_adapter(tmp_path, monkeypatch, soperator=True, preview=False, interrupt=True)
+
+
+def test_infrastructure_only_deploy_finishes_through_real_baseline_workflow(tmp_path, monkeypatch):
+    _exercise_adapter(
+        tmp_path,
+        monkeypatch,
+        soperator=False,
+        preview=False,
+        interrupt=False,
+        real_baseline=True,
+    )
 
 
 def test_render_publication_before_capture_cannot_mix_old_manifest_and_new_files(
@@ -71,8 +82,19 @@ def _exercise_adapter(
     hydrated=False,
     execution_profile=None,
     rerender=False,
+    real_baseline=False,
 ):
-    payload = config() if soperator else {"infra": {"components": []}, "apps": {"charts": []}}
+    from nebius_cxcli.nat_gateway_deploy import NatDeployment
+
+    # This adapter fixture has no remote NAT ownership. NAT transport/recovery has its own tests.
+    monkeypatch.setattr(
+        NatDeployment, "_open", lambda self: SimpleNamespace(value={"gateways": {}})
+    )
+    payload = (
+        config()
+        if soperator
+        else {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
+    )
     execution_payload = copy.deepcopy(payload)
     if hydrated:
         if execution_profile is not None:
@@ -86,7 +108,7 @@ def _exercise_adapter(
     frozen = DeploymentGeneration(
         {
             **frozen.manifest,
-            "execution": {"backend": asdict(settings())},
+            "execution": {**frozen.manifest["execution"], "backend": asdict(settings())},
             "render": {"module_sources": []},
         },
         {
@@ -193,7 +215,8 @@ def _exercise_adapter(
     monkeypatch.setattr(cli, "preflight_soperator_backup_inputs", lambda *a, **kw: None)
     monkeypatch.setattr(cli, "preflight_soperator_sssd_inputs", lambda *a, **kw: {})
     monkeypatch.setattr(cli, "_preflight_soperator_install_checks", lambda *a: None)
-    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *a, **kw: None)
+    if not real_baseline:
+        monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *a, **kw: None)
 
     @contextmanager
     def lease(**kwargs):
@@ -289,7 +312,7 @@ def _exercise_adapter(
             report = build_deploy_validation_report(specs, reports_dir=private_paths.reports_dir)
             report = publish_deployment_reports(private_paths, original, specs, report)
             return cli.DeployRunSummary(validation_report=report, cluster_identities=identities)
-        return SimpleNamespace(cluster_identities=identities)
+        return cli.DeployRunSummary(cluster_identities=identities)
 
     monkeypatch.setattr(
         deployment_cli._CliDeploymentExecutor,
@@ -540,7 +563,7 @@ def test_target_options_are_validated_before_backend_side_effects(
         deployment_cli.deploy_rendered_bundle(
             {},
             project_paths,
-            {"deploy": {"targets": []}},
+            {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"},
             options=deployment_cli.DeployOptions(target_ref="missing", all_targets=True),
         )
     if project_paths is not None:
@@ -641,8 +664,83 @@ def test_lost_fence_after_refresh_prevents_deployment_dispatch(monkeypatch, tmp_
         )
 
 
+@pytest.mark.parametrize("changed", [True, False])
+@pytest.mark.parametrize("nat_failure", [True, False])
+def test_adapter_completes_nat_before_application_inputs(
+    monkeypatch, tmp_path, changed, nat_failure
+):
+    from test_nat_gateway import config as nat_config
+
+    class ApplicationBoundaryReached(Exception):
+        pass
+
+    effects = []
+    executor = object.__new__(deployment_cli._CliDeploymentExecutor)
+    executor.cli = cli
+    executor.plan = SimpleNamespace(action=DeploymentAction.INSTALL, target_ref="")
+    executor.campaign_intent = None
+    executor.config = nat_config()
+    executor.paths = executor.report_paths = paths(tmp_path)
+    executor.manifest = {
+        "execution": {
+            "targets": [],
+            "validations": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "backend": {},
+        },
+        "schema": "nebius-cxcli-generated/v3",
+        "runtime_config": {"version": "v2"},
+    }
+    executor.options = deployment_cli.DeployOptions()
+    executor.runtime_env = {}
+    executor.lease = SimpleNamespace(assert_held=lambda: None, operation_id="operation")
+    executor._bound_identities = lambda: {}
+    terraform = {
+        "resource_changes": [
+            {
+                "address": "module.nat.instance",
+                "type": "nebius_compute_v1_instance",
+                "change": {"actions": ["create"], "before": None, "after": {"name": "nat"}},
+            }
+        ]
+        if changed
+        else []
+    }
+    executor._terraform_plan = lambda **kw: (None, terraform)
+
+    def complete_nat():
+        effects.append("nat")
+        if nat_failure:
+            raise RuntimeError("gateway not ready")
+
+    def prepare_apps():
+        effects.append("apps")
+        raise ApplicationBoundaryReached
+
+    executor.nat = SimpleNamespace(complete=complete_nat)
+    executor._prepare_install_application_inputs = prepare_apps
+    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda *a: [])
+    monkeypatch.setattr(
+        cli, "_sync_mysterybox_primary_version_ids_to_config", lambda *a, **kw: False
+    )
+    monkeypatch.setattr(
+        cli, "_run_terraform_apply_with_status", lambda *a, **kw: effects.append("apply")
+    )
+    expected_error = RuntimeError if nat_failure else ApplicationBoundaryReached
+    with pytest.raises(expected_error, match="gateway not ready" if nat_failure else None):
+        executor.execute(
+            SimpleNamespace(
+                stage=SimpleNamespace(name=DeploymentStageKind.RECONCILE), terraform=terraform
+            ),
+            recovering=False,
+        )
+    assert effects == (["apply"] if changed else []) + ["nat"] + ([] if nat_failure else ["apps"])
+
+
 @pytest.mark.parametrize("loss_phase", ["preflight", "stream", "timeout", "os-error", "status"])
 def test_apply_fence_and_status_abort_share_one_guard(monkeypatch, tmp_path, loss_phase):
+    monkeypatch.setattr(cli, "terraform_show_json", lambda *a, **kw: {})
     held = True
 
     def assert_held():
@@ -760,7 +858,7 @@ def test_recovery_timing_policy_follows_frozen_effective_target(
             },
             manifest={
                 **frozen.manifest,
-                "deploy": {
+                "execution": {
                     "targets": [
                         {
                             "instance_id": "cluster",
@@ -770,8 +868,13 @@ def test_recovery_timing_policy_follows_frozen_effective_target(
                             "cluster_id_output_name": "cluster_id",
                             "component_output_ref": "mk8s.cluster.cluster_id",
                             "flux_dir": "flux",
+                            "ownership": "managed",
                         }
-                    ]
+                    ],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                    "backend": {},
                 },
             },
         )

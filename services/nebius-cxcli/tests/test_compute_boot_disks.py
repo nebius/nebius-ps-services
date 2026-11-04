@@ -172,7 +172,7 @@ def test_materialize_compute_boot_disk_defaults_from_preset_names(
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -221,7 +221,7 @@ def test_materialize_compute_boot_disk_defaults_from_provider_resources(
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -277,7 +277,7 @@ def test_materialize_compute_boot_disk_defaults_for_mk8s_node_groups_without_hel
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -345,7 +345,7 @@ def test_materialize_compute_boot_disk_defaults_ignores_stale_gpu_helper_without
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -402,7 +402,7 @@ def test_materialize_compute_boot_disk_defaults_for_vm_uses_shared_policy(
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -447,7 +447,7 @@ def test_materialize_compute_boot_disk_defaults_for_nfs_uses_vm_style_contract(
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -492,7 +492,7 @@ def test_materialize_compute_boot_disk_defaults_skips_vm_existing_boot_disk(
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -538,7 +538,7 @@ def test_materialize_compute_boot_disk_defaults_fails_for_unmatched_shape(
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -586,7 +586,7 @@ def test_materialize_compute_boot_disk_defaults_respects_existing_inputs_and_ove
     reset_component_sources_cache()
 
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -852,10 +852,7 @@ def test_refresh_compute_boot_disk_defaults_updates_mk8s_node_group_type_change(
     )
 
     assert changed is True
-    assert (
-        inputs["node_groups"]["system"]["boot_disk"]["type"]
-        == "NETWORK_SSD_NON_REPLICATED"
-    )
+    assert inputs["node_groups"]["system"]["boot_disk"]["type"] == "NETWORK_SSD_NON_REPLICATED"
     assert inputs["node_groups"]["system"]["boot_disk"]["size_gibibytes"] == 93
 
 

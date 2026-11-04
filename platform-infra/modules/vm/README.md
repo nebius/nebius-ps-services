@@ -251,7 +251,7 @@ Operational notes:
 - VM observability in `nebius-cxcli` uses Nebius' built-in VM Monitoring agent:
   service-provider metrics are collected automatically by Nebius, and journald
   logs are enabled by cxcli-managed VM labels when
-  `deploy.observability.vm.logs.enabled=true`. This module does not install a
+  `infra.components[id=vm].observability.vm.logs.enabled=true`. This module does not install a
   collector, create observability service accounts, or configure public write
   endpoints.
 

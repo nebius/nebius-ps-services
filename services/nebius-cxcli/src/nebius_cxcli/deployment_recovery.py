@@ -53,7 +53,7 @@ def _project_cache_file(relative: Path) -> bool:
         sub = parts[1:]
         if sub == ("nebius-cxcli-manifest.json",):
             return True
-        if len(sub) == 2 and sub[0] == "infra":
+        if len(sub) == 2 and sub[0] in {"infra", "infra-access"}:
             return (
                 relative.suffix == ".tf"
                 or relative.name.endswith(".tf.json")
@@ -109,7 +109,19 @@ def _cache_file(relative: Path) -> bool:
 
 
 def _validate_journal_bytes(relative: Path, data: bytes) -> None:
-    if relative.name == "deployment-applications.json":
+    if relative.name == "config.yaml":
+        import yaml
+
+        from .cluster_config import validate_source_contract
+
+        validate_source_contract(yaml.safe_load(data))
+    elif relative.name == "nebius-cxcli-manifest.json":
+        import json
+
+        from .generated_manifest import validate_manifest_contract
+
+        validate_manifest_contract(json.loads(data))
+    elif relative.name == "deployment-applications.json":
         import json
 
         from .deployment_applications import validate_application_journal

@@ -17,6 +17,9 @@ evidence before workers start.
 Before locking tasks, the coordinator copies each slice's concrete interfaces,
 schema, fixed values, constraints and acceptance checks into the task fields
 carried by its assignment. Missing task context blocks dispatch.
+Multiline task fields retain schema examples and acceptance checks in the
+serialized assignment. Empty or duplicate fields and malformed task headings
+are rejected before preparation instead of silently dropping task context.
 The native host must permit the required Git metadata and private-state writes.
 Workspace file access alone is insufficient. Unavailable permission is an
 `ENVIRONMENT_BLOCKER` before spec edits; Implement never bypasses host controls.

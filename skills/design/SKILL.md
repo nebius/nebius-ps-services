@@ -230,9 +230,12 @@ Only perform direct research inside `design` for tiny clarifications or when
 `research` is unavailable or not applicable. In that fallback path, verify
 items against current official vendor documentation. Prefer configured
 official-documentation tools and MCP servers when available, such as OpenAI docs
-for Codex/OpenAI topics, context7 for libraries and frameworks, Microsoft Learn
-for Microsoft/Azure topics, Terraform registry tools for Terraform, and vendor
-docs via web search as fallback.
+for Codex/OpenAI topics, Microsoft Learn for Microsoft/Azure topics and
+Terraform registry tools for Terraform. Use only documentation tools available
+in the current session. If absent, failing or insufficient, use Tavily Search
+or Extract against official version-appropriate sources; if Tavily cannot help,
+disclose the limitation and use official-web search or retrieval. Preserve
+higher-priority host rules and never install an integration just for a lookup.
 
 Record only design-relevant findings: constraints, supported patterns,
 version-specific APIs, limits, migration considerations, security implications,

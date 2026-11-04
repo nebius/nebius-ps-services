@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .cluster_config import cluster_row, cluster_rows
 from .component_defaults import resolve_component_defaults
 from .component_instances import (
     INSTANCE_ID_FIELD,
@@ -102,48 +103,8 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-def _deploy_target_rows(payload: dict[str, Any], *, create: bool = False) -> list[Any]:
-    deploy = payload.get("deploy")
-    if not isinstance(deploy, dict):
-        if not create:
-            return []
-        deploy = {}
-        payload["deploy"] = deploy
-    targets = deploy.get("targets")
-    if not isinstance(targets, list):
-        if not create:
-            return []
-        targets = []
-        deploy["targets"] = targets
-    return targets
-
-
 def _deploy_target_instance_id(row: Mapping[str, Any]) -> str:
     return normalize_component_token(row.get(INSTANCE_ID_FIELD))
-
-
-def _deploy_target_row_for_ref(
-    payload: dict[str, Any],
-    *,
-    target_ref: str,
-    create: bool = False,
-) -> dict[str, Any] | None:
-    normalized_target_ref = normalize_component_token(target_ref)
-    if not normalized_target_ref:
-        return None
-    targets = _deploy_target_rows(payload, create=create)
-    for row in targets:
-        if isinstance(row, dict) and _deploy_target_instance_id(row) == normalized_target_ref:
-            return row
-    if not create:
-        return None
-    new_row: dict[str, Any] = {INSTANCE_ID_FIELD: normalized_target_ref}
-    targets.append(new_row)
-    return new_row
-
-
-def _deploy_target_row_has_settings(row: Mapping[str, Any]) -> bool:
-    return any(str(key) != INSTANCE_ID_FIELD for key in row)
 
 
 def _catalog_sources():
@@ -439,22 +400,20 @@ def _coerce_optional_string_list(value: Any) -> tuple[str, ...] | None:
 
 
 def _project_observability_config(
-    payload: dict[str, Any],
-    *,
-    target_ref: str = "",
+    payload: dict[str, Any], *, target_ref: str = ""
 ) -> dict[str, Any]:
-    root_config = _mapping(_mapping(payload.get("deploy")).get("observability"))
-    normalized_target_ref = normalize_component_token(target_ref)
-    if not normalized_target_ref:
-        return root_config
-    target_row = _deploy_target_row_for_ref(payload, target_ref=normalized_target_ref)
-    if not isinstance(target_row, Mapping):
-        return root_config
-    target_config = _mapping(target_row.get("observability"))
-    if not target_config:
-        return root_config
-    merged = copy.deepcopy(root_config)
-    return _deep_merge_mapping(merged, target_config)
+    if target_ref:
+        row = next(
+            (
+                row
+                for row in _infra_component_rows(payload)
+                if component_instance_id(row) == target_ref
+            ),
+            None,
+        )
+        row = row if row is not None else cluster_row(payload, target_ref)
+        return _mapping(row.get("observability")) if row is not None else {}
+    return {}
 
 
 def _payload_nebius_context(payload: dict[str, Any]) -> dict[str, Any]:
@@ -570,142 +529,32 @@ def observability_project_defaults(
     return defaults
 
 
-def normalize_observability_project_settings(payload: dict[str, Any]) -> bool:
-    payload_map = payload if isinstance(payload, dict) else _as_payload(payload)
-    if not payload_map:
-        return False
-
-    infra = payload_map.get("infra")
-    components = infra.get("components") if isinstance(infra, Mapping) else None
-    if not isinstance(components, list):
-        return False
-    component_ids = {
-        component_type_id(item)
-        for item in components
-        if isinstance(item, dict)
-        and bool(item.get("enabled", False))
-        and component_type_id(item) in {"mk8s", "vm"}
-    }
-    mk8s_target_refs = [
-        component_instance_id(item)
-        for item in components
-        if isinstance(item, dict)
-        and component_type_id(item) == "mk8s"
-        and bool(item.get("enabled", False))
-        and component_instance_id(item)
-    ]
-    deploy_raw = payload_map.get("deploy")
-    if deploy_raw is None:
-        if not component_ids:
-            return False
-        deploy: dict[str, Any] = {}
-        payload_map["deploy"] = deploy
-    elif isinstance(deploy_raw, dict):
-        deploy = deploy_raw
-    else:
-        return False
-    if not component_ids:
-        changed = False
-        targets = deploy.get("targets")
-        if isinstance(targets, list):
-            next_targets: list[Any] = []
-            for row in targets:
-                if not isinstance(row, dict):
-                    next_targets.append(row)
-                    continue
-                if "observability" in row:
-                    row.pop("observability", None)
-                    changed = True
-                if _deploy_target_row_has_settings(row):
-                    next_targets.append(row)
-            if next_targets != targets:
-                deploy["targets"] = next_targets
-                changed = True
-            if not next_targets:
-                deploy.pop("targets", None)
-        root_observability = deploy.get("observability")
-        if (
-            isinstance(root_observability, Mapping)
-            and "kubernetes" not in root_observability
-            and "observability" in deploy
-        ):
-            deploy.pop("observability", None)
-            changed = True
-        if not deploy:
-            payload_map.pop("deploy", None)
-            changed = True
-        return changed
-    existing = deploy.get("observability")
-    if existing is not None and not isinstance(existing, Mapping):
-        return False
-    root_existing = copy.deepcopy(dict(existing)) if isinstance(existing, Mapping) else {}
+def normalize_observability_project_settings(
+    payload: dict[str, Any], *, observability_target_refs: frozenset[str] | None = None
+) -> bool:
     changed = False
-
-    kubernetes_defaults = observability_project_defaults(
-        include_kubernetes=True,
-        include_vm=False,
-    )
-    seen_targets = set(mk8s_target_refs)
-    if mk8s_target_refs:
-        for target_ref in mk8s_target_refs:
-            target_row = _deploy_target_row_for_ref(payload_map, target_ref=target_ref, create=True)
-            if target_row is None:
-                continue
-            target_existing = target_row.get("observability")
-            if target_existing is not None and not isinstance(target_existing, Mapping):
-                continue
-            merged_target = copy.deepcopy(kubernetes_defaults)
-            if target_ref in soperator_target_refs(payload_map):
-                merged_target["kubernetes"]["metrics"]["collect_k8s_cluster_metrics"] = False
-            if isinstance(target_existing, Mapping):
-                merged_target = _deep_merge_mapping(merged_target, target_existing)
-            if target_row.get("observability") != merged_target:
-                target_row["observability"] = merged_target
-                changed = True
-
-    targets = deploy.get("targets")
-    if isinstance(targets, list):
-        next_targets = []
-        for row in targets:
-            if not isinstance(row, dict):
-                next_targets.append(row)
-                continue
-            target_ref = _deploy_target_instance_id(row)
-            if target_ref and target_ref not in seen_targets and "observability" in row:
-                row.pop("observability", None)
-                changed = True
-            if _deploy_target_row_has_settings(row) or target_ref in seen_targets:
-                next_targets.append(row)
-        if next_targets != targets:
-            deploy["targets"] = next_targets
+    native = soperator_target_refs(payload)
+    for row in cluster_rows(payload):
+        target = component_instance_id(row)
+        if observability_target_refs is not None and target not in observability_target_refs:
+            continue
+        defaults = observability_project_defaults(include_kubernetes=True, include_vm=False)
+        if target in native:
+            defaults["kubernetes"]["metrics"]["collect_k8s_cluster_metrics"] = False
+        elif row.get("id") == "mk8s":
+            defaults["enabled"] = _mk8s_observability_settings().mode == "kubernetes_agent"
+        merged = _deep_merge_mapping(defaults, _mapping(row.get("observability")))
+        if row.get("observability") != merged:
+            row["observability"] = merged
             changed = True
-        if not next_targets:
-            deploy.pop("targets", None)
-
-    if "vm" not in component_ids:
-        root_observability = deploy.get("observability")
-        if (
-            isinstance(root_observability, Mapping)
-            and "kubernetes" not in root_observability
-            and "observability" in deploy
-        ):
-            deploy.pop("observability", None)
+    for row in _infra_component_rows(payload):
+        if component_type_id(row) != "vm" or not row.get("enabled"):
+            continue
+        defaults = observability_project_defaults(include_kubernetes=False, include_vm=True)
+        merged = _deep_merge_mapping(defaults, _mapping(row.get("observability")))
+        if row.get("observability") != merged:
+            row["observability"] = merged
             changed = True
-    else:
-        defaults = observability_project_defaults(
-            include_kubernetes=False,
-            include_vm=True,
-        )
-        merged = copy.deepcopy(defaults)
-        existing_filtered = copy.deepcopy(root_existing)
-        merged = _deep_merge_mapping(merged, existing_filtered)
-        if deploy.get("observability") != merged:
-            deploy["observability"] = merged
-            changed = True
-
-    if not deploy:
-        payload_map.pop("deploy", None)
-        changed = True
     return changed
 
 
@@ -783,10 +632,11 @@ def _effective_vm_observability_config(
     payload: dict[str, Any],
     *,
     vm_settings: InfraObservabilitySettings | None = None,
+    target_ref: str = "",
 ) -> VmObservabilityConfig:
     settings = vm_settings or _vm_observability_settings()
     defaults = observability_project_defaults(vm_settings=settings).get("vm", {})
-    project = _project_observability_config(payload)
+    project = _project_observability_config(payload, target_ref=target_ref)
     vm = _mapping(project.get("vm"))
     logs = _mapping(vm.get("logs"))
     default_logs = _mapping(_mapping(defaults).get("logs"))
@@ -822,7 +672,7 @@ def _effective_vm_observability_config(
 def _observability_enabled(payload: dict[str, Any], *, target_ref: str = "") -> bool:
     normalized_target_ref = normalize_component_token(target_ref)
     if not normalized_target_ref:
-        for row in _deploy_target_rows(payload):
+        for row in cluster_rows(payload):
             if not isinstance(row, Mapping):
                 continue
             row_target_ref = _deploy_target_instance_id(row)
@@ -834,9 +684,12 @@ def _observability_enabled(payload: dict[str, Any], *, target_ref: str = "") -> 
 
 
 def _root_observability_enabled(payload: dict[str, Any]) -> bool:
-    project = _project_observability_config(payload)
-    enabled = _coerce_optional_bool(project.get("enabled"))
-    return bool(enabled)
+    return any(
+        row.get("enabled")
+        and row.get("id") == "vm"
+        and _mapping(row.get("observability")).get("enabled") is True
+        for row in _infra_component_rows(payload)
+    )
 
 
 def soperator_target_refs(payload_or_config: Any) -> set[str]:
@@ -886,7 +739,7 @@ def _kubernetes_agent_required(
         enabled = _observability_enabled(payload, target_ref=normalized_target_ref)
     if not enabled:
         return False
-    if "mk8s" not in _enabled_component_ids(payload, scope="infra"):
+    if normalized_target_ref not in enabled_cluster_target_refs(payload):
         return False
     effective = kubernetes_settings or _effective_kubernetes_observability_config(
         payload,
@@ -915,6 +768,8 @@ def _grafana_required(
         )
     from .observability_routing import target_settings
 
+    if _selected_app_on_target(payload, _grafana_app_id(), normalized_target_ref):
+        return True
     if target_settings(payload, normalized_target_ref):
         return _selected_app_on_target(payload, _grafana_app_id(), normalized_target_ref)
     if normalized_target_ref in soperator_target_refs(payload):
@@ -934,13 +789,22 @@ def _vm_journald_logs_enabled(
     payload: dict[str, Any],
     *,
     vm_settings: VmObservabilityConfig | None = None,
+    target_ref: str = "",
 ) -> bool:
-    if not _root_observability_enabled(payload):
-        return False
     if not _vm_monitoring_agent_enabled(payload):
         return False
-    effective = vm_settings or _effective_vm_observability_config(payload)
-    return effective.logs_enabled
+    if target_ref:
+        return (
+            bool(_project_observability_config(payload, target_ref=target_ref).get("enabled"))
+            and (
+                vm_settings or _effective_vm_observability_config(payload, target_ref=target_ref)
+            ).logs_enabled
+        )
+    return any(
+        _vm_journald_logs_enabled(payload, target_ref=component_instance_id(row))
+        for row in _infra_component_rows(payload)
+        if row.get("id") == "vm" and row.get("enabled")
+    )
 
 
 def _selected_app_metric_targets(
@@ -1270,7 +1134,7 @@ def resolve_observability_app_selection(
             kubernetes_observability_agent_selected(payload, target_ref)
         ):
             issues.append(
-                f"deploy.targets[instance_id={target_ref}].observability.enabled=true "
+                f"cluster settings[instance_id={target_ref}].observability.enabled=true "
                 "requires explicit additional telemetry selection on this Soperator target; "
                 f"use 'component add {collector_app_id}@{target_ref} --config CONFIG_YAML' "
                 "or disable the additional telemetry switch."
@@ -1299,11 +1163,13 @@ def resolve_observability_app_selection(
                     if app_chart_target_ref(row)
                 ]
                 for row, row_target_ref in targeted_rows:
-                    if row_target_ref not in soperator_target_refs(
-                        payload
-                    ) and not _observability_enabled(
-                        payload,
-                        target_ref=row_target_ref,
+                    if (
+                        row_target_ref not in soperator_target_refs(payload)
+                        and not _observability_enabled(
+                            payload,
+                            target_ref=row_target_ref,
+                        )
+                        and not target_settings(payload, row_target_ref)
                     ):
                         app_label = component_instance_label(
                             collector_app_id,
@@ -1311,22 +1177,22 @@ def resolve_observability_app_selection(
                         )
                         issues.append(
                             f"apps:{app_label} requires "
-                            f"deploy.targets[instance_id={row_target_ref}].observability.enabled=true"
+                            f"cluster settings[instance_id={row_target_ref}].observability.enabled=true"
                         )
                 if not targeted_rows and not observability_enabled and not single_soperator_target:
                     issues.append(
                         f"apps:{collector_app_id} requires "
-                        "deploy.targets[].observability.enabled=true for an MK8s target"
+                        "cluster settings[].observability.enabled=true for an MK8s target"
                     )
             elif not observability_enabled and not single_soperator_target:
                 issues.append(
                     f"apps:{collector_app_id} requires "
-                    "deploy.targets[].observability.enabled=true for an MK8s target"
+                    "cluster settings[].observability.enabled=true for an MK8s target"
                 )
-        if collector_app_id in selected and "mk8s" not in _enabled_component_ids(
-            payload, scope="infra"
-        ):
-            issues.append(f"apps:{collector_app_id} requires one enabled infra:mk8s component")
+        if collector_app_id in selected and not enabled_cluster_target_refs(payload):
+            issues.append(
+                f"apps:{collector_app_id} requires one enabled MK8s or declared external cluster"
+            )
         if kubernetes_agent_required:
             if not collector_app_id:
                 issues.append(
@@ -1343,44 +1209,10 @@ def resolve_observability_app_selection(
                 auto_enabled.append(collector_app_id)
 
     if grafana_app_id:
-        if grafana_app_id in selected:
-            grafana_rows = [
-                row
-                for row in _app_chart_rows_for_id(payload, grafana_app_id)
-                if bool(row.get("enabled", False))
-            ]
-            if grafana_rows:
-                targeted_rows = [
-                    (row, app_chart_target_ref(row))
-                    for row in grafana_rows
-                    if app_chart_target_ref(row)
-                ]
-                for row, row_target_ref in targeted_rows:
-                    if row_target_ref not in soperator_target_refs(
-                        payload
-                    ) and not _observability_enabled(payload, target_ref=row_target_ref):
-                        app_label = component_instance_label(
-                            grafana_app_id,
-                            component_instance_id(row),
-                        )
-                        issues.append(
-                            f"apps:{app_label} requires "
-                            f"deploy.targets[instance_id={row_target_ref}].observability.enabled=true"
-                        )
-                if not targeted_rows and not observability_enabled and not single_soperator_target:
-                    issues.append(
-                        f"apps:{grafana_app_id} requires "
-                        "deploy.targets[].observability.enabled=true for an MK8s target"
-                    )
-            elif not observability_enabled and not single_soperator_target:
-                issues.append(
-                    f"apps:{grafana_app_id} requires "
-                    "deploy.targets[].observability.enabled=true for an MK8s target"
-                )
-        if grafana_app_id in selected and "mk8s" not in _enabled_component_ids(
-            payload, scope="infra"
-        ):
-            issues.append(f"apps:{grafana_app_id} requires one enabled infra:mk8s component")
+        if grafana_app_id in selected and not enabled_cluster_target_refs(payload):
+            issues.append(
+                f"apps:{grafana_app_id} requires one enabled MK8s or declared external cluster"
+            )
         if grafana_required:
             if grafana_app_id not in available_ids:
                 issues.append(
@@ -1464,6 +1296,9 @@ def ensure_observability_app_rows(
     cli_settings: Any | None = None,
     observability_target_refs: frozenset[str] | None = None,
 ) -> bool:
+    from .grafana_database import reject_old_grafana_binding
+
+    reject_old_grafana_binding(_as_payload(payload_or_config))
     payload = (
         payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
     )
@@ -2162,7 +1997,6 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
         return False
 
     changed = False
-    vm_settings = _effective_vm_observability_config(payload)
     managed_label_values = _catalog_observability_gpu_node_label_values()
     for row in _infra_component_rows(payload):
         if not isinstance(row, dict):
@@ -2194,19 +2028,21 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
             continue
         if component_id != "vm":
             continue
+        target_ref = component_instance_id(row)
+        vm_settings = _effective_vm_observability_config(payload, target_ref=target_ref)
         inputs = row.get("inputs")
         if not isinstance(inputs, dict):
             inputs = {}
             row["inputs"] = inputs
         labels = inputs.get("labels")
         if not isinstance(labels, dict):
-            if _vm_journald_logs_enabled(payload, vm_settings=vm_settings):
+            if _vm_journald_logs_enabled(payload, vm_settings=vm_settings, target_ref=target_ref):
                 labels = {}
                 inputs["labels"] = labels
             else:
                 labels = {}
         built_in_logs_enabled = _vm_journald_logs_enabled(
-            payload, vm_settings=vm_settings
+            payload, vm_settings=vm_settings, target_ref=target_ref
         ) and bool(row.get("enabled", False))
         if built_in_logs_enabled:
             if labels.get(_VM_JOURNALD_LOGS_ENABLED_LABEL) != "true":
@@ -2408,9 +2244,7 @@ def observability_endpoint_summary(
         for target_ref in enabled_cluster_target_refs(payload)
         if _kubernetes_agent_required(payload, target_ref=target_ref)
     )
-    vm_settings = _effective_vm_observability_config(payload)
-    enabled_infra = _enabled_component_ids(payload, scope="infra")
-    kubernetes_enabled = bool(kubernetes_settings_by_target and "mk8s" in enabled_infra)
+    kubernetes_enabled = bool(kubernetes_settings_by_target)
     kubernetes_logs_enabled = bool(
         kubernetes_enabled and any(item.logs_enabled for item in kubernetes_settings_by_target)
     )
@@ -2425,7 +2259,7 @@ def observability_endpoint_summary(
         for item in _soperator_observability_configuration(payload)
     )
     vm_service_metrics_enabled = _vm_monitoring_agent_enabled(payload)
-    vm_logs_enabled = _vm_journald_logs_enabled(payload, vm_settings=vm_settings)
+    vm_logs_enabled = _vm_journald_logs_enabled(payload)
     service_metric_buckets = _observability_service_buckets(payload, signal="metrics")
     service_log_buckets = _observability_service_buckets(payload, signal="logs")
     service_metrics_enabled = bool(service_metric_buckets)
@@ -2612,7 +2446,10 @@ def observability_status_summary(
 
 def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any]]:
     """Build source-enabled deploy validations for observability-enabled MK8s targets."""
-    payload = _as_payload(payload_or_config)
+    payload = copy.deepcopy(_as_payload(payload_or_config))
+    from .observability_routing import ensure_routing_apps
+
+    ensure_routing_apps(payload)
     mk8s_observability = _mk8s_observability_settings()
     collector_app_id = (
         mk8s_observability.chart_component_id
@@ -2622,19 +2459,13 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
     if not payload or not collector_app_id:
         return []
     validation = mk8s_observability.validation
-    if not validation.enabled:
-        return []
-    target_refs = enabled_cluster_target_refs(payload)
+    from .observability_routing import effective_signals
+
+    target_refs = tuple(
+        ref for ref in enabled_cluster_target_refs(payload) if effective_signals(payload, ref)
+    )
     if not target_refs:
         return []
-    if not any(_kubernetes_agent_required(payload, target_ref=ref) for ref in target_refs):
-        return []
-    collector_source = helm_chart_source_by_id(collector_app_id, sources=_catalog_sources())
-    if collector_source is None:
-        raise ValueError(
-            "components.infra.mk8s.cli.observability.primary_agent.chart_component_id "
-            f"references unknown apps component '{collector_app_id}'"
-        )
     collector_rows = [
         row
         for row in _app_chart_rows_for_id(payload, collector_app_id)
@@ -2642,8 +2473,41 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
     ]
     validations: list[dict[str, Any]] = []
     for target_ref in target_refs:
+        from .observability_routing import effective_signals, target_settings
+
+        if not effective_signals(payload, target_ref):
+            continue
+        if target_ref not in soperator_target_refs(payload) and target_settings(
+            payload, target_ref
+        ):
+            from .observability_e2e import freeze_validation
+
+            validations.append(
+                {
+                    "kind": OBSERVABILITY_INGESTION_VALIDATION_KIND,
+                    "target_ref": target_ref,
+                    "required": True,
+                    "name": _target_scoped_validation_name(
+                        "Observability delivery", target_ref=target_ref
+                    ),
+                    "e2e": freeze_validation(payload, target_ref),
+                    "report_file": _target_scoped_report_file(
+                        "observability-ingestion-report.json", target_ref=target_ref
+                    ),
+                }
+            )
+            continue
+        if not validation.enabled:
+            continue
         if not _kubernetes_agent_required(payload, target_ref=target_ref):
             continue
+
+        collector_source = helm_chart_source_by_id(collector_app_id, sources=_catalog_sources())
+        if collector_source is None:
+            raise ValueError(
+                "components.infra.mk8s.cli.observability.primary_agent.chart_component_id "
+                f"references unknown apps component '{collector_app_id}'"
+            )
         matching_row = next(
             (
                 row

@@ -1,5 +1,13 @@
 # Protected merge templates
 
+The current helper protocol uses review/intent v2, with separate numeric
+base/head repository identities and contribution/compatibility plus per-project
+spec assessments. Eligible forks retain protected merge and result verification.
+Deploy helper copies and workflow consumers together; drain old intents and
+prove old runs quiescent before cutover. Bootstrap through protected maintainer
+review with independently verified CI, as described in merge-pr's
+[Actions protocol](../../../merge-pr/references/actions-protocol.md).
+
 Install the workflow templates under `.github/workflows` and the policy as
 `.github/merge-policy.json`. Copy both `merge-pr/scripts/merge_gate.py` and
 `merge_completion.py` from the same skill installation into `.github/scripts`.

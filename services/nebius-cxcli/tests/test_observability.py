@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import nebius_cxcli.component_sources as component_sources
+from nebius_cxcli.cluster_config import cluster_rows, require_cluster_row
 from nebius_cxcli.component_sources import (
     ComponentOutput,
     InfraObservabilitySettings,
@@ -102,7 +103,7 @@ def _base_payload(
     for app_id in enabled_apps:
         namespace = (
             "observability"
-            if app_id in {"nebius-observability-agent", "grafana", "postgresql"}
+            if app_id in {"nebius-observability-agent", "grafana", "grafana-postgresql"}
             else app_id
         )
         release_name = (
@@ -122,22 +123,8 @@ def _base_payload(
         if mk8s_enabled:
             chart["target_ref"] = "mk8s"
         charts.append(chart)
-    deploy = {}
-    if mk8s_enabled:
-        deploy["targets"] = [
-            {
-                "instance_id": "mk8s",
-                "observability": {
-                    "enabled": observability_enabled,
-                },
-            }
-        ]
-    if vm_enabled:
-        deploy["observability"] = {
-            "enabled": observability_enabled,
-        }
     payload = {
-        "deploy": deploy,
+        "client_info": {"nebius": {"project_id": "project-fixture", "region_id": "eu-north1"}},
         "infra": {
             "components": [
                 {
@@ -153,19 +140,17 @@ def _base_payload(
                                 "preset": "8gpu-128vcpu-1600gb",
                                 "gpu_stack_source": "nebius_image",
                             }
-                        },
+                        }
                     },
                 },
-                {
-                    "id": "vm",
-                    "instance_id": "vm",
-                    "enabled": vm_enabled,
-                    "inputs": {},
-                },
+                {"id": "vm", "instance_id": "vm", "enabled": vm_enabled, "inputs": {}},
             ]
         },
         "apps": {"charts": charts},
+        "version": "v2",
     }
+    for component in payload["infra"]["components"]:
+        component["observability"] = {"enabled": observability_enabled}
     normalize_observability_project_settings(payload)
     return payload
 
@@ -183,33 +168,24 @@ def _chart_rows(payload: dict, app_id: str) -> list[dict]:
 
 
 def _set_observability_targets(payload: dict, *target_refs: str, enabled: bool = True) -> None:
-    payload["deploy"] = {
-        "targets": [
-            {
-                "instance_id": target_ref,
-                "observability": {
-                    "enabled": enabled,
-                    "kubernetes": {
-                        "logs": {
-                            "enabled": True,
-                            "collect_agent_logs": False,
-                            "excluded_namespaces": ["kube-system"],
-                        },
-                        "metrics": {
-                            "enabled": True,
-                            "collect_agent_metrics": False,
-                            "collect_k8s_cluster_metrics": True,
-                            "excluded_namespaces": ["kube-system"],
-                        },
-                        "traces": {
-                            "enabled": True,
-                        },
-                    },
+    for target_ref in target_refs:
+        require_cluster_row(payload, target_ref)["observability"] = {
+            "enabled": enabled,
+            "kubernetes": {
+                "logs": {
+                    "enabled": True,
+                    "collect_agent_logs": False,
+                    "excluded_namespaces": ["kube-system"],
                 },
-            }
-            for target_ref in target_refs
-        ]
-    }
+                "metrics": {
+                    "enabled": True,
+                    "collect_agent_metrics": False,
+                    "collect_k8s_cluster_metrics": True,
+                    "excluded_namespaces": ["kube-system"],
+                },
+                "traces": {"enabled": True},
+            },
+        }
 
 
 def test_observability_project_defaults_follow_catalog() -> None:
@@ -229,62 +205,60 @@ def test_observability_project_defaults_follow_catalog() -> None:
 def test_normalize_observability_settings_adds_project_defaults() -> None:
     payload = {
         "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "mk8s",
-                    "enabled": True,
-                    "inputs": {},
-                }
-            ]
+            "components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    target = payload["deploy"]["targets"][0]
+    target = cluster_rows(payload)[0]
     assert target["instance_id"] == "mk8s"
-    assert target["observability"]["enabled"] is False
+    assert target["observability"]["enabled"] is True
     assert target["observability"]["kubernetes"]["logs"]["excluded_namespaces"] == ["kube-system"]
-    assert "observability" not in payload["deploy"]
+    assert "deploy" not in payload
 
 
 def test_normalize_observability_settings_vm_only_omits_kubernetes_defaults() -> None:
     payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "vm",
-                    "instance_id": "vm",
-                    "enabled": True,
-                    "inputs": {},
-                }
-            ]
-        },
+        "infra": {"components": [{"id": "vm", "instance_id": "vm", "enabled": True, "inputs": {}}]},
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert payload["deploy"]["observability"]["enabled"] is False
-    assert "kubernetes" not in payload["deploy"]["observability"]
-    assert "collector" not in payload["deploy"]["observability"]["vm"]
-    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "enabled"
+        ]
+        is False
+    )
+    assert (
+        "kubernetes"
+        not in next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+            "observability"
+        ]
+    )
+    assert (
+        "collector"
+        not in next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+            "observability"
+        ]["vm"]
+    )
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "vm"
+        ]["logs"]["enabled"]
+        is True
+    )
 
 
 def test_normalize_observability_settings_preserves_invalid_root_kubernetes_branch() -> None:
     payload = {
-        "deploy": {
-            "observability": {
-                "enabled": True,
-                "kubernetes": {
-                    "logs": {"enabled": False},
-                },
-            },
-        },
         "infra": {
             "components": [
                 {
@@ -292,19 +266,38 @@ def test_normalize_observability_settings_preserves_invalid_root_kubernetes_bran
                     "instance_id": "vm",
                     "enabled": True,
                     "inputs": {},
+                    "observability": {"enabled": True, "kubernetes": {"logs": {"enabled": False}}},
                 }
             ]
         },
         "apps": {"charts": []},
+        "version": "v2",
     }
 
     changed = normalize_observability_project_settings(payload)
 
     assert changed is True
-    assert payload["deploy"]["observability"]["kubernetes"] == {"logs": {"enabled": False}}
-    assert payload["deploy"]["observability"]["enabled"] is True
-    assert "collector" not in payload["deploy"]["observability"]["vm"]
-    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
+    assert next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+        "observability"
+    ]["kubernetes"] == {"logs": {"enabled": False}}
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "enabled"
+        ]
+        is True
+    )
+    assert (
+        "collector"
+        not in next(row for row in payload["infra"]["components"] if row["id"] == "vm")[
+            "observability"
+        ]["vm"]
+    )
+    assert (
+        next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"][
+            "vm"
+        ]["logs"]["enabled"]
+        is True
+    )
 
 
 def test_observability_auto_enables_k8s_agent_when_enabled() -> None:
@@ -320,21 +313,10 @@ def test_observability_auto_enables_k8s_agent_when_enabled() -> None:
     assert selection.kubernetes_agent_required is True
     assert selection.collector_app_id == "nebius-observability-agent"
     assert selection.grafana_app_id == "grafana"
-    assert selection.grafana_required is True
-    assert selection.grafana_gateway_app_id == "gateway-helm"
-    assert selection.grafana_gateway_required is True
-    assert selection.auto_enabled_app_ids == (
-        "gateway-helm",
-        "grafana",
-        "nebius-observability-agent",
-        "postgresql",
-    )
-    assert selection.selected_app_ids == (
-        "gateway-helm",
-        "grafana",
-        "nebius-observability-agent",
-        "postgresql",
-    )
+    assert selection.grafana_required is False
+    assert selection.grafana_gateway_required is False
+    assert selection.auto_enabled_app_ids == ("nebius-observability-agent",)
+    assert selection.selected_app_ids == ("nebius-observability-agent",)
 
 
 def test_ensure_observability_app_rows_seeds_collector_for_direct_config_edit() -> None:
@@ -351,22 +333,9 @@ def test_ensure_observability_app_rows_seeds_collector_for_direct_config_edit() 
     assert chart["version"] == "1.0.5"
     assert chart["namespace"] == "observability"
     assert chart["release-name"] == "nebius-observability-agent"
-    gateway = _chart_row(payload, "gateway-helm")
-    assert gateway["enabled"] is True
-    assert gateway["repo"] == "oci://docker.io/envoyproxy/gateway-helm"
-    assert gateway["version"] == "1.7.0"
-    assert gateway["namespace"] == "envoy-gateway-system"
-    assert gateway["release-name"] == "envoy-gateway"
-    assert gateway["values"]["deployment"]["replicas"] == 2
-    assert gateway["values"]["deployment"]["pod"]["affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
-    grafana = _chart_row(payload, "grafana")
-    assert grafana["enabled"] is True
-    assert grafana["repo"] == "oci://ghcr.io/grafana-community/helm-charts/grafana"
-    assert grafana["version"] == "13.2.5"
-    assert grafana["namespace"] == "observability"
-    assert grafana["release-name"] == "grafana"
-    assert grafana["values"]["replicas"] == 2
-    assert grafana["values"]["affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
+    assert not _chart_rows(payload, "grafana")
+    assert not _chart_rows(payload, "grafana-postgresql")
+    assert not _chart_rows(payload, "gateway-helm")
 
 
 def test_ensure_observability_app_rows_seeds_one_collector_per_target() -> None:
@@ -398,22 +367,8 @@ def test_ensure_observability_app_rows_seeds_one_collector_per_target() -> None:
     assert [item["instance_id"] for item in charts] == ["blue", "green"]
     assert all(item["namespace"] == "observability" for item in charts)
     assert all(item["release-name"] == "nebius-observability-agent" for item in charts)
-    grafana_charts = sorted(
-        _chart_rows(payload, "grafana"),
-        key=lambda item: str(item["target_ref"]),
-    )
-    assert [item["target_ref"] for item in grafana_charts] == ["blue", "green"]
-    assert [item["instance_id"] for item in grafana_charts] == ["blue", "green"]
-    assert all(item["namespace"] == "observability" for item in grafana_charts)
-    assert all(item["release-name"] == "grafana" for item in grafana_charts)
-    gateway_charts = sorted(
-        _chart_rows(payload, "gateway-helm"),
-        key=lambda item: str(item["target_ref"]),
-    )
-    assert [item["target_ref"] for item in gateway_charts] == ["blue", "green"]
-    assert [item["instance_id"] for item in gateway_charts] == ["blue", "green"]
-    assert all(item["namespace"] == "envoy-gateway-system" for item in gateway_charts)
-    assert all(item["release-name"] == "envoy-gateway" for item in gateway_charts)
+    assert not _chart_rows(payload, "grafana")
+    assert not _chart_rows(payload, "gateway-helm")
 
 
 def test_ensure_observability_app_rows_fills_missing_collector_target() -> None:
@@ -476,38 +431,12 @@ def test_observability_validation_specs_follow_enabled_targets() -> None:
 
     specs = observability_validation_specs(payload)
 
-    assert specs == [
-        {
-            "kind": "mk8s_observability_ingestion",
-            "target_ref": "mk8s",
-            "name": "Observability ingestion (mk8s)",
-            "namespace": "observability",
-            "helmrelease_name": "nebius-observability-agent",
-            "helmrelease_ready_condition": "Ready",
-            "signal_value_paths": {
-                "logs": "spec.values.config.logs.enabled",
-                "metrics": "spec.values.config.metrics.enabled",
-                "traces": "spec.values.config.traces.enabled",
-            },
-            "cluster_metric_targets_path": "spec.values.config.metrics.additionalTargets",
-            "daemonset_name": "o11y-agent",
-            "pod_selector": "app.kubernetes.io/instance=nebius-observability-agent",
-            "pod_failure_sample_limit": 5,
-            "trace_otlp_service": {
-                "name": "nebius-observability-agent",
-                "port": 4317,
-                "endpoint_slice_selector": "kubernetes.io/service-name=nebius-observability-agent",
-                "endpoint_slice_check_limit": 5,
-            },
-            "signals": {
-                "logs": True,
-                "metrics": True,
-                "traces": True,
-                "collect_k8s_cluster_metrics": True,
-            },
-            "report_file": "observability-ingestion-report-mk8s.json",
-        }
-    ]
+    assert len(specs) == 1
+    assert specs[0]["kind"] == "mk8s_observability_ingestion"
+    assert specs[0]["target_ref"] == "mk8s"
+    assert specs[0]["required"] is True
+    assert specs[0]["e2e"]["signals"] == ["metrics", "logs", "traces"]
+    assert specs[0]["report_file"] == "observability-ingestion-report-mk8s.json"
 
 
 def test_observability_validation_specs_skip_disabled_targets() -> None:
@@ -519,7 +448,7 @@ def test_observability_validation_specs_skip_disabled_targets() -> None:
     assert observability_validation_specs(payload) == []
 
 
-def test_observability_validation_specs_skip_catalog_disabled_validation(
+def test_observability_validation_specs_required_despite_optional_readiness_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = _base_payload(
@@ -536,7 +465,7 @@ def test_observability_validation_specs_skip_catalog_disabled_validation(
         lambda: disabled_settings,
     )
 
-    assert observability_validation_specs(payload) == []
+    assert observability_validation_specs(payload)[0]["required"]
 
 
 def test_observability_dependency_issues_require_target_toggle_for_agent() -> None:
@@ -549,7 +478,7 @@ def test_observability_dependency_issues_require_target_toggle_for_agent() -> No
 
     assert issues == [
         "apps:nebius-observability-agent@mk8s requires "
-        "deploy.targets[instance_id=mk8s].observability.enabled=true"
+        "cluster settings[instance_id=mk8s].observability.enabled=true"
     ]
 
 
@@ -569,12 +498,8 @@ def test_observability_dependency_issues_are_bound_to_collector_target() -> None
             "inputs": {"gpu_enabled": False},
         },
     ]
-    payload["deploy"] = {
-        "targets": [
-            {"instance_id": "blue", "observability": {"enabled": True}},
-            {"instance_id": "green", "observability": {"enabled": False}},
-        ]
-    }
+    require_cluster_row(payload, "blue").update({"observability": {"enabled": True}})
+    require_cluster_row(payload, "green").update({"observability": {"enabled": False}})
     payload["apps"]["charts"] = [
         {
             "id": "nebius-observability-agent",
@@ -610,8 +535,8 @@ def test_observability_dependency_issues_are_bound_to_collector_target() -> None
 
     assert issues == [
         "apps:nebius-observability-agent@green requires "
-        "deploy.targets[instance_id=green].observability.enabled=true",
-        "Observability-enabled MK8s deployment requires 'apps:postgresql' to be enabled",
+        "cluster settings[instance_id=green].observability.enabled=true",
+        "Observability-enabled MK8s deployment requires 'apps:grafana-postgresql' to be enabled",
     ]
 
 
@@ -788,7 +713,7 @@ def test_materialize_observability_agent_values_omits_cluster_targets_when_disab
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent",),
     )
-    target_observability = payload["deploy"]["targets"][0]["observability"]
+    target_observability = cluster_rows(payload)[0]["observability"]
     target_observability["kubernetes"]["metrics"]["collect_k8s_cluster_metrics"] = False
 
     materialize_observability_app_values(payload)
@@ -801,7 +726,7 @@ def test_materialize_observability_agent_values_omits_cluster_targets_when_disab
 def test_materialize_grafana_datasources_from_observability_read_endpoints() -> None:
     payload = _base_payload(
         observability_enabled=True,
-        enabled_apps=("grafana", "postgresql"),
+        enabled_apps=("grafana", "grafana-postgresql"),
     )
     payload["client_info"] = {
         "client_name": "client-a",
@@ -831,7 +756,9 @@ def test_materialize_grafana_datasources_from_observability_read_endpoints() -> 
         "passwordKey": "admin-password",
     }
     assert values["envValueFrom"] == {
-        "GF_DATABASE_PASSWORD": {"secretKeyRef": {"name": "postgresql-grafana", "key": "password"}},
+        "GF_DATABASE_PASSWORD": {
+            "secretKeyRef": {"name": "grafana-postgresql-grafana", "key": "password"}
+        },
         "GF_SECURITY_SECRET_KEY": {
             "secretKeyRef": {"name": "grafana-encryption", "key": "secret-key"}
         },
@@ -1037,7 +964,7 @@ def test_materialize_observability_infra_values_skips_dcgm_labels_when_metrics_d
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["deploy"]["targets"][0]["observability"]["kubernetes"]["metrics"]["enabled"] = False
+    cluster_rows(payload)[0]["observability"]["kubernetes"]["metrics"]["enabled"] = False
 
     changed = materialize_observability_infra_values(payload)
 
@@ -1052,8 +979,12 @@ def test_materialize_observability_infra_values_sets_vm_journald_labels() -> Non
         mk8s_enabled=False,
         vm_enabled=True,
     )
-    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
-    payload["deploy"]["observability"]["vm"]["logs"]["systemd_units"] = [
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"]["vm"][
+        "logs"
+    ]["enabled"] = True
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"]["vm"][
+        "logs"
+    ]["systemd_units"] = [
         "sshd.service",
         "docker.service",
     ]
@@ -1074,8 +1005,12 @@ def test_materialize_observability_infra_values_sets_vm_journald_label_for_all_u
         mk8s_enabled=False,
         vm_enabled=True,
     )
-    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
-    payload["deploy"]["observability"]["vm"]["logs"]["systemd_units"] = []
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"]["vm"][
+        "logs"
+    ]["enabled"] = True
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"]["vm"][
+        "logs"
+    ]["systemd_units"] = []
     payload["infra"]["components"][1]["inputs"]["labels"] = {"example.com/owner": "platform"}
 
     changed = materialize_observability_infra_values(payload)
@@ -1113,7 +1048,9 @@ def test_observability_status_summary_reports_vm_agent_and_gpu_metrics() -> None
         vm_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"]["vm"][
+        "logs"
+    ]["enabled"] = True
 
     summary = observability_status_summary(payload)
 
@@ -1197,8 +1134,8 @@ def test_observability_endpoint_summary_respects_disabled_kubernetes_signals() -
             "region_id": "eu-north1",
         }
     }
-    payload["deploy"]["targets"][0]["observability"]["kubernetes"]["logs"]["enabled"] = False
-    payload["deploy"]["targets"][0]["observability"]["kubernetes"]["traces"]["enabled"] = False
+    cluster_rows(payload)[0]["observability"]["kubernetes"]["logs"]["enabled"] = False
+    cluster_rows(payload)[0]["observability"]["kubernetes"]["traces"]["enabled"] = False
 
     summary = observability_endpoint_summary(payload)
 
@@ -1248,7 +1185,9 @@ def test_observability_endpoint_summary_vm_logs_adds_logs_read_path_only() -> No
         mk8s_enabled=False,
         vm_enabled=True,
     )
-    payload["deploy"]["observability"]["vm"]["logs"]["enabled"] = True
+    next(row for row in payload["infra"]["components"] if row["id"] == "vm")["observability"]["vm"][
+        "logs"
+    ]["enabled"] = True
     payload["client_info"] = {
         "nebius": {
             "project_id": "project-example",
@@ -1314,11 +1253,17 @@ def test_observability_endpoint_summary_managed_service_buckets_follow_catalog()
     "extra_apps,expected",
     [
         ((), {"soperator"}),
-        (("grafana",), {"soperator", "grafana", "gateway-helm", "postgresql"}),
+        (("grafana",), {"soperator", "grafana", "gateway-helm", "grafana-postgresql"}),
         (("nebius-observability-agent",), {"soperator", "nebius-observability-agent"}),
         (
             ("grafana", "nebius-observability-agent"),
-            {"soperator", "grafana", "gateway-helm", "nebius-observability-agent", "postgresql"},
+            {
+                "soperator",
+                "grafana",
+                "gateway-helm",
+                "nebius-observability-agent",
+                "grafana-postgresql",
+            },
         ),
     ],
 )
@@ -1380,7 +1325,7 @@ def test_explicit_soperator_collector_drives_materialization_and_signal_summary(
         observability_enabled=target_switch,
         enabled_apps=("soperator", "nebius-observability-agent"),
     )
-    settings = payload["deploy"]["targets"][0]["observability"]["kubernetes"]
+    settings = cluster_rows(payload)[0]["observability"]["kubernetes"]
     settings["logs"]["enabled"] = False
     settings["metrics"]["enabled"] = False
     settings["traces"]["enabled"] = traces_enabled
@@ -1404,7 +1349,7 @@ def test_mixed_targets_never_fan_out_ordinary_collector_to_soperator(existing_co
     ordinary["instance_id"] = "ordinary"
     payload["infra"]["components"].append(ordinary)
     _set_observability_targets(payload, "mk8s", "ordinary")
-    payload["deploy"]["targets"][0]["observability"]["enabled"] = False
+    cluster_rows(payload)[0]["observability"]["enabled"] = False
     if existing_collector:
         collector = _base_payload(enabled_apps=("nebius-observability-agent",))["apps"]["charts"][0]
         collector.update(instance_id="ordinary", target_ref="ordinary")
@@ -1414,11 +1359,11 @@ def test_mixed_targets_never_fan_out_ordinary_collector_to_soperator(existing_co
     ensure_observability_app_rows(payload)
     materialize_observability_app_values(payload)
     assert not observability_dependency_issues(payload)
-    for app_id in ("nebius-observability-agent", "grafana", "gateway-helm"):
+    for app_id in ("nebius-observability-agent",):
         assert {row["target_ref"] for row in _chart_rows(payload, app_id)} == {"ordinary"}
     assert _chart_row(payload, "soperator") == protected
     # An app selected on another target is not explicit Soperator collector intent.
-    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    cluster_rows(payload)[0]["observability"]["enabled"] = True
     assert any(
         "component add nebius-observability-agent@mk8s" in issue
         for issue in observability_dependency_issues(payload)
@@ -1428,14 +1373,14 @@ def test_mixed_targets_never_fan_out_ordinary_collector_to_soperator(existing_co
 @pytest.mark.parametrize("explicit_infra_metrics", [None, False, True])
 def test_soperator_extra_agent_defaults_to_application_signals(explicit_infra_metrics):
     payload = _base_payload(enabled_apps=("soperator", "nebius-observability-agent"))
-    settings = payload["deploy"]["targets"][0]["observability"]["kubernetes"]
+    settings = cluster_rows(payload)[0]["observability"]["kubernetes"]
     settings["metrics"].pop("collect_k8s_cluster_metrics", None)
     if explicit_infra_metrics is not None:
         settings["metrics"]["collect_k8s_cluster_metrics"] = explicit_infra_metrics
     settings["traces"]["enabled"] = False
     normalize_observability_project_settings(payload)
     assert settings["traces"]["enabled"] is False
-    effective = payload["deploy"]["targets"][0]["observability"]["kubernetes"]
+    effective = cluster_rows(payload)[0]["observability"]["kubernetes"]
     assert effective["metrics"]["collect_k8s_cluster_metrics"] is (explicit_infra_metrics is True)
     chart = _chart_row(payload, "nebius-observability-agent")
     chart["values"] = {

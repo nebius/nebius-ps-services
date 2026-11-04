@@ -125,6 +125,28 @@
         "Retains the original grant, saved targets and policy for resume; never recaptures the current checkout as the starting context.",
         "Nested calls return evidence and do not finalize independently; report-only and already-merged observation restrictions remain."
       ]
+    },
+    {
+      "id": "fork-publication-race",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use create-pr private preparation for a review repair of an existing fork PR. A same-named local branch exists, and the contributor advances the remote before push.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Uses a fresh namespaced local alias and immutable PR/base/head binding.",
+        "Trusted pre-push witness prevents submission on changed advertised head; no force push.",
+        "Preserves rejection evidence and closes or refreshes through owner reconciliation, without replacing PR."
+      ]
+    },
+    {
+      "id": "publication-ack-lost",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact external services, mutate files or execute publication. Use create-pr private preparation to resume a journaled push whose response was lost; independent branch and PR readback show intended head.",
+      "expected_output": "Applies contribution acceptance, spec ownership and exact identity boundaries.",
+      "files": [],
+      "assertions": [
+        "Settles the same journal without another push.",
+        "Keeps original receipt/grant and exact review/base evidence.",
+        "Does not copy credentials or execute contributor helpers."
+      ]
     }
   ]
 }

@@ -78,7 +78,25 @@ def test_same_release_repair_requires_live_physical_protection(tmp_path, monkeyp
     generation = DeploymentGeneration(
         {
             "runtime_config": payload,
-            "deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux"}]},
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": "flux",
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "backend": {},
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+            "schema": "nebius-cxcli-generated/v3",
         },
         {
             "flux/kustomization.yaml": base64.b64encode(b"resources: [adapter.yaml]\n").decode(),
@@ -370,7 +388,25 @@ def test_observe_compares_resolved_settings_without_changing_generation(
         return DeploymentGeneration(
             {
                 "runtime_config": payload,
-                "deploy": {"targets": [{"target_ref": "cluster", "flux_dir": "flux"}]},
+                "execution": {
+                    "targets": [
+                        {
+                            "target_ref": "cluster",
+                            "flux_dir": "flux",
+                            "instance_id": "cluster",
+                            "access": "external",
+                            "component_id": "mk8s",
+                            "ownership": "managed",
+                            "cluster_id_output_name": "cluster" + "_cluster_id",
+                            "component_output_ref": "cluster" + ".cluster_id",
+                        }
+                    ],
+                    "backend": {},
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
+                "schema": "nebius-cxcli-generated/v3",
             },
             {
                 "flux/kustomization.yaml": base64.b64encode(b"resources: [values.yaml]\n").decode(),
@@ -487,7 +523,25 @@ def test_source_roundtrip_also_requires_independent_protected_resource_match(
         (stage.flux_dir / "adapter.yaml").write_text(yaml.safe_dump_all([*docs, graph, outer]))
         manifest = {
             "runtime_config": copy.deepcopy(source_payload),
-            "deploy": {"targets": [{"target_ref": "cluster", "flux_dir": str(stage.flux_dir)}]},
+            "execution": {
+                "targets": [
+                    {
+                        "target_ref": "cluster",
+                        "flux_dir": str(stage.flux_dir),
+                        "instance_id": "cluster",
+                        "access": "external",
+                        "component_id": "mk8s",
+                        "ownership": "managed",
+                        "cluster_id_output_name": "cluster" + "_cluster_id",
+                        "component_output_ref": "cluster" + ".cluster_id",
+                    }
+                ],
+                "backend": {},
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+            "schema": "nebius-cxcli-generated/v3",
         }
         rendered[stage.generated_dir] = (
             stage,
@@ -511,7 +565,7 @@ def test_source_roundtrip_also_requires_independent_protected_resource_match(
         GRAFANA_TARGET_KUBE_CONTEXT_ENV="context",
         _render_soperator_upgrade_admission=render,
         load_generated_manifest=lambda directory: rendered[directory][1],
-        _resolve_selected_deploy_targets=lambda manifest, **kw: manifest["deploy"]["targets"],
+        _resolve_selected_deploy_targets=lambda manifest, **kw: manifest["execution"]["targets"],
         _paths_for_target_flux_dir=lambda stage, target: stage,
         _rendered_soperator_upstream_values=lambda directory: rendered[directory.parent][2],
         _rendered_soperator_adapter_state=lambda directory: rendered[directory.parent][3],

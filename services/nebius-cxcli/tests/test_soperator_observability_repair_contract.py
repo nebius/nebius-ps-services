@@ -75,6 +75,7 @@ def authored():
                 "gpu_cluster_a": {**copy.deepcopy(gpu), "target_ref": "cluster-a", "version": "1.0"}
             },
         },
+        "version": "v2",
     }
 
 
@@ -187,7 +188,14 @@ def bundles(tmp_path, monkeypatch):
             {
                 "runtime_config": config,
                 "render": {"application_inputs": {}, "compatibility": {}},
-                "deploy": {"targets": [{"target_ref": "cluster-a", "flux_dir": "flux/cluster-a"}]},
+                "execution": {
+                    "targets": [{"target_ref": "cluster-a", "flux_dir": "flux/cluster-a"}],
+                    "backend": {},
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
+                "schema": "nebius-cxcli-generated/v3",
             },
             {
                 **{"flux/cluster-a/" + k: base64.b64encode(v).decode() for k, v in content.items()},

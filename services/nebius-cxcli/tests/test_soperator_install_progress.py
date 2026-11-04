@@ -117,7 +117,7 @@ def test_service_account_progress_reports_creation_only_when_needed(exists):
 
 @pytest.mark.parametrize("valid", [False, True])
 def test_provider_validation_reports_returned_outcome(monkeypatch, valid):
-    from nebius.api.nebius.iam.v1 import ProjectServiceClient
+    from nebius.api.nebius.iam.v2 import ProjectServiceClient
 
     lookup = provider_options.ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
@@ -249,7 +249,7 @@ def test_empty_provider_inventory_is_successful_and_cached(monkeypatch):
 
 
 def test_partial_name_lookup_reports_each_remote_outcome(monkeypatch):
-    from nebius.api.nebius.iam.v1 import ProjectServiceClient, TenantServiceClient
+    from nebius.api.nebius.iam.v2 import ProjectServiceClient, TenantServiceClient
 
     lookup = provider_options.ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())

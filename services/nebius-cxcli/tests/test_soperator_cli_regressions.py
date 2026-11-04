@@ -989,7 +989,7 @@ def test_upgrade_admission_validates_the_target_scoped_flux_directory(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
+    config_path.write_text("version: v2\n", encoding="utf-8")
     paths = cli.resolve_project_paths(config_path)
     staged_paths = cli.staged_generated_paths(paths)
     calls: list[list[str]] = []
@@ -1065,7 +1065,7 @@ def _onboard_source_payload(*, managed_target_ref: str = "") -> dict[str, Any]:
             }
         )
     return {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "client-a",
             "nebius": {
@@ -1366,7 +1366,7 @@ def test_existing_onboard_config_rejects_project_creation_flags(
     kwargs: dict[str, str],
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
+    config_path.write_text("version: v2\n", encoding="utf-8")
     arguments: dict[str, Any] = {
         "interactive": False,
         "client_name": None,
@@ -1658,7 +1658,7 @@ def test_established_name_resolved_onboard_config_keeps_region_authoritative(
     config_path = tmp_path / "tenant-a" / "project-a" / "config.yaml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        """version: v1
+        """version: v2
 client_info:
   client_name: client-a
   nebius:

@@ -62,7 +62,20 @@ class Executor:
 
 def test_one_campaign_owns_all_stages_and_preview_has_no_authority():
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     live = []
     preview = run_deployment(
         generation=generation,
@@ -87,7 +100,20 @@ def test_one_campaign_owns_all_stages_and_preview_has_no_authority():
 
 def test_initial_recovery_is_atomic_and_resumes_frozen_admission():
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     live = []
     original_begin = state.begin
 
@@ -122,7 +148,20 @@ def test_initial_recovery_is_atomic_and_resumes_frozen_admission():
 @pytest.mark.parametrize("before,after", [("1m", "60s"), ("0s", "none"), ("0", "0s")])
 def test_recovery_accepts_equivalent_duration_controls(before, after):
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     live = []
     with pytest.raises(RuntimeError, match="interrupted"):
         run_deployment(
@@ -171,7 +210,20 @@ def test_recovery_accepts_equivalent_duration_controls(before, after):
 )
 def test_recovery_still_rejects_changed_or_invalid_controls(changed):
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     live = []
     with pytest.raises(RuntimeError, match="interrupted"):
         run_deployment(
@@ -201,7 +253,20 @@ def test_finish_is_remote_durable_before_later_stage_resume():
     from nebius_cxcli.soperator_acceptance import _CONTROL, AcceptanceControl, current_control
 
     state = DeploymentState(Store(), settings(), assert_held=lambda: None)
-    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    generation = DeploymentGeneration(
+        {
+            "runtime_config": {"version": "v2"},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+        {},
+    )
     live = []
 
     class Interrupting(Executor):

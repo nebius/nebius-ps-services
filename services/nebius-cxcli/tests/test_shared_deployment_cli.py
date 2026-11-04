@@ -10,6 +10,7 @@ import typer.main
 from typer.testing import CliRunner
 
 from nebius_cxcli import cli
+from nebius_cxcli.cluster_config import cluster_rows, soperator_row
 from nebius_cxcli.frozen_catalog import freeze_catalog
 
 runner = CliRunner()
@@ -29,7 +30,17 @@ def test_deploy_rejects_obsolete_rendered_soperator_values_before_auth(
     }
     if explicit_paths is not None:
         row["values-explicit-paths"] = explicit_paths
-    manifest = {"runtime_config": {"apps": {"charts": [row]}}}
+    manifest = {
+        "runtime_config": {"apps": {"charts": [row]}, "version": "v2"},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+    }
     manifest["render"] = {"inputs": freeze_catalog(manifest["runtime_config"])}
     paths = SimpleNamespace(
         config_path=tmp_path / "config.yaml",
@@ -37,7 +48,7 @@ def test_deploy_rejects_obsolete_rendered_soperator_values_before_auth(
         reports_dir=tmp_path / "generated" / "reports",
     )
     # Deploy consumes the saved render even when the source was already corrected.
-    paths.config_path.write_text("apps:\n  charts: []\n")
+    paths.config_path.write_text("version: v2\napps:\n  charts: []\n")
     monkeypatch.setattr(cli, "resolve_deploy_config_paths", lambda _: paths)
     monkeypatch.setattr(cli, "load_generated_manifest", lambda _: manifest)
     monkeypatch.setattr(
@@ -170,12 +181,13 @@ def test_fresh_soperator_deploy_loads_without_an_ordinary_app_baseline(
     import yaml
 
     config = {
+        "version": "v2",
         "apps": {
             "charts": [
                 {"id": name, "enabled": True, "target_ref": "cluster"}
                 for name in ("soperator", "nvidia-gpu-operator", "nvidia-network-operator")
             ]
-        }
+        },
     }
     paths = SimpleNamespace(
         config_path=tmp_path / "config.yaml",
@@ -183,7 +195,18 @@ def test_fresh_soperator_deploy_loads_without_an_ordinary_app_baseline(
         reports_dir=tmp_path / "generated" / "reports",
     )
     paths.config_path.write_text(yaml.safe_dump(config))
-    manifest = {"runtime_config": config, "render": {"inputs": freeze_catalog(config)}}
+    manifest = {
+        "runtime_config": config,
+        "render": {"inputs": freeze_catalog(config)},
+        "schema": "nebius-cxcli-generated/v3",
+        "execution": {
+            "backend": {},
+            "targets": [],
+            "required_component_outputs": [],
+            "status_watchers": [],
+            "validations": [],
+        },
+    }
     calls = []
     monkeypatch.setattr(cli, "resolve_deploy_config_paths", lambda _path: paths)
     monkeypatch.setattr(cli, "load_generated_manifest", lambda _path: manifest)
@@ -253,7 +276,7 @@ def test_guided_upgrade_preserves_resolved_controls_and_source_cas(
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "cluster"}]},
+        "version": "v2",
     }
     config_path.write_text(yaml.safe_dump(source))
     before = config_path.read_bytes()
@@ -366,7 +389,7 @@ def test_guided_upgrade_preserves_resolved_controls_and_source_cas(
             "os": "ubuntu24.04",
             "gpu_stack_preset": "cuda12",
         }
-        assert authored["deploy"]["targets"][0]["soperator_rollout"] == {
+        assert soperator_row(authored, cluster_rows(authored)[0]["instance_id"])["rollout"] == {
             "strategy": strategy,
             "max_surge_count": surge,
             "drain_timeout": "45m",
@@ -380,7 +403,19 @@ def test_guided_upgrade_preserves_resolved_controls_and_source_cas(
             options=deployment_cli.DeployOptions(),
             lease=None,
         )
-        executor.generation = SimpleNamespace(manifest={"runtime_config": authored})
+        executor.generation = SimpleNamespace(
+            manifest={
+                "runtime_config": authored,
+                "schema": "nebius-cxcli-generated/v3",
+                "execution": {
+                    "backend": {},
+                    "targets": [],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
+            }
+        )
         executor.plan = SimpleNamespace(target_ref="cluster", target_release="4.1.7", stages=())
         executor.hooks = SimpleNamespace(source_groups=("worker",))
         kwargs = executor._campaign_kwargs()
@@ -447,7 +482,8 @@ def test_render_publication_is_local_and_preserves_backend_generation(monkeypatc
             ]
         },
         "infra": {"components": []},
-        "value": 1,
+        "compatibility": {"fixture": 1},
+        "version": "v2",
     }
     path.write_text(yaml.safe_dump(payload))
     monkeypatch.setattr(
@@ -497,7 +533,7 @@ def test_render_publication_is_local_and_preserves_backend_generation(monkeypatc
 
     def render_infra(config, staged, **kwargs):
         target = staged.infra_dir / "main.tf"
-        target.write_text(f"locals {{ value = {config['value']} }}\n")
+        target.write_text(f"locals {{ value = {config['compatibility']['fixture']} }}\n")
         return [target]
 
     def manifest(config, staged, **kwargs):
@@ -544,7 +580,7 @@ def test_render_publication_is_local_and_preserves_backend_generation(monkeypatc
         if p.is_file()
     }
     if mode == "different":
-        payload["value"] = 2
+        payload["compatibility"]["fixture"] = 2
     from contextlib import nullcontext
 
     from nebius_cxcli.deployment_local import DeploymentLocalLock

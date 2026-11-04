@@ -207,6 +207,7 @@ def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
 
 
 BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
+    "nat-gateway": {},  # Dedicated transactional wizard owns these fields.
     "vpc": {
         "inputs.parent_id": {
             "prompt": False,
@@ -515,39 +516,39 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         **_mk8s_soperator_autoscaling_fields(),
         **_mk8s_soperator_worker_ephemeral_fields(),
         **_mk8s_soperator_worker_shape_fields(),
-        "deploy.targets[].secrets.mysterybox.enabled": {
+        "infra.components[].secrets.mysterybox.enabled": {
             "default": True,
             "write_default_to_config": True,
         },
-        "deploy.targets[].secrets.mysterybox.store_name": {
+        "infra.components[].secrets.mysterybox.store_name": {
             "default": "nebius-mysterybox-shared",
             "prompt": False,
         },
-        "deploy.targets[].secrets.mysterybox.api_domain": {
+        "infra.components[].secrets.mysterybox.api_domain": {
             "default": "api.nebius.cloud:443",
             "prompt": False,
         },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.name": {
+        "infra.components[].secrets.mysterybox.credentials_secret.name": {
             "default": "nebius-mysterybox-shared-creds",
             "prompt": False,
         },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.namespace": {
+        "infra.components[].secrets.mysterybox.credentials_secret.namespace": {
             "default": "external-secrets",
             "prompt": False,
         },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.key": {
+        "infra.components[].secrets.mysterybox.credentials_secret.key": {
             "default": "credentials.json",
             "prompt": False,
         },
-        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
+        "infra.components[].secrets.mysterybox.allow_all_namespaces": {
             "default": True,
             "write_default_to_config": True,
         },
-        "deploy.targets[].secrets.mysterybox.refresh_interval": {
+        "infra.components[].secrets.mysterybox.refresh_interval": {
             "default": "15m",
             "write_default_to_config": True,
         },
-        "deploy.targets[].secrets.mysterybox.sync_namespaces": {
+        "infra.components[].secrets.mysterybox.sync_namespaces": {
             "default": ["default"],
             "type_hint": "list(string)",
             "prompt_complex": True,
@@ -607,8 +608,61 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "inputs.filesystems",
         ),
     },
+    "tailscale-gw": {
+        **_project_network_and_subnet_fields(),
+        **_compute_platform_and_preset_fields(
+            platform_field="inputs.platform", preset_field="inputs.preset"
+        ),
+        "inputs.platform": {"options": {"from": "compute_platforms", "args": {"cpu_only": True}}},
+        "inputs.preset": {
+            "options": {
+                "from": "compute_platform_presets",
+                "depends_on": "inputs.platform",
+                "args": {"cpu_only": True},
+            }
+        },
+        "inputs.management_cidrs": {
+            "default_from": {"from": "operator_public_ip_cidr"},
+            "type_hint": "list(string)",
+            "write_default_to_config": True,
+            "required": True,
+        },
+        "tailscale.stage": {
+            "default": "infrastructure",
+            "write_default_to_config": True,
+            "prompt": False,
+            "type_hint": "string",
+        },
+        "tailscale.tailnet": {"type_hint": "string", "required": True},
+        "tailscale.tags": {"type_hint": "list(string)", "required": True},
+        "tailscale.routes": {"type_hint": "list(string)", "required": True},
+        "tailscale.onboarding.owner": {"type_hint": "string", "required": True},
+        "tailscale.onboarding.purpose": {"type_hint": "string", "required": True},
+        "tailscale.onboarding.environment": {"type_hint": "string"},
+        "tailscale.onboarding.admin_requirements": {"type_hint": "list(string)", "default": []},
+        "tailscale.policy.tag_owners": {"type_hint": "list(string)", "default": []},
+        "tailscale.policy.auto_approve": {"type_hint": "bool", "default": True},
+        "tailscale.policy.rules": {"type_hint": "list(any)", "required": True},
+        "tailscale.auth": {"type_hint": "map(any)", "required": True},
+        "tailscale.approval": {
+            "default": "external",
+            "write_default_to_config": True,
+            **_static_sources("external", "api"),
+        },
+        **_suppressed_prompt_fields(
+            "inputs.ssh_host_keys",
+            "inputs.bootstrap_user_data",
+            "inputs.labels",
+            "inputs.member_overrides",
+        ),
+    },
     "wireguard-gw": {
         **_project_network_and_subnet_fields(),
+        "access.admin_group_id": {
+            "required": True,
+            "type_hint": "string",
+            "options": {"from": "wireguard_admin_groups"},
+        },
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
@@ -626,7 +680,12 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.wireguard_tunnel_cidr": {
             "write_default_to_config": True,
         },
+        "inputs.create_public_ip_allocation": {"write_default_to_config": True},
+        "inputs.client_default_persistent_keepalive": {"write_default_to_config": True},
+        "inputs.nat_mode": {"write_default_to_config": True},
         **_suppressed_prompt_fields(
+            "inputs.access_bootstrap",
+            "inputs.bootstrap_user_data",
             "inputs.boot_disk_block_size_bytes",
             "inputs.endpoint_host",
             "inputs.clients",
@@ -790,6 +849,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "object-storage": {
+        "inputs.labels": {"prompt_complex": True},
         "inputs.versioning_policy": _static_sources("DISABLED", "ENABLED", "SUSPENDED"),
         "inputs.object_audit_logging": _static_sources("NONE", "MUTATE_ONLY", "ALL"),
     },

@@ -46,7 +46,7 @@ def test_upgrade_reports_unreadable_source_before_discovery(tmp_path, directory)
 def test_public_discovery_provider_failure_does_not_expose_transport_details(
     tmp_path, monkeypatch, failure_stage
 ):
-    import nebius.api.nebius.iam.v1 as iam_v1
+    import nebius.api.nebius.iam.v2 as iam_v2
 
     closed = []
     sdk = SimpleNamespace(sync_close=lambda: closed.append(True))
@@ -58,7 +58,7 @@ def test_public_discovery_provider_failure_does_not_expose_transport_details(
     request = SimpleNamespace(wait=fail if failure_stage == "project" else lambda: project)
     monkeypatch.setattr(soperator_public_discovery, "init_nebius_sdk", lambda **kw: sdk)
     monkeypatch.setattr(
-        iam_v1, "ProjectServiceClient", lambda sdk: SimpleNamespace(get=lambda *a, **kw: request)
+        iam_v2, "ProjectServiceClient", lambda sdk: SimpleNamespace(get=lambda *a, **kw: request)
     )
     monkeypatch.setattr(
         soperator_public_discovery,
@@ -120,7 +120,7 @@ def test_upgrade_planner_binds_the_configuration_it_read(
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "cluster-a"}]},
+        "version": "v2",
     }
     paths.config_path.write_text(yaml.safe_dump(source))
     original = paths.config_path.read_bytes()

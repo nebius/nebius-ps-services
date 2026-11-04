@@ -45,7 +45,11 @@ def verify_context_cluster(kubeconfig: Path, *, context: str, server: str, ca_pe
         cluster = _named(payload, "clusters", selected["cluster"])["cluster"]
         if not isinstance(cluster, Mapping):
             raise ValueError("invalid cluster")
-        if cluster.get("insecure-skip-tls-verify") or cluster.get("tls-server-name"):
+        if (
+            cluster.get("insecure-skip-tls-verify")
+            or cluster.get("tls-server-name")
+            or cluster.get("proxy-url")
+        ):
             raise ValueError("overridden TLS identity")
         if _endpoint(str(cluster.get("server", ""))) != _endpoint(server):
             raise ValueError("different endpoint")

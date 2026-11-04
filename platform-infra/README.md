@@ -14,13 +14,18 @@ Reusable modules under `modules/`:
 
 - [`mk8s`](modules/mk8s/README.md): Nebius Managed Kubernetes cluster and node groups.
 - [`vpc`](modules/vpc/README.md): Nebius VPC network and subnet ownership.
+- [`nat-gateway`](modules/nat-gateway/README.md): Custom CPU NAT gateway with optional sensitive pre-pinned host identity, a 40 GiB default disk, create/reuse gateway subnet selection and an
+  explicit dedicated subnet, stable allocations, separate routing policies and
+  any-source IPv4 key-only SSH protected by fail2ban.
 - [`managed-postgresql`](modules/managed-postgresql/README.md): Nebius Managed PostgreSQL cluster.
 - [`sfs`](modules/sfs/README.md): Nebius Shared File System.
 - [`nfs`](modules/nfs/README.md): VM-backed NFS bridge for explicit NFS compatibility cases.
 - [`object-storage`](modules/object-storage/README.md): Nebius Object Storage buckets.
-- [`mysterybox`](modules/mysterybox/README.md): Nebius MysteryBox secrets and versioned payloads.
+- [`mysterybox`](modules/mysterybox/README.md): SecretStash containers, with optional initial payload versions.
 - [`vm`](modules/vm/README.md): General Nebius Compute virtual machine provisioning.
-- [`wireguard-gw`](modules/wireguard-gw/README.md): WireGuard VPN gateway VM.
+- [`tailscale-gw`](modules/tailscale-gw/README.md): two persistent, independently addressed Tailscale subnet-router VMs for customer-owned tailnets.
+- [`wireguard-access`](modules/wireguard-access/README.md): dedicated WireGuard VM identity and narrow SecretStash grants.
+- [`wireguard-gw`](modules/wireguard-gw/README.md): WireGuard VPN gateway VM with authenticated SecretStash bootstrap.
 - [`ssh-jumphost`](modules/ssh-jumphost/README.md): SSH bastion/jump host VM.
 
 Each module has its own README and one or more runnable example roots under
@@ -35,6 +40,8 @@ These requirements apply to direct consumers of the modules in this repo:
   provider write-only payload fields
 - Nebius provider source/version for all modules:
   `nebius/nebius` with `>= 0.6.8, < 0.7.0`
+- `vpc` requires `nebius/nebius >= 0.6.74, < 0.7.0` for supported subnet
+  status pool outputs
 - `managed-postgresql` also requires `hashicorp/random >= 3.6.0, < 4.0.0`
 - The calling Terraform root owns backend configuration, provider configuration,
   credentials, and lock files
@@ -243,7 +250,7 @@ to help users choose the right module quickly.
 
 ### [`mysterybox`](modules/mysterybox/README.md)
 
-- Creates Nebius MysteryBox secrets and one initial primary version per secret
+- Creates SecretStash containers and, by default, one initial primary version per secret
 - Uses provider write-only payload fields for text and file secret values
 - Secret versions are immutable MysteryBox snapshots; rotate by creating a new
   MysteryBox version outside Terraform, marking it primary, and recording that
@@ -312,7 +319,9 @@ to help users choose the right module quickly.
   - `platform`
   - `preset`
   - `source_image_family`
-  - `ssh_public_key`
+  - `ssh_user_name`
+  - `boot_disk_size_gib`
+  - `access_bootstrap` (frozen public references prepared by cxcli)
 - Example:
   - `modules/wireguard-gw/examples/minimal`
 
@@ -561,3 +570,10 @@ Guidance:
 If a Terraform error originates inside `.terraform/modules/...`, the issue is in
 the source module itself rather than the generated root. Fix and validate the
 module, then rerender.
+
+WireGuard networking updates share a canonical guest helper for explicit MTU and
+TCP MSS handling. cxcli preserves the original bootstrap during in-place updates
+and separately verifies connected-client access to private Kubernetes endpoints.
+First boot records an empty peer registry when no bootstrap clients are declared,
+allowing deployment reconciliation before the first client is issued.
+See [WireGuard networking](modules/wireguard-gw/README.md#managed-network-updates).

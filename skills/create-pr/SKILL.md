@@ -340,12 +340,14 @@ order, branch selection and base synchronization before the process below.
    before pushing or opening/reusing the PR. Follow the stricter active-run
    publication contract above; missing or failed UAT cannot authorize an
    Agentic SDLC PR.
-   If a branch has no upstream yet, push it with upstream tracking. If conflict
-   resolution or base merge work created new commits, push those commits to the
-   same branch with an explicit `HEAD:<branch>` refspec.
+   Ordinary publication uses the owner's private `publish-target` operation;
+   follow [PR publication](references/pr-publication.md), including bound fork
+   intake and independent readback. Upstream tracking is not required. Active
+   SDLC retains its separately authorized direct explicit-ref push.
 10. Avoid duplicate PRs.
-   Check for an existing open PR for each head branch. If one already exists,
-   return that PR instead of creating another.
+   Reuse the bound base-repository/PR number and exact head-repository/ref
+   identity for existing PRs. For new work, search that full identity before
+   creation; branch names alone are not unique across forks.
 11. Open each PR with the right readiness state.
    Treat any explicit user-provided PR title as authoritative. Use it verbatim
    unless the user explicitly asks for refinement. Do not substitute a generic
@@ -366,9 +368,11 @@ order, branch selection and base synchronization before the process below.
    blocked by external state.
    When GitHub checks are expected and available, watch or poll them until
    they reach a terminal pass, fail, skip, or cancel state within the fixed
-   10,800-second PR-readiness budget before reporting the PR as ready. Ordinary
+   86,400-second (24-hour) PR-readiness budget before reporting the PR as ready. Ordinary
    completion preserves the same deadline through repairs and reruns; use the
-   publication caller's checkpoint when present. Only explicit release resume
+   publication caller's checkpoint when present, even when shorter. An explicit
+   user continuation may start a new ordinary observation attempt with the same
+   transaction. Only explicit release resume
    renews release budgets. If checks remain pending because external CI is delayed or
    unavailable, report the PR as pending instead of ready and include the last
    observed check state.
@@ -450,8 +454,9 @@ URLs, customer data, raw logs, or one-off local state.
 - Do not stage or commit while local tests are still running or pending. Wait
   for terminal pass/fail status, repair branch-caused failures when safe, and
   rerun the failed checks before committing or reporting readiness.
-- Do not use plain ambiguous `git push`. Use explicit refspecs such as
-  `git push origin HEAD:<branch>` or `git push -u origin HEAD:<branch>`.
+- Use the private owner `publish-target` operation for ordinary PR pushes; read
+  [PR publication](references/pr-publication.md). It binds the destination,
+  journals the update and independently verifies branch and PR readback.
 - Do not treat a conflict-free current-base PR as enough when the user asked
   for multiple branches. Also check the proposed dependency order.
 - Do not resolve semantic conflicts by guessing. Prefer a small merge commit

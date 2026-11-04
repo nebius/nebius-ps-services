@@ -751,9 +751,8 @@ def test_project_publication_preserves_unrelated_config_and_receipt_identity(
     monkeypatch.setattr(observability, "_grafana_app_id", lambda: grafana_id)
     path = tmp_path / "config.yaml"
     source = {
-        "version": "v1",
+        "version": "v2",
         "infra": {"components": []},
-        "deploy": {"targets": []},
         "apps": {
             "charts": [
                 {"id": grafana_id, "instance_id": "cluster", "enabled": True},
@@ -865,7 +864,7 @@ def test_interrupted_publication_recovers_only_same_destination(tmp_path):
     from nebius_cxcli.project_bundle_transaction import ProjectBundleTransaction
 
     path = tmp_path / "config.yaml"
-    path.write_text("before")
+    path.write_text("version: v2\ncompatibility: {fixture: before}\n")
 
     def crash(stage):
         if stage == "after-commit":
@@ -873,13 +872,14 @@ def test_interrupted_publication_recovers_only_same_destination(tmp_path):
 
     with pytest.raises(RuntimeError, match="interruption"):
         ProjectBundleTransaction(tmp_path, failpoint=crash).commit(
-            {path: b"after"}, generation_sha256=publication_identity("import", path, "cluster")
+            {path: b"version: v2\ncompatibility: {fixture: after}\n"},
+            generation_sha256=publication_identity("import", path, "cluster"),
         )
     with pytest.raises(RuntimeError, match="differs"):
         recover_import_publication(path, "other")
-    assert path.read_text() == "before"
+    assert path.read_text() == "version: v2\ncompatibility: {fixture: before}\n"
     recover_import_publication(path, "cluster")
-    assert path.read_text() == "after"
+    assert path.read_text() == "version: v2\ncompatibility: {fixture: after}\n"
 
 
 @pytest.mark.parametrize(
@@ -943,7 +943,10 @@ def test_interrupted_import_retains_original_remote_preimage(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(
         yaml.safe_dump(
-            {"apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]}}
+            {
+                "version": "v2",
+                "apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]},
+            }
         )
     )
     client = FakeGrafana()
@@ -1017,7 +1020,10 @@ def test_cluster_selection_precedes_leases_and_locked_preflight_rejects_drift(
     from nebius_cxcli.paths import resolve_project_paths
 
     paths = resolve_project_paths(tmp_path / "config.yaml")
-    payload = {"apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]}}
+    payload = {
+        "version": "v2",
+        "apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]},
+    }
     paths.config_path.write_text(yaml.safe_dump(payload))
     original = paths.config_path.read_bytes()
     source = write_dashboard(

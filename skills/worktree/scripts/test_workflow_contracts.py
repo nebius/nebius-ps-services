@@ -111,6 +111,22 @@ class DirectExecutionTests(unittest.TestCase):
             self.run_dir, self.project, "FEAT-001", self.plan, 4
         )
 
+    def test_multiline_contract_survives_assignment_serialization(self):
+        goal = 'write a.txt\n  JSON fields: {"id": "string", "done": "boolean"}'
+        validation = "verify task identifier\n  Reject missing id and non-boolean done."
+        done = "expected identifier is present\n  Preserve the exact JSON field types."
+        self.plan.write_text(self.plan.read_text().replace("write a.txt", goal, 1)
+                             .replace("verify task identifier", validation, 1)
+                             .replace("expected identifier is present", done, 1))
+        self.plan.write_bytes(self.plan.read_bytes().replace(b"\n", b"\r\n"))
+        self.prepare()
+        assignment = engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        persisted = read(engine.assignment_path(self.run_dir, "FEAT-001", "WAVE-001", "TASK-001"))
+        for record in (assignment, persisted):
+            self.assertEqual(record["goal"], goal)
+            self.assertEqual(record["validation"], validation)
+            self.assertEqual(record["done_criteria"], done)
+
     def test_dirty_canonical_specs_cannot_be_excluded_from_preparation(self):
         self.publication(self.project)
         git(self.project, "add", "-A")

@@ -73,19 +73,6 @@ variable "ssh_user_name" {
   }
 }
 
-variable "ssh_public_key" {
-  description = "Inline SSH public key content for initial VM access."
-  type        = string
-  nullable    = false
-  validation {
-    condition = can(regex(
-      "^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(256|384|521))[[:space:]]+[^[:space:]]+([[:space:]]+.*)?$",
-      trimspace(var.ssh_public_key),
-    ))
-    error_message = "ssh_public_key must be an inline OpenSSH public key string using ssh-rsa, ssh-ed25519, or ECDSA."
-  }
-}
-
 variable "create_public_ip_allocation" {
   description = "Create a dedicated static public IP allocation and attach it to the VM."
   type        = bool
@@ -360,4 +347,39 @@ variable "labels" {
   type        = map(string)
   default     = {}
   nullable    = false
+}
+
+variable "access_bootstrap" {
+  description = "Lifecycle-owned public first-boot references. Private SSH material must never enter Terraform. Frozen for the lifetime of this VM generation."
+  type        = map(string)
+  nullable    = false
+  default     = {}
+  validation {
+    condition = (
+      toset(keys(var.access_bootstrap)) == toset([
+        "generation", "service_account_id", "host_secret_id", "host_version_id",
+        "host_public_key", "login_public_key",
+      ]) &&
+      alltrue([for value in values(var.access_bootstrap) : length(trimspace(value)) > 0]) &&
+      can(regex("^ssh-ed25519 [A-Za-z0-9+/]+=*$", lookup(var.access_bootstrap, "host_public_key", ""))) &&
+      can(regex("^ssh-ed25519 [A-Za-z0-9+/]+=*$", lookup(var.access_bootstrap, "login_public_key", "")))
+    )
+    error_message = "access_bootstrap requires the complete public SecretStash bootstrap contract prepared by cxcli."
+  }
+}
+
+variable "wireguard_mtu" {
+  description = "Tunnel MTU; null selects min(1420, detected uplink MTU minus 80). The guest also enforces the uplink limit."
+  type        = number
+  default     = null
+  validation {
+    condition     = var.wireguard_mtu == null ? true : (var.wireguard_mtu == floor(var.wireguard_mtu) && var.wireguard_mtu >= 1280 && var.wireguard_mtu <= 1420)
+    error_message = "wireguard_mtu must be an integer from 1280 through 1420, or null for automatic selection."
+  }
+}
+
+variable "bootstrap_user_data" {
+  description = "Lifecycle-owned immutable bootstrap for this physical gateway generation. Direct callers must preserve their applied bootstrap when updating networking in place."
+  type        = string
+  default     = null
 }

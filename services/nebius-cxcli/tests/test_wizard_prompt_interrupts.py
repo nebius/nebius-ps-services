@@ -531,6 +531,81 @@ def test_prompt_scalar_override_parses_mysterybox_secret_list(monkeypatch) -> No
     assert value == secret_list
 
 
+def test_mysterybox_guided_prompt_defaults_to_plain_secret_entry(monkeypatch) -> None:
+    responses = iter(["app-secret", "token", "", "", ""])
+    prompts: list[str] = []
+    messages: list[str] = []
+
+    def prompt(message: str, **_kwargs):
+        prompts.append(message)
+        return next(responses)
+
+    monkeypatch.setattr(cli.typer, "prompt", prompt)
+    monkeypatch.setattr(cli.console, "print", lambda message: messages.append(str(message)))
+    value, stopped = cli._prompt_scalar_override(
+        "infra.components[0].inputs.secrets",
+        [],
+        type_hint="list(object({ name = string payload = map(object({ type = string })) }))",
+        required=True,
+    )
+
+    assert not stopped
+    assert value == [
+        {"name": "app-secret", "version_id": "n/a", "payload": {"TOKEN": {"type": "text"}}}
+    ]
+    assert prompts[1].startswith("Payload key for app-secret")
+    assert not any(
+        "Kubernetes" in text or "ESO" in text or "sync" in text for text in prompts + messages
+    )
+
+
+def test_mysterybox_guided_prompt_preserves_hidden_existing_sync_metadata(monkeypatch) -> None:
+    existing = [
+        {
+            "name": "app-secret",
+            "version_id": "mbsecver-existing",
+            "kubernetes_secret_name": "custom-target",
+            "eso_version_policy": "manual-version-pinning",
+            "payload": {"TOKEN": {"type": "text"}},
+        }
+    ]
+    messages: list[str] = []
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(cli.console, "print", lambda message: messages.append(str(message)))
+
+    value, stopped = cli._prompt_mysterybox_secrets_override(
+        "infra.components[0].inputs.secrets", existing, required=True, eso_sync=False
+    )
+    assert not stopped
+    assert value == existing
+    assert value is not existing
+    cli._print_wizard_selected_field("infra.components[0].inputs.secrets", value)
+    assert not any("custom-target" in text or "sync" in text for text in messages)
+
+
+@pytest.mark.parametrize("answer,stopped", [("q", False), ("qq", True)])
+@pytest.mark.parametrize("eso_sync", [False, True])
+def test_mysterybox_guided_prompt_navigation(monkeypatch, answer, stopped, eso_sync) -> None:
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: answer)
+    value, should_stop = cli._prompt_mysterybox_secrets_override(
+        "infra.components[0].inputs.secrets", [], required=True, eso_sync=eso_sync
+    )
+    assert should_stop is stopped
+    assert value == [] if stopped else value is cli._WIZARD_BACKTRACK
+
+
+def test_mysterybox_plain_prompt_backtracks_payload_key_and_type(monkeypatch) -> None:
+    responses = iter(["discarded", "q", "app-secret", "token", "q", "api_key", "", "", ""])
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(responses))
+    value, stopped = cli._prompt_mysterybox_secrets_override(
+        "infra.components[0].inputs.secrets", [], required=True, eso_sync=False
+    )
+    assert not stopped
+    assert value == [
+        {"name": "app-secret", "version_id": "n/a", "payload": {"API_KEY": {"type": "text"}}}
+    ]
+
+
 def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypatch) -> None:
     responses = iter(
         [
@@ -560,6 +635,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
         [],
         type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
         required=True,
+        mysterybox_eso_sync=True,
     )
 
     assert should_stop is False
@@ -593,7 +669,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
     assert any("Entered USERNAME as the key." in item for item in captured)
     assert any("Entered PASSWORD as the key." in item for item in captured)
     assert any(
-        "Added MysteryBox Secret db-uname-pass with 2 payload key(s), syncing to Kubernetes Secret db-uname-pass."
+        "Added MysteryBox Secret db-uname-pass with 2 payload key(s), configured to sync to Kubernetes Secret db-uname-pass."
         in item
         for item in captured
     )
@@ -612,6 +688,7 @@ def test_prompt_scalar_override_accepts_custom_mysterybox_kubernetes_secret_name
         [],
         type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
         required=True,
+        mysterybox_eso_sync=True,
     )
 
     assert should_stop is False
@@ -646,6 +723,7 @@ def test_prompt_scalar_override_defaults_mysterybox_kubernetes_secret_name_to_dn
         [],
         type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
         required=True,
+        mysterybox_eso_sync=True,
     )
 
     assert should_stop is False
@@ -742,6 +820,7 @@ def test_prompt_scalar_override_accepts_manual_mysterybox_eso_version_policy(
         [],
         type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
         required=True,
+        mysterybox_eso_sync=True,
     )
 
     assert should_stop is False
@@ -798,6 +877,7 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
         [],
         type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
         required=True,
+        mysterybox_eso_sync=True,
     )
 
     assert should_stop is False
@@ -846,6 +926,7 @@ def test_mysterybox_guided_prompt_q_at_payload_type_returns_to_payload_key(
         [],
         type_hint='list(object({ name = string payload = map(object({ type = optional(string, "text") })) }))',
         required=True,
+        mysterybox_eso_sync=True,
     )
 
     assert should_stop is False
@@ -987,9 +1068,63 @@ def test_prompt_component_with_checkboxes_tty_uses_key_navigation_without_contro
     titles = [choice["title"] for choice in captured["choices"]]
     assert selected == ["mk8s"]
     assert titles == ["mk8s  (mk8s)"]
+    assert captured["choices"][0]["checked"] is True
     assert "< Back" not in titles
     assert "< Quit wizard" not in titles
     assert "q=back; qq=quit" in str(captured["instruction"])
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("1,2", {"vm", "vpc"}),
+        ("vpc,vm", {"vm", "vpc"}),
+        ("all", {"vm", "vpc"}),
+        ("none", set()),
+        ("", set()),
+    ],
+)
+def test_prompt_component_scope_selection_resolves_text(monkeypatch, answer, expected):
+    entries = (
+        ComponentEntry(id="vm", scope="infra", config_path="infra.vm", description="VM"),
+        ComponentEntry(
+            id="internal",
+            scope="infra",
+            config_path="infra.internal",
+            description="internal",
+            selectable=False,
+        ),
+        ComponentEntry(id="vpc", scope="infra", config_path="infra.vpc", description="VPC"),
+    )
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: answer)
+
+    assert (
+        cli._prompt_component_scope_selection(action="add", scope="infra", entries=entries)
+        == expected
+    )
+
+
+@pytest.mark.parametrize("invalid", ["missing", "0", "3", "internal", "²"])
+def test_prompt_component_scope_selection_retries_invalid_text(monkeypatch, invalid):
+    entries = (
+        ComponentEntry(id="vm", scope="infra", config_path="infra.vm", description="VM"),
+        ComponentEntry(
+            id="internal",
+            scope="infra",
+            config_path="infra.internal",
+            description="internal",
+            selectable=False,
+        ),
+    )
+    answers = iter((invalid, "1"))
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(answers))
+
+    assert cli._prompt_component_scope_selection(action="add", scope="infra", entries=entries) == {
+        "vm"
+    }
+    assert list(answers) == []
 
 
 def test_resolve_component_ids_prints_interactive_selection_summary(monkeypatch) -> None:
@@ -1081,7 +1216,7 @@ def test_prompt_component_with_checkboxes_text_q_backs(monkeypatch) -> None:
 
 def test_component_field_wizard_q_at_first_field_returns_to_component_phase(monkeypatch) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -1139,7 +1274,7 @@ def test_component_field_wizard_q_at_first_field_returns_to_component_phase(monk
 
 def test_component_field_wizard_q_revisits_previous_field(monkeypatch) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -1203,7 +1338,7 @@ def test_component_field_wizard_guides_vpc_subnets_without_raw_yaml_prompt(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -1294,7 +1429,7 @@ def test_component_field_wizard_allows_vpc_network_without_subnets_when_live_net
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -1387,7 +1522,7 @@ def test_component_field_wizard_existing_vpc_network_skips_network_name_and_retr
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -1493,7 +1628,7 @@ def test_component_field_wizard_accepts_region_vpc_cidr_suggestion(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2278,7 +2413,7 @@ def test_component_field_wizard_can_select_existing_private_pool_for_new_vpc(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2363,7 +2498,7 @@ def test_component_field_wizard_extends_new_vpc_parent_cidrs_for_out_of_pool_sub
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2457,7 +2592,7 @@ def test_component_field_wizard_existing_private_pool_subnet_extends_new_vpc_par
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2550,7 +2685,7 @@ def test_component_field_wizard_existing_vpc_extends_parent_for_out_of_parent_su
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2680,7 +2815,7 @@ def test_component_field_wizard_existing_vpc_failed_parent_extension_reprompts_f
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2782,7 +2917,7 @@ def test_component_field_wizard_existing_vpc_accepts_subnet_cidr_inside_default_
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -2903,7 +3038,7 @@ def test_component_field_wizard_existing_vpc_avoids_live_private_allocations(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3030,7 +3165,7 @@ def test_component_field_wizard_existing_vpc_rejects_manual_cidr_over_live_priva
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3158,7 +3293,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_allocati
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3192,7 +3327,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_allocati
 
     class _ProviderLookup(ProviderOptionLookup):
         def __init__(self):
-            self._last_error = None
+            super().__init__()
 
         def resolve(self, *, provider, **kwargs):
             self._last_error = None
@@ -3276,7 +3411,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_subnet_l
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3310,7 +3445,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_subnet_l
 
     class _ProviderLookup(ProviderOptionLookup):
         def __init__(self):
-            self._last_error = None
+            super().__init__()
 
         def resolve(self, *, provider, **_kwargs):
             self._last_error = None
@@ -3381,7 +3516,7 @@ def test_component_field_wizard_subnet_custom_cidr_accepts_multiple_ranges(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3482,7 +3617,7 @@ def test_component_field_wizard_retries_vpc_cidr_overlapping_default_pool(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3566,7 +3701,7 @@ def test_component_field_wizard_retries_overlapping_vpc_cidr_values(
     monkeypatch,
 ) -> None:
     payload = {
-        "version": "v1",
+        "version": "v2",
         "client_info": {
             "client_name": "demo",
             "nebius": {
@@ -3711,8 +3846,8 @@ def test_vm_observability_prompt_guidance_includes_concise_field_comments(
     emitted_guidance: set[str] = set()
 
     for field_path in (
-        "deploy.observability.enabled",
-        "deploy.observability.vm.logs.enabled",
+        "infra.components[0].observability.enabled",
+        "infra.components[0].observability.vm.logs.enabled",
     ):
         cli._maybe_print_observability_prompt_guidance(
             full_path_label=field_path,
@@ -4682,7 +4817,7 @@ def test_prompt_scalar_override_accepts_comma_list_for_string_sequences(monkeypa
     monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
 
     value, should_stop = cli._prompt_scalar_override(
-        "deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        "infra.components[0].secrets.mysterybox.sync_namespaces",
         [],
         type_hint="list(string)",
         required=False,
@@ -4716,7 +4851,7 @@ def test_prompt_scalar_override_reprompts_invalid_string_sequence(monkeypatch) -
     monkeypatch.setattr(cli.console, "print", lambda message: messages.append(str(message)))
 
     value, should_stop = cli._prompt_scalar_override(
-        "deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        "infra.components[0].secrets.mysterybox.sync_namespaces",
         [],
         type_hint="list(string)",
         required=False,

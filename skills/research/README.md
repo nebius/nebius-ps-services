@@ -3,11 +3,23 @@
 `research` is an implicit, read-only skill for senior-engineer technical due
 diligence on one focal subject or disputed claim. It investigates technologies,
 protocols, RFCs, APIs, frameworks, products, architecture patterns, and feature
-requirements. It searches internal Slack and Confluence context first when
-organization context matters, using MCP
-or app-tool access when connectors are unavailable, verifying technical claims
-against vendor and authoritative external sources, comparing alternatives, and
-producing actionable recommendations for design decisions.
+requirements. It inspects relevant repository evidence, then searches internal
+connectors only for unresolved organizational context. It verifies technical
+claims against authoritative external sources, compares alternatives and
+produces actionable recommendations for design decisions.
+
+Research effort uses adaptive checkpoints: start with the named evidence gaps,
+retrieve a small relevant batch, reuse results, and expand only when uncertainty
+could change the answer. Stop early when supported; respect explicit hard
+limits and state uncertainty when further retrieval cannot resolve it.
+
+For substantial public synthesis, the skill can use Tavily Research with a
+sanitized brief and explicit supported model. It retains ownership of source
+ranking and recommendations, verifies decisive original sources, and prevents
+duplicate jobs after ambiguous completion. One job cannot guarantee internal
+query/page counts or spending limits. Narrow questions retain direct
+documentation/Search/Extract routing. See the
+[methodology](references/research-methodology.md) for examples and failure handling.
 
 The skill is intentionally not a generic Q&A helper. A useful research pass
 continues from "what is this?" to "why does it exist?", "how does it work?",
@@ -18,7 +30,8 @@ matter?".
 
 - `SKILL.md`: runtime contract, source priority, workflow, guardrails, and
   output contract.
-- `agents/openai.yaml`: UI metadata and implicit invocation policy.
+- `agents/openai.yaml`: UI metadata with matching local and conditional internal
+  source intake, and implicit invocation policy.
 - `references/research-methodology.md`: detailed source-ranking and research
   workflow guidance.
 - `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.

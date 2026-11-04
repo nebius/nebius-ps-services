@@ -89,7 +89,7 @@ def target_documents(
 
     rows = [
         row
-        for row in generation.manifest.get("deploy", {}).get("targets", [])
+        for row in generation.manifest.get("execution", {}).get("targets", [])
         if row.get("target_ref") == target_ref
     ]
     if len(rows) != 1:
@@ -473,7 +473,7 @@ def verify_desired_target(
         if previous is not None
         and any(
             row.get("target_ref") == target_ref
-            for row in previous.manifest.get("deploy", {}).get("targets", [])
+            for row in previous.manifest.get("execution", {}).get("targets", [])
         )
         else {}
     )

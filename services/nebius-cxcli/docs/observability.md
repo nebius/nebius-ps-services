@@ -1,4 +1,4 @@
-# Grafana installation and telemetry routing
+# Observability and Grafana installation
 
 Install Grafana and configure its storage, collectors and query connections on
 an existing cxcli-managed MK8s target:
@@ -8,7 +8,12 @@ nebius-cxcli grafana install --config /path/to/config.yaml --target CLUSTER_TARG
 ```
 
 Both flags are required. Interactive terminals open the configuration wizard;
-`--no-interactive` uses explicit flags, then saved settings, then defaults.
+`--no-interactive` uses explicit flags and established local-installation settings.
+Entering `grafana install` from a managed-only target selects the local stack by
+default. Explicit per-signal flags can choose remote or both; subsequent reruns
+preserve those established routes. This command is the focused entrypoint for
+in-cluster Grafana and uses the same resolver, renderer, deployment and validation
+as the main workflow.
 Setup and datasource preview resolve backends only for the selected target.
 Plain MK8s setup does not look up Soperator sources, even when another target in
 the configuration uses Soperator. The complete configuration is still validated.
@@ -16,7 +21,8 @@ Selecting Grafana through the Apps wizard or noninteractive project creation and
 component addition uses the same configuration routine, including when standalone
 backends were selected earlier. Backtracking to disable observability removes
 only the routing and dependencies introduced by that wizard.
-Settings persist under `deploy.targets[].observability.routing` and Apps remain
+Settings persist under `observability.routing` on the matching managed component
+or `infra.external_clusters[]` record. Apps remain
 separate entries in `apps.charts[]`. Apps selection saves configuration intent;
 use the full `render`/`deploy` workflow to apply native Soperator routing changes.
 The ordinary Apps deployment path cannot apply protected native changes.
@@ -40,6 +46,50 @@ saved intent for retry. Use `--no-interactive` to reuse saved choices.
 The short render lock serializes publication; a local process lock excludes
 simultaneous mutations of the same backend. Terraform retains its native remote
 state lock. Serialize whole deployments across machines or CI repositories.
+
+## Creation wizard defaults
+
+For new ordinary MK8s targets, the interactive `create` and `component add`
+wizards ask:
+
+```text
+Observability:
+  Nebius-managed observability (default)
+  In-cluster observability
+  Disabled
+```
+
+Accepting these defaults enables metrics, logs and traces through one Nebius
+Observability Agent. It configures remote storage and does not automatically add
+Grafana, VictoriaMetrics, VictoriaLogs or VictoriaTraces. Skipping field editing
+also accepts these defaults. The canonical `observability.enabled` field stays
+true because collection is enabled; setting it false disables collection.
+Selecting local installation opens the existing Grafana/storage setup flow.
+Explicit `grafana install` selects the in-cluster workflow. Dedicated Soperator
+defaults are unchanged. Headless creation uses the same managed default.
+
+The wizard shows regional write destinations for the configured project using
+the existing endpoint templates and supported collector discovery/authentication.
+It also shows the collector's OTLP/gRPC address for application traces.
+Applications must be instrumented and configured to send traces; the collector
+does not create spans for them. See the [Nebius agent guide](https://docs.nebius.com/observability/agents/nebius-o11y-agent).
+
+Per-signal selections remain configurable. On ordinary MK8s, each
+`observability.kubernetes.<signal>.enabled` flag limits the selected routing signals;
+an explicit false is preserved across rendering and deployment. Re-enabling a
+signal reuses its saved route. Disabling every signal stops collection while
+retaining storage and query connections. Existing targets retain saved settings;
+an explicit mode change uses staged collector handover. Selecting the named
+Nebius-managed mode resets write endpoints, authentication and reserved
+`metrics-remote`, `logs-remote` and `traces-remote` query connections to Nebius
+defaults. Separately named query-only datasources are preserved.
+If the selected default was an automatic local datasource removed by this mode
+change, the default follows the managed route. An explicit query-only default
+remains selected.
+Backtracking removes only routing and Apps introduced by the current wizard;
+it does not remove preexisting storage or data. If setup temporarily enables a
+saved disabled collector, backtracking restores that row's original identity,
+disabled state and custom values.
 
 ## Browser access after deployment
 
@@ -159,8 +209,8 @@ storage retains existing local stores and volumes; it does not retire them.
 
 ## Defaults and flags
 
-Defaults are identical for labs, development and production, with or without
-Soperator. Each signal defaults to local storage. A remote URL by itself does
+For explicit `grafana install`, defaults are identical for labs, development and
+production, with or without Soperator. Each signal defaults to local storage. A remote URL by itself does
 not enable remote export.
 
 | Flag | Required | Default / meaning |
@@ -243,7 +293,9 @@ identities come from that release, including its port; older releases may use
 On plain MK8s, the VictoriaMetrics stack supplies VMAgent and Kubernetes metric
 exporters. Selected GPU Operator DCGM targets are also scraped. VictoriaLogs and
 VictoriaTraces are independent Helm Apps in `component_sources.yaml`, so they
-can also be selected without Grafana.
+can also be selected without Grafana as storage components. The verified cxcli
+collection workflow requires a Grafana query path for each destination; use
+`grafana install` to configure that path before deploying local collection.
 
 The OpenTelemetry chart supplies an OTLP gateway for local/custom logs and
 traces. A separate DaemonSet of the same chart reads node pod logs when needed.
@@ -253,9 +305,15 @@ remote endpoint can use the Nebius observability agent. VMAgent handles metrics;
 it does not collect logs or traces. Applications must emit instrumented spans
 to produce traces.
 
-One collector owns each signal. Compatible existing owners remain in place
-when destinations change. Conflicting or foreign owners require an explicit
-cutover; cxcli does not install a competing collector or silently adopt one.
+One collector owns each signal. Ordinary mode changes prepare destination stores
+with the destination collector inactive, stop source collection and verify current
+HelmRelease generations and stopped Pods, then activate the destination. Only then
+does the stable trace Service switch. A target-owned ConfigMap records progress
+and the frozen destination digest under the deployment lease. Retries inspect live
+state and never restart a quiesced source during preparation. Retired collectors
+remain as inactive releases; stores, PVCs and Secrets remain intact. A failed
+handover or query check leaves that state available for diagnosis and retry.
+Foreign releases are not adopted. Soperator keeps its native ownership rules.
 
 ## Exact VMAgent destinations
 
@@ -343,3 +401,71 @@ shapes fail explicitly; this is an artifact consumer, not a public JSON discover
 command. Courses do not install Pushgateway or create a compatibility bridge. The current
 course publisher's authenticated remote readback is not qualified here; retain
 local metrics for that flow, optionally replicating with `both`.
+
+## Application instrumentation
+
+The preinstalled VM monitoring agent and VMAgent are insufficient for Kubernetes
+logs and traces. Managed mode uses the Nebius Kubernetes Observability Agent for
+all three signals. Both managed mode and the local VMAgent discover application
+Pods with `prometheus.io/scrape: "true"`, `prometheus.io/port`, and optional
+`prometheus.io/path` and `prometheus.io/scheme` annotations. Declare the matching
+container port. See the [Nebius annotation contract](https://docs.nebius.com/observability/metrics/ingest/nebius-o11y-agent).
+
+On ordinary MK8s, instrument applications to send OTLP/gRPC traces to
+`cxcli-otlp.observability.svc.cluster.local:4317` without TLS inside the cluster.
+This address is rendered when traces are enabled and follows mode changes.
+Soperator uses the gateway Service address printed by its installation summary.
+Applications using older collector-specific
+addresses need explicit reconfiguration. Generic OTLP application metrics are not
+configured by this workflow; use Prometheus scraping. The two OTel catalog entries
+serve separate roles: `opentelemetry-collector` receives and exports OTLP in a
+Deployment; `opentelemetry-logs` reads node Pod logs in a DaemonSet. Neither is
+installed by the managed default.
+
+## Delivery validation and reports
+
+Ordinary observability deployment creates a temporary, restricted, digest-pinned
+probe Pod. It exposes a uniquely labeled Prometheus sample, writes a structured
+stdout log, and emits an OTLP/gRPC span through the advertised trace ingress.
+It never writes directly into a backend. Each enabled destination must return
+current project, target, frozen configuration, run and time evidence through both its backend API and
+Grafana datasource proxy. The polling window is five minutes; the Pod has a
+10-minute active deadline and cleanup uses its immutable UID. The probe requires
+an eligible CPU node under its placement policy. Interrupted cleanup is reported
+separately, with the failure reason in JSON and the deployment summary.
+Readiness or a datasource health response cannot produce
+a delivery OK.
+
+Set `NEBIUS_PROFILE` to an explicit human Nebius CLI profile for managed validation.
+The operator IAM token is used in memory for reads; it is separate from producer
+metadata credentials and is never written into reports. Preflight checks access
+to `https://grafana.nebius.dev/`, discovers organizations and matches datasource
+types and project read URLs without assuming organization 1 or fixed UIDs. No
+managed dashboards or datasources are created or changed. Local Grafana uses its
+existing administrator Secret over a temporary loopback-only tunnel. Custom
+remote backend reads require HTTPS and their configured Secret references.
+
+Missing authentication, ambiguous or missing datasources, stale results, empty
+queries, skipped required checks and cleanup failure all prevent success. Failed
+validation leaves the deployed stack for diagnosis. Terminal checks, the target's
+`observability-ingestion-report-<target>.json`, and `deploy-report.md` share the
+same result. Reports list effective producer transports; the Nebius agent writes
+metrics with OTLP/HTTP while VMAgent uses Prometheus remote write. Dual-write
+reports list both destinations. A new deployment attempt clears its selected
+validation results before preparation, so an early failure cannot reuse an older
+success. A source test run does not certify live ingestion.
+
+## Independent PostgreSQL applications
+
+`postgresql` is in the **Database** group and can serve arbitrary applications.
+Its chart settings remain user-owned. Set `values.auth.existingSecret`; an enabled
+custom user also needs `values.customUser.existingSecret`. Use the pinned chart's
+Secret key settings and keep password values out of config.yaml.
+
+`grafana-postgresql` is a distinct **Observability** dependency. Only that identity
+receives Grafana database users, generated Secret references and ingress policy.
+Both database components can coexist on one target with distinct release names.
+Existing implicit Grafana bindings under `postgresql` fail before adding a new
+database. Explicitly change that binding to `grafana-postgresql`, preserving its
+release name, namespace, PVCs and Secret references; verify the retained database
+before deployment. cxcli does not silently rename or replace a database.

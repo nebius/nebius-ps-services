@@ -155,7 +155,7 @@ class QuotaRecord:
     name: str
     region: str
     limit: int | None
-    usage: int
+    usage: int | None
     service: str
     description: str
     unit: str
@@ -398,8 +398,8 @@ def _available_quota(limit: Any, usage: Any) -> int | None:
     limit_value = _positive_int(limit)
     if limit_value is None:
         return None
-    usage_value = _positive_int(usage) or 0
-    return max(limit_value - usage_value, 0)
+    usage_value = _positive_int(usage)
+    return max(limit_value - usage_value, 0) if usage_value is not None else None
 
 
 def _is_not_found_error(exc: Exception) -> bool:
@@ -898,7 +898,7 @@ class _QuotaSession:
                     name=name,
                     region=region,
                     limit=_positive_int(getattr(spec, "limit", None)),
-                    usage=_positive_int(getattr(status, "usage", 0)) or 0,
+                    usage=_positive_int(getattr(status, "usage", None)),
                     service=_as_text(getattr(status, "service", None)),
                     description=_as_text(getattr(status, "description", None)),
                     unit=_as_text(getattr(status, "unit", None)),
@@ -1124,6 +1124,45 @@ class _QuotaSession:
         return None
 
 
+def _live_quota_record(
+    records: dict[tuple[str, str], QuotaRecord],
+    name: str,
+    region: str,
+) -> QuotaRecord | None:
+    direct = records.get((name, region))
+    if direct is not None or name not in {
+        "vpc.subnet.count",
+        "vpc.pool.count",
+        "vpc.route.count",
+        "vpc.route-table.count",
+        "vpc.network.count",
+    }:
+        return direct
+
+    # Public docs name these resources, while allowance identifiers are provider data.
+    # Resolve only an unambiguous live spelling/description, never invent unlimited quota.
+    def token(value: str) -> str:
+        return "".join(c for c in value.lower() if c.isalnum())
+
+    label = name.removeprefix("vpc.").removesuffix(".count").replace("-", " ")
+    descriptions = {
+        token(text) for text in (label, label + "s", label + " count", "number of " + label + "s")
+    }
+    candidates = [
+        record
+        for (key, loc), record in records.items()
+        if loc == region
+        and (
+            token(key) == token(name)
+            or (
+                (key.startswith("vpc.") or record.service.lower() == "vpc")
+                and token(record.description) in descriptions
+            )
+        )
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _evaluate_requirement(
     requirement: AggregatedQuotaRequirement,
     *,
@@ -1131,17 +1170,35 @@ def _evaluate_requirement(
     project_quotas: dict[tuple[str, str], QuotaRecord],
     capacity_resource_advice: tuple[CapacityResourceAdvice, ...] | None = (),
 ) -> QuotaCheck:
-    key = (requirement.quota_name, requirement.region)
-    tenant = tenant_quotas.get(key)
-    project = project_quotas.get(key)
+    tenant = _live_quota_record(tenant_quotas, requirement.quota_name, requirement.region)
+    project = _live_quota_record(project_quotas, requirement.quota_name, requirement.region)
+    resolved_record = project or tenant
+    if resolved_record is not None:
+        requirement = replace(requirement, quota_name=resolved_record.name)
 
     tenant_limit = tenant.limit if tenant is not None else None
     tenant_usage = tenant.usage if tenant is not None else None
     project_limit = project.limit if project is not None else None
     project_usage = project.usage if project is not None else None
 
-    tenant_available = _available_quota(tenant_limit, tenant_usage)
-    project_available = _available_quota(project_limit, project_usage)
+    def measured(record: QuotaRecord | None) -> bool:
+        return bool(
+            record is not None
+            and record.state == "STATE_ACTIVE"
+            and record.usage_state in {"USAGE_STATE_USED", "USAGE_STATE_NOT_USED"}
+            and record.usage is not None
+        )
+
+    tenant_available = _available_quota(tenant_limit, tenant_usage) if measured(tenant) else None
+    project_available = (
+        _available_quota(project_limit, project_usage) if measured(project) else None
+    )
+    unresolved_limit = any(
+        record is not None and record.limit is not None and not measured(record)
+        for record in (tenant, project)
+    )
+    if unresolved_limit:
+        tenant_available = project_available = None
 
     if tenant_available is not None and project_available is not None:
         regular_available = min(tenant_available, project_available)
@@ -2239,7 +2296,43 @@ def _requirements_for_component(
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
-    if component_id in {"ssh-jumphost", "wireguard-gw"}:
+    if component_id == "tailscale-gw":
+        from .tailscale_config import members
+
+        for member in members(row):
+            member_inputs = {
+                **inputs,
+                **{
+                    k: v
+                    for k, v in inputs.get("member_overrides", {}).get(member, {}).items()
+                    if v is not None
+                },
+            }
+            member_inputs["create_public_ip_allocation"] = True
+            resources = session.preset_resources(
+                project_id=project_id,
+                platform=_mapping_text(member_inputs, "platform"),
+                preset=_mapping_text(member_inputs, "preset"),
+            )
+            if resources is not None and resources.gpu_count:
+                _append_gap(
+                    gaps,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    message="Tailscale gateways require CPU-only presets",
+                )
+                continue
+            _estimate_jump_host_requirements(
+                session=session,
+                project_id=project_id,
+                region=region,
+                component_id=component_id,
+                instance_id=instance_id,
+                inputs=member_inputs,
+                requirements=requirements,
+                gaps=gaps,
+            )
+    elif component_id in {"ssh-jumphost", "wireguard-gw"}:
         _estimate_jump_host_requirements(
             session=session,
             project_id=project_id,
@@ -2250,6 +2343,89 @@ def _requirements_for_component(
             requirements=requirements,
             gaps=gaps,
         )
+    elif component_id == "nat-gateway":
+        resources = session.preset_resources(
+            project_id=project_id,
+            platform=_mapping_text(inputs, "platform"),
+            preset=_mapping_text(inputs, "preset"),
+        )
+        if resources is None or resources.gpu_count != 0 or resources.vcpu_count <= 0:
+            _append_gap(
+                gaps,
+                component_id=component_id,
+                instance_id=instance_id,
+                message="NAT requires a live CPU-only preset",
+            )
+            return requirements, gaps
+        _estimate_jump_host_requirements(
+            session=session,
+            project_id=project_id,
+            region=region,
+            component_id=component_id,
+            instance_id=instance_id,
+            inputs=inputs,
+            requirements=requirements,
+            gaps=gaps,
+        )
+        from .nat_gateway import terraform_policies
+
+        policies = terraform_policies(row)
+        creates_subnet = int(inputs.get("gateway_subnet_mode", "create") == "create")
+        for quota_name, count, reason in (
+            ("vpc.allocation.count", 1, "stable private NAT allocation"),
+            ("vpc.subnet.count", creates_subnet, "dedicated gateway subnet"),
+            ("vpc.pool.count", creates_subnet, "explicit gateway subnet private pool"),
+            (
+                "vpc.route-table.count",
+                creates_subnet + len(policies),
+                "gateway and workload routing tables",
+            ),
+            (
+                "vpc.route.count",
+                creates_subnet + sum(1 + len(routes) for routes in policies.values()),
+                "gateway default and preserved workload routes",
+            ),
+        ):
+            _append_requirement(
+                requirements,
+                component_id=component_id,
+                instance_id=instance_id,
+                quota_name=quota_name,
+                region=region,
+                required=count,
+                reason=reason,
+            )
+    elif component_id == "vpc" and any(
+        r.get("id") == "nat-gateway" and r.get("enabled")
+        for r in payload.get("infra", {}).get("components", [])
+    ):
+        network = inputs.get("network", {})
+        subnets = inputs.get("subnets", {})
+        new_network = not network.get("existing_id")
+        for quota_name, count in (
+            ("vpc.network.count", int(new_network)),
+            ("vpc.subnet.count", len(subnets)),
+            (
+                "vpc.pool.count",
+                sum(
+                    len(s.get("ipv4_private_cidrs") or []) + len(s.get("ipv4_public_cidrs") or [])
+                    for s in subnets.values()
+                )
+                + len(network.get("ipv4_private_cidrs") or []),
+            ),
+            ("vpc.route-table.count", int(new_network)),
+            ("vpc.route.count", int(new_network)),
+        ):
+            if count:
+                _append_requirement(
+                    requirements,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    quota_name=quota_name,
+                    region=region,
+                    required=count,
+                    reason="VPC resources and implicit subnet/default-routing resources",
+                )
     elif component_id == "vm":
         _estimate_vm_requirements(
             session=session,

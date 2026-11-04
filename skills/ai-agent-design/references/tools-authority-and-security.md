@@ -10,6 +10,7 @@ execute code, contact remote agents, or cause side effects.
 - Approval binding
 - Tool and protocol design
 - Credential mediation
+- Orchestration and execution identities
 - Sandbox and artifact boundary
 - Trust boundaries
 - Prompt-injection controls
@@ -150,6 +151,27 @@ Credential invisibility prevents one theft path; it does not prevent a confused
 deputy, an over-broad delegated action, or exfiltration through a legitimate
 API. Reauthorize every action at the trusted boundary.
 
+## Orchestration And Execution Identities
+
+Inventory which workload can read each credential and which actions it enables.
+Keep orchestration credentials for state, queues, models, or telemetry within
+their trusted service boundary; code controlled by the model must not inherit
+them through process environment, mounts, plugins, callbacks, or child workers.
+A tool allowlist does not isolate arbitrary code running in the same process.
+Use an enforceable execution boundary when that capability is accepted.
+
+Prefer narrow brokered operations over general credential delivery. Where a
+workload needs a delegated credential, bind it to its verified identity, exact
+task, allowed targets/destinations, actions, expiry, and current authority.
+Read grants and write approvals have distinct lifetimes and risk policies.
+After waiting, restart, steering, or principal changes, refresh required
+authorization rather than inheriting ambient service privilege.
+
+Separate product-operating telemetry authority from diagnostic access to target
+systems. A shared backend does not justify a shared read credential. Test the
+actual execution path for access to coordinator, export, and target credentials;
+absence from the model prompt alone is insufficient.
+
 ## Sandbox And Artifact Boundary
 
 When the agent can execute code or manipulate files, define proportionate:
@@ -165,6 +187,10 @@ When the agent can execute code or manipulate files, define proportionate:
 - cancellation, cleanup, retention, and incident-preservation behavior; and
 - artifact type, path, size, malware, secret, and policy validation before a
   trusted publication service exports the result.
+
+For oversized tool results and artifact retrieval, apply the bounded access and
+complete derivation-lineage rules in the context reference. Redaction or a
+summary does not enlarge the authorized audience.
 
 Treat sandbox output as untrusted. A managed sandbox is an execution-isolation
 component, not proof of authorization, tenancy, durability, data governance,
@@ -241,6 +267,9 @@ not be the final authorization or policy enforcement layer.
 - Are dependencies and exported artifacts validated at a trusted boundary?
 - Can duplicate or replayed calls repeat an effect?
 - Are security events observable without leaking sensitive content?
+- Can model-controlled code access any orchestration credentials through the
+  actual process, filesystem, callback, or worker boundary?
+- Are product telemetry and target diagnostic identities independently scoped?
 
 ## Primary Sources
 

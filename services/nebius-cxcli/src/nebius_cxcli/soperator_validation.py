@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from . import kubernetes_process
+from .cluster_config import cluster_rows
 from .component_instances import normalize_component_token
 from .duration_utils import parse_go_duration_seconds
 from .runtime_config import to_plain_data
@@ -949,77 +950,19 @@ def _soperator_jail_storage_from_chart_row(row: Mapping[str, Any]) -> dict[str, 
     }
 
 
-def _soperator_deployment_smoke_enabled_by_target(
-    deploy_targets: Sequence[Any],
-) -> dict[str, bool]:
-    enabled_by_target: dict[str, bool] = {}
-    for row in deploy_targets:
-        if not isinstance(row, Mapping):
-            continue
-        target_ref = normalize_component_token(
-            row.get("instance_id") or row.get("target_ref") or row.get("id")
-        )
-        if not target_ref:
-            continue
-        deployment_testing = _as_mapping(row.get("deployment_testing"))
-        soperator = _as_mapping(deployment_testing.get("soperator"))
-        smoke = _as_mapping(soperator.get("smoke"))
-        enabled_by_target[target_ref] = smoke.get("enabled") is not False
-    return enabled_by_target
-
-
 def normalize_soperator_project_deployment_testing_settings(payload: dict[str, Any]) -> bool:
-    plain_payload = to_plain_data(payload)
-    if not isinstance(plain_payload, Mapping):
-        return False
-    charts = _as_sequence(_as_mapping(plain_payload.get("apps")).get("charts"))
-    soperator_target_refs = {
-        normalize_component_token(row.get("instance_id") or row.get("target_ref"))
-        for row in charts
-        if isinstance(row, Mapping)
-        and str(row.get("id", "") or "").strip() == "soperator"
-        and row.get("enabled") is not False
-    }
-    soperator_target_refs.discard("")
-
-    deploy = payload.get("deploy")
-    if not isinstance(deploy, dict):
-        return False
-    targets = deploy.get("targets")
-    if not isinstance(targets, list):
-        return False
-
     changed = False
-    for row in targets:
-        if not isinstance(row, dict):
+    for row in payload.get("apps", {}).get("charts", []):
+        if row.get("id") != "soperator" or row.get("enabled") is False:
             continue
-        target_ref = normalize_component_token(
-            row.get("instance_id") or row.get("target_ref") or row.get("id")
-        )
-        deployment_testing = row.get("deployment_testing")
-        if target_ref not in soperator_target_refs:
-            if isinstance(deployment_testing, dict):
-                soperator = deployment_testing.get("soperator")
-                if soperator is not None:
-                    deployment_testing.pop("soperator", None)
-                    changed = True
-                    if not deployment_testing:
-                        row.pop("deployment_testing", None)
-            continue
-        if not isinstance(deployment_testing, dict):
-            deployment_testing = {}
-            row["deployment_testing"] = deployment_testing
-            changed = True
-        soperator = deployment_testing.get("soperator")
-        if not isinstance(soperator, dict):
-            soperator = {}
-            deployment_testing["soperator"] = soperator
-            changed = True
-        smoke = soperator.get("smoke")
+        testing = row.get("deployment_testing")
+        if not isinstance(testing, dict):
+            testing = {}
+            row["deployment_testing"] = testing
+        smoke = testing.get("smoke")
         if not isinstance(smoke, dict):
             smoke = {}
-            soperator["smoke"] = smoke
-            changed = True
+            testing["smoke"] = smoke
         if "enabled" not in smoke:
             smoke["enabled"] = True
             changed = True
@@ -1034,7 +977,7 @@ def soperator_cluster_validation_specs(
     payload = to_plain_data(payload_or_config)
     if not isinstance(payload, Mapping):
         return []
-    deploy_targets = _as_sequence(_as_mapping(payload.get("deploy")).get("targets"))
+    deploy_targets = cluster_rows(payload)
     target_context_by_ref: dict[str, str] = {}
     for row in deploy_targets:
         if not isinstance(row, Mapping):
@@ -1045,7 +988,6 @@ def soperator_cluster_validation_specs(
         if not target_ref:
             continue
         target_context_by_ref[target_ref] = str(row.get("kube_context", "") or "").strip()
-    smoke_enabled_by_target = _soperator_deployment_smoke_enabled_by_target(deploy_targets)
     charts = _as_sequence(_as_mapping(payload.get("apps")).get("charts"))
     specs: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1059,7 +1001,8 @@ def soperator_cluster_validation_specs(
         target_ref = normalize_component_token(row.get("instance_id") or row.get("target_ref"))
         if not target_ref or target_ref in seen:
             continue
-        if respect_deployment_testing and smoke_enabled_by_target.get(target_ref, True) is False:
+        smoke = _as_mapping(_as_mapping(row.get("deployment_testing")).get("smoke"))
+        if respect_deployment_testing and smoke.get("enabled") is False:
             continue
         seen.add(target_ref)
         specs.append(

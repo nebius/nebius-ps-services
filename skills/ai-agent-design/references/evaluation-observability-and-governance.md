@@ -9,6 +9,9 @@ auditable, and recoverable throughout its lifecycle.
 - Outcome verification and revision
 - Dataset and grader policy
 - Trace and privacy model
+- Telemetry meaning and operational authority
+- Capacity and admission
+- Evidence gates and trial integrity
 - Release identity and promotion
 - Ownership and change management
 - Incident response
@@ -170,6 +173,44 @@ decision; do not freeze unstable vendor fields into this durable skill.
 - Do not store hidden chain-of-thought. Store bounded rationale, evidence,
   decisions, and actions required for audit and debugging.
 
+## Telemetry Meaning And Operational Authority
+
+Define signal ownership, collection coverage, freshness, window, and failure
+semantics. Distinguish observed zero, empty eligible result, partial coverage,
+stale data, denied access, missing collection, and unavailable backend. Do not
+convert absent samples to successful zero/error-free observations or infer
+capacity from missing telemetry.
+
+Separate product health signals, target-system diagnostic observations, and
+authoritative action audit by purpose and identity. Use distinct read, export,
+and administration grants when those responsibilities differ. Audit and
+capacity decisions must not depend on sampled traces. Review SDK telemetry
+defaults, exception capture, headers, content export, and cardinality before
+enabling instrumentation; minimize before collection/export where possible.
+
+When the failure model includes losing the monitored service or its hosting
+environment, place a watchdog and notification path outside that failure
+domain. Give it bounded observation and alert authority; external placement
+does not grant repair privileges. Test loss of collection, export, backend,
+credentials, and the alert path independently.
+
+## Capacity And Admission
+
+For asynchronous or concurrent agents, track distinct quantities:
+
+- admitted sessions, including tasks waiting on input or approval;
+- running, starting, draining, and unknown execution, including descendants;
+- queued or in-flight model requests and reserved token/cost demand.
+
+Map limits to the quantity that consumes the resource. An approval wait may
+release a model slot while retaining session state; cancellation may stop new
+admission while existing work still consumes resources. Use authoritative
+reservations and reconciliation for hard admission decisions. Metrics are
+evidence for sizing, not permission to release an unresolved reservation.
+Include retries, fan-out, cleanup, rollout overlap, and failure headroom in
+capacity evidence; an infrastructure quota is not an application concurrency
+policy.
+
 ## Core Indicators
 
 Select service-level indicators tied to the workload:
@@ -209,6 +250,35 @@ evaluation datasets, graders, thresholds, and observability configuration
 
 A model name alone is not a release. Rollback restores a complete compatible
 identity or an explicitly tested alternative.
+
+## Evidence Gates And Trial Integrity
+
+Report design/static checks, provider/runtime compatibility, controlled runtime
+behavior, and live qualification separately. Bind each result to the actual
+release, configuration, workload, environment class, and observation time.
+Synthetic fixtures and schema validators cannot prove credentials, runtime
+isolation, cancellation, load handling, or a live outcome.
+
+Before a live acceptance trial, freeze the expected product-owned workflow,
+starting checkpoint, success criteria, fixture setup, and independent verifier.
+Classify observations by their effects: a nominally read-only probe can change
+the state under test. Recovery that performs or bypasses a product-owned step
+marks the affected trial and dependent evidence as intervened. Retain that
+record; changing the declaration starts a new trial.
+
+After a repair, replay from a proven product-supported checkpoint before the
+first divergence or intervention, with prior writers quiescent or effectively
+fenced. Observe the product perform the transition and independently verify its
+authoritative postconditions. Otherwise report a mitigation, unresolved gate,
+or blocked trial instead of a verified fix. Trial rigor does not itself grant
+permission for live mutations.
+
+Use synthetic, public-safe adversarial cases for reusable evaluations. Include
+revoked uncited inputs, repeated compaction, mandatory-context overflow,
+post-assembly mutation, lost cache invalidation, time-based eligibility changes,
+duplicate successor requests, late child admission, ambiguous cancellation,
+and missing telemetry. Keep private fixtures and raw traces out of public
+skills, prompts, examples, and evaluation reports.
 
 ## Promotion Gates
 
@@ -306,3 +376,9 @@ until authoritative outcome and idempotency are known.
 - [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
 - [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/)
+- [OpenTelemetry, Handling sensitive data](https://opentelemetry.io/docs/security/handling-sensitive-data/)
+  supports data minimization and review of instrumentation-emitted content.
+
+Separate evidence tiers, trial integrity, telemetry unknown states, and
+reservation accounting are design policies to verify in the chosen system;
+these sources do not certify a deployment or a particular SDK configuration.

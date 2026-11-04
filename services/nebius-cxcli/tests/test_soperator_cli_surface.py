@@ -48,7 +48,7 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 def test_public_discovery_provider_observation_preserves_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import nebius.api.nebius.iam.v1 as iam_v1
+    import nebius.api.nebius.iam.v2 as iam_v2
 
     class _CompletedRequest:
         def __init__(self, value: object) -> None:
@@ -102,7 +102,7 @@ def test_public_discovery_provider_observation_preserves_capacity(
             return [raw_group]
 
     sdk = SimpleNamespace(sync_close=lambda: None)
-    monkeypatch.setattr(iam_v1, "ProjectServiceClient", _ProjectServiceClient)
+    monkeypatch.setattr(iam_v2, "ProjectServiceClient", _ProjectServiceClient)
     monkeypatch.setattr(soperator_public_discovery, "init_nebius_sdk", lambda **_kwargs: sdk)
     monkeypatch.setattr(
         soperator_public_discovery,
@@ -4015,6 +4015,7 @@ def _soperator_lifecycle_guard_payload(state: str) -> dict[str, object]:
         },
         "infra": {"components": []},
         "apps": {"charts": []},
+        "version": "v2",
     }
     if state == "none":
         pass
@@ -4029,14 +4030,9 @@ def _soperator_lifecycle_guard_payload(state: str) -> dict[str, object]:
             ]
         }
     elif state == "registration-marker":
-        payload["deploy"] = {
-            "targets": [
-                {
-                    "instance_id": "cluster-a",
-                    "soperator_registration": None,
-                }
-            ]
-        }
+        payload["apps"]["charts"].append(
+            {"id": "soperator", "instance_id": "cluster-a", "enabled": False, "registration": {}}
+        )
     else:  # pragma: no cover - test helper contract
         raise AssertionError(f"unknown guard state: {state}")
     return payload
@@ -4096,8 +4092,14 @@ def test_generic_generated_commands_reject_all_soperator_lifecycle_state_before_
     (generated_dir / "nebius-cxcli-manifest.json").write_text(
         json.dumps(
             {
-                "schema": "nebius-cxcli-generated/v2",
-                "execution": {"backend": {"bucket": "bucket", "key": "state"}},
+                "schema": "nebius-cxcli-generated/v3",
+                "execution": {
+                    "backend": {"bucket": "bucket", "key": "state"},
+                    "targets": [],
+                    "required_component_outputs": [],
+                    "status_watchers": [],
+                    "validations": [],
+                },
                 "runtime_config": _soperator_lifecycle_guard_payload(manifest_state),
                 "render": {"terraform_tfvars": {"sentinel": "must-not-write"}},
             }
@@ -4580,7 +4582,7 @@ def test_soperator_status_forwards_live_context_and_noninteractive_target_select
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     resolver_calls: list[dict[str, object]] = []
     snapshot_calls: list[dict[str, object]] = []
@@ -4721,7 +4723,7 @@ def test_soperator_status_verify_observability_is_live_by_default_and_writes_sep
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     operation_receipt = paths.reports_dir / "soperator-release-reconcile-existing.json"
     operation_receipt.parent.mkdir(parents=True, exist_ok=True)
     operation_receipt.write_text('{"status":"complete"}\n', encoding="utf-8")
@@ -4819,7 +4821,7 @@ def test_soperator_status_verify_observability_rejects_no_live_before_auth(
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
+    config_path.write_text("version: v2\n", encoding="utf-8")
     monkeypatch.setattr(
         cli,
         "_read_config_payload",
@@ -4849,7 +4851,7 @@ def test_soperator_status_observability_auth_failure_is_sanitized(
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     target_row = {
         "cluster_id": "mk8scluster-a",
@@ -4941,7 +4943,11 @@ def test_managed_context_identity_compares_provider_generated_uid(
     monkeypatch.setattr(
         cli,
         "_load_deploy_context_readonly",
-        lambda _path: (object(), paths, {"deploy": {"targets": []}}),
+        lambda _path: (
+            object(),
+            paths,
+            {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"},
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -4977,7 +4983,7 @@ def test_soperator_status_uses_scoped_context_for_onboarded_cluster_id(
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     payload = {"client_info": {"nebius": {"project_id": "project-a"}}, "apps": {}}
     context_calls: list[dict[str, object]] = []
@@ -5053,10 +5059,14 @@ def test_soperator_status_uses_nonpersistent_managed_handoff(
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     generated_config = SimpleNamespace()
-    manifest: dict[str, object] = {"deploy": {"targets": []}}
+    manifest: dict[str, object] = {
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+    }
     selected_target = {"target_ref": "cluster-a"}
     identity = {"cluster_id": "mk8scluster-bound", "kubernetes_uid": "bound-uid"}
     generation = "sha256:" + "a" * 64
@@ -5210,7 +5220,7 @@ def test_soperator_status_fails_on_live_collection_errors(
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     monkeypatch.setattr(cli, "_read_config_payload", lambda _path: {"apps": {}})
     monkeypatch.setattr(
@@ -5263,7 +5273,7 @@ def test_soperator_status_projects_local_recovery_without_live_mutation(
 ) -> None:
     monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     monkeypatch.setattr(cli, "_read_config_payload", lambda _path: {"apps": {}})
     monkeypatch.setattr(
@@ -6064,7 +6074,10 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     reuse_candidate: bool,
 ) -> None:
     # This fixture owns release preparation; graph admission has dedicated tests.
-    monkeypatch.setattr("nebius_cxcli.soperator_graph_transition.preflight_transition", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_graph_transition.preflight_transition",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(cli, "_read_soperator_slurm_cluster_journal", lambda **kw: None)
     monkeypatch.setattr(cli, "_preflight_soperator_upgrade_checks", lambda *_args: None)
     monkeypatch.setattr(cli, "_preflight_soperator_checks", lambda *_args, **_kwargs: None)
@@ -6106,12 +6119,16 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     original_source_payload = copy.deepcopy(source_payload)
     target = cli._parse_soperator_upgrade_target("cluster-a")
     generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": []}}
+    manifest: dict[str, Any] = {
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+    }
     writes: list[str] = []
     applies: list[dict[str, Any]] = []
     intents: list[str] = []
     verified_values: list[Mapping[str, Any]] = []
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     rendered_values = {
         "nodesets": {"enabled": True},
         "observability": {"enabled": True, "overrideValues": {"cluster": "materialized"}},
@@ -6383,9 +6400,12 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
     monkeypatch.setattr(cli, "_preflight_soperator_upgrade_checks", lambda *_args: None)
     monkeypatch.setattr(cli, "_preflight_soperator_checks", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("nebius_cxcli.soperator_graph_transition.preflight_transition", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_graph_transition.preflight_transition",
+        lambda *_args, **_kwargs: None,
+    )
     paths = _paths(tmp_path)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
+    paths.config_path.write_text("version: v2\n", encoding="utf-8")
     _write_rendered_soperator_values(
         paths,
         target_ref="cluster-a",
@@ -6414,7 +6434,11 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
     }
     target = cli._parse_soperator_upgrade_target("cluster-a")
     generated_config = SimpleNamespace()
-    manifest: dict[str, Any] = {"deploy": {"targets": []}}
+    manifest: dict[str, Any] = {
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "version": "v2",
+    }
     frozen_snapshot = replace(
         sample_snapshot(),
         registry="oci://registry.example.invalid/soperator",

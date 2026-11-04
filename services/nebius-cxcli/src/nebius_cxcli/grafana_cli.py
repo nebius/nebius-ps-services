@@ -910,8 +910,9 @@ def install_command(
         ),
     ] = None,
 ) -> None:
-    """Configure automatic datasources, save settings, render, install and verify Grafana.
+    """Install in-cluster Grafana through the shared observability workflow.
 
+    First install defaults to local stores; reruns preserve configured routing.
     Setup resolves backends only for the selected target. After confirmation,
     render replaces generated artifacts and normal deploy applies pending project changes.
     """

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .cluster_config import validate_source_contract
 from .component_instances import component_instance_id, ensure_component_instance_id
 from .deploy_targets import TARGET_REF_FIELD, enabled_cluster_target_refs
 
@@ -50,12 +51,17 @@ def to_dynamic_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     This is an internal export boundary, not an alternate source-config reader.
     Public validation still rejects authored runtime-only fields.
     """
+    validate_source_contract(payload)
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config payload must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
     dynamic = _deep_copy(dict(payload))
-    dynamic["infra"] = {"components": dynamic["infra"].get("components", [])}
+    dynamic["infra"] = {
+        key: _deep_copy(value)
+        for key, value in dynamic["infra"].items()
+        if key in {"components", "external_clusters"}
+    }
     dynamic["apps"] = {"charts": dynamic["apps"].get("charts", [])}
     for row in dynamic["apps"]["charts"]:
         if not isinstance(row, dict) or TARGET_REF_FIELD not in row:
@@ -73,11 +79,11 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             "config payload must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
 
+    validate_source_contract(payload)
     dynamic_payload = _deep_copy(dict(payload))
     runtime: dict[str, Any] = {
-        "version": dynamic_payload.get("version", "v1"),
+        "version": dynamic_payload["version"],
         "client_info": _deep_copy(dynamic_payload.get("client_info", {})),
-        "deploy": _deep_copy(dynamic_payload.get("deploy", {})),
         "infra": {},
         "apps": {},
     }
@@ -116,11 +122,15 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                 if not component_id:
                     continue
                 ensure_component_instance_id(copied_item, default_component_id=component_id)
+                alias = component_instance_id(copied_item).replace("-", "_")
+                if alias in {"components", "external_clusters"}:
+                    # Canonical collections take precedence over derived convenience aliases.
+                    continue
                 enabled = bool(copied_item.get("enabled", False))
                 inputs = copied_item.get("inputs", {})
                 if not isinstance(inputs, Mapping):
                     inputs = {}
-                runtime_infra[component_instance_id(copied_item).replace("-", "_")] = {
+                runtime_infra[alias] = {
                     "enabled": enabled,
                     **_deep_copy(dict(inputs)),
                 }

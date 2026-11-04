@@ -92,8 +92,9 @@ Skip broad background, adjacent files, and interesting but non-decisive context.
 5. Official vendor documentation: use current official docs for products,
    clouds, APIs, SDKs, CLIs, package managers, frameworks, and standards.
 
-Read `references/source-priority.md` when the topic needs more than one source
-class, source conflicts appear, or the user asks for deeper research. Use
+Read `references/source-priority.md` before any vendor-documentation lookup,
+including a small single-source question, and when the topic needs more than
+one source class, source conflicts appear, or the user asks for deeper research. Use
 `research` only for a bounded follow-up when a recommendation-changing conflict
 remains unresolved after applying the source-priority rules.
 

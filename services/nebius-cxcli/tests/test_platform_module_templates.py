@@ -1,12 +1,75 @@
 import ast
+import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "private_pools,public_pools,expected_private,expected_public",
+    [
+        (
+            [{"cidrs": ["172.16.0.0/24", "172.16.1.0/24"]}, {"cidrs": ["172.16.2.0/24"]}],
+            [{"cidrs": ["192.0.2.0/24"]}, {"cidrs": ["198.51.100.0/24", "203.0.113.0/24"]}],
+            ["172.16.0.0/24", "172.16.1.0/24", "172.16.2.0/24"],
+            ["192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"],
+        ),
+        ([], [], [], []),
+        (None, None, [], []),
+        ([{"cidrs": None}, {"cidrs": []}], [{"cidrs": None}], [], []),
+    ],
+)
+def test_vpc_subnet_output_expression_uses_supported_status_pools(
+    tmp_path, private_pools, public_pools, expected_private, expected_public
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "platform-infra/modules/vpc/locals.tf").read_text()
+    # Terraform provider mocks cannot populate computed nested collections.
+    # Execute the actual output expression with fixture resources in their place.
+    output_expression = source[source.index("  subnet_output = {") :]
+    output_expression = output_expression.replace("nebius_vpc_v1_subnet.this", "var.subnets")
+    (tmp_path / "main.tf").write_text(
+        'variable "subnets" { type = any }\nlocals {\n  subnets = var.subnets\n' + output_expression
+    )
+    subnet = {
+        "id": "subnet-test",
+        "name": "worker",
+        "parent_id": "project-test",
+        "network_id": "network-test",
+        "status": {
+            "ipv4_private_pools": private_pools,
+            "ipv4_public_pools": public_pools,
+            "route_table": {"id": "route-table-test", "default": True},
+        },
+    }
+    (tmp_path / "terraform.tfvars.json").write_text(json.dumps({"subnets": {"worker": subnet}}))
+    result = subprocess.run(
+        ["terraform", "console", "-no-color"],
+        cwd=tmp_path,
+        input="jsonencode(local.subnet_output)\n",
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    output = json.loads(json.loads(result.stdout))["worker"]
+    assert output == {
+        "id": subnet["id"],
+        "name": subnet["name"],
+        "parent_id": subnet["parent_id"],
+        "network_id": subnet["network_id"],
+        "ipv4_private_cidrs": expected_private,
+        "ipv4_public_cidrs": expected_public,
+        "route_table": subnet["status"]["route_table"],
+    }
 
 
 def test_ssh_jumphost_passes_bootstrap_allowed_cidrs_json_to_cloud_init() -> None:
@@ -66,9 +129,9 @@ def test_ssh_jumphost_template_installs_vm_local_day2_allowed_cidr_helper(tmp_pa
 
 def test_wireguard_gw_passes_runtime_config_json_to_cloud_init() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    main_tf = (repo_root / "platform-infra" / "modules" / "wireguard-gw" / "main.tf").read_text(
-        encoding="utf-8"
-    )
+    main_tf = (
+        repo_root / "platform-infra" / "modules" / "wireguard-gw" / "cloud-init.tf"
+    ).read_text(encoding="utf-8")
 
     assert "wireguard_config_json = jsonencode({" in main_tf
     assert "endpoint_host                       = var.endpoint_host" in main_tf
@@ -195,7 +258,9 @@ def test_wireguard_gw_template_renders_shell_heredoc_terminators_at_column_zero(
     expression = (
         f'templatefile("{template_path}", {{ '
         'ssh_user_name = "ubuntu", '
-        f'ssh_public_key = "{_VALID_ED25519_PUBLIC_KEY}", '
+        'access_config_json = "{}", '
+        f'access_helper = indent(6, file("{template_path.parent / "wireguard_access.py"}")), '
+        f'network_helper = indent(6, file("{template_path.parent / "wireguard_network.py"}")), '
         "wireguard_config_json = jsonencode({ "
         'wireguard_tunnel_cidr = "10.8.0.1/22", '
         "wireguard_listen_port = 51820, "

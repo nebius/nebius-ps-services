@@ -901,13 +901,14 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertNotIn("prompt-session-intake/assets/hooks", second.stdout)
         self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
         self.assertIn("unchanged troubleshoot/assets/hooks", second.stdout)
+        self.assertIn("unchanged shared runtime", second.stdout)
         self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
         self.assertIn("files: unchanged 7", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
         self.assertIn(
-            "Summary: files updated 0, unchanged 23; registrations unchanged 11",
+            "Summary: files updated 0, unchanged 27; registrations unchanged 11",
             second.stdout,
         )
         self.assertTrue(
@@ -1108,8 +1109,16 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             self.installed_hook_target("nebius_auth_token_helper.py").is_file()
         )
         self.assertIn("registrations: unchanged 1", second.stdout)
+        self.assertIn("unchanged shared runtime", second.stdout)
+        for name in (
+            "agent_runtime.py",
+            "hook_runtime.py",
+            "trusted_runtime.py",
+            "task_state_permissions.py",
+        ):
+            self.assertTrue(self.installed_hook_target(name).is_file())
         self.assertIn(
-            "Summary: files updated 0, unchanged 3; registrations unchanged 1",
+            "Summary: files updated 0, unchanged 7; registrations unchanged 1",
             second.stdout,
         )
         self.assertNotIn(

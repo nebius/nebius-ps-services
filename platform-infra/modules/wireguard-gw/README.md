@@ -10,6 +10,13 @@ listener. By default it creates a dedicated static public IP allocation. To reus
 an existing allocation, set `create_public_ip_allocation = false` and provide
 `public_ip_allocation_id`.
 
+cxcli declares the access dependency in source configuration and applies a separate
+`infra-access` Terraform root before this VM. The sibling `mysterybox` module owns
+metadata-only containers; `wireguard-access` owns IAM. The SDK creates payload
+versions and freezes the public `access_bootstrap` input. Repeated deploys retain
+those identities, including after login rotation. Keep the access root when the
+VM is destroyed. See [cxcli access lifecycle](../../../services/nebius-cxcli/docs/wireguard.md).
+
 ## How It Works
 
 Cloud-init runs once on first boot. It installs WireGuard, OpenSSH, UFW,
@@ -22,6 +29,15 @@ sudo nebius-wireguard-client add-local-subnets --local-subnet 10.20.0.0/16,10.30
 sudo nebius-wireguard-client remove-local-subnets --local-subnet 10.20.0.0/16
 sudo nebius-wireguard-client list --pretty
 ```
+
+Terraform compresses embedded file contents using cloud-init's `gz+b64` encoding
+to fit Nebius's 32 KiB user-data limit. Cloud-init restores the exact scripts and
+permissions before setup. The rendered-payload regression checks size and lossless
+decoding; compression does not introduce private keys into user data.
+
+The guest identifies its HTTP requests as `nebius-cxcli-wireguard/1`; API edge
+filtering can reject Python's default urllib client before IAM authorization.
+Host payload reads still require the attached service account's narrow grant.
 
 That command owns changing client state after boot. It allocates the next free
 client `/32` from `wireguard_tunnel_cidr`, generates client keys plus a
@@ -40,6 +56,26 @@ configs are not rewritten automatically.
 Generate one client config per device or user. Do not reuse the same `.conf`
 for multiple simultaneous clients because it contains a unique private key and
 tunnel `/32`.
+
+## Managed network updates
+
+`wireguard_network.py` is the canonical first-boot and day-2 helper. Server and
+client configurations contain an explicit MTU, automatically derived as
+`min(1420, uplink MTU - 80)`. Optional `wireguard_mtu` is an integer from 1280 to
+1420 bounded by that uplink. Scoped bidirectional MSS clamps protect forwarded
+TCP. Reconciliation preserves existing firewall policy, identities and peers;
+it does not reset UFW or restart WireGuard.
+
+First boot persists a private peer registry even when `clients` is empty, so
+deployment reconciliation can verify a gateway before its first client is issued.
+A missing registry on an existing gateway still blocks reconciliation as lost state.
+
+cxcli freezes the original applied bootstrap in the protected state backend and
+supplies `bootstrap_user_data` at runtime. Do not author that field in cxcli
+configuration. Direct Terraform consumers must retain their applied payload
+when upgrading an existing gateway; changing cloud-init without that explicit
+preservation invokes the shared VM replacement guard. See the
+[repair and verification workflow](../../../services/nebius-cxcli/docs/wireguard.md#mtu-repair-and-client-verification).
 
 ## Networking Model
 
@@ -90,7 +126,7 @@ module "wireguard_gw" {
   source_image_family = "ubuntu24.04-driverless"
   boot_disk_size_gib  = 64
   ssh_user_name       = "ubuntu"
-  ssh_public_key      = "ssh-ed25519 AAAA... user@example"
+  access_bootstrap    = var.wireguard_access_bootstrap # public references prepared by cxcli
 
   wireguard_tunnel_cidr = "10.8.0.1/22"
   wireguard_listen_port = 51820
@@ -128,7 +164,7 @@ Required VM inputs:
 - `preset`
 - `source_image_family`
 - `boot_disk_size_gib`
-- `ssh_public_key`
+- `access_bootstrap` (public generation, service-account, host secret/version, host and login public keys)
 
 `boot_disk_size_gib` is explicit. `nebius-cxcli` resolves the live
 platform/preset metadata, applies its shared `compute.boot_disk_defaults`
@@ -183,6 +219,7 @@ Public IP inputs:
 ## Outputs
 
 - `instance_id`
+- `boot_disk_id`
 - `private_ip`
 - `public_ip`
 - `public_ip_allocation_id`
@@ -193,23 +230,26 @@ Public IP inputs:
 
 ## Client Connection
 
-Retrieve a generated client config with SSH, then use it with the WireGuard CLI
-tools:
+For gateways deployed with cxcli, generate and download a client config using
+your Nebius identity and the published SecretStash references in `config.yaml`:
 
 ```bash
-umask 077
-ssh -i ~/.ssh/id_ed25519 ubuntu@<wireguard-public-ip> \
-  'sudo cat /var/lib/wireguard/clients/<client-name>/<client-name>.conf' \
-  > <client-name>.conf
-chmod 600 <client-name>.conf
+nebius-cxcli wireguard --gen-client-conf "$CONFIG" \
+  --client-name laptop --output-dir ./wireguard-clients
 ```
+
+cxcli retrieves the managed login key temporarily, pins the authenticated server
+identity, and writes the client file with mode 0600. Select `--component` when the
+configuration contains multiple gateways. See the
+[administrator access guide](../../../services/nebius-cxcli/docs/wireguard.md)
+for group access, rotation and recovery.
 
 On macOS, install the command-line tools with Homebrew:
 
 ```bash
 brew install wireguard-tools
-wg-quick up ./<client-name>.conf
-wg-quick down ./<client-name>.conf
+wg-quick up ./wireguard-clients/laptop.conf
+wg-quick down ./wireguard-clients/laptop.conf
 ```
 
 macOS may ask for an admin password when changing the tunnel state. This
@@ -244,3 +284,36 @@ workflow uses only `wireguard-tools`; there is no HTTP UI on the VPN gateway.
 - WireGuard routing and namespaces: <https://www.wireguard.com/netns/>
 - `wg(8)`: <https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8>
 - `wg-quick(8)`: <https://git.zx2c4.com/wireguard-tools/about/src/man/wg-quick.8>
+
+### SSH access and identity
+
+New deployments use the cxcli SecretStash lifecycle. `access_bootstrap` contains
+only public first-boot values and pinned references: `generation`,
+`service_account_id`, `host_secret_id`, `host_version_id`, `host_public_key` and
+`login_public_key`. The attached VM service account reads only its host secret
+using a metadata token. No SSH private key enters Terraform or cloud-init.
+
+Socket activation is disabled. The SSH service requires successful host-key
+bootstrap, and administrator authorization is withheld until the retrieved
+Ed25519 pair matches the pinned public key/version. Complete gateway setup runs
+as a retrying systemd unit. Subsequent boots validate the persisted identity and
+preserve rotated authorization without fetching SecretStash again.
+
+Keep this map frozen for the VM generation: the shared VM replaces its boot disk
+when cloud-init changes. Rotate login through `nebius-cxcli wireguard
+--rotate-login-key`, which updates guest authorization and the connection secret
+without changing this map. `boot_disk_id` participates in the authenticated
+connection binding. Existing deployments with personal keys are unsupported.
+
+See [cxcli WireGuard access](../../../services/nebius-cxcli/docs/wireguard.md)
+for installation, IAM, client distribution, offboarding and recovery.
+
+## Packet-path regression
+
+`tests/network_path.py` runs only inside a disposable Linux environment with
+`iproute2`, `iptables`, `wireguard-tools`, `curl`, `openssl`, Python and namespace
+administration privileges. It creates its own namespaces and ephemeral keys,
+never uses cloud credentials or the host network, and cleans up in `finally`.
+The negative control suppresses path-MTU feedback and must stall; canonical guest
+reconciliation must then restore a verified 64 KiB TLS transfer, including repeat
+application with unchanged gateway identity and peer.

@@ -33,7 +33,10 @@ def bound(tmp_path, monkeypatch):
     payload = {
         "client_info": {},
         "apps": {"charts": [{"id": "grafana", "instance_id": "cluster", "enabled": True}]},
-        "deploy": {"targets": [{"instance_id": "cluster"}]},
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "cluster", "enabled": True, "inputs": {}}]
+        },
+        "version": "v2",
     }
     paths.config_path.write_text(yaml.safe_dump(payload))
     identity = {"cluster_id": "fixture-cluster", "kubernetes_uid": "fixture-uid"}
@@ -451,6 +454,7 @@ def test_soperator_replay_does_not_import_dashboards_without_target_intent(
 ):
     paths = resolve_project_paths(tmp_path / "config.yaml")
     payload = {
+        "version": "v2",
         "apps": {
             "charts": [
                 {"id": "soperator", "instance_id": "cluster", "enabled": True},
@@ -462,7 +466,7 @@ def test_soperator_replay_does_not_import_dashboards_without_target_intent(
                     "dashboard_imports": [{"uid": "other-dashboard"}],
                 },
             ]
-        }
+        },
     }
 
     def unexpected_client(*args, **kwargs):
@@ -507,9 +511,24 @@ def test_import_assets_are_in_frozen_and_ordinary_inventories(tmp_path):
     path.parent.mkdir(parents=True)
     path.write_bytes(json_bytes(dashboard()))
     key = path.relative_to(paths.generated_dir).as_posix()
-    generation = DeploymentGeneration.capture(paths, {})
+    generation = DeploymentGeneration.capture(
+        paths,
+        {
+            "schema": "nebius-cxcli-generated/v3",
+            "runtime_config": {"version": "v2"},
+            "execution": {
+                "backend": {},
+                "targets": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+                "validations": [],
+            },
+        },
+    )
     assert key in generation.files
-    assert path in ordinary_apps._ordinary_files(paths, {"deploy": {"targets": []}})
+    assert path in ordinary_apps._ordinary_files(
+        paths, {"infra": {"components": []}, "apps": {"charts": []}, "version": "v2"}
+    )
     assert key in application_files(paths)["files"]
 
 

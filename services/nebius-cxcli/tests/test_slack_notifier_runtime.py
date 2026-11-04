@@ -277,22 +277,19 @@ def test_ensure_existing_webhook_skips_secret_when_mysterybox_eso_manages_it(
                                 }
                             ]
                         },
-                    }
-                ]
-            },
-            "deploy": {
-                "targets": [
+                    },
                     {
+                        "id": "mk8s",
                         "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {},
                         "secrets": {
-                            "mysterybox": {
-                                "enabled": True,
-                                "sync_namespaces": ["soperator"],
-                            }
+                            "mysterybox": {"enabled": True, "sync_namespaces": ["soperator"]}
                         },
-                    }
+                    },
                 ]
             },
+            "version": "v2",
         }
     )
     emitted: list[str] = []

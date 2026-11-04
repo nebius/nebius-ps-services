@@ -74,7 +74,8 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    major updates and Docker, follows the same operator-initiated review and repair
    path. No scheduler starts local review. Freeze host/repository/default/PR identity.
 2. If already merged, skip effects and verify that exact operation's result.
-   Otherwise require same-repository, non-draft, live-default target. Invoke
+   Otherwise require a non-draft, live-default target with separately bound
+   base/head repository identities, including eligible forks. Invoke
    local review-pr as a parent-owned coordinator for **every unmerged PR**, even
    with an existing passing attestation. It must not re-delegate merge-pr.
    Reuse code analysis only within this root operation at unchanged exact
@@ -84,11 +85,16 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    remote-only merges; do not materialize a local PR branch without need.
    Delegate safe repairs to create-pr's private preparation handoff; do not
    mutate branch history here. Unsafe findings and human objections stop.
-3. Wait for applicable current-head CI, synchronize/review again when default
+3. Require review-pr contribution/compatibility and per-project spec assessments.
+   It calls maintain-project-specs after safe repairs; do not create a second
+   spec writer or review loop here. Wait for applicable current-head CI, synchronize/review again when default
    advances, and freeze the exact head/base and COMMENT review ID. CI alone is
    insufficient. The broker authorizes configured numeric operator IDs only.
-   PR readiness has a fixed 10,800-second budget. Reuse the publication caller's
-   checkpoint deadline when present; repairs and refreshed gates never reset it.
+   PR readiness has a fixed 86,400-second (24-hour) budget. Reuse the publication caller's
+   checkpoint deadline when present, even when shorter; repairs and refreshed
+   gates never reset it. An explicit user continuation may start a new ordinary
+   observation attempt; record the prior outcome and new deadline, retaining the
+   original receipt, grant and targets. Release callers retain their own resume rules.
    Carry the original receipt, grant and targets through review/repair handoffs;
    only the completion owner closes the grant at its selected final boundary.
    If a publication caller already bound its head, return any refreshed head and
@@ -101,7 +107,7 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    `bypass_rules: false`. Required queues stop before approval. Unsupported
    workflow-file permissions stop for a maintainer; no App/PAT/bypass fallback.
 5. Dispatch/HTTP acceptance is pending, not merged. Reconcile authoritative PR
-   state after errors before any retry. Wait at most 10,800 seconds with 30-second
+   state after errors before any retry. Wait at most 86,400 seconds with 30-second
    polls; retain the caller grant on timeout and return the exact resume identity.
    Externally queued PRs may be observed read-only, never enqueued by this skill.
 6. After actual merge, preserve known success even if later verification fails.
@@ -109,7 +115,7 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    merge recording; merged continuations cannot repair, push or merge again.
    Use the trusted completion helper to verify exact-result CI artifacts and
    configured Pages publication. The completion workflow owns explicit dispatch
-   and Pages effects; local observation is read-only. Observe for at most 10,800
+   and Pages effects; local observation is read-only. Observe for at most 86,400
    seconds from first confirmed merge, using the release caller's checkpointed
    verification deadline when present. Reruns and repeated checks never reset it;
    only explicit release resume renews the caller's budgets. Keep short API

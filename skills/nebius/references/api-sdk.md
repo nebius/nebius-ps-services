@@ -80,3 +80,8 @@ serializes messages without authenticating. Neither proves cloud availability.
 Do not log whole requests, tokens, credentials, secret-bearing specs/status, or
 tracebacks containing provider details. Keep CLI/API versions in evidence and
 recheck generated schemas before upgrading the validation pin.
+
+For Kubernetes consumers, use explicit `workload_identity` in `assets/sdk/runtime.py`;
+see [the renewable identity workflow](kubernetes-workload-identity.md). This mode
+uses the native federated bearer with a rotating projected file, is exclusive
+with other auth selectors, and never falls back to operator credentials.

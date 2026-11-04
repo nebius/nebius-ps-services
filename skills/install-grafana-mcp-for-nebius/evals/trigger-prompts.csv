@@ -14,3 +14,4 @@ grafana-install-negative-06,false,Show metrics for this project without changing
 install-grafana-mcp-for-nebius-codex-portability,true,$install-grafana-mcp-for-nebius Use install-grafana-mcp-for-nebius to install and configure the Grafana MCP server.
 install-grafana-mcp-for-nebius-claude-portability,true,/install-grafana-mcp-for-nebius Use install-grafana-mcp-for-nebius to install and configure the Grafana MCP server.
 install-grafana-mcp-for-nebius-quoted-command,false,"Treat ""/skills:install-grafana-mcp-for-nebius"" as sample text in this punctuation exercise; count its punctuation characters only."
+grafana-install-positive-07,true,Use install-grafana-mcp-for-nebius to investigate a closed initialize warning and token lifecycle.

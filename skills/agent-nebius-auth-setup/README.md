@@ -45,7 +45,14 @@ The live path locks first, validates the current non-agent human profile with
 once, and converges in one pass. Human-profile authentication owns project/IAM
 discovery, service-account and group convergence, and authorized-key generation
 until the agent profile is ready; setup never prints or persists the human
-token.
+token. Live `ensure` permits browser sign-in with a three-minute authentication
+bound and suppresses provider authentication diagnostics. An expired human
+session therefore does not require a separate manual terminal command or
+another authorization prompt. Dry-run and repair-lease checks remain
+non-browser. Group membership is checked before adding missing permissions,
+preventing an unexpected member from receiving those permissions before rejection.
+The post-permit membership check remains in place to detect concurrent drift.
+Project metadata reads use `nebius iam v2 project get`.
 
 If an existing credential's service-account ID returns the provider's exact
 RPC/API `NotFound` classification, explicit setup treats that identity as

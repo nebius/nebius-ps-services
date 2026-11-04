@@ -56,11 +56,16 @@ def bundle(payload):
         files[root + "/release.yaml"] = base64.b64encode(yaml.safe_dump(doc).encode()).decode()
     return DeploymentGeneration(
         {
-            "schema": "nebius-cxcli-generated/v2",
-            "execution": {"backend": {}},
+            "schema": "nebius-cxcli-generated/v3",
+            "execution": {
+                "backend": {},
+                "targets": targets,
+                "validations": [],
+                "required_component_outputs": [],
+                "status_watchers": [],
+            },
             "render": {"module_sources": []},
             "runtime_config": payload,
-            "deploy": {"targets": targets, "validations": []},
         },
         files,
     )
@@ -299,7 +304,11 @@ def test_shared_entrypoint_freezes_selection_and_appends_only_needed_phase(
     old = bundle(source)
     value = bundle(desired)
     value = DeploymentGeneration(
-        {**value.manifest, "execution": {"backend": asdict(settings())}}, value.files
+        {
+            **value.manifest,
+            "execution": {**value.manifest["execution"], "backend": asdict(settings())},
+        },
+        value.files,
     )
     local = paths(tmp_path)
     manifest = value.materialize(local)
@@ -355,6 +364,7 @@ def test_ordinary_runtime_write_rechecks_parent_fence_inside_helper(tmp_path, mo
         {
             "infra": {"components": []},
             "apps": {"charts": [{"id": "grafana", "instance_id": "other", "enabled": True}]},
+            "version": "v2",
         }
     )
     manifest = value.materialize(local)
@@ -397,7 +407,7 @@ def test_ordinary_runtime_write_rechecks_parent_fence_inside_helper(tmp_path, mo
             cli,
             runtime_config_from_manifest(manifest),
             local,
-            manifest["deploy"]["targets"][1],
+            manifest["execution"]["targets"][1],
             deploy_validations=[],
             deployment_lease=SimpleNamespace(assert_held=authority),
             on_inputs=inputs,
@@ -415,7 +425,7 @@ def test_fresh_install_applies_ordinary_prerequisites_before_protected_graph(
     local = paths(tmp_path)
     payload = config()
     manifest = bundle(payload).materialize(local)
-    target = manifest["deploy"]["targets"][0]
+    target = manifest["execution"]["targets"][0]
     target_paths = cli._paths_for_target_flux_dir(local, target)
     ordinary = target_paths.flux_dir / "ordinary"
     ordinary.mkdir()

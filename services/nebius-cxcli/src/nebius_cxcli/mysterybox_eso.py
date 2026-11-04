@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from .component_defaults import resolve_component_defaults
+from .cluster_config import cluster_rows
 from .component_instances import (
     INSTANCE_ID_FIELD,
     component_instance_id,
@@ -19,8 +19,6 @@ from .components import ComponentEntry, component_entries
 from .deploy_targets import (
     TARGET_REF_FIELD,
     app_chart_target_ref,
-    enabled_cluster_target_refs,
-    target_scoped_app_instance_id,
 )
 from .runtime_config import to_plain_data
 from .slack_notifier_runtime import soperator_notifier_mysterybox_secret_refs
@@ -111,26 +109,8 @@ def _app_chart_rows(payload: Mapping[str, Any], app_id: str = "") -> list[dict[s
     return rows
 
 
-def _ensure_app_charts(payload: dict[str, Any]) -> list[Any]:
-    apps = payload.get("apps")
-    if not isinstance(apps, dict):
-        apps = {}
-        payload["apps"] = apps
-    charts = apps.get("charts")
-    if not isinstance(charts, list):
-        charts = []
-        apps["charts"] = charts
-    return charts
-
-
 def _target_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
-    deploy = payload.get("deploy")
-    if not isinstance(deploy, Mapping):
-        return []
-    targets = deploy.get("targets")
-    if not isinstance(targets, list):
-        return []
-    return [dict(row) for row in targets if isinstance(row, Mapping)]
+    return [dict(row) for row in cluster_rows(payload) if isinstance(row, Mapping)]
 
 
 def _target_ref(row: Mapping[str, Any]) -> str:
@@ -145,21 +125,6 @@ def _target_mysterybox_config(row: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(mysterybox, Mapping):
         return {}
     return dict(mysterybox)
-
-
-def _mysterybox_backend_enabled(payload: Mapping[str, Any]) -> bool:
-    infra = payload.get("infra")
-    if not isinstance(infra, Mapping):
-        return False
-    components = infra.get("components")
-    if not isinstance(components, list):
-        return False
-    return any(
-        isinstance(row, Mapping)
-        and bool(row.get("enabled", False))
-        and component_type_id(row) == MYSTERYBOX_INFRA_COMPONENT_ID
-        for row in components
-    )
 
 
 def _mysterybox_secret_eso_version_policy(secret: Mapping[str, Any]) -> str:
@@ -184,6 +149,8 @@ def _enabled_mysterybox_secret_refs(payload: Mapping[str, Any]) -> list[dict[str
             continue
         instance_id = component_instance_id(row)
         inputs = row.get("inputs")
+        if isinstance(inputs, Mapping) and inputs.get("create_initial_versions") is False:
+            continue
         secrets = inputs.get("secrets") if isinstance(inputs, Mapping) else None
         if not instance_id or not isinstance(secrets, list):
             continue
@@ -380,15 +347,42 @@ def _append_unique(items: list[str], value: str, seen: set[str]) -> None:
     seen.add(token)
 
 
+def mysterybox_eso_selected_target_refs(payload_or_config: Any) -> tuple[str, ...]:
+    """Resolve sync intent, including ESO's default before the first secret exists."""
+    payload = _payload(payload_or_config)
+    selected_targets = {
+        app_chart_target_ref(row) or component_instance_id(row)
+        for row in _app_chart_rows(payload, EXTERNAL_SECRETS_APP_ID)
+        if row.get("enabled", False)
+    }
+    return tuple(
+        target_ref
+        for row in cluster_rows(payload)
+        if (target_ref := _target_ref(row)) in selected_targets
+        and _as_bool(_target_mysterybox_config(row).get("enabled", True))
+    )
+
+
 def normalize_mysterybox_eso_project_settings(payload_or_config: Any) -> bool:
     payload = _payload(payload_or_config)
     changed = False
-    for row in _target_rows(payload):
+    selected_targets = set(mysterybox_eso_selected_target_refs(payload))
+    eligible_secrets = bool(_enabled_mysterybox_secret_refs(payload))
+    for row in cluster_rows(payload):
         target_ref = _target_ref(row)
+        if target_ref in selected_targets and eligible_secrets:
+            if not isinstance(row.get("secrets"), dict):
+                row["secrets"] = {}
+            if not isinstance(row["secrets"].get("mysterybox"), dict):
+                row["secrets"]["mysterybox"] = {}
+            settings = row["secrets"]["mysterybox"]
+            if "enabled" not in settings:
+                settings["enabled"] = True
+                settings.setdefault("sync_namespaces", [DEFAULT_SYNC_NAMESPACE])
+                changed = True
         if not target_ref or not _as_bool(_target_mysterybox_config(row).get("enabled")):
             continue
-        deploy = payload.get("deploy")
-        targets = deploy.get("targets") if isinstance(deploy, dict) else None
+        targets = cluster_rows(payload)
         if not isinstance(targets, list):
             continue
         target_row = next(
@@ -420,7 +414,9 @@ def normalize_mysterybox_eso_project_settings(payload_or_config: Any) -> bool:
                 mysterybox[key] = value
                 changed = True
                 continue
-            if key != "allow_all_namespaces" and not _as_text(mysterybox.get(key)):
+            if key not in {"allow_all_namespaces", "sync_namespaces"} and not _as_text(
+                mysterybox.get(key)
+            ):
                 mysterybox[key] = value
                 changed = True
         credential_secret = mysterybox.setdefault("credentials_secret", {})
@@ -465,9 +461,6 @@ def mysterybox_eso_app_target_refs(payload_or_config: Any) -> tuple[str, ...]:
         _append_unique(target_refs, target_ref, seen)
     for ref in soperator_notifier_mysterybox_secret_refs(payload):
         _append_unique(target_refs, _as_text(ref.get("target_ref")), seen)
-    if _mysterybox_backend_enabled(payload):
-        for target_ref in enabled_cluster_target_refs(payload):
-            _append_unique(target_refs, target_ref, seen)
     return tuple(target_refs)
 
 
@@ -506,109 +499,6 @@ def _external_secrets_entry(
     return next((entry for entry in entries if entry.id == EXTERNAL_SECRETS_APP_ID), None)
 
 
-def _chart_group(entry: ComponentEntry) -> str:
-    group = _as_text(entry.group).lower()
-    return group.replace(" ", "-") if group else "platform"
-
-
-def _chart_repo(entry: ComponentEntry) -> str:
-    return _as_text(entry.chart_repo)
-
-
-def _new_external_secrets_app_row(entry: ComponentEntry, *, target_ref: str) -> dict[str, Any]:
-    row = {
-        "id": EXTERNAL_SECRETS_APP_ID,
-        INSTANCE_ID_FIELD: target_scoped_app_instance_id(
-            EXTERNAL_SECRETS_APP_ID, target_ref=target_ref
-        ),
-        "group": _chart_group(entry),
-        "enabled": True,
-        "repo": _chart_repo(entry),
-        "version": _as_text(entry.version),
-        "namespace": _as_text(entry.default_namespace) or "external-secrets",
-        "release-name": _as_text(entry.default_release_name) or EXTERNAL_SECRETS_APP_ID,
-        "values": {},
-    }
-    return resolve_component_defaults(
-        component_node=row,
-        entry=entry,
-        preserve_existing_literal=True,
-        include_shared=False,
-    )
-
-
-def _apply_external_secrets_defaults(row: dict[str, Any], entry: ComponentEntry) -> None:
-    if not _as_text(row.get("repo")):
-        row["repo"] = _chart_repo(entry)
-    if not _as_text(row.get("version")) and entry.version:
-        row["version"] = _as_text(entry.version)
-    if not _as_text(row.get("namespace")):
-        row["namespace"] = _as_text(entry.default_namespace) or "external-secrets"
-    if not _as_text(row.get("release-name")):
-        row["release-name"] = _as_text(entry.default_release_name) or EXTERNAL_SECRETS_APP_ID
-    if not _as_text(row.get("group")):
-        row["group"] = _chart_group(entry)
-    if not isinstance(row.get("values"), Mapping):
-        row["values"] = {}
-    resolved = resolve_component_defaults(
-        component_node=row,
-        entry=entry,
-        preserve_existing_literal=True,
-        include_shared=False,
-    )
-    row.clear()
-    row.update(resolved)
-
-
-def ensure_mysterybox_eso_app_rows(
-    payload_or_config: Any,
-    *,
-    app_entries: tuple[ComponentEntry, ...] | None = None,
-) -> bool:
-    payload = _payload(payload_or_config)
-    enabled_targets = mysterybox_eso_app_target_refs(payload)
-    if not enabled_targets:
-        return False
-    entry = _external_secrets_entry(app_entries)
-    if entry is None:
-        return False
-
-    charts = _ensure_app_charts(payload)
-    changed = False
-    rows = _app_chart_rows(payload, EXTERNAL_SECRETS_APP_ID)
-    rows_by_target = {component_instance_id(row): row for row in rows if isinstance(row, dict)}
-    for target_ref in enabled_targets:
-        existing = rows_by_target.get(target_ref)
-        if existing is None:
-            existing = next(
-                (
-                    row
-                    for row in rows
-                    if not app_chart_target_ref(row) and not bool(row.get("enabled", False))
-                ),
-                None,
-            )
-        if existing is None:
-            existing = next((row for row in rows if not app_chart_target_ref(row)), None)
-        if existing is None:
-            charts.append(_new_external_secrets_app_row(entry, target_ref=target_ref))
-            changed = True
-            continue
-        before = copy.deepcopy(existing)
-        existing["enabled"] = True
-        existing["id"] = EXTERNAL_SECRETS_APP_ID
-        existing.pop("target_ref", None)
-        existing[INSTANCE_ID_FIELD] = target_scoped_app_instance_id(
-            EXTERNAL_SECRETS_APP_ID,
-            target_ref=target_ref,
-        )
-        _apply_external_secrets_defaults(existing, entry)
-        if existing != before:
-            changed = True
-        rows_by_target[target_ref] = existing
-    return changed
-
-
 def mysterybox_eso_dependency_issues(
     payload_or_config: Any,
     *,
@@ -629,17 +519,12 @@ def mysterybox_eso_dependency_issues(
     if _external_secrets_entry(app_entries) is None:
         if native_targets:
             issues.append(
-                "deploy.targets[].secrets.mysterybox.enabled=true requires bundled apps:external-secrets"
+                "cluster settings[].secrets.mysterybox.enabled=true requires bundled apps:external-secrets"
             )
         elif direct_targets:
             issues.append(
                 "apps:soperator notifier webhookSource=mysterybox requires bundled "
                 "apps:external-secrets for the same target"
-            )
-        else:
-            issues.append(
-                "infra.components[id=mysterybox].enabled=true with an MK8s target "
-                "requires bundled apps:external-secrets"
             )
         return issues
     rows_by_target = {
@@ -651,22 +536,17 @@ def mysterybox_eso_dependency_issues(
         if target_ref not in rows_by_target:
             if target_ref in native_targets:
                 issues.append(
-                    f"deploy.targets[instance_id={target_ref}].secrets.mysterybox.enabled=true "
-                    "requires apps:external-secrets to be enabled for the same target"
+                    f"cluster settings[instance_id={target_ref}].secrets.mysterybox.enabled=true "
+                    "requires the user to select apps:external-secrets for the same target"
                 )
             elif target_ref in direct_targets:
                 issues.append(
                     f"apps:soperator notifier webhookSource=mysterybox on target "
-                    f"'{target_ref}' requires apps:external-secrets to be enabled for the same target"
-                )
-            else:
-                issues.append(
-                    f"infra.components[id=mysterybox].enabled=true with MK8s target "
-                    f"'{target_ref}' requires apps:external-secrets to be enabled for the same target"
+                    f"'{target_ref}' requires the user to select apps:external-secrets for the same target"
                 )
     if native_targets and not _enabled_mysterybox_secret_refs(payload) and not direct_secret_refs:
         issues.append(
-            "deploy.targets[].secrets.mysterybox.enabled=true requires at least one "
+            "cluster settings[].secrets.mysterybox.enabled=true requires at least one "
             "enabled mysterybox component with inputs.secrets or one bundled app "
             "MysteryBox webhook source"
         )
