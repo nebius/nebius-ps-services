@@ -28,6 +28,15 @@ All notable changes to this project are tracked here. This changelog follows
   preview-generated approval digests, failed-passive replacement, interrupted
   migration and staged replacement resume, boot-disk rescue limits, and verification.
 
+- Fix VM-HA route reconciliation deadlocking after a second ownership change (a
+  second automatic failover, or `failback vm`) when ownership returns to a VM
+  that was previously the owner. On promotion, adopt routes whose published
+  cloud authority labels prove this cluster owns them, so a re-promoted member
+  can reconcile a route the peer authored while it was demoted instead of
+  fencing on "route mutation lacks exact durable management authority". Only
+  routes matching this exact cluster's authority are adopted, after the existing
+  promotion fence (former owner Stopped, shared allocation confirmed).
+
 ## [nebius-vpngw-v0.6.3] - 2026-11-04
 
 - Keep HA safety CI selectors aligned with the retained-identity regression and
