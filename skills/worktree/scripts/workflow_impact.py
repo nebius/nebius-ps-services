@@ -49,7 +49,7 @@ LEDGER_SCHEMA = "workflow/objective-impact-ledger-v1"
 EXECUTION_BASIS_SCHEMA = "workflow/objective-impact-execution-basis-v1"
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REVISION_RE = re.compile(r"r[0-9]{4}\Z")
-FEATURE_RE = re.compile(r"FEAT-[0-9]{3,}\Z")
+FEATURE_RE = re.compile(r"(?:FEAT|SLICE)-[0-9]{3,}\Z")
 ATTEMPT_RE = re.compile(r"attempt-([0-9]{4,12})\.json\Z")
 MAX_GENERATION = 999_999_999_999
 
@@ -334,12 +334,12 @@ def publish(
 
 
 def spec_checkout(
-    run_dir: Path, project_root: Path, *, feature_id: str | None = None,
+    run_dir: Path, project_root: Path, *, execution_id: str | None = None,
     strict_head: bool = True,
 ) -> Path:
     try:
         return resolve_spec_checkout(
-            run_dir, project_root, feature_id=feature_id, strict_head=strict_head,
+            run_dir, project_root, execution_id=execution_id, strict_head=strict_head,
         )
     except SpecCheckoutError as error:
         raise ObjectiveImpactError(error.code, str(error)) from error
@@ -451,7 +451,7 @@ def _publish_locked(
 
 
 def verify_current(
-    run_dir: Path, project_root: Path, *, feature_id: str | None = None
+    run_dir: Path, project_root: Path, *, execution_id: str | None = None
 ) -> tuple[dict[str, Any], str]:
     current = load_current(run_dir, required=True)
     assert current is not None
@@ -471,7 +471,7 @@ def verify_current(
         )
     # Execution callers retain exact HEAD/journal recovery checks at each
     # transition; this read only selects the registered spec ownership boundary.
-    project_root = spec_checkout(run_dir, project_root, feature_id=feature_id, strict_head=False)
+    project_root = spec_checkout(run_dir, project_root, execution_id=execution_id, strict_head=False)
     for kind in ("requirements", "design"):
         path = project_root / "docs" / f"{kind}.md"
         if receipt.get(f"{kind}_sha256") == "absent" and not path.exists() and not path.is_symlink():
@@ -487,17 +487,17 @@ def verify_current(
     return receipt, receipt_sha256
 
 
-def _basis_path(run_dir: Path, feature_id: str) -> Path:
-    if FEATURE_RE.fullmatch(feature_id) is None:
+def _basis_path(run_dir: Path, execution_id: str) -> Path:
+    if FEATURE_RE.fullmatch(execution_id) is None:
         raise ObjectiveImpactError("RUN_STATE_INVALID", "feature ID is invalid")
-    return _root(run_dir) / "execution" / f"{feature_id}.json"
+    return _root(run_dir) / "execution" / f"{execution_id}.json"
 
 
 def _identity_files(project_root: Path) -> dict[str, str]:
     """Freeze effective repository instructions and the execution helper closure."""
     sources = {path for path in Path(__file__).parent.glob("*.py") if not path.name.startswith("test")}
     catalog = Path(__file__).resolve().parents[2]
-    for dependency in ("maintain-project-specs", "global-context-management"):
+    for dependency in ("maintain-project-specs", "global-context-management", "merge-pr", "sdlc-classify-failure"):
         sources.update(path for path in (catalog / dependency / "scripts").rglob("*.py") if not path.name.startswith("test"))
     for directory, children, filenames in os.walk(project_root):
         children[:] = [name for name in children if name not in {".git", "node_modules", ".venv", "venv", "__pycache__"}]
@@ -520,6 +520,8 @@ def _identity_files(project_root: Path) -> dict[str, str]:
         "code-review/references/quality-rubric.md",
         "align/references/quality-gate.md",
         "worktree/references/workflow-contract.md",
+        "worktree/references/issue-resolution.md",
+        "worktree/references/document-delivery.md",
         "worktree/assets/worker-result.schema.json",
         "sdlc-start/references/state-schema.md",
         "sdlc-prepare-execution/references/execution-plane.md",
@@ -539,7 +541,7 @@ def _identity_files(project_root: Path) -> dict[str, str]:
     return identities
 
 
-def _execution_basis(run_dir, feature_id, plan_digest, project_root, receipt, receipt_sha256):
+def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256):
     from workflow_objectives import validate_run
     run, objective = validate_run(run_dir)
     plans = [path for path in (run_dir / "plans").rglob("*.md")
@@ -549,13 +551,15 @@ def _execution_basis(run_dir, feature_id, plan_digest, project_root, receipt, re
         raise ObjectiveImpactError("BASIS_INVALID", "one immutable locked plan must match the execution digest")
     latest = objective["revisions"][-1]
     from workflow_state import read
-    prepared = read(run_dir / "prepared-bases" / (feature_id + ".json"))
+    prepared = read(run_dir / "prepared-bases" / (execution_id + ".json"))
     if prepared.get("schema") != "workflow/prepared-base-v1" or prepared.get("git_common_dir") != run["git_common_dir"]:
         raise ObjectiveImpactError("BASIS_INVALID", "prepared Git base identity is invalid")
     inputs = run_dir / "input-dependencies.json"
+    from workflow_program import slice_basis
+    program_basis = slice_basis(run_dir, project_root, execution_id)
     return {
         "schema": EXECUTION_BASIS_SCHEMA, "owner": run["owner"],
-        "feature_id": feature_id, "objective_id": objective["objective_id"],
+        "execution_id": execution_id, "objective_id": objective["objective_id"],
         "plan_digest": plan_digest, "plan_path": str(plans[0]),
         "plan_basis_revision": latest["revision"], "latest_settled_revision": latest["revision"],
         "objective_sha256": latest["sha256"], "impact_sha256": receipt_sha256,
@@ -563,6 +567,7 @@ def _execution_basis(run_dir, feature_id, plan_digest, project_root, receipt, re
         "spec_transition_sha256": receipt.get("spec_transition_sha256"),
         "plan_action": receipt["plan_action"], "base_commit": prepared["base_head"],
         "input_dependencies_sha256": canonical_digest(read(inputs)) if inputs.exists() else None,
+        "program_basis": program_basis,
         "ownership": {key: run[key] for key in ("owner", "run_id", "project_root", "git_common_dir")},
         "identities": _identity_files(project_root),
         # Task ownership and validation requirements are part of these exact
@@ -571,17 +576,17 @@ def _execution_basis(run_dir, feature_id, plan_digest, project_root, receipt, re
     }
 
 
-def settle_execution(run_dir: Path, feature_id: str, plan_digest: str, project_root: Path,
+def settle_execution(run_dir: Path, execution_id: str, plan_digest: str, project_root: Path,
                      allow_basis_creation: bool = False) -> dict[str, object]:
     from workflow_objectives import _writers_quiescent, validate_run
     from workflow_state import write, read
     if SHA256_RE.fullmatch(plan_digest) is None:
         raise ObjectiveImpactError("RUN_STATE_INVALID", "execution plan digest is invalid")
-    spec_checkout(run_dir, project_root, feature_id=feature_id)
+    spec_checkout(run_dir, project_root, execution_id=execution_id)
     receipt, receipt_sha256 = verify_current(run_dir, project_root)
-    path = _basis_path(run_dir, feature_id)
+    path = _basis_path(run_dir, execution_id)
     existing = _read(path, "execution basis pointer") if path.exists() else None
-    value = _execution_basis(run_dir, feature_id, plan_digest, project_root, receipt, receipt_sha256)
+    value = _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256)
     fingerprint = canonical_digest(value)
     if existing is not None and existing.get("sha256") == fingerprint:
         return value
@@ -594,31 +599,31 @@ def settle_execution(run_dir: Path, feature_id: str, plan_digest: str, project_r
             raise ObjectiveImpactError("REPLAN_REQUIRED", "material steering requires a distinct immutable plan")
     elif not allow_basis_creation:
         raise ObjectiveImpactError("BASIS_REQUIRED", "prepared execution requires an explicit initial basis")
-    relative = f"bases/{feature_id}/{fingerprint}.json"
+    relative = f"bases/{execution_id}/{fingerprint}.json"
     immutable = run_dir / relative
     if immutable.exists():
         if read(immutable) != value:
             raise ObjectiveImpactError("BASIS_INVALID", "immutable execution basis was changed")
     else:
         write(immutable, value, exclusive=True)
-    _atomic(path, {"schema": "workflow/execution-basis-pointer-v1", "path": relative, "sha256": fingerprint})
+    _atomic(path, {"schema": "workflow/execution-basis-pointer-v2", "path": relative, "sha256": fingerprint})
     return value
 
 
-def verify_execution(run_dir: Path, feature_id: str, plan_digest: str, project_root: Path, *, allow_fenced: bool = False) -> dict[str, object]:
+def verify_execution(run_dir: Path, execution_id: str, plan_digest: str, project_root: Path, *, allow_fenced: bool = False) -> dict[str, object]:
     from workflow_objectives import check_dispatch
     from workflow_state import read
     if not allow_fenced:
         check_dispatch(run_dir, allow_complete=True)
-    receipt, receipt_sha256 = verify_current(run_dir, project_root, feature_id=feature_id)
-    pointer = _read(_basis_path(run_dir, feature_id), "execution basis pointer")
+    receipt, receipt_sha256 = verify_current(run_dir, project_root, execution_id=execution_id)
+    pointer = _read(_basis_path(run_dir, execution_id), "execution basis pointer")
     fingerprint = pointer.get("sha256")
-    if (pointer.get("schema") != "workflow/execution-basis-pointer-v1"
+    if (pointer.get("schema") != "workflow/execution-basis-pointer-v2"
             or not isinstance(fingerprint, str) or SHA256_RE.fullmatch(fingerprint) is None
-            or pointer.get("path") != f"bases/{feature_id}/{fingerprint}.json"):
+            or pointer.get("path") != f"bases/{execution_id}/{fingerprint}.json"):
         raise ObjectiveImpactError("BASIS_INVALID", "execution basis pointer is invalid")
     value = read(run_dir / pointer["path"])
-    current = _execution_basis(run_dir, feature_id, plan_digest, project_root, receipt, receipt_sha256)
+    current = _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256)
     if canonical_digest(value) != fingerprint or value != current:
         raise ObjectiveImpactError("REPLAN_REQUIRED", "immutable execution basis is stale")
     return value
@@ -631,14 +636,14 @@ def public_execution_bases(run_dir: Path) -> list[dict[str, str]]:
     if directory.is_symlink() or not directory.is_dir():
         raise ObjectiveImpactError("RUN_STATE_INVALID", "impact execution directory is unsafe")
     rows: list[dict[str, str]] = []
-    for path in sorted(directory.glob("FEAT-*.json")):
+    for path in sorted(directory.glob("*.json")):
         pointer = _read(path, "execution basis pointer")
         value = _read(run_dir / str(pointer["path"]), "execution basis")
-        feature_id = str(value.get("feature_id") or "")
+        execution_id = str(value.get("execution_id") or "")
         revision = str(value.get("plan_basis_revision") or "")
-        if FEATURE_RE.fullmatch(feature_id) is None or REVISION_RE.fullmatch(revision) is None:
+        if FEATURE_RE.fullmatch(execution_id) is None or REVISION_RE.fullmatch(revision) is None:
             raise ObjectiveImpactError("RUN_STATE_INVALID", "impact execution basis is invalid")
-        rows.append({"feature_id": feature_id, "plan_basis_revision": revision})
+        rows.append({"execution_id": execution_id, "plan_basis_revision": revision})
     return rows
 
 

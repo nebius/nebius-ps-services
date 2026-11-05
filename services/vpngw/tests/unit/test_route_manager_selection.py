@@ -233,6 +233,7 @@ def _fake_subnet(
             name=name,
             id=f"id-{name}",
             parent_id="project-test",
+            resource_version=1,
         ),
         spec=SimpleNamespace(
             network_id=network_id,
@@ -512,7 +513,9 @@ def test_list_routes_buffers_all_nebius_route_tables_before_rendering(
         route_manager.list_routes(
             _three_vm_plan(),
             {
-                "gateway": {"local_prefixes": ["10.20.0.0/16", "10.30.0.0/16"]},
+                "gateway": {
+                    "local_prefixes": ["10.20.0.0/16", "10.30.0.0/16"],
+                },
                 "gateway_group": {"subnet": {"name": "vpngw-subnet"}},
             },
         )
@@ -569,6 +572,7 @@ def test_vm_ha_route_selection_requires_explicit_route_id_ownership() -> None:
 def _three_vm_plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="nebius-vpn-gw",
             instance_count=3,
             region="eu-north1",
@@ -1688,3 +1692,89 @@ def test_find_connection_for_peer_respects_gateway_instance_scope() -> None:
     resolved = route_manager._find_connection_for_peer("169.254.10.2", connections, inst_cfg)
 
     assert resolved == ("gcp-site-b", "site-b-tunnel-1", "169.254.20.1", "active")
+
+
+def test_default_table_copy_failure_preserves_subnet_attachment(monkeypatch):
+    import grpc
+    from nebius.api.nebius.common.v1 import metadata_pb2
+    from nebius.api.nebius.vpc.v1 import (
+        route_pb2,
+        route_service_pb2_grpc,
+        route_table_service_pb2_grpc,
+        subnet_service_pb2_grpc,
+    )
+
+    manager = RouteManager(project_id="project-test", auth_token="synthetic-test-token")
+    monkeypatch.setattr(manager, "_channel", lambda: object())
+    monkeypatch.setattr(grpc, "secure_channel", lambda *_: object())
+    monkeypatch.setattr(
+        manager, "_find_gateway_private_allocations_by_index", lambda *_: {0: "allocation-gateway"}
+    )
+    monkeypatch.setattr(manager, "_resolve_target_network_id", lambda *_: "network-test")
+    monkeypatch.setattr(manager, "_get_network_private_pool_cidrs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        manager, "_collect_remote_prefix_targets", lambda *_: {"10.80.0.0/16": "allocation-gateway"}
+    )
+    subnet = _fake_subnet(
+        name="workload", network_id="network-test", explicit_cidrs=["10.20.0.0/16"]
+    )
+    subnet.status.route_table.id = "route-table-default"
+    route = route_pb2.Route(
+        metadata=metadata_pb2.ResourceMetadata(
+            id="route-customer", name="customer", parent_id="route-table-default"
+        )
+    )
+    route.spec.description = "preserve customer metadata"
+    route.spec.destination.cidr = "0.0.0.0/0"
+    route.spec.next_hop.default_egress_gateway = True
+    sstub = SimpleNamespace(
+        List=Mock(return_value=SimpleNamespace(items=[subnet], next_page_token="")), Update=Mock()
+    )
+    target = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="route-table-target",
+            name=manager._route_table_name("workload"),
+            parent_id="project-test",
+        )
+    )
+    rtstub = SimpleNamespace(
+        List=Mock(return_value=SimpleNamespace(items=[target], next_page_token=""))
+    )
+    rstub = SimpleNamespace(Create=Mock(side_effect=RuntimeError("copy denied")))
+    monkeypatch.setattr(subnet_service_pb2_grpc, "SubnetServiceStub", lambda _: sstub)
+    monkeypatch.setattr(route_table_service_pb2_grpc, "RouteTableServiceStub", lambda _: rtstub)
+    monkeypatch.setattr(route_service_pb2_grpc, "RouteServiceStub", lambda _: rstub)
+    monkeypatch.setattr(
+        manager,
+        "_list_route_table_routes",
+        lambda *_args, route_table_id: [route] if route_table_id == "route-table-default" else [],
+    )
+    with pytest.raises(RouteManagementError, match="incomplete"):
+        manager._add_routes(SimpleNamespace(), {"gateway": {"local_prefixes": ["10.20.0.0/16"]}})
+    assert rstub.Create.call_args.args[0].spec == route.spec
+    sstub.Update.assert_not_called()
+
+
+def test_summary_quota_failure_never_deletes_working_specifics():
+    from nebius.api.nebius.common.v1 import metadata_pb2
+    from nebius.api.nebius.vpc.v1 import route_pb2, route_service_pb2
+
+    route = route_pb2.Route(
+        metadata=metadata_pb2.ResourceMetadata(id="route-existing", name="specific")
+    )
+    route.spec.destination.cidr = "10.80.1.0/24"
+    route.spec.next_hop.allocation.id = "allocation-gateway"
+    stub = SimpleNamespace(Create=Mock(side_effect=RuntimeError("quota exceeded")), Delete=Mock())
+    manager = RouteManager(project_id="project-test")
+    with pytest.raises(RuntimeError, match="existing routes were preserved"):
+        manager._reconcile_route_table(
+            stub,
+            route_service_pb2,
+            route_pb2,
+            metadata_pb2,
+            route_table_id="route-table-test",
+            prefix_targets={"10.80.0.0/16": "allocation-gateway"},
+            summarize=True,
+            initial_routes=[route],
+        )
+    stub.Delete.assert_not_called()

@@ -7,6 +7,7 @@ from pathlib import Path
 
 # Exact canonical readers, loaded in dependency order into a fresh guest process.
 SOURCES = (
+    ("_vpngw_ingress", "ingress_policy.py"),
     ("_vpngw_ordinary_operations", "ordinary_operations.py"),
     ("_vpngw_tunnel_state", "tunnel_state.py"),
     ("_vpngw_ordinary_routes", "ordinary_routes.py"),
@@ -14,6 +15,7 @@ SOURCES = (
     ("nebius_vpngw.agent.vm_ha_controller", "agent/vm_ha_controller.py"),
     ("nebius_vpngw.agent.vm_ha_checkpoint", "agent/vm_ha_checkpoint.py"),
     ("nebius_vpngw.agent.vm_ha.mtls", "agent/vm_ha/mtls.py"),
+    ("nebius_vpngw.checkpoint_upgrade", "checkpoint_upgrade.py"),
     ("_vpngw_ha_repair", "ha_repair.py"),
     ("_vpngw_ordinary_remote", "deploy/ordinary_remote.py"),
     ("_vpngw_handoff_remote", "deploy/handoff_remote.py"),

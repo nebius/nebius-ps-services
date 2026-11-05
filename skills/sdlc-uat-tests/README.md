@@ -5,9 +5,11 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Validate the full product, not just individual features, before PR creation,
-using the requirements Live Experiment Environment only when it is confirmed
-safe and allowed.
+Qualify each promoted delivery slice and its inherited product regression
+obligations before PR creation. Use a confirmed safe, authorized live target
+when applicable; accepted non-runtime changes use reviewed live N/A evidence.
+Future slices stay pending, and slice success alone does not complete a feature
+or phase.
 Web GUI rows default to headless Playwright Test with isolated processes and
 contexts, actual browser identity, target SHA, assertions, traces, screenshots
 and cleanup receipts. Optional headless MCP exploration is separate. A locked
@@ -24,17 +26,17 @@ criteria retain their separately declared harness.
 
 ## Primary Inputs
 
-- All requirements.
-- All feature designs.
-- All feature evidence.
+- The frozen slice criteria, inherited regression obligations and source mappings.
+- The canonical requirements and designs relevant to those obligations.
+- The current slice and dependency evidence.
 - Current branch.
 - Product startup instructions.
 - Live Experiment Environment section from `docs/requirements.md`, when present.
 
 ## Output
 
-- Full UAT report exists.
-- All P0 acceptance criteria pass or blockers are classified.
+- A complete UAT report for the current slice exists.
+- Every mandatory slice and inherited regression criterion passes with executed evidence; missing or failed evidence blocks delivery.
 - Cross-feature flows pass.
 - Product is ready for publication-only `create-pr` only on pass and only for
   the clean exact promoted SHA tested by UAT.

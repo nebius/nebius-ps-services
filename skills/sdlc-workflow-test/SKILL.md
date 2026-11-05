@@ -103,6 +103,9 @@ The default report path is:
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `docs/agentic-sdlc-design.md`.
 - `references/verification-checklist.md`.
 - `assets/live-results.schema.json` when producing or ingesting live evidence.
@@ -175,8 +178,14 @@ remotes.
    canonical spec ownership, advisory project-lifecycle independence, direct
    objective/binding regressions, execution and secret gates, Implement and
    managed-worktree interoperability, bounded observability, repair control,
-   exact-SHA publication modes, verifier self-tests, and hook fixtures. The
-   disposable fixture is a nested selected folder in a local
+   exact-SHA publication modes, verifier self-tests, and hook fixtures. Its
+   required capability matrix includes complete document-package coverage,
+   phase/slice ordering, current completion evidence, large task graphs and
+   bounded retained worktrees. Shared semantic and delivery owners participate
+   in installed parity. Missing required tests fail; skipped tests stay partial.
+   Current live profiles do not qualify native multi-slice document delivery
+   or a real remote merge; report those limits explicitly.
+   The disposable fixture is a nested selected folder in a local
    monorepo-shaped Git repository. Obsolete flat fixtures and unknown,
    unowned, dirty, externally connected, or non-canonical directories and repositories
    fail closed without mutation. The script does not edit installed skills or
@@ -226,7 +235,9 @@ remotes.
    machine-semantic validators; never promote a source by relabeling it.
    Deterministic and merge-safety profiles are verifier-derived rather than
    supplied in the live manifest: they become valid only when every mapped
-   deterministic capability or the explicit merge-authorization guard passes.
+   deterministic capability passes. Merge safety also requires executed
+   qualification, protected admission and recovery regressions; hook denials
+   alone are insufficient, and these checks do not qualify a real remote merge.
    Lightweight PASS remains fail-closed until its collector derives exact
    claims from checkpoint, Git, test, steering, document, and repaired-failure
    bytes. Three-tier PASS requires the copied source to byte-match
@@ -249,6 +260,13 @@ remotes.
    secret-bearing output.
 
 ## Three-Tier Live Process
+
+For each phase observation, write its private `phase-result-v5` JSON at
+`<run-root>/evidence/phases/<phase>.json` and pass that exact file to
+`record-phase --evidence`. Read the installed helper's subcommand help before
+invocation. The recorder owns immutable attempt archives; callers never write
+them. `record-validation` is for canonical acceptance checks; recorded failures
+are immutable. Follow `references/three-tier-live.md` for development evidence.
 
 For explicit `--create-live-test`, `--create-live-test --keep`, or `--resume`, read and follow
 `references/three-tier-process.md` before any live operation. It owns all ten
@@ -348,8 +366,23 @@ marker and have exactly one verifier-owned local bare `origin`. Its private
 receipt binds the project, owner generation, frozen baseline and default branch.
 Creation, evidence recording, resume and cleanup share one validator. Reject
 external or extra remotes, URL overrides, unsafe paths, borrowed objects,
-command-bearing inherited configuration and changed origin refs or push guards. The root, fixture components, and report path must
-be real local directories and files, never symlink redirects.
+repository-local executable configuration, conditional includes and changed
+origin refs or push guards. Every fresh fixture has a private Git configuration
+profile sealed to its generation and origin receipt. The shared validator
+excludes inherited configuration and global/system attributes; only its exact
+owned environment overlay is accepted. Startup, workers, commit admission,
+evidence, resume and cleanup revalidate it without ambient fallback. Launch
+native commands through `scripts/run_with_git_environment.py` with the exact
+owned profile and checkout. It supplies environment only, never SDLC transitions.
+The native launcher removes unrelated inherited variables and parent identities,
+requires the exact private native home, and prevents user shell initialization
+from restoring credentials. Configure the disposable host using the
+[native launch settings](references/three-tier-process.md#native-launch-settings).
+Do not dump environment values or use this launcher for application runtime
+secrets; those belong to the outer lifecycle's protected runtime input.
+A missing or altered profile requires a failed report, not silent recreation.
+The root, fixture components, and report path must be real local directories
+and files, never symlink redirects.
 
 The three-tier lifecycle helper is additionally limited to private lifecycle
 state, sanitized reports, exact label verification, and deletion of recorded
@@ -381,6 +414,12 @@ exclusive runtime lease. The worker acquires and holds it through the full live
 sequence and teardown; the outer verifier consumes it without impersonating or
 releasing worker ownership. A per-resource use lock guards synchronous actions
 against lease release, while short state locks leave heartbeat/status available.
+Every live startup requires owned
+`up --force-recreate --detach --wait web db`; build web separately.
+The helper rejects other startup shapes without rewriting arguments.
+Recreation retains the named database volume; rediscover endpoints and
+inventory afterward. UAT persistence uses the separate owned restart action.
+
 Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
@@ -389,6 +428,18 @@ run validation on uncommitted integration work before coordinator sealing.
 Shipping and UAT always require a clean promoted checkout. After completed promotion,
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Read-only classifier observations have a separate explicit target purpose. While
+the bound root coordinator is running `sdlc-classify-failure`, it may observe
+unsealed integration files without committing them or changing phase. Exact
+worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+This purpose is never used by Compose, runtime inventory, build certification,
+browser acceptance or test execution; explicit clean-target requests still win.
+Worker selectors and dirty promoted checkouts remain rejected.
+
+For final historical TDD validation, follow the exact lineage checks in
+[the live contract](references/three-tier-live.md). Never rewrite old receipts
+or use preserved TDD evidence to admit stale application acceptance.
 
 Before dispatching the first phase, record `sdlc-start` PASS while the coordinator
 checkpoint still names `sdlc-start` and Git remains at the fixture baseline.
@@ -422,8 +473,8 @@ not serve concurrent worker tests.
 - The deterministic capability matrix records objective, execution, fallback,
   outer lease, Implement interop, steering, observability, hook, and
   verifier results, including failure-event/diagnosis/repair-control,
-  corrective-plan, explicit-ref/head publication and explicit-PR, canonical
-  single-action merge authorization.
+  corrective-plan, explicit-ref/head publication, owner-produced qualification,
+  protected admission, review drift and ambiguous merge recovery.
 - The private v3 live manifest records digest-backed semantic assertions for
   all seven live lanes and an explicit evidence row for every required Agentic
   SDLC skill. Profile results also bind exact source schemas to collector-made
@@ -456,12 +507,6 @@ secrets, or screenshot contents.
 For the lightweight no-flag mode, preserve the existing readiness report and
 PASS/PARTIAL/FAIL interpretation.
 
-Return:
-
-- Final readiness status: PASS, PARTIAL, or FAIL.
-- Report path.
-- Top issues found.
-- Recommended fixes.
-- Whether it is safe to try the SDLC workflow on a low-risk real repository.
-- Validation commands run.
-- Live or external tests skipped and why.
+Include the top issues and recommended fixes, validation commands, and skipped
+live or external checks with their reasons. State whether the evidence supports
+trying the workflow on a low-risk real repository.

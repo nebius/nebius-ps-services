@@ -11,8 +11,9 @@ from pathlib import Path
 import sys
 from types import ModuleType
 
-SUPPORT_FILES = ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py")
+SUPPORT_FILES = ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py")
 _SOURCES = {
+    "git_environment": "global-context-management/scripts/git_environment.py",
     "agent_runtime": "global-context-management/scripts/agent_runtime.py",
     "hook_runtime": "global-context-management/scripts/hook_runtime.py",
     "task_state_permissions": "global-context-management/scripts/task_state_permissions.py",
@@ -20,14 +21,18 @@ _SOURCES = {
     "lib": "sdlc-start/assets/hooks/lib/__init__.py",
     "lib.sdlc_state": "sdlc-start/assets/hooks/lib/sdlc_state.py",
     "lib.sdlc_policy": "sdlc-start/assets/hooks/lib/sdlc_policy.py",
+    "merge_gate": "merge-pr/scripts/merge_gate.py",
+    "merge_completion": "merge-pr/scripts/merge_completion.py",
 }
 _GROUPS = {
-    "runtime": ("agent_runtime",),
-    "projector": ("agent_runtime", "hook_runtime"),
+    "git-environment": ("git_environment",),
+    "runtime": ("git_environment", "agent_runtime",),
+    "projector": ("git_environment", "agent_runtime", "hook_runtime"),
     "permissions": ("task_state_permissions",),
-    "context-dependencies": ("agent_runtime", "task_state_permissions"),
-    "global-context": ("agent_runtime", "task_state_permissions", "global_context_state"),
-    "sdlc-hook-state": ("agent_runtime", "lib", "lib.sdlc_state", "lib.sdlc_policy"),
+    "context-dependencies": ("git_environment", "agent_runtime", "task_state_permissions"),
+    "global-context": ("git_environment", "agent_runtime", "task_state_permissions", "global_context_state"),
+    "sdlc-hook-state": ("git_environment", "agent_runtime", "lib", "lib.sdlc_state", "lib.sdlc_policy"),
+    "protected-merge": ("merge_gate", "merge_completion"),
 }
 def _read_source(path):
     raise ImportError("shared support requires its verified bootstrap")

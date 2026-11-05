@@ -28,6 +28,8 @@ verifier = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = verifier
 SPEC.loader.exec_module(verifier)
 
+from git_fixture_environment import isolated_git_configuration  # noqa: E402
+
 
 class VerifierImportTests(unittest.TestCase):
     def test_file_location_import_resolves_siblings_from_unrelated_cwd(self):
@@ -64,6 +66,28 @@ def git(cwd: Path, *arguments: str) -> str:
 
 
 class VerifierContractTests(unittest.TestCase):
+    def test_prompt_routing_check_ignores_only_the_owned_home_prefix(self):
+        for agent in ("codex", "claude"):
+            home = self.root / f"sdlc-test-{agent}"
+            home.mkdir()
+            ctx = replace(self.source_contract_context(), agent=agent, host_home=home, checks=[])
+            command = f"python3 {home}/hooks/hook_runtime.py --agent {agent} --hook user_prompt_submit_global_context.py"
+            cases = ((command, "PASS"),
+                     (command.replace("user_prompt_submit_global_context.py", "route_sdlc.py"), "FAIL"),
+                     (f"python3 {home}/hooks/sdlc_start.py", "FAIL"),
+                     (command + " sdlc-start", "FAIL"),
+                     ("python3 -c 'import sdlc_router'", "FAIL"))
+            for value, expected in cases:
+                with self.subTest(agent=agent, command=value):
+                    settings = home / ("hooks.json" if agent == "codex" else "settings.json")
+                    settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [{"hooks": [{
+                        "type": "command", "command": value,
+                    }]}]}}))
+                    ctx.checks.clear()
+                    verifier.check_hook_config(ctx)
+                    matched = [row.status for row in ctx.checks if row.name == "UserPromptSubmit SDLC routing"]
+                    self.assertEqual(matched, [expected])
+
     def test_native_hook_payload_parity_uses_each_authoritative_source(self) -> None:
         for agent in ("codex", "claude"):
             with self.subTest(agent=agent):
@@ -81,7 +105,7 @@ class VerifierContractTests(unittest.TestCase):
                         "stop_lifecycle_arbiter.py",
                     ),
                     "global-context-management/scripts": (
-                        "agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py",
+                        "agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py",
                     ),
                 }
                 for source, names in payloads.items():
@@ -127,7 +151,7 @@ class VerifierContractTests(unittest.TestCase):
                     source_support.mkdir(parents=True)
                     installed = home / "hooks"
                     shutil.copytree(source_hooks, installed)
-                    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+                    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
                         shutil.copyfile(original.skills_root / "global-context-management/scripts" / name,
                                         source_support / name)
                         shutil.copyfile(source_support / name, installed / name)
@@ -177,7 +201,9 @@ class VerifierContractTests(unittest.TestCase):
         self.assertFalse(verifier.valid_verification_context(replace(self.ctx, agent="claude"), value, current_head=self.head))
 
     def setUp(self) -> None:
+        self.enterContext(isolated_git_configuration())
         self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.verification_root = (self.root / "verification").resolve(strict=False)
         self.project = self.verification_root / "disposable-project"
@@ -188,6 +214,7 @@ class VerifierContractTests(unittest.TestCase):
             self.verification_root / verifier.VERIFICATION_ROOT_MARKER,
             {"schema": verifier.VERIFICATION_ROOT_MARKER_SCHEMA},
         )
+        verifier.owned_git_origin.prepare_configuration(self.project, self.verification_root, "lightweight", kind="lightweight")
         git(self.project, "init", "-q", "-b", "main")
         git(self.project, "config", "user.name", "Verifier Test")
         git(self.project, "config", "user.email", "verifier@example.invalid")
@@ -199,6 +226,7 @@ class VerifierContractTests(unittest.TestCase):
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "initial")
         self.head = git(self.project, "rev-parse", "HEAD")
+        verifier.owned_git_origin.initialize(self.project, self.verification_root, "lightweight")
         self.ctx = verifier.Context(
             skills_root=self.root / "skills",
             repo_root=self.root / "source-repo",
@@ -249,21 +277,90 @@ class VerifierContractTests(unittest.TestCase):
         self.assertEqual(verifier.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
         self.assertEqual(
             verifier.CAPABILITY_SUITE_TIMEOUT_SECONDS,
-            {"worktree": 900, "execution": 900, "three-tier": 900, "task-waves": 900},
+            {"worktree": 900, "execution": 900, "three-tier": 900, "task-waves": 900, "verifier": 600, "hooks": 600},
         )
 
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         with mock.patch.object(verifier, "run", return_value=completed) as runner:
             verifier.check_capability_regressions(self.ctx)
 
-        self.assertEqual(len(runner.call_args_list), 16)
+        self.assertEqual(len(runner.call_args_list), 17)
         for call in runner.call_args_list:
             command = " ".join(str(value) for value in call.args[0])
             if any(name in command for name in ("test-worktree-manager.py", "test_workflow_execution.py", "test_workflow_contracts.py", "test_three_tier", "-s " + str(self.ctx.skills_root / "worktree/scripts"), "-s " + str(self.ctx.skills_root / "sdlc-workflow-test/scripts"))):
                 expected = 900
+            elif any(name in command for name in ("test_verify_agentic_sdlc.py", "test_sdlc_hooks.py")):
+                expected = 600
             else:
                 expected = 120
             self.assertEqual(call.kwargs["timeout"], expected, command)
+
+    def test_merge_denials_alone_cannot_qualify_delivery_capability(self) -> None:
+        hooks = MODULE_PATH.parents[2] / "sdlc-start/assets/hooks/tests/test_sdlc_hooks.py"
+        names = re.findall(r"^    def (test_\w+)\(", hooks.read_text(), re.MULTILINE)
+        completed = subprocess.CompletedProcess(
+            [], 0, stdout="\n".join(name + " ... ok" for name in names), stderr="",
+        )
+        with mock.patch.object(verifier, "run", return_value=completed):
+            verifier.check_capability_regressions(self.ctx)
+        merge = next(c for c in self.ctx.checks if c.capability_id == "merge.authorization")
+        self.assertEqual(merge.status, "FAIL")
+
+    def test_shared_owner_drift_and_missing_installation_fail_parity(self) -> None:
+        owners = {"maintain-project-specs", "merge-pr", "commit", "global-context-management"}
+        self.assertTrue(owners.issubset(verifier.SOURCE_PARITY_SKILLS))
+        for name in verifier.SOURCE_PARITY_SKILLS:
+            for root in (self.ctx.skills_root, self.ctx.global_skills_dir):
+                target = root / name / "SKILL.md"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"{name} current\n")
+        for owner in owners:
+            target = self.ctx.global_skills_dir / owner / "SKILL.md"
+            for contents in ("stale\n", None):
+                with self.subTest(owner=owner, missing=contents is None):
+                    if contents is None:
+                        target.unlink()
+                    else:
+                        target.write_text(contents)
+                    ctx = replace(self.ctx, checks=[])
+                    verifier.check_skill_discovery(ctx)
+                    parity = next(c for c in ctx.checks if c.capability_id == "runtime.skill-parity")
+                    self.assertEqual(parity.status, "FAIL")
+                    self.assertIn(owner, parity.detail)
+                    target.write_text(f"{owner} current\n")
+
+    def test_document_program_tests_are_required_and_cannot_be_skipped(self) -> None:
+        path = MODULE_PATH.parents[2] / "worktree/scripts/test_workflow_program.py"
+        names = re.findall(r"^    def (test_\w+)\(", path.read_text(), re.MULTILINE)
+        all_names = set()
+        for sibling in path.parent.glob("test_*.py"):
+            all_names.update(re.findall(r"^    def (test_\w+)\(", sibling.read_text(), re.MULTILINE))
+        required = {"source.obligations", "program.phase-slices", "program.source-admission",
+                    "program.completion-freshness", "execution.bounded-scale"}
+        for omitted in (None, *names):
+            for skipped in (False, True) if omitted else (False,):
+                with self.subTest(omitted=omitted, skipped=skipped):
+                    output = "\n".join(n + " ... ok" for n in all_names if n != omitted)
+                    if skipped:
+                        output += f"\n{omitted} ... skipped 'unavailable'"
+                    completed = subprocess.CompletedProcess([], 0, stdout=output, stderr="")
+                    ctx = replace(self.ctx, checks=[])
+                    with mock.patch.object(verifier, "run", return_value=completed):
+                        verifier.check_capability_regressions(ctx)
+                    checks = {c.capability_id: c for c in ctx.checks if c.capability_id in required}
+                    self.assertEqual(set(checks), required)
+                    if omitted is None:
+                        self.assertTrue(all(c.status == "PASS" for c in checks.values()))
+                    else:
+                        affected = [c for c in checks.values() if omitted in c.detail]
+                        self.assertTrue(affected)
+                        self.assertTrue(all(c.status != "PASS" for c in affected))
+
+    def test_merge_checklist_uses_protected_delivery_authority(self) -> None:
+        checklist = (MODULE_PATH.parents[1] / "references/verification-checklist.md").read_text()
+        self.assertNotIn("entire canonical single-action", checklist)
+        self.assertIn("producer-admitted qualification", checklist)
+        self.assertIn("ambiguous submission", checklist)
 
     def test_failed_suite_reports_exit_and_test_names_without_raw_output(self) -> None:
         failed = subprocess.CompletedProcess(
@@ -294,6 +391,46 @@ class VerifierContractTests(unittest.TestCase):
         verifier.check_hooks_with_fixtures(ctx)
         self.assertEqual([(check.name, check.detail) for check in ctx.checks if check.status != "PASS"], [])
         self.assertIn("Unbound active run does not infer ownership", [check.name for check in ctx.checks])
+        self.assertIn("Committed features do not invent a UAT route", [check.name for check in ctx.checks])
+        self.assertIn("Continue to coordinator-selected slice UAT", [check.name for check in ctx.checks])
+
+    def test_hook_fixture_seed_isolates_a_distinct_source_catalog(self):
+        source = self.source_contract_context().skills_root
+        copied = self.root / "separate-source"
+        for name in ("worktree", "global-context-management"):
+            shutil.copytree(source / name, copied / name,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        ctx = replace(self.ctx, skills_root=copied)
+        paths = {key: str(value) for key, value in vars(ctx).items() if isinstance(value, Path)}
+        code = (
+            "import importlib.util,json,sys; from pathlib import Path; "
+            "s=importlib.util.spec_from_file_location('probe',sys.argv[1]); "
+            "m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; s.loader.exec_module(m); "
+            "ctx=m.Context(**{k:Path(v) for k,v in json.loads(sys.argv[2]).items()}); "
+            "r=m.setup_fixture_state(ctx); print(json.loads((r/'run.json').read_text())['status'])"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(MODULE_PATH), json.dumps(paths)],
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+            text=True, capture_output=True, timeout=40, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "running")
+        self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.head)
+        self.assertEqual(git(self.project, "status", "--porcelain"), "")
+
+    def test_failed_hook_fixture_seed_becomes_sanitized_report_failure(self):
+        ctx = self.source_contract_context()
+        failed = subprocess.CompletedProcess([], 127, stdout="", stderr="private diagnostic")
+        with mock.patch.object(verifier, "run", return_value=failed):
+            verifier.check_hooks_with_fixtures(ctx)
+        failures = [row for row in ctx.checks if row.status == "FAIL"]
+        self.assertEqual(len(failures), 2)
+        self.assertTrue(all("exit 127" in row.detail for row in failures))
+        report = self.verification_root / "report.md"
+        verifier.write_report(ctx, report)
+        self.assertIn("Hook fixture setup", report.read_text())
+        self.assertNotIn("private diagnostic", report.read_text())
 
     def test_execution_contract_accepts_current_canonical_sources(self) -> None:
         ctx = self.source_contract_context()
@@ -335,7 +472,7 @@ class VerifierContractTests(unittest.TestCase):
         cases = (
             ("troubleshoot/SKILL.md", "references/workflow-handoffs.md"),
             ("troubleshoot/references/workflow-handoffs.md", "Do not commit product fixes"),
-            ("troubleshoot/references/workflow-handoffs.md", "Return one `diagnosis-v1` to `sdlc-classify-failure`"),
+            ("troubleshoot/references/workflow-handoffs.md", "Return one `diagnosis-v3` to `sdlc-classify-failure`"),
         )
         read_text = verifier.read_text
         for relative, term in cases:
@@ -693,7 +830,7 @@ class VerifierContractTests(unittest.TestCase):
         )
         wrapper = self.verification_root / "evidence/profiles/lightweight/result.json"
         value = json.loads(wrapper.read_text())
-        value.update(source_schema="workflow/accepted-objective-v1",
+        value.update(source_schema="workflow/accepted-objective-v2",
                      source_identity=json.loads(source.read_text())["run_id"], source_artifacts=[ref])
         verifier.write_private_json(wrapper, value)
         self.assertIsNotNone(verifier.load_live_results(self.ctx))
@@ -1383,7 +1520,7 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_committed_normalized_objective_is_private_workflow_state(self) -> None:
         private = self.selected / "objective.json"
-        private.write_text('{"schema": "workflow/accepted-objective-v1"}\n', encoding="utf-8")
+        private.write_text('{"schema": "workflow/accepted-objective-v2"}\n', encoding="utf-8")
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "invalid private objective")
         self.write_manifest(final_head=git(self.project, "rev-parse", "HEAD"))
@@ -1530,6 +1667,10 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_flat_fixture_is_rejected_without_conversion(self) -> None:
         shutil.rmtree(self.project)
+        # An obsolete flat fixture predates the owned origin and profile.
+        shutil.rmtree(self.verification_root / "origin.git")
+        shutil.rmtree(self.verification_root / verifier.owned_git_origin.git_profile.DIRECTORY)
+        (self.verification_root / verifier.owned_git_origin.git_profile.ORIGIN_RECEIPT).unlink()
         self.project.mkdir(parents=True)
         old_files = {
             "README.md": "# Disposable SDLC Verification Project\n",
@@ -1567,7 +1708,7 @@ class VerifierContractTests(unittest.TestCase):
             result = verifier.main(["--verification-root", str(self.verification_root)])
         self.assertEqual(result, 1)
         report = (self.verification_root / "report.md").read_text()
-        self.assertIn("not a canonical verifier-owned fixture", report)
+        self.assertIn("Existing fixture has no owned Git profile", report)
         for section in ("PreToolUse safety test results", "Stop continuation test results"):
             self.assertIn("Hook fixture prerequisite", report.split("## " + section + "\n", 1)[1].split("\n## ", 1)[0])
         self.assertFalse((self.verification_root / "hook-fixture-agent-home").exists())

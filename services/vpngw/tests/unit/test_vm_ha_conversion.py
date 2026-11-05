@@ -17,7 +17,7 @@ from typer.testing import CliRunner
 
 from nebius_vpngw.cli import (
     _apply_nebius_region_precedence,
-    _conditional_publish_text,
+    _atomic_write_text,
     _file_fingerprint,
     _load_config_with_region_override,
     _ordinary_vm_ha_conversion_trust_prerequisite,
@@ -671,7 +671,7 @@ def test_conditional_publication_does_not_overwrite_a_racing_destination(
         patch("nebius_vpngw.cli.os.rename", side_effect=replace_before_quarantine),
         pytest.raises(OSError, match="changed file was restored"),
     ):
-        _conditional_publish_text(
+        _atomic_write_text(
             destination,
             "wizard-candidate\n",
             expected_fingerprint=expected,
@@ -698,7 +698,7 @@ def test_conditional_publication_never_trusts_preexisting_recovery_state(
         staging.symlink_to(attacker, target_is_directory=True)
 
     with pytest.raises(OSError, match="recovery|interrupted"):
-        _conditional_publish_text(
+        _atomic_write_text(
             destination,
             "wizard-candidate\n",
             expected_fingerprint=None,

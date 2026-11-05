@@ -30,6 +30,7 @@ from nebius_vpngw.deploy.route_manager import (
 def _plan(*, vm_ha: bool) -> ResolvedDeploymentPlan:
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="gateway",
             instance_count=1,
             region="region-a",
@@ -80,6 +81,7 @@ def test_applicability_registry_covers_every_executable_leaf_and_action_mode() -
         "validate-config",
         "apply",
         "status",
+        "access add-operator",
         "vm-ha --rotate-mtls",
         "add-routes-local",
         "list-routes-local",
@@ -116,6 +118,7 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         "validate-config",
         "apply",
         "status",
+        "access add-operator",
         "list-routes-local",
         "list-routes-remote",
         "create-from-peer-config",
@@ -133,7 +136,7 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         command in all_topologies
         or (command in ordinary_only and not vm_ha)
         or (command in vm_ha_only and vm_ha)
-        or (command in ordinary_bgp_only and not vm_ha and mode == "bgp")
+        or (command in ordinary_bgp_only and (vm_ha or mode == "bgp"))
         or command == "add-routes-local"
     )
 
@@ -156,10 +159,10 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         ("destroy", True, "bgp", True),
         ("failover tunnel", False, "bgp", True),
         ("failover tunnel", False, "static", False),
-        ("failover tunnel", True, "bgp", False),
+        ("failover tunnel", True, "bgp", True),
         ("failback tunnel", False, "bgp", True),
         ("failback tunnel", False, "static", False),
-        ("failback tunnel", True, "bgp", False),
+        ("failback tunnel", True, "bgp", True),
         ("failover vm", False, "bgp", False),
         ("failover vm", True, "static", True),
         ("failback vm", False, "static", False),
@@ -552,48 +555,6 @@ def test_add_routes_failure_exits_nonzero_without_false_completion(
     assert "Local route management completed" not in result.output
 
 
-@pytest.mark.parametrize(
-    ("argv", "expected_message"),
-    (
-        (
-            ("failover", "tunnel", "tunnel-a"),
-            "not supported for a VM-HA-enabled gateway",
-        ),
-        (
-            ("failback", "tunnel", "tunnel-a"),
-            "not supported for a VM-HA-enabled gateway",
-        ),
-    ),
-)
-def test_vm_ha_ordinary_only_commands_fail_before_external_effects(
-    argv: tuple[str, ...],
-    expected_message: str,
-    tmp_path,
-    monkeypatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\n", encoding="utf-8")
-    config = _config("bgp")
-    plan = _plan(vm_ha=True)
-
-    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _path: config)
-    monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_args: plan)
-
-    def unexpected_effect(*_args, **_kwargs):
-        raise AssertionError("external effect occurred before applicability rejection")
-
-    monkeypatch.setattr("nebius_vpngw.cli._ensure_authentication", unexpected_effect)
-    monkeypatch.setattr("subprocess.run", unexpected_effect)
-
-    result = CliRunner().invoke(
-        app,
-        [*argv, "--local-config-file", str(config_path)],
-    )
-
-    assert result.exit_code != 0
-    assert expected_message in " ".join(result.output.split())
-
-
 @pytest.mark.parametrize("mode", ("static", "bgp"))
 @pytest.mark.parametrize("tunnel_name", ("all", "tunnel-a"))
 def test_vm_ha_tunnel_restart_reports_clean_guidance_before_external_effects(
@@ -682,7 +643,7 @@ def test_static_tunnel_failover_commands_fail_before_ssh(
         (("failback", "tunnel", "tunnel-a"), "failback"),
     ),
 )
-def test_vm_ha_tunnel_transfer_reports_clean_guidance_before_external_effects(
+def test_vm_ha_tunnel_transfer_dispatches_controller_before_ordinary_effects(
     mode: str,
     argv: tuple[str, ...],
     action: str,
@@ -697,24 +658,29 @@ def test_vm_ha_tunnel_transfer_reports_clean_guidance_before_external_effects(
     monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _path: config)
     monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_args: plan)
 
+    monkeypatch.setattr("nebius_vpngw.cli._require_idle_gateway_bindings", lambda *_args: None)
+
     def unexpected_effect(*_args, **_kwargs):
         raise AssertionError("external effect occurred before applicability rejection")
 
     monkeypatch.setattr("nebius_vpngw.cli._ensure_authentication", unexpected_effect)
     monkeypatch.setattr("subprocess.run", unexpected_effect)
 
+    requests = []
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._ha_tunnel_command",
+        lambda path, verb, target: requests.append((path, verb, target)),
+    )
+
     result = CliRunner().invoke(
         app,
         [*argv, "--local-config-file", str(config_path)],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
+    assert requests == [(config_path, action, argv[2] if len(argv) > 2 else None)]
     assert result.stdout == ""
-    assert result.stderr == (
-        f"Tunnel {action} is not supported for a VM-HA-enabled gateway. "
-        f"Use 'nebius-vpngw {action} vm --local-config-file <file>' only to transfer "
-        "VM ownership; it does not select a tunnel.\n"
-    )
+    assert result.stderr == ""
 
 
 @pytest.mark.parametrize(
@@ -756,6 +722,13 @@ def test_vm_ha_only_commands_use_central_policy_before_external_effects(
 
 def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
     expected = {
+        ("access", "add-operator"): (
+            ("name",),
+            ("--local-config-file", "-c"),
+            ("--generate-ssh-key",),
+            ("--key-output",),
+            ("--public-key",),
+        ),
         ("create-config",): (
             ("config_file",),
             ("--force", "-f"),
@@ -788,6 +761,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--region",),
             ("--dry-run",),
             ("--approve-disruption",),
+            ("--resume-replacement",),
             ("--prepare-vm-ha-peer-rotation",),
             ("--approve-vm-ha-migration",),
             ("--recover-vm-ha-migration",),

@@ -6,6 +6,16 @@ owns context/continuity; `maintain-project-specs` owns requirements/design
 interpretation and canonical publication. Global eligible root-user intent
 maintenance is independent of workflow entry. Workers report spec gaps to the root.
 
+Prepared execution can admit a proven active-task design correction through
+private `prepare-design-revision` and `seal-design-revision`. The existing
+classifier and counted dispatch supply authority; exact native terminations,
+released leases and immutable retained-wave proof precede paired publication.
+The semantic owner retains publication authority, while Worktree commits only
+the validated pair with exact parent/tree crash recovery. Pending revisions
+block new dispatch/replanning. Fresh impact and appended tasks replace the old
+basis without rewriting failed work, original TDD or started task definitions.
+See [the private recovery sequence](../../sdlc-prepare-execution/references/execution-plane.md).
+
 ## Accepted objectives and bindings
 
 Canonical public entry is `$implement [request]` or `$sdlc-start [objective]`.
@@ -24,8 +34,8 @@ The normalized objective has exactly outcome (text), scope, constraints,
 acceptance_criteria, clarifications (lists of text), and provenance (kind
 `direct_request`, `current_plan` or `steering`, plus `source_sha256`). No raw turns
 or prompt-history archive is retained. Objective snapshots are immutable
-`objectives/rNNNN.json`; `workflow/accepted-objective-v1` selects adjacent revisions
-with content/semantic digests and parent ancestry. `workflow/run-v1` owns the run.
+`objectives/rNNNN.json`; `workflow/accepted-objective-v2` selects adjacent revisions
+with content/semantic digests and parent ancestry. `workflow/run-v2` owns the run.
 
 State lives under `<agent-home>/implement/` or `<agent-home>/sdlc-runs/`, outside Git.
 `bindings/<native-session-sha256>.json` uses `workflow/session-binding-v1` and names
@@ -88,6 +98,20 @@ content is never copied. Preserve unrelated files and the original checkout.
 
 ## Scheduling and native worker ownership
 
+The shared execution and native dispatch owners use `workflow_liveness.py` for
+the canonical 300-second startup window and 3600-second per-attempt wall-clock
+limit. Startup runs from arming to successful `task-start`; the work clock begins
+at that successful start. Builds, external runtime
+waits, tests, review and reporting all count. `WORKER_DEADLINE_NEAR` warns during
+the final 300 seconds only while the worker remains active; it never extends
+time or overrides scope, stall or other terminal guards. Target 30-second direct
+heartbeats and retain the enforced 240-second stale-heartbeat limit. Report actual
+cadence gaps honestly; use work/wait boundaries and short yielding tool waits
+where supported. An ACTIVE observation does not certify the target cadence.
+Obsolete assignment limits
+are rejected without conversion. Install policy changes only after quiescence
+and create fresh assignments; recovery cannot be used merely to renew a clock.
+
 `workflow_transition.py prepare` uses one run integration checkout for Implement
 and SDLC's single active feature integration checkout. Workers receive fresh task
 worktrees. The deterministic ready queue operates inside each frozen dependency
@@ -95,13 +119,117 @@ wave. Capacity is at most four, capped by native host observation, configured
 limits and available independent tasks. Without an established native capacity,
 use one isolated worker and report serial execution.
 
-`wave-prepare` allocates free slots. `task-arm`, native `task-start`, heartbeat and
-watch establish real task ownership. Use `workflow_dispatch.py` for the sequential
-native CLI fallback. Workers return structured evidence and spec gaps; they do not
-create arbitrary commits. After observed native termination, the coordinator uses
-`task-finish --termination` to create one journaled direct-child commit, validates
-it with `task-admit`, then calls `wave-refill`. A result file, Git worktree lock or
-an agent's own “done” statement does not prove writer quiescence.
+`wave-prepare` allocates free slots. `task-arm` returns a canonical `launch`
+envelope from `workflow_worker_contract.py`: assignment/basis, exact cwd,
+fresh assignment-only context, prompt, heartbeat phases, liveness limits, raw
+runtime-resource command arguments and output-schema path/digest. Both native
+parallel adapters and the sequential `workflow_dispatch.py` consume this owner.
+Prepare the bounded handoff and verify native capacity before arming. After
+arming, spawn immediately; defer serializing launch observations and other
+inspection until after dispatch. Repeating `task-arm` never resets its clock.
+Configure the native host for a fresh context; a prompt saying “fresh” does not
+establish it. Adapters launch, monitor, interrupt and observe native termination;
+they do not recreate prompts, result policy or scheduling. Native `task-start`,
+heartbeat and watch establish task ownership.
+
+Both coordinators use the shared stop-before-repair worker boundary. An
+unexpected failed check or blocking review finding returns preserved evidence
+and a blocked result before any repair or rerun. Only negative outcomes declared
+in immutable assignment validation before execution are expected feedback.
+Required safe teardown and lease release remain allowed. The owning coordinator
+classifies and authorizes recovery or replanning; workers cannot relabel failures
+or erase them with a later successful check.
+
+Before actions with known access prerequisites, both worker envelopes direct
+agents to supported tools and native approval mechanisms. An approval request
+does not grant access, a denial remains a policy/authority stop, and an
+unexpected executed failure still requires the blocked handoff. Recovery uses
+the existing shared engine with a stopped predecessor, released runtime,
+unchanged assignment and fresh identity; it never grants permission itself.
+
+Workers return complete structured evidence and spec gaps without committing.
+After independently observing native termination, the coordinator stores that
+observation and the complete result in bounded owner-private JSON files. Invoke
+`task-result --result <payload> --termination <observation>` with the exact
+run/execution/wave/task. The shared owner validates every field, identity, basis
+and attempt before writing an immutable `workflow/worker-result-receipt-v1`.
+Its response supplies `receipt_path`, `receipt_sha256` and `worker_status`.
+Only an implemented receipt may enter `task-finish --receipt <receipt_path>
+--termination <observation> --message <message>`; projected summary/validation/
+review flags are unsupported. Finish derives those fields from the receipt and
+binds its digest into the exact commit intent and `workflow/worker-result-v3`.
+Then use `task-admit` and `wave-refill`. A result file, Git worktree lock or an
+agent's own “done” statement does not prove writer quiescence or test success.
+
+Receipts are immutable per task attempt. Exact ingestion replays work after
+finish; changed replays conflict. Current operations authorize the current
+coordinator while historical receipts retain their original issuer and evidence.
+Before prepare/refill, arm and first start, current blocked or replan receipts
+stop new dispatch. Running peers may heartbeat, replay start, finish and admit;
+the full-wave integration barrier remains. Recovery and replanning stay with
+their existing owners. Completed and specification-gap results cannot renew a
+worker attempt through recovery.
+
+Authorized recovery returns a launch envelope from the same builder. If a host
+allocates native identity only when creating an agent, first create a fresh idle
+agent that performs no task work, obtain its identity, authorize recovery after
+observing the prior worker's termination, and send the returned envelope. It
+contains the exact recovery command and expected attempt. Recovery authorizations
+are immutable per task, attempt and issuing coordinator; a successor needs its
+own authorization and fresh termination observation. Preserve prior receipts
+and reject an obsolete issuer's authorization without overwriting it.
+
+All native adapters consume the existing `task-arm` or `authorize-recovery` CLI
+admission, which validates the selected home, owner-root layout, current
+coordinator binding, project context/manifest and canonical assignment before
+native launch. Existing arm/recovery checks still enforce basis, worktree and
+attempt identity. Do not substitute a pure internal launch-builder result for
+this admission. The `worker-launch-v2` envelope declares `support_write_roots`:
+the registered project-state directory, plus the selected home's
+`workflow-resources` directory for runtime tasks or recovery. Recovery needs
+the lease-store lock even without a runtime conflict domain.
+
+The coordinator prepares missing lease storage after owner checks, under the
+existing project lock. Both sequential host adapters use documented `--add-dir`
+directories; no native config, approval, sandbox or launch-mode override is
+introduced. Complete admission before spawning. Native parallel adapters must
+honor the same admitted roots or report unavailable capability.
+The directory grants include sibling runs and active pointers within one
+project and other leases in the shared resource store. Helper ownership,
+assignment and resource checks enforce finer authority; unrelated edits remain
+forbidden. Keep the project lock and its ordering unchanged. Atomic lease
+replacement requires directory access, not only access to the final JSON file.
+See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+The worker result schema uses the native provider's supported output subset.
+Local validation remains authoritative: implemented and blocked results require
+no spec gaps, replan results require at least one, and each requirement/design ID list must be
+typed and unique. Unsupported conditional and uniqueness schema keywords are
+not sent to the provider. A failed native process preserves its nonzero exit;
+known schema rejection produces a fixed diagnostic without reflecting stderr.
+
+Workers return `implemented` only after assigned work, validation and review
+complete. A non-specification failure that leaves work or validation incomplete
+returns `blocked`, with honest evidence and no invented specification gap. After
+validating every result field, the sequential dispatcher stops later assignments
+and returns exit 2, `WORKER_BLOCKED`, and the validated `worker_result` in its error
+response. This evidence never enters the normal success result list. The
+coordinator observes termination and owns diagnosis and authorized routing;
+blocked work must not enter `task-finish`, admission or integration. The result
+does not authorize an automatic retry or change existing budgets.
+The sequential adapter similarly stops on `replan_required`, returning
+`WORKER_REPLAN_REQUIRED` with validated evidence. Both native paths still ingest
+the full result through `task-result`; neither adapter can bypass the receipt.
+
+Before `task-start`, a zero-exit worker with exact `PENDING_START` state may
+preserve validated blocked/replan output as diagnostic-only `prestart_result`.
+The dispatcher still returns `WORKER_FAILED` and stops later tasks. Both input
+and canonical result are capped at 64 KiB; identity, schema and sensitive-content
+guards apply. Invalid, oversized or implemented output returns a fixed reason
+without a payload. Terminal liveness and nonzero-exit failures take precedence.
+This field is never `worker_result` and grants no receipt, completion, recovery
+or replanning authority; the coordinator diagnoses the observed failure.
 
 Coordinator-owned immutable termination observations use
 `workflow/worker-termination-v1`: assignment digest, worker session hash, observer
@@ -161,3 +289,9 @@ never authorizes a push, PR, merge or publication.
 Report deterministic tests, installed hooks, fresh native-agent execution and live
 application evidence separately. Unavailable runtime checks remain NOT_RUN/PARTIAL;
 fixture intervention cannot establish a workflow pass.
+
+## Document programs
+
+Use [document delivery](document-delivery.md) for portable source coverage,
+phase barriers, slice identity, bounded retention and conditional protected merge.
+The same execution primitives serve ordinary singleton Implement and SDLC slices.

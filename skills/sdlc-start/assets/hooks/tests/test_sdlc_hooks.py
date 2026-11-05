@@ -120,7 +120,7 @@ class HookTestCase(unittest.TestCase):
                 "project_id": "test-project",
                 "run_id": "run-1",
                 "status": status,
-                "current_feature": "FEAT-001",
+                "current_execution": "FEAT-001",
                 "current_phase": phase,
                 "next_recommended_skill": next_skill,
                 "retry_counts": {phase: 0},
@@ -152,11 +152,13 @@ class HookTestCase(unittest.TestCase):
         blocker_key = "component|operation|error-class|source-boundary"
         classification_record = (
             {
-                "schema": "agentic-sdlc/failure-classification-v1",
-                "feature_id": "FEAT-001",
+                "schema": "agentic-sdlc/failure-classification-v2",
+                "execution_id": "FEAT-001",
                 "event_id": event_id,
                 "blocker_key": blocker_key,
                 "next_recommended_skill": classification_route,
+                "invalidates": [],
+                "inherited_invalidations": [],
             }
             if classification_route
             else None
@@ -178,8 +180,8 @@ class HookTestCase(unittest.TestCase):
         write_json(
             event_path,
             {
-                "schema": "agentic-sdlc/failure-event-v1",
-                "feature_id": "FEAT-001",
+                "schema": "agentic-sdlc/failure-event-v2",
+                "execution_id": "FEAT-001",
                 "event_id": event_id,
                 "blocker_key": blocker_key,
             },
@@ -187,8 +189,8 @@ class HookTestCase(unittest.TestCase):
         write_json(
             control_path,
             {
-                "schema": "agentic-sdlc/repair-control-v1",
-                "feature_id": "FEAT-001",
+                "schema": "agentic-sdlc/repair-control-v2",
+                "execution_id": "FEAT-001",
                 "current_event_id": event_id,
                 "current_diagnosis_id": diagnosis_id,
                 "current_classification_id": classification_id,
@@ -225,8 +227,8 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 diagnosis_path,
                 {
-                    "schema": "agentic-sdlc/diagnosis-v1",
-                    "feature_id": "FEAT-001",
+                    "schema": "agentic-sdlc/diagnosis-v3",
+                    "execution_id": "FEAT-001",
                     "event_id": event_id,
                     "diagnosis_id": diagnosis_id,
                     "blocker_key": blocker_key,
@@ -271,6 +273,7 @@ class HookTestCase(unittest.TestCase):
         run_dir: Path,
         *,
         complete: bool,
+        inherited: list[dict[str, str]] | None = None,
     ) -> None:
         control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         control = json.loads(control_path.read_text(encoding="utf-8"))
@@ -278,11 +281,12 @@ class HookTestCase(unittest.TestCase):
         surface = "commit" if complete else "validation"
         owner_skill = "sdlc-commit" if complete else "sdlc-validate-codes"
         classification = {
-            "schema": "agentic-sdlc/failure-classification-v1",
-            "feature_id": "FEAT-001",
+            "schema": "agentic-sdlc/failure-classification-v2",
+            "execution_id": "FEAT-001",
             "event_id": control["current_event_id"],
             "blocker_key": blocker_key,
             "invalidates": [surface],
+            "inherited_invalidations": inherited or [],
         }
         classification_id = hashlib.sha256(
             json.dumps(
@@ -308,7 +312,7 @@ class HookTestCase(unittest.TestCase):
             }
         ]
         cursor_projection = {
-            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "schema": "agentic-sdlc/revalidation-cursor-v2",
             "classification_id": classification_id,
             "repair_dispatch_id": "dispatch-1",
             "required": required,
@@ -336,8 +340,8 @@ class HookTestCase(unittest.TestCase):
             git(self.project, "worktree", "add", str(integration), branch_name)
             integration_head = git(integration, "rev-parse", "HEAD")
             gate = {
-                "schema": "agentic-sdlc/gate-evidence-v1",
-                "feature_id": "FEAT-001",
+                "schema": "agentic-sdlc/gate-evidence-v2",
+                "execution_id": "FEAT-001",
                 "surface": surface,
                 "owner_skill": owner_skill,
                 "status": "passed",
@@ -355,7 +359,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "workflow/execution-coordinator-v1",
+                    "schema": "workflow/execution-coordinator-v2",
                 "owner": "agentic-sdlc",
                     "status": "done",
                     "base_branch": "main",
@@ -369,8 +373,8 @@ class HookTestCase(unittest.TestCase):
                 },
             )
             evidence = {
-                "schema": "agentic-sdlc/revalidation-evidence-v1",
-                "feature_id": "FEAT-001",
+                "schema": "agentic-sdlc/revalidation-evidence-v2",
+                "execution_id": "FEAT-001",
                 "event_id": control["current_event_id"],
                 "classification_id": classification_id,
                 "repair_dispatch_id": "dispatch-1",
@@ -419,7 +423,7 @@ class HookTestCase(unittest.TestCase):
             }
         ]
         control["revalidation"] = {
-            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "schema": "agentic-sdlc/revalidation-cursor-v2",
             "classification_id": classification_id,
             "repair_dispatch_id": "dispatch-1",
             "cursor_id": cursor_id,
@@ -451,9 +455,9 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "workflow/execution-coordinator-v1",
+                "schema": "workflow/execution-coordinator-v2",
                 "owner": "agentic-sdlc",
-                "feature_id": "FEAT-001",
+                "execution_id": "FEAT-001",
                 "project_root": str(self.project),
                 "git_common_dir": str(common),
                 "integration_worktree": str(integration),
@@ -504,8 +508,8 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "workflow/worker-assignment-v1",
-                "feature_id": "FEAT-001",
+                "schema": "workflow/worker-assignment-v2",
+                "execution_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",
                 "worktree": str(worker),
@@ -699,6 +703,39 @@ class HookTestCase(unittest.TestCase):
                         self.assert_denied(result, "secret")
                     else:
                         self.assertEqual(result, {})
+
+    def test_dynamic_csrf_lookup_is_allowed_through_each_write_tool(self) -> None:
+        self.active_run()
+        source = "const token = form.querySelector('[name=csrfmiddlewaretoken]').value;"
+        for tool in ("Bash", "apply_patch", "Write", "Edit"):
+            with self.subTest(tool=tool):
+                if tool == "Bash":
+                    text = "cat > src/board.html <<'HTML'\n" + source + "\nHTML"
+                else:
+                    text = "*** Begin Patch\n*** Add File: src/board.html\n+" + source + "\n*** End Patch\n"
+                payload = self.pre_payload(tool, text)
+                if tool in {"Write", "Edit"}:
+                    field = "content" if tool == "Write" else "new_string"
+                    payload["tool_input"] = {"file_path": str(self.project / "src/board.html"), field: source}
+                self.assertEqual(run_hook(PRE_TOOL, payload, self.codex_home), {})
+
+    def test_dynamic_lookup_does_not_mask_literals_or_ambiguous_payloads(self) -> None:
+        self.active_run()
+        literal = "z" * 24
+        for source in (
+            'token = "form.querySelector[csrfmiddlewaretoken]"',
+            "token = form.querySelector(",
+            "token = form.querySelector('csrf').value; token = " + literal,
+            "token = form.querySelector('csrf').value;\nsecret = " + literal,
+            "token = " + literal + " # placeholder",
+            "token = form.querySelector('csrf').value; GITHUB_TOKEN=" + literal,
+            "token = form.querySelector('csrf').value; -----BEGIN PRIVATE KEY-----",
+            "token = " + "form." * 1000 + "get('csrf');",
+        ):
+            with self.subTest(source=source[:80]):
+                payload = self.pre_payload("Write", "")
+                payload["tool_input"] = {"file_path": str(self.project / "src/board.html"), "content": source}
+                self.assert_denied(run_hook(PRE_TOOL, payload, self.codex_home), "secret")
 
     def test_internal_skill_requires_active_coordinator_context(self) -> None:
         payload = self.pre_payload("Skill", "")
@@ -1535,7 +1572,7 @@ class HookTestCase(unittest.TestCase):
         head = git(self.project, "rev-parse", "HEAD")
         command = f"gh pr merge 42 --squash --match-head-commit {head}"
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "merge authorization")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_wrapped_or_prepended_gh_pr_merge(self) -> None:
         self.switch_feature()
@@ -1554,7 +1591,7 @@ class HookTestCase(unittest.TestCase):
                     self.pre_payload("Bash", command),
                     self.codex_home,
                 )
-                self.assert_denied(result, "without a wrapper or prepended command")
+                self.assert_denied(result, "protected delivery adapter")
 
     def test_pretool_denies_nested_shell_gh_pr_merge(self) -> None:
         self.switch_feature()
@@ -1572,7 +1609,7 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assertEqual(result, {})
 
-    def test_pretool_allows_exact_authorized_gh_pr_merge(self) -> None:
+    def test_pretool_denies_label_authorized_gh_pr_merge(self) -> None:
         self.switch_feature()
         run_dir = self.active_run()
         head = git(self.project, "rev-parse", "HEAD")
@@ -1590,7 +1627,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assertEqual(result, {})
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_when_remote_default_head_advanced(self) -> None:
         self.switch_feature()
@@ -1611,9 +1648,9 @@ class HookTestCase(unittest.TestCase):
             base_head="0" * 40,
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "base HEAD")
+        self.assert_denied(result, "delivery")
 
-    def test_pretool_allows_exact_authorized_merge_queue_command(self) -> None:
+    def test_pretool_denies_label_authorized_merge_queue_command(self) -> None:
         self.switch_feature()
         run_dir = self.active_run()
         head = git(self.project, "rev-parse", "HEAD")
@@ -1631,9 +1668,9 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assertEqual(result, {})
+        self.assert_denied(result, "delivery")
 
-    def test_pretool_allows_exact_authorized_pr_url_merge(self) -> None:
+    def test_pretool_denies_label_authorized_pr_url_merge(self) -> None:
         self.switch_feature()
         run_dir = self.active_run()
         head = git(self.project, "rev-parse", "HEAD")
@@ -1652,7 +1689,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assertEqual(result, {})
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_without_exact_head_guard(self) -> None:
         self.switch_feature()
@@ -1672,7 +1709,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "match the authorized current HEAD")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_command_outside_exact_authorization(self) -> None:
         self.switch_feature()
@@ -1695,7 +1732,7 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", attempted), self.codex_home
         )
-        self.assert_denied(result, "exact_command")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_without_explicit_pr_target(self) -> None:
         self.switch_feature()
@@ -1715,7 +1752,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "explicit PR number or URL")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_admin_bypass(self) -> None:
         self.switch_feature()
@@ -1735,7 +1772,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "unsupported strategy or flag")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_branch_deletion(self) -> None:
         self.switch_feature()
@@ -1755,7 +1792,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "canonical single-action form")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_compound_merge_command(self) -> None:
         self.switch_feature()
@@ -1775,7 +1812,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "one direct shell action")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_pr_scope_mismatch(self) -> None:
         self.switch_feature()
@@ -1795,7 +1832,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "PR does not match")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_merge_without_passing_readiness(self) -> None:
         self.switch_feature()
@@ -1815,7 +1852,7 @@ class HookTestCase(unittest.TestCase):
             uat_status="passed",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
-        self.assert_denied(result, "checks status")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_github_merge_mcp_in_active_sdlc(self) -> None:
         self.switch_feature()
@@ -1828,7 +1865,7 @@ class HookTestCase(unittest.TestCase):
             ),
             self.codex_home,
         )
-        self.assert_denied(result, "must use the exact authorized gh pr merge")
+        self.assert_denied(result, "delivery")
 
     def test_pretool_denies_force_push(self) -> None:
         self.switch_feature()
@@ -1839,6 +1876,25 @@ class HookTestCase(unittest.TestCase):
             self.codex_home,
         )
         self.assert_denied(result, "force push")
+
+    def test_protected_delivery_rejects_raw_dispatch_approval_and_api_aliases(self):
+        self.switch_feature()
+        self.active_run()
+        for command in (
+            "gh workflow run skills-merge-pr.yml", "command gh workflow run skills-merge-pr.yml",
+            "gh --repo owner/repo workflow run skills-merge-pr.yml", "gh pr review 42 -a",
+            "gh api repos/owner/repo/actions/workflows/merge.yml/dispatches -f ref=main",
+            "gh api graphql -f 'query=mutation { addPullRequestReview(input: {event: APPROVE}) { id } }'",
+            "gh api repos/owner/repo/pulls/42/merge-async --method PUT",
+        ):
+            with self.subTest(command=command):
+                self.assert_denied(run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home), "delivery adapter")
+        for name, payload in (
+            ("mcp__github__workflow_dispatch", {"workflow": "merge.yml"}),
+            ("mcp__github__pull_request_review_write", {"event": "APPROVE"}),
+        ):
+            self.assert_denied(run_hook(PRE_TOOL, self.pre_payload(name, tool_input=payload), self.codex_home), "delivery adapter")
+        self.assertEqual(run_hook(PRE_TOOL, self.pre_payload("Bash", "gh api repos/owner/repo/contents/.github/merge-policy.json"), self.codex_home), {})
 
     def test_pretool_denies_dangerous_rm(self) -> None:
         self.active_run()
@@ -1985,6 +2041,29 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result.get("decision"), "block")
         self.assertIn("sdlc-classify-failure", result.get("reason", ""))
 
+    def test_stop_rejects_retired_active_diagnosis_schema(self) -> None:
+        for status, next_skill in (
+            ("diagnosed", "sdlc-classify-failure"),
+            ("routed", "sdlc-create-plan"),
+        ):
+            with self.subTest(status=status):
+                run_dir = self.active_run(next_skill=next_skill)
+                self.write_repair_state(
+                    run_dir, status=status, next_skill=next_skill, with_diagnosis=True,
+                    classification_route=next_skill if status == "routed" else None,
+                )
+                current = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertEqual(current.get("decision"), "block")
+                self.assertIn(next_skill, current.get("reason", ""))
+                state = json.loads((run_dir / "current-state.json").read_text())
+                path = run_dir / state["repair"]["diagnosis"]
+                diagnosis = json.loads(path.read_text())
+                diagnosis["schema"] = "agentic-sdlc/diagnosis-v2"
+                write_json(path, diagnosis)
+                result = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertFalse(result.get("continue", True))
+                self.assertIn("diagnosis identity is inconsistent", result["stopReason"])
+
     def test_stop_enforces_repair_budget_status(self) -> None:
         run_dir = self.active_run(next_skill="sdlc-classify-failure")
         self.write_repair_state(
@@ -2018,6 +2097,85 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result.get("decision"), "block")
         self.assertIn("sdlc-implement-plan", result.get("reason", ""))
 
+    def test_final_dispatch_can_revalidate_but_cannot_exceed_ceiling(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-validate-codes")
+        self.write_repair_state(
+            run_dir, status="revalidation_required", next_skill="sdlc-validate-codes",
+        )
+        self.write_revalidation_cursor(run_dir, complete=False)
+        path = run_dir / "repairs/FEAT-001/repair-control.json"
+        control = json.loads(path.read_text())
+        control["feature_dispatches"] = control["feature_dispatch_limit"]
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-validate-codes", result.get("reason", ""))
+        control["feature_dispatches"] += 1
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("dispatch ceiling", result["stopReason"])
+
+    def test_stop_verifies_inherited_obligations_against_original_classification(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-validate-codes")
+        self.write_repair_state(
+            run_dir, status="revalidation_required", next_skill="sdlc-validate-codes",
+        )
+        source = {
+            "schema": "agentic-sdlc/failure-classification-v2",
+            "execution_id": "FEAT-001", "event_id": "c" * 64,
+            "blocker_key": "prior|implementation|failure|boundary",
+            "invalidates": ["validation"], "inherited_invalidations": [],
+        }
+        identity = hashlib.sha256(json.dumps(
+            source, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode()).hexdigest()
+        source["classification_id"] = identity
+        path = run_dir / "repairs/FEAT-001/classifications" / f"{identity}.json"
+        write_json(path, source)
+        reference = {"event_id": source["event_id"], "classification_id": identity,
+                     "surface": "validation"}
+        self.write_revalidation_cursor(run_dir, complete=False, inherited=[reference])
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-validate-codes", result.get("reason", ""))
+        for field, value in (("event_id", "d" * 64), ("surface", "requirements"),
+                             ("classification_id", "../outside")):
+            with self.subTest(field=field):
+                self.write_revalidation_cursor(
+                    run_dir, complete=False, inherited=[{**reference, field: value}]
+                )
+                result = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertFalse(result["continue"])
+                self.assertIn("inherited invalidation", result["stopReason"])
+        self.write_revalidation_cursor(run_dir, complete=False, inherited=[reference])
+        path.unlink()
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("inherited invalidation", result["stopReason"])
+
+    def test_final_admitted_dispatch_requires_active_matching_authority(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-implement-plan")
+        self.write_repair_state(
+            run_dir, status="remediating", next_skill="sdlc-implement-plan",
+            classification_route="sdlc-implement-plan",
+        )
+        path = run_dir / "repairs/FEAT-001/repair-control.json"
+        control = json.loads(path.read_text())
+        control["feature_dispatches"] = control["feature_dispatch_limit"]
+        control["active_blocker"]["attempts"] = [{
+            "classification_id": control["current_classification_id"],
+            "event_id": control["current_event_id"], "status": "dispatched", "result": None,
+        }]
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        control["active_blocker"]["attempts"][0]["event_id"] = "foreign"
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("no active repair authority", result["stopReason"])
+
     def test_stop_blocks_publication_until_invalidations_are_revalidated(
         self,
     ) -> None:
@@ -2040,7 +2198,7 @@ class HookTestCase(unittest.TestCase):
         control = json.loads(control_path.read_text(encoding="utf-8"))
         control["revalidation"]["repair_dispatch_id"] = "foreign-dispatch"
         projection = {
-            "schema": "agentic-sdlc/revalidation-cursor-v1",
+            "schema": "agentic-sdlc/revalidation-cursor-v2",
             "classification_id": control["revalidation"]["classification_id"],
             "repair_dispatch_id": "foreign-dispatch",
             "required": control["revalidation"]["required"],
@@ -2097,6 +2255,16 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result.get("decision"), "block")
         self.assertIn("sdlc-uat-tests", result.get("reason", ""))
 
+    def test_completed_features_do_not_override_coordinator_slice_route(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-create-plan")
+        write_json(run_dir / "feature-queue.json", {
+            "features": [{"id": "FEAT-001", "status": "committed"}],
+        })
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-create-plan", result.get("reason", ""))
+        self.assertNotIn("sdlc-uat-tests", result.get("reason", ""))
+
     def test_stop_continues_for_pause_steering(self) -> None:
         run_dir = self.active_run(next_skill="sdlc-validate-codes")
         (run_dir / "STEERING.md").write_text(
@@ -2144,6 +2312,24 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertFalse(result["continue"])
         self.assertIn("explicit user request", result["stopReason"])
+
+    def test_stop_continues_only_slice_in_accepted_merge_scope(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-merge-pr")
+        from workflow_objectives import _revision
+        objective = json.loads((run_dir / "objective.json").read_text())
+        snapshot = json.loads((run_dir / objective["revisions"][-1]["snapshot"]).read_text())
+        snapshot["completion"] = {"boundary": "merge-verified", "repository": "example/repository", "base": "main",
+                                  "method": "squash", "delivery_scope": ["SLICE-001"], "live_operations": [],
+                                  "merge_effects": ["ci.yml"], "allow_nonruntime_na": True}
+        _revision(run_dir, objective, snapshot)
+        state = json.loads((run_dir / "current-state.json").read_text())
+        state["current_execution"] = "SLICE-001"
+        write_json(run_dir / "current-state.json", state)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        state["current_execution"] = "SLICE-002"
+        write_json(run_dir / "current-state.json", state)
+        self.assertFalse(run_hook(STOP, self.stop_payload(), self.codex_home)["continue"])
 
     def test_stop_does_not_continue_worktree_integration(self) -> None:
         self.active_run(

@@ -56,7 +56,7 @@ class PeerTransport(Protocol):
     identity, never from heartbeat payload data.
     """
 
-    def send(self, heartbeat: PeerHeartbeat) -> None: ...
+    def send(self, heartbeat: PeerHeartbeat, *, timeout_seconds: float = 2.0) -> None: ...
 
     def receive(self, *, timeout_seconds: float) -> AuthenticatedPeerMessage: ...
 
@@ -243,8 +243,9 @@ class MutualTLSPeerTransport:
             raise PeerTransportError("peer certificate is not an exact managed pin")
         return node_id, fingerprint, peer.epoch
 
-    def send(self, heartbeat: PeerHeartbeat) -> None:
-        deadline = _Deadline(self._send_timeout_seconds)
+    def send(self, heartbeat: PeerHeartbeat, *, timeout_seconds: float = 2.0) -> None:
+        _require_positive_finite_timeout("send timeout", timeout_seconds)
+        deadline = _Deadline(min(self._send_timeout_seconds, timeout_seconds))
         try:
             context, snapshot = self._tls.client_context()
             if (
@@ -364,10 +365,10 @@ class PeerStateExchange:
         if age > self.max_heartbeat_age_seconds:
             raise StalePeerStateError("peer heartbeat timestamp is stale")
 
-    def send(self, heartbeat: PeerHeartbeat) -> None:
+    def send(self, heartbeat: PeerHeartbeat, *, timeout_seconds: float = 2.0) -> None:
         if heartbeat.cluster_id != self.cluster_id:
             raise StateValidationError("outbound heartbeat has the wrong cluster identity")
-        self.transport.send(heartbeat)
+        self.transport.send(heartbeat, timeout_seconds=timeout_seconds)
 
     def receive(self, *, timeout_seconds: float) -> tuple[PeerHeartbeat, ReplayState]:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:

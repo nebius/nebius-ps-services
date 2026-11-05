@@ -6,7 +6,7 @@ workspace. Use an operator-authorized scoped permission profile or report
 `ENVIRONMENT_BLOCKER`; never change or bypass controls from the product workflow.
 
 After accepting a new objective, run the shared private transition
-`prepare-specs --run-dir <run> --project-root <project> --feature FEAT-001`.
+`prepare-specs --run-dir <run> --project-root <project> --execution FEAT-001`.
 It allocates the run's sole integration checkout from the accepted committed
 source, with no plan, execution basis, waves or workers. Initial canonical
 publication belongs to this checkout and requires the bound root's current
@@ -87,3 +87,14 @@ after final alignment, acceptance validation and documentation evidence. Then
 complete the run through intake `complete`; it independently checks the actual
 outer lease release. Return the ordinary explicit Worktree integration handoff.
 Local workflow completion never performs the outer owner's integration.
+
+## Issue plan delivery
+
+For referenced issue plans, follow the shared
+[issue-resolution contract](../../worktree/references/issue-resolution.md).
+Normalize accepted membership once; never scrape arbitrary issue mentions at
+completion. Supply exact per-member criterion evidence through the private
+seal-feature --issue-evidence option before promotion. Existing local validation
+and completion gates remain required. Completion writes a root-owned receipt
+in the run directory; comments, PR references and merge are later authorized
+owner work. Report resolved/partial/unresolved coverage and closure pending merge.

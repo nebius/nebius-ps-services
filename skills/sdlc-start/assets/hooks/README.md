@@ -23,7 +23,7 @@ local Codex home.
   recommended skill.
 - When `current-state.json` has an
   `agentic-sdlc/repair-state-pointer-v1`, the Stop hook validates that its
-  `failure-event-v1`, optional `diagnosis-v1`, and `repair-control-v1` remain
+  `failure-event-v2`, optional `diagnosis-v3`, and `repair-control-v2` remain
   inside the run and agree on feature, event, and stable blocker identity. It
   stops on exhausted budgets or semantic-cycle status, requires
   diagnosis-required work to route to `troubleshoot`, and requires a recorded
@@ -57,6 +57,11 @@ local Codex home.
   Public Nebius profile, project, and credential-file path assignments are
   metadata rather than secret material. All other long Nebius assignments,
   including token material, remain fail-closed.
+  Generic credential-assignment screening recognizes complete, bounded,
+  unquoted lookup/call expressions, including CSRF DOM lookups with one trailing
+  JavaScript semicolon. It never evaluates those expressions. Literal values,
+  ambiguous syntax and provider-specific credential patterns remain blocked;
+  placeholder text elsewhere on a line cannot exempt a credential assignment.
 - An active run also covers coordinator-registered integration and worker
   worktrees outside the original checkout. The hook verifies canonical Git
   root/common directory, branch, and recorded HEAD before sensitive Git actions.
@@ -79,14 +84,16 @@ local Codex home.
   through variable expansion, command substitution, an interpreter, or another
   generated program. Workflow skills must issue only the canonical direct
   commands and must not construct guarded actions indirectly.
-- Active-run PR merge requires one exact, expiring `sdlc-merge-pr`
-  authorization bound to the branch, current promoted/reviewed HEAD, explicit
-  user request, passing checks/review/UAT, explicit PR number or URL, and
-  complete `gh pr merge ... --match-head-commit <HEAD>` command. The canonical
-  command permits only an optional long-form merge strategy; admin bypass,
-  branch deletion, repository override, implicit PR selection, shell operators,
-  and appended actions are denied. GitHub merge MCP writes are denied in favor
-  of this race-safe canonical path.
+- Active-run raw merge, approval and workflow-dispatch commands are denied,
+  including CLI wrappers, REST/GraphQL and MCP variants. Caller-written passed
+  labels and legacy command authorization files cannot permit them.
+- `sdlc-merge-pr` uses the SDLC-owned protected delivery adapter. Accepted run
+  intent scopes repository, default branch, delivery slice and live/merge effects;
+  independent qualification and exact review admission precede broker dispatch.
+  Queues are unsupported. Ambiguous submissions reconcile without resubmission;
+  dependent slices wait for independently verified merge results.
+- Stop follows the coordinator's recorded phase. Aggregate feature-status labels
+  must not select UAT or override that route.
 
 ## Validate
 
@@ -110,8 +117,8 @@ PY
 
 ## Install To Local Runtime
 
-Use the explicit installer option so hook updates are not hidden inside the
-normal skill installation path:
+The default full-catalog installation also installs and registers reviewed
+hooks. Use the explicit options below for a hooks-only refresh:
 
 ```bash
 ./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
@@ -134,3 +141,11 @@ hook files within the same hook event, and reports extra installed hook files
 or `hooks.json` entries for manual review instead of removing them by default.
 After syncing, restart Codex and review the PreToolUse and Stop hook entries in
 `/hooks`.
+
+### Repair dispatch completion
+
+The feature dispatch ceiling blocks new repair admissions. The last admitted
+repair may finish under its existing authority and complete required
+revalidation. Over-limit counts and missing dispatch or cursor authority remain
+blocked. Successive classifications retain earlier invalidations, and the
+current successful repair must rerun their ordered gates before resolution.

@@ -8,3 +8,5 @@ sdlc-implement-negative-03,false,Change the locked SDLC plan while implementatio
 sdlc-implement-plan-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-implement-plan for its assigned phase. Implement this locked Agentic SDLC feature plan through its dependency waves."
 sdlc-implement-plan-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-implement-plan for its assigned phase. Implement this locked Agentic SDLC feature plan through its dependency waves."
 sdlc-implement-plan-quoted-command,false,"Treat ""/skills:sdlc-implement-plan"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-implement-plan-diagnosis-v3-positive,true,"As the verified active SDLC coordinator, execute the admitted corrective task bound to its diagnosis-v3 and unchanged regression oracle."
+sdlc-implement-plan-diagnosis-v3-negative,false,"Before any prepared execution, a formatting diagnosis needs an authoring repair; directly implement application changes instead."

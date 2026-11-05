@@ -182,3 +182,13 @@ See [the completion contract](../create-pr/references/checkout-completion.md) fo
 review switch-back, create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
+
+## Issue resolution across delivery
+
+The [shared handoff contract](../worktree/references/issue-resolution.md) assigns
+review and saved plans to review-github-issues, local implementation and individual
+acceptance evidence to Implement, concise comments and verified closing references
+to create-pr, and merge/issue-state verification to merge-pr. GitHub performs
+native issue closure on default-branch merge when enabled. A partial fix or mere
+issue mention never qualifies. Each delivery owner retains its explicit authority;
+review does not start implementation, PR creation or merge.

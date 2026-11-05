@@ -265,3 +265,15 @@ requeue, CI writes, credentials changes, or protection bypass.
 - [Workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
 - [Accepted check conclusions](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-status-checks-before-merging)
 - [Git deletion refspecs and explicit expected-value leases](https://git-scm.com/docs/git-push)
+
+## Issue closure readback
+
+Follow the shared [issue-resolution contract](../../worktree/references/issue-resolution.md).
+Capture intended full issue identities before merge. After independently proven
+merge, read each issue and available closure-event evidence through the matching
+host. A PR match returned by an issue tool can be truncated; do not infer full
+coverage or causation from it. Distinguish already closed, newly observed closed,
+still open and inaccessible. Report state reasons when exposed. No issue update
+is part of this verification; GitHub owns native closure and post-merge CI is a
+separate result. A human merge after agent exit needs no running agent to close
+correctly configured issues, but no later verification is claimed until observed.

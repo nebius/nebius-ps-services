@@ -119,8 +119,8 @@ def _psks_from_private_config(path_value: str, plan: Plan) -> dict[str, str]:
         raise HelperError("PSK source config must not be accessible by group or other users")
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError) as error:
-        raise HelperError(f"cannot read PSK source config: {error}") from error
+    except (OSError, UnicodeError, yaml.YAMLError):
+        raise HelperError("cannot read PSK source config") from None
     if not isinstance(document, dict):
         raise HelperError("PSK source config must contain a YAML mapping")
     gateway_group = document.get("gateway_group")

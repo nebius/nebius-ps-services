@@ -43,6 +43,17 @@ class BrowserTests(unittest.TestCase):
         with self.assertRaisesRegex(browser.BrowserOwnershipError, "oracle changed"):
             browser.verify_bundle(self.state)
 
+    def test_frozen_oracle_rejects_changed_completion_control(self):
+        bundle = browser.verify_bundle(self.state)
+        (bundle / "completion-control.mjs").write_text("changed")
+        with self.assertRaisesRegex(browser.BrowserOwnershipError, "oracle changed"):
+            browser.verify_bundle(self.state)
+
+    def test_frozen_oracle_rejects_previous_bundle_without_control(self):
+        self.state["browser_bundle"].pop("completion-control.mjs")
+        with self.assertRaisesRegex(browser.BrowserOwnershipError, "oracle is missing"):
+            browser.verify_bundle(self.state)
+
     def test_frozen_oracle_rejects_symlink(self):
         bundle = browser.verify_bundle(self.state)
         item = bundle / "package.json"

@@ -92,7 +92,10 @@ def native_helper(tmp_path, monkeypatch):
 
 
 @pytest.mark.integration
-def test_native_policy_preservation_idempotency_and_conditional_apply(native_helper):
+@pytest.mark.parametrize("protocol,ports", [("tcp", ["443"]), ("all", [])])
+def test_native_policy_preservation_idempotency_and_conditional_apply(
+    native_helper, protocol, ports
+):
     cfg = row()["tailscale"]
     cfg["policy"] = {
         "tag_owners": ["group:admins"],
@@ -100,8 +103,8 @@ def test_native_policy_preservation_idempotency_and_conditional_apply(native_hel
             {
                 "sources": ["group:developers"],
                 "destinations": ["10.20.0.0/24"],
-                "protocol": "tcp",
-                "ports": ["443"],
+                "protocol": protocol,
+                "ports": ports,
             }
         ],
     }
@@ -113,6 +116,7 @@ def test_native_policy_preservation_idempotency_and_conditional_apply(native_hel
     semantic = tailscale_policy.transform(document)["value"]
     assert semantic["future"] == 9007199254740993
     assert semantic["autoApprovers"]["routes"] == {"10.20.0.0/24": ["tag:router"]}
+    assert semantic["grants"][0]["ip"] == (["*"] if protocol == "all" else ["tcp:443"])
     assert tailscale_policy.proposal(document, cfg) == (document, [])
     state = {"document": original, "etag": "v1"}
     writes = []
@@ -136,6 +140,19 @@ def test_native_policy_preservation_idempotency_and_conditional_apply(native_hel
     with pytest.raises(RuntimeError, match="changed since"):
         tailscale_policy.apply_plan(api, cfg, "ts", plan)
     assert len(writes) == 1
+
+
+@pytest.mark.integration
+def test_native_narrowing_request_preserves_existing_broad_grants(native_helper):
+    cfg = row()["tailscale"]
+    broad = {"src": ["group:users"], "dst": ["10.20.0.0/24"], "ip": ["*"]}
+    existing = json.dumps({"grants": [broad]})
+    document, patch = tailscale_policy.proposal(existing, cfg)
+    assert all(operation["op"] == "add" for operation in patch)
+    assert tailscale_policy.transform(document)["value"]["grants"] == [
+        broad,
+        {"src": ["group:users"], "dst": ["10.20.0.0/24"], "ip": ["tcp:443"]},
+    ]
 
 
 @pytest.mark.integration

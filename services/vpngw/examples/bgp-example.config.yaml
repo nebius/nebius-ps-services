@@ -26,6 +26,7 @@ gateway_group:
     ssh_private_key_path: "~/.ssh/id_ed25519"
 
 gateway:
+  # Replace with the actual administrator and apply-runner source CIDRs.
   local_asn: 65010
   local_prefixes:
     - "10.10.0.0/16"

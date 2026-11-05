@@ -534,7 +534,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         for source in (ASSETS / "hooks").glob("*.template"):
             target = self.codex_home / "hooks" / source.name.removesuffix(".template")
             copy_template(source, target)
-        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
             copy_template(SKILL_ROOT.parent / "global-context-management/scripts" / name,
                           self.codex_home / "hooks" / name)
         for source in (ASSETS / "agents").glob("*.template"):

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat, ReplayState
+from nebius_vpngw.agent.vm_ha.models import DigestSet, HeartbeatEvidence, PeerHeartbeat, ReplayState
 from nebius_vpngw.agent.vm_ha.mtls import MTLSSnapshot, PeerLeaf
 from nebius_vpngw.agent.vm_ha.runtime import (
     BGPExportState,
@@ -26,6 +26,7 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     _bgp_export_state,
     _configured_bgp_sessions,
     _configured_bgp_summary_sessions,
+    _confirmed_down_bgp_sessions,
     _expected_bgp_exports,
     _live_peer_binding_from_mtls,
     _observed_import_policy_digest,
@@ -79,6 +80,54 @@ class MemoryReplayStore:
 
     def save_replay_state(self, peer_node_id: str, state: ReplayState) -> None:
         self.values[peer_node_id] = state
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("Idle", BGPExportState.MATCH),
+        ("Unknown", BGPExportState.UNKNOWN),
+        (None, BGPExportState.UNKNOWN),
+        ([], BGPExportState.UNKNOWN),
+        ({}, BGPExportState.UNKNOWN),
+    ],
+)
+def test_runtime_treats_malformed_bgp_fsm_state_as_unknown(tmp_path, state, expected):
+    peer = "169.254.10.2"
+    summary = {"ipv4Unicast": {"peers": {peer: {"state": state}}}}
+
+    def runner(argv, timeout):
+        command = Path(argv[0]).name
+        if command == "systemctl":
+            return CommandResult(0)
+        if command == "sysctl":
+            return CommandResult(0, "0\n")
+        if command == "vtysh":
+            if argv[-1] == "show bgp summary json":
+                return CommandResult(0, json.dumps(summary))
+            if argv[-1] == "show bgp ipv4 unicast json":
+                return CommandResult(0, '{"routes": {}}')
+            if argv[-1] == "show running-config":
+                return CommandResult(0, "")
+        if command == "ip":
+            return CommandResult(0, "[]" if "-j" in argv else "")
+        raise AssertionError(argv)
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        configured_bgp_sessions=(peer,),
+        expected_bgp_policy_digest="a" * 64,
+        expected_bgp_exports={peer: ()},
+        runner=runner,
+    )
+    observed = runtime.observe()
+    assert observed.bgp_export_state is expected
+    assert not observed.established_bgp_sessions
+    assert not observed.forwarding_enabled
+    assert _confirmed_down_bgp_sessions(summary) == (
+        frozenset({peer}) if state == "Idle" else frozenset()
+    )
 
 
 def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Path) -> None:
@@ -182,12 +231,13 @@ def _fake_mtls_snapshot() -> MTLSSnapshot:
         certificate_path=Path("/unused/certificate.pem"),
         private_key_path=Path("/unused/private-key.pem"),
         peers=(peer,),
+        current_peer=peer,
         peer_certificate_paths=(Path("/unused/peer.pem"),),
         peer_certificate_pems=(b"unused",),
     )
 
 
-def test_live_peer_binding_uses_highest_managed_mtls_epoch(tmp_path: Path) -> None:
+def test_live_peer_binding_uses_exact_managed_current_peer(tmp_path: Path) -> None:
     binding = VMHARuntimeBinding.model_validate(_runtime_config(tmp_path)["runtime_binding"])
     local = next(item for item in binding.nodes if item.node_id == "node-a")
     peer = next(item for item in binding.nodes if item.node_id == "node-b")
@@ -195,8 +245,9 @@ def test_live_peer_binding_uses_highest_managed_mtls_epoch(tmp_path: Path) -> No
         _fake_mtls_snapshot(),
         peers=(
             PeerLeaf("node-b", "compute-b", 1, "e" * 64, "f" * 64),
-            PeerLeaf("node-b", "compute-b-new", 2, "1" * 64, "2" * 64),
+            PeerLeaf("node-b", "compute-b-new", 1, "1" * 64, "2" * 64),
         ),
+        current_peer=PeerLeaf("node-b", "compute-b-new", 1, "1" * 64, "2" * 64),
     )
 
     current = _live_peer_binding_from_mtls(
@@ -248,9 +299,10 @@ class UnavailableDataPlane(FakeDataPlane):
         raise RuntimeError("local FRR is not materialized")
 
 
-def test_expected_bgp_exports_are_exact_per_connection_and_peer() -> None:
+@pytest.mark.parametrize("prefix", ["10.96.0.0/13", "10.96.0.1/13"])
+def test_expected_bgp_exports_are_exact_per_connection_and_peer(prefix) -> None:
     config = {
-        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": [prefix]},
         "connections": [
             {
                 "name": "site-a",
@@ -273,6 +325,14 @@ def test_expected_bgp_exports_are_exact_per_connection_and_peer() -> None:
         "169.254.10.2": frozenset({"10.96.0.0/13"}),
         "169.254.11.2": frozenset(),
     }
+
+
+@pytest.mark.parametrize("prefix", ["10.96.0.0/13", "10.96.0.1/13"])
+def test_static_runtime_accepts_schema_valid_local_prefix(prefix):
+    assert (
+        _expected_bgp_exports({"gateway": {"local_prefixes": [prefix]}, "connections": []}, [])
+        == {}
+    )
 
 
 def test_empty_frr_bgp_summary_is_an_exact_empty_peer_set() -> None:
@@ -1707,8 +1767,25 @@ def test_non_owner_observes_no_stale_route_receipt_without_blocking_snapshot(
     ports.close()
 
 
+@pytest.mark.parametrize(
+    ("blockers", "mutations", "current"),
+    [
+        ((), (), True),
+        (("required-bgp-prefixes-lack-usable-xfrm-next-hop",), (), True),
+        (("required-bgp-prefixes-not-learned",), (), True),
+        (("configured-bgp-sessions-not-established",), (), True),
+        (("bgp-import-policy-mismatch",), (), False),
+        (("no-configured-bgp-sessions",), (), False),
+        (("foreign-route-conflict:table:10.0.0.0/24",), (), False),
+        (("unknown-evidence",), (), False),
+        ((), ("required-mutation",), False),
+    ],
+)
 def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
     tmp_path: Path,
+    blockers,
+    mutations,
+    current,
 ) -> None:
     ports = build_runtime_ports(
         _runtime_config(tmp_path),
@@ -1745,7 +1822,7 @@ def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
         ownership_re_read_exact=True,
         ownership_epoch="7",
     )
-    plan = SimpleNamespace(blocked_reasons=(), mutations=())
+    plan = SimpleNamespace(blocked_reasons=blockers, mutations=mutations)
     ports.routes._plan = (  # type: ignore[method-assign]
         lambda _ownership, _state, **_kwargs: plan
     )
@@ -1753,9 +1830,10 @@ def test_rejoined_guarded_former_does_not_invalidate_durable_route_receipt(
 
     observed = ports.routes.receipt_context()
 
-    assert observed is not None
-    assert observed.owner_node_id == "node-a"
-    assert observed.ownership_incarnation == 1
+    assert (observed is not None) is current
+    if observed is not None:
+        assert observed.owner_node_id == "node-a"
+        assert observed.ownership_incarnation == 1
     ports.close()
 
 
@@ -1904,52 +1982,115 @@ def test_bound_cloud_transfer_uses_one_candidate_revision_boundary(tmp_path: Pat
     assert runtime.observe().ownership_re_read_exact is True
 
 
-def test_bound_cloud_missing_peer_authority_is_exactly_inhibition_scoped(
-    tmp_path: Path,
+@pytest.mark.parametrize("role", ["active", "passive"])
+def test_bound_cloud_missing_peer_preserves_established_owner_without_transfer_authority(
+    tmp_path: Path, role: str
 ) -> None:
-    config = _runtime_config(tmp_path)
-    binding = VMHARuntimeBinding.model_validate(config["runtime_binding"])
-    local = next(node for node in binding.nodes if node.role.value == "active")
-    peer = next(node for node in binding.nodes if node.node_id != local.node_id)
-    inhibited = False
-    observed_flags: list[bool] = []
+    from grpc import StatusCode
+    from test_vm_ha_cloud import _request_error
+    from test_vm_ha_controller import _reconciled, _snapshot
 
-    class Adapter:
-        def observe_cluster(self, **kwargs: object) -> ClusterCloudObservation:
-            observed_flags.append(bool(kwargs["allow_missing_former"]))
-            owner = AllocationOwner(local.compute_id, local.network_interface_name)
-            return ClusterCloudObservation(
-                allocation=AllocationObservation(binding.shared_allocation_id, owner),
-                former=ComputeObservation(
-                    peer.compute_id,
-                    InstanceCloudState.STOPPED,
-                    "0",
-                    ((peer.network_interface_name, ""),),
-                    ((peer.network_interface_name, ()),),
-                ),
-                candidate=ComputeObservation(
-                    local.compute_id,
-                    InstanceCloudState.RUNNING,
-                    "7",
-                    ((local.network_interface_name, "primary-a"),),
-                    ((local.network_interface_name, (binding.shared_allocation_id,)),),
-                ),
-                former_owner=AllocationOwner(peer.compute_id, peer.network_interface_name),
-                candidate_owner=owner,
-            )
-
-    runtime = BoundCloudRuntime(
-        binding,
-        local,
-        peer,
-        Adapter(),  # type: ignore[arg-type]
-        standby_replacement_inhibited=lambda: inhibited,
+    from nebius_vpngw.agent.vm_ha_controller import (
+        ConfiguredRole,
+        ControllerCheckpoint,
+        HAState,
+        VMHAController,
     )
+    from nebius_vpngw.deploy.vm_ha_cloud import VMHACloudAdapter
 
-    assert runtime.observe().local_attachment_exact(local.node_id)
-    inhibited = True
-    assert runtime.observe().local_attachment_exact(local.node_id)
-    assert observed_flags == [False, True]
+    binding = VMHARuntimeBinding.model_validate(_runtime_config(tmp_path)["runtime_binding"])
+    local = next(node for node in binding.nodes if node.role.value == role)
+    peer = next(node for node in binding.nodes if node.node_id != local.node_id)
+    owner = AllocationOwner(local.compute_id, local.network_interface_name)
+    mutations: list[object] = []
+    allocation_reads: list[str] = []
+
+    def allocation(allocation_id: str) -> SimpleNamespace:
+        allocation_reads.append(allocation_id)
+        return SimpleNamespace(
+            status=SimpleNamespace(
+                state="ASSIGNED",
+                assignment=SimpleNamespace(
+                    network_interface=SimpleNamespace(
+                        instance_id=owner.instance_id,
+                        name=owner.network_interface_name,
+                    )
+                ),
+            )
+        )
+
+    def instance(instance_id: str) -> SimpleNamespace:
+        if instance_id == peer.compute_id:
+            raise _request_error(StatusCode.NOT_FOUND)
+        assert instance_id == local.compute_id
+        return SimpleNamespace(
+            metadata=SimpleNamespace(resource_version=7),
+            status=SimpleNamespace(state="RUNNING"),
+            spec=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        name=local.network_interface_name,
+                        ip_address=SimpleNamespace(allocation_id="primary-a"),
+                        aliases=[SimpleNamespace(allocation_id=binding.shared_allocation_id)],
+                    )
+                ]
+            ),
+        )
+
+    adapter = VMHACloudAdapter(
+        instance_reader=instance,
+        allocation_reader=allocation,
+        instance_stopper=lambda *args: mutations.append(args),
+        alias_allocation_setter=lambda *args: mutations.append(args),
+    )
+    runtime = BoundCloudRuntime(binding, local, peer, adapter)
+    cloud = runtime.observe()
+    assert allocation_reads == [binding.shared_allocation_id] * 2
+    assert cloud.local_attachment_exact(local.node_id)
+    assert cloud.former_owner_compute_state is ComputeState.UNKNOWN
+    assert not cloud.transfer_complete(local.node_id)
+    snapshot = _snapshot(
+        local_node_id=local.node_id,
+        peer_node_id=peer.node_id,
+        configured_role=ConfiguredRole(role),
+        peer_heartbeat=None,
+        peer_received_at=None,
+        cloud=cloud,
+        data_plane_mode=DataPlaneMode.ACTIVE,
+    )
+    snapshot = replace(snapshot, routes_reconciled_context=_reconciled(snapshot))
+    checkpoint = ControllerCheckpoint(
+        state=HAState.ACTIVE, established_ownership_context=snapshot.ownership_context
+    )
+    controller = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+    decision = controller.decide(snapshot, checkpoint)
+    assert decision.state is HAState.DEGRADED
+    assert decision.reasons == ("peer-generation-unavailable",)
+    assert decision.forwarding_enabled
+    assert decision.action is None
+
+    # Even exact local ownership cannot turn absence into takeover fencing.
+    takeover = controller.decide(
+        snapshot, replace(checkpoint, suspect_since=90.0, suspicion_boot_id=snapshot.boot_id)
+    )
+    assert not takeover.forwarding_enabled
+    assert takeover.action is not None
+    assert takeover.action.kind is ActionKind.DISABLE_ACTIVE
+    action = ControllerAction(
+        kind=ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
+        operation_id="missing-peer-transfer",
+        ownership_epoch="7",
+        boot_id=snapshot.boot_id,
+        target_node_id=local.node_id,
+        allocation_id=cloud.allocation_id,
+        generation_id=snapshot.local_generation_id,
+        digests=snapshot.local_digests,
+    )
+    with pytest.raises(RuntimeError, match="former-owner fencing"):
+        runtime.confirm_candidate(action)
+    with pytest.raises(RuntimeError, match="not STOPPED"):
+        runtime.detach_former(replace(action, kind=ActionKind.DETACH_FORMER_ATTACHMENT))
+    assert mutations == []
 
 
 def _runtime_config(tmp_path: Path) -> dict[str, object]:
@@ -2464,6 +2605,40 @@ def test_factory_connects_to_runtime_ip_but_authenticates_stable_node_id(
     ports.close()
 
 
+def _heartbeat_observation(ports, now, **changes):
+    from tests.unit.test_vm_ha_controller import _snapshot
+
+    from nebius_vpngw.agent.vm_ha_controller import ConfiguredRole
+
+    snapshot = _snapshot(
+        now=now,
+        boot_id="boot-a",
+        cluster_id=ports.binding.cluster_id,
+        local_node_id=ports.local.node_id,
+        peer_node_id=ports.peer.node_id,
+        configured_role=ConfiguredRole(ports.local.role.value),
+        local_generation_id=ports.binding.generation_id,
+        local_digests=DigestSet(
+            ports.binding.configuration_digest,
+            ports.binding.static_routes_digest,
+            ports.binding.bgp_policy_digest,
+        ),
+        cloud=CloudObservation(
+            authoritative=True,
+            allocation_id=ports.binding.shared_allocation_id,
+            observed_owner_node_id=ports.local.node_id,
+            former_owner_node_id=ports.peer.node_id,
+            former_owner_compute_state=ComputeState.STOPPED,
+            former_attachment_absent=True,
+            candidate_attachment_exact=True,
+            ownership_re_read_exact=True,
+            ownership_epoch="7",
+        ),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+    )
+    return replace(snapshot, **changes)
+
+
 def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
     tmp_path: Path,
 ) -> None:
@@ -2488,10 +2663,26 @@ def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
         ownership_re_read_exact=True,
         ownership_epoch="7",
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
+    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, serving_ready=True)
     ports.data_plane.current = DataPlaneMode.ACTIVE  # type: ignore[attr-defined]
 
-    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=4, clock=10.0)
+    snapshot = _heartbeat_observation(
+        ports,
+        10.0,
+        cloud=ports.cloud.observe(),
+        readiness=ports.routes.readiness(),
+        data_plane_mode=ports.data_plane.mode(),
+    )
+    ports.cloud.observe = lambda: pytest.fail("heartbeat must not repeat cloud observation")
+    ports.routes.readiness = lambda: pytest.fail("heartbeat must not repeat readiness observation")
+    heartbeat = ports.heartbeat(
+        boot_id="boot-a",
+        sequence=4,
+        clock=10.0,
+        snapshot=snapshot,
+        local_readiness=snapshot.readiness,
+        evidence=HeartbeatEvidence(state="healthy", cloud_status="complete", cloud_age_seconds=0),
+    )
     ports.install_shutdown_guard(boot_id="boot-a")
 
     assert heartbeat.node_id == "node-a"
@@ -2538,15 +2729,113 @@ def test_passive_heartbeat_reports_role_neutral_exact_standby_readiness(
         former_attachment_exact=former_exact,
         candidate_attachment_absent=candidate_absent,
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
+    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, serving_ready=True)
     ports.data_plane.current = DataPlaneMode.PASSIVE  # type: ignore[attr-defined]
 
-    heartbeat = ports.heartbeat(boot_id="boot-a", sequence=5, clock=11.0)
+    heartbeat = ports.heartbeat(
+        boot_id="boot-a",
+        sequence=5,
+        clock=11.0,
+        local_readiness=LocalReadiness(True, True, True, True),
+        evidence=HeartbeatEvidence(state="healthy", cloud_status="complete", cloud_age_seconds=0),
+        snapshot=_heartbeat_observation(
+            ports,
+            11.0,
+            cloud=ports.cloud.observe(),
+            readiness=ports.routes.readiness(),
+            data_plane_mode=ports.data_plane.mode(),
+        ),
+    )
 
     assert heartbeat.promotion_ready is promotion_ready
-    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v3"
+    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v5"
     assert heartbeat.auto_healing_policy_state == "blocked"
     ports.close()
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "boot_id",
+        "cluster_id",
+        "local_node_id",
+        "peer_node_id",
+        "generation",
+        "digests",
+        "allocation",
+        "role",
+    ],
+)
+def test_heartbeat_rejects_observation_from_another_runtime(tmp_path, changed):
+    from nebius_vpngw.agent.vm_ha_controller import ConfiguredRole
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    snapshot = _heartbeat_observation(ports, 10.0)
+    if changed == "generation":
+        snapshot = replace(snapshot, local_generation_id="f" * 64)
+    elif changed == "digests":
+        snapshot = replace(snapshot, local_digests=DigestSet("f" * 64, "b" * 64, "c" * 64))
+    elif changed == "allocation":
+        snapshot = replace(snapshot, cloud=replace(snapshot.cloud, allocation_id="other"))
+    elif changed == "role":
+        snapshot = replace(snapshot, configured_role=ConfiguredRole.PASSIVE)
+    else:
+        snapshot = replace(snapshot, **{changed: "other"})
+    try:
+        with pytest.raises(RuntimeError, match="observation does not match"):
+            ports.heartbeat(
+                boot_id="boot-a",
+                sequence=1,
+                clock=10.0,
+                snapshot=snapshot,
+                local_readiness=snapshot.readiness,
+                evidence=HeartbeatEvidence(
+                    state="healthy", cloud_status="complete", cloud_age_seconds=0
+                ),
+            )
+    finally:
+        ports.close()
+
+
+def test_heartbeat_cannot_turn_unknown_readiness_into_a_healthy_claim(tmp_path):
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    snapshot = replace(
+        _heartbeat_observation(ports, 10.0), readiness=LocalReadiness(False, False, False, False)
+    )
+    try:
+        heartbeat = ports.heartbeat(
+            boot_id="boot-a",
+            sequence=1,
+            clock=10.0,
+            snapshot=snapshot,
+            local_readiness=snapshot.readiness,
+            evidence=HeartbeatEvidence(
+                state="healthy", cloud_status="complete", cloud_age_seconds=0
+            ),
+        )
+        assert not heartbeat.service_healthy
+        assert not heartbeat.route_ready
+        assert not heartbeat.promotion_ready
+    finally:
+        ports.close()
 
 
 def test_factory_failure_closes_sdk_and_never_persists_credentials(tmp_path: Path) -> None:
@@ -2626,7 +2915,7 @@ def test_enable_accepts_prior_route_operation_only_with_current_exact_authority(
         ownership_re_read_exact=True,
         ownership_epoch="7",
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
+    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, serving_ready=True)
     reconcile_context = RouteReconciliationContext(
         operation_id="route-op",
         cluster_id="cluster-a",
@@ -4153,4 +4442,521 @@ def test_replacement_recovery_rejects_a_different_ledger_kind(tmp_path: Path) ->
         ports.routes._apply_mutation(mutation, ledger)
 
     assert ports.routes.store.load_pending_mutation() is not None
+    ports.close()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "complete",
+        "rekey",
+        "missing-coverage",
+        "unknown-peer",
+        "unknown-sa",
+        "duplicate-peer",
+        "deadline",
+    ],
+)
+def test_scoped_bgp_repair_requires_complete_authoritative_backup(tmp_path, case):
+    from tests.unit.test_ha_tunnel_selection import native_bgp_effects, raw_sas
+
+    from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy
+
+    _, policy, evidence = native_bgp_effects(tmp_path, peer_state="Established")
+    if case == "missing-coverage":
+        evidence[
+            ("vtysh", "-c", f"show bgp ipv4 unicast neighbors {policy.paths[0].peer} routes json")
+        ] = json.dumps({"routes": {"10.2.0.0/16": [{"valid": True}]}})
+    elif case == "unknown-peer":
+        evidence[("vtysh", "-c", "show bgp summary json")] = json.dumps(
+            {
+                "ipv4Unicast": {
+                    "peers": {
+                        policy.paths[0].peer: {"state": "Established"},
+                        policy.paths[1].peer: {"state": "Unavailable"},
+                    }
+                }
+            }
+        )
+    elif case == "unknown-sa":
+        evidence[("swanctl", "--list-sas", "--raw")] = "incomplete observation"
+    elif case == "rekey":
+        evidence[("swanctl", "--list-sas", "--raw")] = raw_sas(
+            "list-sa event {preferred {uniqueid=2 state=CONNECTING child-sas {}}}\n"
+        )
+    elif case == "duplicate-peer":
+        policy = ConnectionPolicy(
+            policy.name,
+            policy.mode,
+            (policy.paths[0], replace(policy.paths[1], peer=policy.paths[0].peer)),
+            policy.destinations,
+        )
+    calls = []
+
+    def runner(argv, timeout):
+        command = (Path(argv[0]).name, *argv[1:])
+        calls.append((command, timeout))
+        if command == ("vtysh", "-c", "clear bgp ipv4 unicast 169.254.2.2"):
+            return CommandResult(0)
+        return CommandResult(0, evidence[command])
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        configured_bgp_sessions=("169.254.1.2", "169.254.2.2"),
+        expected_bgp_policy_digest="a" * 64,
+        runner=runner,
+        routing_lock_path=tmp_path / "routing.lock",
+        monotonic_clock=lambda: 10,
+        bgp_path_policies=(policy,),
+    )
+    action = _repair_action(deadline=15, reasons=("bgp-not-ready", "xfrm-not-ready"))
+    if case in {"unknown-peer", "unknown-sa", "deadline"}:
+        with pytest.raises(RuntimeError):
+            runtime._repair_failed_bgp_paths(action, 10 if case == "deadline" else 14)
+    else:
+        assert runtime._repair_failed_bgp_paths(action, 14) is (case in {"complete", "rekey"})
+    effects = [command for command, _ in calls if command[-1].startswith("clear ")]
+    assert effects == (
+        [("vtysh", "-c", "clear bgp ipv4 unicast 169.254.2.2")]
+        if case in {"complete", "rekey"}
+        else []
+    )
+    assert all(0 < timeout <= 4 for _, timeout in calls)
+
+
+def test_scoped_bgp_repair_cannot_consume_the_fencing_reserve(tmp_path, monkeypatch):
+    now = [10.0]
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="a" * 64,
+        monotonic_clock=lambda: now[0],
+    )
+
+    def finishes_at_reserve(action, deadline):
+        now[0] = deadline
+        return True
+
+    fenced = []
+    monkeypatch.setattr(runtime, "_repair_failed_bgp_paths", finishes_at_reserve)
+    monkeypatch.setattr(runtime, "emergency_fence", fenced.append)
+    action = _repair_action(deadline=15, reasons=("bgp-not-ready", "xfrm-not-ready"))
+    runtime.repair_local(action)
+    assert fenced == [action]
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp", "bgp-ineligible", "unbound"])
+@pytest.mark.parametrize("pending", [False, True])
+@pytest.mark.parametrize("path_case", ["healthy", "path-down", "forwarding-off"])
+def test_sampler_distinguishes_serving_failure_and_pending_recovery(
+    tmp_path, monkeypatch, mode, pending, path_case
+):
+    from tests.unit.test_ha_tunnel_selection import config as tunnel_config
+    from tests.unit.test_vm_ha_controller import _cloud, _peer, _snapshot
+
+    from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
+    from nebius_vpngw.agent.vm_ha.heartbeat import HeartbeatPublisher
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint, HAState, VMHAController
+
+    forwarding = path_case != "forwarding-off"
+    path_ready = path_case != "path-down"
+    from nebius_vpngw.agent.vm_ha.runtime import BoundRouteRuntime
+    from nebius_vpngw.agent.vm_ha.tunnels import STATE_NAME
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    state_dir = tmp_path / "sample"
+    state_dir.mkdir()
+    state_path = state_dir / "data-plane.json"
+    state_path.write_text('{"mode":"active"}')
+    config_path = tmp_path / "sample.yaml"
+    import yaml
+
+    sample_config = tunnel_config("bgp" if mode == "bgp-ineligible" else mode)
+    if mode == "unbound":
+        sample_config = {"connections": [], "vm_ha": {}}
+    elif mode == "bgp-ineligible":
+        sample_config["connections"][0]["tunnels"].pop()
+    config_path.write_text(yaml.safe_dump(sample_config))
+    ports = replace(
+        ports,
+        data_plane=SystemDataPlaneRuntime(
+            state_path=state_path,
+            guard_path=state_dir / "guard.json",
+            configured_bgp_sessions=(),
+            expected_bgp_policy_digest="a" * 64,
+        ),
+    )
+    monkeypatch.setattr(
+        SystemDataPlaneRuntime,
+        "observe",
+        lambda self, **kwargs: SimpleNamespace(forwarding_enabled=forwarding),
+    )
+    monkeypatch.setattr(
+        BoundRouteRuntime,
+        "readiness",
+        lambda self, strict=False: LocalReadiness(True, path_ready, True, True),
+    )
+    # This test isolates publication/receiver semantics with synthetic readiness.
+    # Real native exports and bound selector context are exercised below.
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.tunnel_runtime._selection_context",
+        lambda cfg, state_dir: None,
+    )
+    ports.cloud.observe = lambda: pytest.fail("sampler cannot read cloud")
+    if pending:
+        (state_dir / STATE_NAME).write_text("{}")
+        monkeypatch.setattr(
+            "nebius_vpngw.agent.vm_ha.tunnels.read_state",
+            lambda path: {"operation": {"phase": "verify", "connection": "site"}},
+        )
+    before = {p.name: p.read_bytes() for p in state_dir.iterdir()}
+    ready = ports.sample_local_health(
+        config_path=config_path, state_dir=state_dir, deadline=105, clock=lambda: 100
+    )
+    complete = not pending or mode == "bgp"
+    protects = forwarding and path_ready and complete
+    assert ready.serving_ready is protects
+    assert ready.sample_complete is complete
+    assert ready.service_healthy is forwarding
+
+    # Carry the actual sampler result through publication and causal reception to
+    # the peer's ordinary failure decision. Pending BGP intent grants no grace.
+    now, received = [100.0], []
+    proof = PeerEvidenceTracker(
+        local_node_id="node-b",
+        peer_node_id="node-a",
+        generation_id=_peer().generation_id,
+        clock=lambda: now[0],
+    )
+    publisher = HeartbeatPublisher(
+        sample=lambda deadline: ready,
+        identity=lambda: "unchanged-observed-path",
+        service_identity=lambda: "same-boot-and-config",
+        build=lambda snapshot, local, evidence: replace(
+            _peer(),
+            service_healthy=bool(local and local.service_healthy),
+            route_ready=bool(local and local.transfer_ready),
+            promotion_ready=False,
+            evidence=replace(
+                evidence, echo=proof.issue(_peer(node_id="node-b")).evidence.challenge
+            ),
+        ),
+        send=lambda heartbeat, remaining: received.append(proof.accept(heartbeat)),
+        clock=lambda: now[0],
+    )
+    controller = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+    checkpoint = ControllerCheckpoint(state=HAState.NORMAL)
+    cloud = replace(_cloud(), former_attachment_exact=True, candidate_attachment_absent=True)
+    for elapsed in (0, 6):
+        now[0] = 100.0 + elapsed
+        publisher.collect()
+        publisher.publish()
+        result = controller.decide(
+            _snapshot(
+                now=now[0], cloud=cloud, peer_heartbeat=received[-1], peer_received_at=now[0]
+            ),
+            checkpoint,
+        )
+        checkpoint = result.checkpoint
+    assert (result.action is not None and result.action.kind is ActionKind.STOP_FORMER_OWNER) is (
+        not protects
+    )
+    assert {p.name: p.read_bytes() for p in state_dir.iterdir()} == before
+    ports.close()
+
+
+@pytest.mark.parametrize("case", ["healthy", "unknown-bgp", "missing-rib", "missing-xfrm"])
+def test_pending_bgp_sampler_requires_complete_native_evidence(tmp_path, case):
+    import yaml
+    from tests.unit.test_ha_tunnel_selection import AUTH, Effects, config
+
+    from nebius_vpngw.agent.vm_ha.tunnels import STATE_NAME, TunnelController
+
+    cfg = config("bgp")
+    peers = tuple(t["inner_remote_ip"] for t in cfg["connections"][0]["tunnels"])
+    prefix = cfg["connections"][0]["remote_prefixes"][0]
+    digest = _policy_digest({peer: (prefix,) for peer in peers})
+    calls = []
+
+    def runner(argv, timeout):
+        command = Path(argv[0]).name
+        calls.append((tuple(argv), timeout))
+        if command == "systemctl":
+            return CommandResult(0)
+        if command == "sysctl":
+            return CommandResult(0, "1\n")
+        if command == "vtysh":
+            if argv[-1] == "show bgp summary json":
+                states = {peer: {"state": "Established"} for peer in peers}
+                if case == "unknown-bgp":
+                    states[peers[1]] = {"state": "Unavailable"}
+                return CommandResult(0, json.dumps({"ipv4Unicast": {"peers": states}}))
+            if argv[-1] == "show bgp ipv4 unicast json":
+                return CommandResult(
+                    0, json.dumps({"routes": {} if case == "missing-rib" else {prefix: [{}]}})
+                )
+            if argv[-1].endswith("advertised-routes json"):
+                return CommandResult(0, '{"advertisedRoutes": {}, "totalPrefixCounter": 0}')
+            if argv[-1] == "show running-config":
+                return CommandResult(
+                    0,
+                    f"ip prefix-list peer-in seq 10 permit {prefix}\nrouter bgp 65000\n"
+                    + "".join(f" neighbor {peer} prefix-list peer-in in\n" for peer in peers),
+                )
+        if command == "ip":
+            args = tuple(argv[1:])
+            if args in {("rule", "show"), ("route", "show", "169.254.0.0/16")}:
+                return CommandResult(0, "")
+            if args == ("-j", "-4", "route", "show", "table", "all"):
+                return CommandResult(
+                    0,
+                    json.dumps(
+                        [{"dst": prefix, "dev": "xfrm0", "protocol": "bgp", "gateway": peers[0]}]
+                    ),
+                )
+            if args in {("-j", "xfrm", "state"), ("-j", "xfrm", "policy")}:
+                return CommandResult(
+                    0,
+                    ""
+                    if case == "missing-xfrm"
+                    else "src 192.0.2.10 dst 192.0.2.20\n\tif_id 100\n",
+                )
+            if args == ("-d", "-j", "link", "show", "type", "xfrm"):
+                return CommandResult(
+                    0, '[{"ifname":"xfrm0","linkinfo":{"info_data":{"if_id":100}}}]'
+                )
+        raise AssertionError(argv)
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "binding",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    state_dir = tmp_path / "sample"
+    state_dir.mkdir()
+    config_path = tmp_path / "sample.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    state_path = state_dir / "data-plane.json"
+    state_path.write_text('{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"active"}')
+    selector = TunnelController(cfg, state_dir / STATE_NAME, Effects())
+    selector.tick(AUTH, 100)
+    selector.request("failover", "backup", AUTH, 101)
+    ports = replace(
+        ports,
+        data_plane=SystemDataPlaneRuntime(
+            state_path=state_path,
+            guard_path=state_dir / "guard.json",
+            configured_bgp_sessions=peers,
+            expected_bgp_policy_digest=digest,
+            runner=runner,
+        ),
+    )
+    ports.routes.bgp_policies = [{"remote_prefixes": [prefix]}]
+    ports.routes.expected_import_policy_digest = digest
+    ports.cloud.observe = lambda: pytest.fail("native sampler cannot observe cloud")
+    before = {p.name: p.read_bytes() for p in state_dir.iterdir()}
+    ready = ports.sample_local_health(
+        config_path=config_path, state_dir=state_dir, deadline=105, clock=lambda: 102
+    )
+    assert ready.sample_complete
+    assert ready.serving_ready is (case == "healthy")
+    assert ready.promotion_ready is (case == "healthy")
+    assert calls and all(0 < timeout <= 3 for _, timeout in calls)
+    assert {p.name: p.read_bytes() for p in state_dir.iterdir()} == before
+    ports.close()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "normal-policy",
+        "previous-override",
+        "release-requested-policy",
+        "release-missing-rib",
+        "release-extra-export",
+        "unknown-bgp",
+        "missing-rib",
+        "missing-xfrm",
+        "missing-export",
+        "extra-export",
+        "completed",
+        "passive",
+        "stale-authority",
+    ],
+)
+def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(tmp_path, case):
+    import yaml
+    from tests.unit.test_ha_tunnel_selection import AUTH, Effects, config
+
+    from nebius_vpngw.agent.vm_ha.tunnels import STATE_NAME, TunnelController
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
+
+    cfg = config("bgp")
+    cfg["gateway"]["local_prefixes"] = ["10.0.0.0/24"]
+    cfg["vm_ha"].update(
+        node={"node_id": AUTH.owner},
+        runtime_binding={"shared_allocation_id": AUTH.allocation},
+        generation={"generation_id": AUTH.generation},
+    )
+    peers = tuple(t["inner_remote_ip"] for t in cfg["connections"][0]["tunnels"])
+    prefix = cfg["connections"][0]["remote_prefixes"][0]
+    digest = _policy_digest({peer: (prefix,) for peer in peers})
+    calls = []
+
+    def runner(argv, timeout):
+        command = Path(argv[0]).name
+        calls.append((tuple(argv), timeout))
+        if command == "systemctl":
+            return CommandResult(0)
+        if command == "sysctl":
+            return CommandResult(0, "0\n" if case == "passive" else "1\n")
+        if command == "vtysh":
+            if argv[-1] == "show bgp summary json":
+                states = {peer: {"state": "Established"} for peer in peers}
+                if case == "unknown-bgp":
+                    states[peers[1]] = {"state": "Unavailable"}
+                return CommandResult(0, json.dumps({"ipv4Unicast": {"peers": states}}))
+            if argv[-1] == "show bgp ipv4 unicast json":
+                return CommandResult(
+                    0,
+                    json.dumps(
+                        {
+                            "routes": {}
+                            if case in {"missing-rib", "release-missing-rib"}
+                            else {prefix: [{}]}
+                        }
+                    ),
+                )
+            if argv[-1].endswith("advertised-routes json"):
+                # Native FRR still serves the predecessor while cloud authority
+                # revalidation delays application of the durable new selection.
+                prefixes = {"10.0.0.0/24"}
+                if (
+                    case in {"previous-override", "stale-authority"}
+                    and peers[1] in argv[-1]
+                    or case.startswith("release-")
+                    and peers[0] in argv[-1]
+                    or case == "missing-export"
+                ):
+                    prefixes = set()
+                elif case in {"extra-export", "release-extra-export"}:
+                    prefixes.add("10.99.0.0/24")
+                return CommandResult(
+                    0,
+                    json.dumps(
+                        {
+                            "advertisedRoutes": {p: {} for p in prefixes},
+                            "totalPrefixCounter": len(prefixes),
+                        }
+                    ),
+                )
+            if argv[-1] == "show running-config":
+                return CommandResult(
+                    0,
+                    f"ip prefix-list peer-in seq 10 permit {prefix}\nrouter bgp 65000\n"
+                    + "".join(f" neighbor {peer} prefix-list peer-in in\n" for peer in peers),
+                )
+        if command == "ip":
+            args = tuple(argv[1:])
+            if args in {("rule", "show"), ("route", "show", "169.254.0.0/16")}:
+                return CommandResult(0, "")
+            if args == ("-j", "-4", "route", "show", "table", "all"):
+                return CommandResult(
+                    0,
+                    json.dumps(
+                        [{"dst": prefix, "dev": "xfrm0", "protocol": "bgp", "gateway": peers[0]}]
+                    ),
+                )
+            if args in {("-j", "xfrm", "state"), ("-j", "xfrm", "policy")}:
+                return CommandResult(
+                    0,
+                    ""
+                    if case == "missing-xfrm"
+                    else "src 192.0.2.10 dst 192.0.2.20\n\tif_id 100\n",
+                )
+            if args == ("-d", "-j", "link", "show", "type", "xfrm"):
+                return CommandResult(
+                    0, '[{"ifname":"xfrm0","linkinfo":{"info_data":{"if_id":100}}}]'
+                )
+        raise AssertionError(argv)
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "binding",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    state_dir = tmp_path / "sample"
+    state_dir.mkdir()
+    config_path = tmp_path / "sample.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    state_path = state_dir / "data-plane.json"
+    state_path.write_text('{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"active"}')
+    selector = TunnelController(cfg, state_dir / STATE_NAME, Effects())
+    selector.tick(AUTH, 100)
+    selector.request("failover", "backup", AUTH, 101)
+    selector.tick(AUTH, 102)  # Publishes new intent; fake effects leave native policy unchanged.
+    assert selector.state["selected"] == {"site": "backup"}
+    if case.startswith("release-"):
+        # Exercise the real timeout transition; the observer below represents
+        # FRR still serving the installed target during restoration revalidation.
+        selector.tick(AUTH, selector.state["operation"]["deadline"] + 1)
+        assert selector.state["operation"]["verb"] == "release"
+        assert selector.state["selected"] == {}
+    if case == "completed":
+        selector.state["operation"]["phase"] = "succeeded"
+        selector._save()
+    if case == "passive":
+        state_path.write_text('{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"passive"}')
+    (state_dir / "controller-checkpoint.json").write_text(
+        json.dumps(
+            controller_checkpoint_to_dict(
+                ControllerCheckpoint(ownership_incarnation=2 if case == "stale-authority" else 1)
+            )
+        )
+    )
+    ports = replace(
+        ports,
+        data_plane=SystemDataPlaneRuntime(
+            state_path=state_path,
+            guard_path=state_dir / "guard.json",
+            configured_bgp_sessions=peers,
+            expected_bgp_policy_digest=digest,
+            runner=runner,
+        ),
+    )
+    ports.routes.bgp_policies = [{"remote_prefixes": [prefix]}]
+    ports.routes.expected_import_policy_digest = digest
+    ports.cloud.observe = lambda: pytest.fail("native sampler cannot observe cloud")
+    before = {p.name: p.read_bytes() for p in state_dir.iterdir()}
+    ready = ports.sample_local_health(
+        config_path=config_path, state_dir=state_dir, deadline=105, clock=lambda: 102
+    )
+    assert ready.sample_complete
+    healthy = case in {"normal-policy", "previous-override", "release-requested-policy"}
+    assert ready.serving_ready is healthy
+    assert ready.promotion_ready is healthy
+    assert calls and all(0 < timeout <= 3 for _, timeout in calls)
+    assert {p.name: p.read_bytes() for p in state_dir.iterdir()} == before
     ports.close()

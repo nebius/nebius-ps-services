@@ -128,7 +128,16 @@ def main(argv=None):
     command = sub.add_parser('fence', allow_abbrev=False)
     command.add_argument('--run-dir', type=Path, required=True)
     command.add_argument('--reason', choices=('steering', 'cancelled'), required=True)
-    for action in ('refinement-ready', 'settle-objective', 'complete', 'cancel-complete', 'retire-fenced-waves', 'resume-replanned'):
+    command = sub.add_parser('admit-program', allow_abbrev=False)
+    command.add_argument('--run-dir', type=Path, required=True)
+    command.add_argument('--candidate', type=Path, required=True)
+    for action in ('qualify', 'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'):
+        command = sub.add_parser(action, allow_abbrev=False)
+        command.add_argument('--run-dir', type=Path, required=True)
+        command.add_argument('--execution', required=True)
+        if action in {'qualify', 'attest-delivery', 'phase-exit'}:
+            command.add_argument('--candidate', type=Path, required=True)
+    for action in ('admit-inputs', 'refinement-ready', 'settle-objective', 'complete', 'cancel-complete', 'retire-fenced-waves', 'resume-replanned'):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument('--run-dir', type=Path, required=True)
         if action == 'settle-objective':
@@ -139,7 +148,25 @@ def main(argv=None):
         session = native_session_id()
         if hasattr(args, 'run_dir'):
             authorize_coordinator(args.run_dir, session, owner=args.owner)
-        if args.action == 'complete':
+        if args.action == 'qualify':
+            from workflow_qualification import qualify
+            value = qualify(args.run_dir, args.execution, read(args.candidate))
+        elif args.action in {'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'}:
+            import workflow_delivery
+            if args.action == 'attest-delivery':
+                candidate = read(args.candidate)
+                value = workflow_delivery.attest(args.run_dir, args.execution, candidate['review'], candidate['qualification'])
+            elif args.action == 'phase-exit':
+                value = workflow_delivery.phase_exit(args.run_dir, args.execution, read(args.candidate)['qualifications'])
+            else:
+                value = getattr(workflow_delivery, 'submit' if args.action == 'submit-delivery' else 'reconcile')(args.run_dir, args.execution)
+        elif args.action == 'admit-inputs':
+            from workflow_program import admit_inputs
+            value = admit_inputs(args.run_dir)
+        elif args.action == 'admit-program':
+            from workflow_program import admit
+            value = admit(args.run_dir, read(args.candidate))
+        elif args.action == 'complete':
             value = complete_run(args.run_dir, session)
         elif args.action in {'cancel-complete', 'retire-fenced-waves', 'resume-replanned'}:
             import workflow_reconcile
@@ -156,7 +183,7 @@ def main(argv=None):
         else:
             binding = observe_binding(home, args.owner, session, args.project_root)
             value = {'status': 'UNBOUND'} if binding is None else result(*binding, 'BOUND')
-    except (WorkflowError, OSError, ValueError, RuntimeError) as error:
+    except (WorkflowError, OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         print(json.dumps({'status': 'blocked', 'code': getattr(error, 'code', 'STATE_INVALID'), 'error': str(error)}))
         return 2
     print(json.dumps(value, indent=2, sort_keys=True))

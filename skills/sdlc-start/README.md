@@ -10,10 +10,32 @@ SDLC phases. Worktree owns Git transactions and fresh task worktrees. Root-owned
 spec interpretation remains with maintain-project-specs. Global spec maintenance
 is independent of workflow intake; no prompt capture is installed.
 
+Accepted registration and initialized phase state are separate. After fresh
+intake, the bound coordinator creates its first `sdlc-start` checkpoint and
+current state before observation or routing. Existing or partial history follows
+reconciliation; an active pointer never justifies resetting evidence or counters.
+Intake helpers, hooks and verifiers do not create these phase transitions.
+
 Prepared phases use the registered integration checkout. Promotion retains
 unchanged-source checks and managed outer-worktree ownership. Post-promotion
 documentation drift starts a corrective run. Remote publication still requires
 its existing authorization and exact-commit checks.
 
+In verifier-owned disposable runs, hook Git reads validate the sealed Git
+profile before observing project identity or staged content. Invalid profiles
+fail closed; ordinary sessions retain their existing Git environment.
+
+Secret screening permits bounded unquoted lookup/call expressions, including
+CSRF DOM access, while retaining literal, ambiguous-input and provider-specific
+credential checks across shell, patch and native write tools.
+
 See [SKILL.md](SKILL.md), [state schema](references/state-schema.md) and the
 [shared execution contract](../worktree/references/workflow-contract.md).
+
+## Repair dispatch completion
+
+The feature dispatch ceiling blocks new repair admissions. The last admitted
+repair may finish under its existing authority and complete required
+revalidation. Over-limit counts and missing dispatch or cursor authority remain
+blocked. Successive classifications retain earlier invalidations, and the
+current successful repair must rerun their ordered gates before resolution.

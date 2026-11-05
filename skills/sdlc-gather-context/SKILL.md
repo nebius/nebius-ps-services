@@ -66,6 +66,9 @@ Gather only the context needed for one feature and produce a compact context pac
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
   Before preparation, bind evidence to the accepted objective and applicable
@@ -75,7 +78,7 @@ Gather only the context needed for one feature and produce a compact context pac
 - `docs/design.md` if present.
 - Relevant source files, tests, README, architecture docs, and layer boundary
   contracts when the feature spans serial application layers.
-- Official vendor docs first.
+- Local source, contracts and tests first; official vendor docs resolve external facts.
 - Internal Confluence, Slack, Jira, GitHub, or MCP resources when available.
 
 ## Writes
@@ -87,7 +90,10 @@ Gather only the context needed for one feature and produce a compact context pac
 
 - Use `assets/templates/context-pack.md.template` when creating a context pack.
 - Identify technologies and vendors used by the feature.
-- Gather official vendor facts first, internal docs second, code and tests third.
+- Read local code, contracts and tests first. Use connected organizational context
+  only for unresolved organizational questions; invoke `research` for bounded
+  external facts with primary documentation. Return evidence to this adapter;
+  research never writes the SDLC context pack or starts another coordinator.
 - Summarize only facts that affect design or implementation.
 - For serial multi-layer features, gather the facts needed to design one
   vertical slice: existing layer owners, API or command contracts, data or
@@ -132,7 +138,7 @@ Gather only the context needed for one feature and produce a compact context pac
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

@@ -9,6 +9,8 @@ import re
 import stat
 import subprocess
 
+from workflow_state import git_environment
+
 
 class SpecCheckoutError(RuntimeError):
     """Execution cannot establish the authoritative canonical-spec checkout."""
@@ -37,7 +39,7 @@ def _read(path: Path) -> dict:
 def _git(path: Path, *arguments: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(path), *arguments], capture_output=True, text=True,
-        timeout=30, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"}, check=False,
+        timeout=30, env={**git_environment(path), "GIT_OPTIONAL_LOCKS": "0"}, check=False,
     )
     if result.returncode:
         _fail("canonical-spec Git identity is unavailable")
@@ -45,7 +47,7 @@ def _git(path: Path, *arguments: str) -> str:
 
 
 def resolve_spec_checkout(
-    run_dir: Path, selected_project: Path, *, feature_id: str | None = None,
+    run_dir: Path, selected_project: Path, *, execution_id: str | None = None,
     strict_head: bool = True,
 ) -> Path:
     """Derive the checkout; transition owners retain their journal recovery checks.
@@ -54,12 +56,12 @@ def resolve_spec_checkout(
     their own interrupted commit. No path, branch or registration check is relaxed.
     """
     try:
-        return _resolve(run_dir.resolve(), selected_project, feature_id, strict_head)
+        return _resolve(run_dir.resolve(), selected_project, execution_id, strict_head)
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         raise SpecCheckoutError("canonical-spec checkout is unavailable or invalid") from error
 
 
-def _resolve(run_dir: Path, selected: Path, feature_id: str | None, strict: bool) -> Path:
+def _resolve(run_dir: Path, selected: Path, execution_id: str | None, strict: bool) -> Path:
     if selected != selected.resolve() or run_dir != run_dir.resolve():
         _fail("canonical-spec identity contains a symlink")
     execution = run_dir / "execution"
@@ -69,32 +71,32 @@ def _resolve(run_dir: Path, selected: Path, feature_id: str | None, strict: bool
         _fail("canonical-spec execution directory is unsafe")
     records = {}
     for entry in execution.iterdir():
-        if re.fullmatch(r"FEAT-[0-9]{3,}", entry.name):
+        if re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", entry.name):
             if entry != entry.resolve() or not entry.is_dir():
                 _fail("canonical-spec feature directory is unsafe")
             records[entry.name] = _read(entry / "coordinator.json")
-    if feature_id is None:
+    if execution_id is None:
         current = run_dir / "current-state.json"
         if current.exists():
-            feature_id = _read(current).get("current_feature")
+            execution_id = _read(current).get("current_execution")
         active = [key for key, value in records.items() if value.get("status") != "done"]
-        if len(active) > 1 or (active and feature_id not in (None, active[0])):
+        if len(active) > 1 or (active and execution_id not in (None, active[0])):
             _fail("canonical-spec active feature is ambiguous")
         delivered = [key for key, value in records.items() if value.get("delivery_mode") == "feature" and value.get("status") == "done"]
-        if not active and feature_id is None and len(delivered) == 1:
-            feature_id = delivered[0]
-        feature_id = active[0] if active else feature_id
-    if feature_id not in records:
+        if not active and execution_id is None and len(delivered) == 1:
+            execution_id = delivered[0]
+        execution_id = active[0] if active else execution_id
+    if execution_id not in records:
         if any(value.get("status") != "done" for value in records.values()):
             _fail("canonical-spec active feature is missing")
         return selected
-    value = records[feature_id]
+    value = records[execution_id]
     if value.get("schema") in {f"agentic-sdlc/execution-coordinator-v{n}" for n in range(1, 8)}:
         _fail("legacy execution coordinator schema is unsupported", "WORKFLOW_UPGRADE_REQUIRED")
-    if (value.get("schema") != "workflow/execution-coordinator-v1"
+    if (value.get("schema") != "workflow/execution-coordinator-v2"
             or value.get("state_version") != 1
             or value.get("run_id") != run_dir.name
-            or value.get("feature_id") != feature_id
+            or value.get("execution_id") != execution_id
             or value.get("selected_project_root") != str(selected)):
         _fail("canonical-spec coordinator identity is foreign")
     repo = Path(value["project_root"])
@@ -107,7 +109,7 @@ def _resolve(run_dir: Path, selected: Path, feature_id: str | None, strict: bool
     common = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     if str(common) != value.get("git_common_dir"):
         _fail("canonical-spec common Git directory is foreign")
-    integration = run_dir / "worktrees" / feature_id / "integration"
+    integration = run_dir / "worktrees" / execution_id / "integration"
     if value.get("integration_worktree") != str(integration):
         _fail("canonical-spec integration path is foreign")
     status = value.get("status")
@@ -146,9 +148,9 @@ def _resolve(run_dir: Path, selected: Path, feature_id: str | None, strict: bool
             status == "blocked" and not integration.exists()
             and value.get("active_wave") is None
             and value.get("integration_head") == value.get("base_head")
-            and not (execution / feature_id / "assignments").exists()):
+            and not (execution / execution_id / "assignments").exists()):
         return selected
-    if not feature_delivery and status not in {"specs_prepared", "specs_sealing", "prepared", "tdd_sealed", "waves_running", "integrated", "sealed", "blocked", "repair_required"}:
+    if not feature_delivery and status not in {"specs_prepared", "specs_sealing", "prepared", "tdd_sealed", "waves_running", "integrated", "sealed", "blocked", "repair_required", "design_revision_pending"}:
         _fail("canonical-spec execution lifecycle is invalid")
     if integration != integration.resolve() or not integration.is_dir():
         _fail("canonical-spec integration checkout is unavailable")

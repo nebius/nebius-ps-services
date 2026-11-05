@@ -685,7 +685,7 @@ def assert_doc_contracts(root: Path) -> None:
 def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     hooks_dir = codex_home / "hooks"
     hooks_dir.mkdir(parents=True)
-    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
         shutil.copyfile(root / "scripts" / name, hooks_dir / name)
 
     session_script = hooks_dir / "session_start_context.py"
@@ -1083,7 +1083,7 @@ def validate_hooks_json_command(root: Path, hooks: dict, temp_dir: Path) -> None
     normal_home = temp_dir / "normal-home"
     hooks_dir = custom_home / "hooks"
     hooks_dir.mkdir(parents=True)
-    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
         shutil.copyfile(root / "scripts" / name, hooks_dir / name)
     normal_home.mkdir()
     shutil.copyfile(
@@ -1131,7 +1131,7 @@ def validate_security_and_permission_helper(root: Path, temp_dir: Path) -> None:
     codex_home = temp_dir / "security-codex"
     hooks_dir = codex_home / "hooks"
     hooks_dir.mkdir(parents=True)
-    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
         shutil.copyfile(root / "scripts" / name, hooks_dir / name)
     helper = hooks_dir / "global_context_state.py"
     user_hook = hooks_dir / "user_prompt_context.py"

@@ -175,20 +175,21 @@ def _excluded(payload: dict[str, Any]) -> bool:
     return bool(agent_type and agent_type not in {"root", "primary"})
 
 
-def _git_environment() -> dict[str, str]:
-    shaped = sorted(
-        name
-        for name in os.environ
-        if (
-            name in REPOSITORY_SHAPING_GIT_ENV
-            or name.startswith(REPOSITORY_SHAPING_GIT_ENV_PREFIXES)
-        )
-    )
+def _git_environment(root: Path | None = None) -> dict[str, str]:
+    from git_environment import environment as owned_environment
+    if "SKILLS_GIT_PROFILE" in os.environ and root is None:
+        raise IntentError("owned Git environment requires the exact repository scope")
+    try:
+        environment = owned_environment(root or Path.cwd())
+    except ValueError as error:
+        raise IntentError(str(error)) from error
+    permitted = ({"GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_ATTR_NOSYSTEM"}
+                 if "SKILLS_GIT_PROFILE" in environment else set())
+    shaped = sorted(name for name in os.environ if name not in permitted and (
+        name in REPOSITORY_SHAPING_GIT_ENV or name.startswith(REPOSITORY_SHAPING_GIT_ENV_PREFIXES)))
     if shaped:
-        raise IntentError(
-            "repository-shaping Git environment must be unset: " + ", ".join(shaped)
-        )
-    return os.environ.copy()
+        raise IntentError("repository-shaping Git environment must be unset: " + ", ".join(shaped))
+    return environment
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -199,7 +200,7 @@ def _git(root: Path, *arguments: str) -> str:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=_git_environment(),
+            env=_git_environment(root),
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -361,9 +362,13 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
                 "Interpret the root user's request semantically: commit, commit-push or create-pr may "
                 "be requested in natural language or with a skill name anywhere. Discussion, "
                 "help, quotations, negation and skill repair are not action requests. "
-                "Only for an authorized action, use canonical commit transaction begin before branch changes, then prepare "
+                "Only for an authorized standalone root commit, commit-push or create-pr action, "
+                "use canonical commit transaction begin before branch changes, then prepare "
                 f"with --requested-action commit|commit-push|create-pr and --intent-sha256 {receipt_digest}. "
                 f"Canonical authorization path: {path}. Canonical claim path: {claim_path}. "
+                "Agentic SDLC owns its admission and commits through its coordinator and sdlc-commit; "
+                "do not call root begin for its eventual commit phase, including before sdlc-start admission. "
+                "Implement and Worktree delegated commits retain their owning workflow contracts. "
                 "Never ask for a repeated magic phrase or create authorization files manually."
             ),
         },

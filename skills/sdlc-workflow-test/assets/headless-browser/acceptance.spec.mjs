@@ -1,6 +1,7 @@
 import { test, expect, chromium } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { completeTask } from './completion-control.mjs';
 
 // Independent verifier oracle: never copied into the product's TDD test tree.
 const input = JSON.parse(fs.readFileSync(process.env.SDLC_BROWSER_INPUT, 'utf8'));
@@ -116,7 +117,7 @@ test('owned browser acceptance', async () => {
     await page.reload();
     await expect(page.locator(`[data-task-id="${id}"]`)).toContainText(title);
     observed('refresh-and-observe-persistence');
-    await page.locator(`[data-task-id="${id}"]`).getByRole('checkbox', { name: 'Complete task', exact: true }).check();
+    await completeTask(page, id);
     observations.record.completed = true;
     observed('complete-task');
     await checkpoint('completed', observations.record);

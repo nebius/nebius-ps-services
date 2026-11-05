@@ -13,6 +13,19 @@ defines vertical end-to-end feature flow, layer boundaries, implementation,
 validation, test, evaluation, rollout, and rollback boundaries before planning
 starts.
 
+Write source citations as descriptive Markdown links and check the complete
+design candidate before paired publication. Use the project's Markdown settings
+even when the candidate is private. Without a configured checker, the private
+`scripts/check_design_markdown.py` helper runs `markdownlint` from the selected
+project and applies MD013 exceptions only to recognized schema-marker lines
+in memory. It never edits candidate files or canonical ownership markers;
+prose length and citation checks stay active. Its report binds the candidate
+digest and maps diagnostics to original lines without exposing source excerpts.
+Disable automatic fixes and configuration fallback. Preserve existing template
+exceptions without adding ad hoc suppressions. Retain failed checks and return them to normal workflow
+classification; the check does not authorize direct edits to canonical files
+or bypass the shared publisher's semantic validation.
+
 Failure-driven redesign is narrower than initial design work. It requires a
 classifier-validated admission record proving a system-contract defect,
 reproducibility at the recorded commit, valid evaluator/environment, stable
@@ -21,6 +34,14 @@ reconsideration may proceed automatically; changes to public contracts, data
 lifecycle, security, permissions, deployment scope, or external behavior
 require durable human approval. Inconclusive diagnosis stops instead of
 becoming redesign.
+
+A proven candidate formatting or schema failure before execution preparation
+may return here as `phase_artifact_repair`. Verify the exact classifier route
+and active counted localized dispatch, preserve the accepted decisions, and
+rerun the original canonical publisher check. Keep the failed candidate and
+record completion before advancing. This limited artifact repair does not
+authorize architectural reconsideration; semantic changes return to the
+classifier and its normal admission rules.
 
 ## Design Method
 

@@ -213,7 +213,7 @@ def exact_lock(expected: dict[str, Any], state_dir: Path = STATE) -> dict[str, A
     return value
 
 
-def evidence(
+def fencing_evidence(
     expected: dict[str, Any], *, state_dir: Path = STATE, unstarted: bool = False
 ) -> dict[str, Any]:
     """Observe underlying authority, never boot-filtered status projections."""
@@ -241,8 +241,7 @@ def evidence(
         path = state_dir / name
         if path.exists() or path.is_symlink():
             raise RuntimeError("HA repair conflicts with durable writer authority")
-    from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, PeerLeaf
-    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_from_dict
+    from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
 
     checkpoint_path = state_dir / "controller-checkpoint.json"
     checkpoint = read_json(checkpoint_path) if checkpoint_path.exists() else None
@@ -253,9 +252,33 @@ def evidence(
         # Legacy decoding must not normalize away an unproved external effect.
         if checkpoint.get("pending_action") is not None:
             raise RuntimeError("HA repair controller checkpoint is unresolved")
-        decoded = controller_checkpoint_from_dict(checkpoint)
+        decoded = inspect_checkpoint(checkpoint)
         if decoded.transfer_continuity is not None or decoded.repair_attempt is not None:
             raise RuntimeError("HA repair controller continuity is unresolved")
+    return {
+        "lock": lock,
+        "boot_id": boot,
+        "forwarding": False,
+        "guard_boot_id": guard["guard_boot_id"],
+        "checkpoint_schema": None if checkpoint is None else checkpoint["schema"],
+        "checkpoint_sha256": None
+        if checkpoint is None
+        else sha(verified_file(checkpoint_path, sha(checkpoint_path.read_bytes()))),
+        "checkpoint_conversion": (
+            read_json(state_dir / "checkpoint-conversion.json")
+            if (state_dir / "checkpoint-conversion.json").exists()
+            else None
+        ),
+    }
+
+
+def evidence(
+    expected: dict[str, Any], *, state_dir: Path = STATE, unstarted: bool = False
+) -> dict[str, Any]:
+    """Freeze package-repair fencing plus mTLS identity before package effects."""
+    from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, PeerLeaf
+
+    fence = fencing_evidence(expected, state_dir=state_dir, unstarted=unstarted)
     store = ManagedMTLSStore(state_dir / "mtls", create=False)
     status = store.status()
     active = store._load_active()
@@ -300,15 +323,11 @@ def evidence(
             raise RuntimeError("HA repair conflicts with mTLS transaction")
         transactions[path.name] = dict(record)
     return {
-        "lock": lock,
-        "boot_id": boot,
-        "forwarding": False,
-        "guard_boot_id": guard["guard_boot_id"],
+        **fence,
         "mtls": active,
         "transactions": transactions,
         # Sequence changes under an inhibited controller are harmless; the raw
         # no-pending assertions above must be made afresh at every boundary.
-        "checkpoint_schema": None if checkpoint is None else checkpoint["schema"],
     }
 
 
@@ -340,3 +359,33 @@ def persist_cold_guard(source: bytes) -> None:
 
 def sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def peer_checkpoint_transition(before: object, after: object, artifact: str) -> bool:
+    """Accept only the exact fenced predecessor-to-v5 publication on a peer."""
+    if before == after:
+        return True
+    if not isinstance(before, dict) or not isinstance(after, dict) or set(before) != set(after):
+        return False
+    changing = {"checkpoint_schema", "checkpoint_sha256", "checkpoint_conversion"}
+    if any(before[key] != after[key] for key in set(before) - changing):
+        return False
+    receipt = after.get("checkpoint_conversion")
+    lock = after.get("lock", {})
+    if not isinstance(receipt, dict) or not isinstance(lock, dict):
+        return False
+    return bool(
+        before.get("checkpoint_schema")
+        in {"nebius-vpngw/vm-ha-controller-checkpoint-v" + str(v) for v in range(1, 5)}
+        and after.get("checkpoint_schema") == "nebius-vpngw/vm-ha-controller-checkpoint-v5"
+        and receipt.get("schema") == "nebius-vpngw/checkpoint-conversion-v1"
+        and receipt.get("phase") == "pending"
+        and receipt.get("before") == before.get("checkpoint_sha256")
+        and receipt.get("after") == after.get("checkpoint_sha256")
+        and receipt.get("artifact") == artifact
+        and receipt.get("boot_id") == after.get("boot_id")
+        and all(
+            receipt.get(k) == lock.get(k)
+            for k in ("operation_id", "node_id", "cluster_id", "generation_id")
+        )
+    )

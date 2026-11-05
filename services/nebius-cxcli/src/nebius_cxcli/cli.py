@@ -2535,8 +2535,11 @@ app = typer.Typer(
         "root when missing, and overwrites existing resolved project folders only with "
         "confirmation unless --force is provided; component list/add/remove use "
         "--config CONFIG_YAML as the day-2 config.yaml editing surface; "
-        "discover uses a deployment-scope directory; grafana install persists target observability "
-        "settings and installs Grafana and its backends; grafana also manages dashboard JSON; "
+        "discover uses a deployment-scope directory; grafana install provides focused Grafana "
+        "setup, saves target observability settings, then renders and deploys the whole project, "
+        "including other pending changes; grafana also manages dashboard JSON; "
+        "nat-gateway uses CONFIG_YAML to inspect infra:nat-gateway components and recover "
+        "retained gateway state; "
         "validate, quota-check, quota-request, render, deploy, "
         "acceptance-test, upgrade, migrate, and bootstrap-ci use config.yaml; "
         "soperator create uses a deployments root, discover uses an output directory, "
@@ -2721,7 +2724,7 @@ app.add_typer(acceptance_test_app, name="acceptance-test")
 app.add_typer(upgrade_app, name="upgrade")
 app.add_typer(migrate_app, name="migrate")
 app.add_typer(grafana_app, name="grafana")
-app.add_typer(nat_app, name="nat")
+app.add_typer(nat_app, name="nat-gateway")
 app.add_typer(tailscale_app, name="tailscale")
 
 
@@ -25175,29 +25178,13 @@ def _empty_complex_value_label(value: object, *, type_hint: str | None) -> str |
 
 
 def _parse_complex_prompt_value(raw: str, *, type_hint: str | None) -> object:
-    kind = _complex_type_kind(type_hint)
-    parsed = yaml.safe_load(raw)
-    if kind == "sequence":
-        if isinstance(parsed, list):
-            if _is_string_sequence_type_hint(type_hint) and not all(
-                isinstance(item, str) for item in parsed
-            ):
-                raise ValueError("Expected a comma-separated list of strings.")
-            return parsed
-        if _is_string_sequence_type_hint(type_hint) and isinstance(parsed, str):
-            values = [item.strip() for item in parsed.split(",")]
-            if not values or any(not item for item in values):
-                raise ValueError("Expected a comma-separated list of strings.")
-            return values
-        if _is_string_sequence_type_hint(type_hint):
-            raise ValueError("Expected a comma-separated list of strings.")
-        else:
-            raise ValueError("Expected a YAML/JSON list value.")
-    if kind == "mapping":
-        if not isinstance(parsed, dict):
-            raise ValueError("Expected a YAML/JSON mapping value.")
-        return parsed
-    return parsed
+    from .wizard_input import parse_collection
+
+    return parse_collection(
+        raw,
+        kind=_complex_type_kind(type_hint),
+        string_sequence=_is_string_sequence_type_hint(type_hint),
+    )
 
 
 def _has_required_complex_content(value: object, *, type_hint: str | None) -> bool:
@@ -25210,6 +25197,9 @@ def _has_required_complex_content(value: object, *, type_hint: str | None) -> bo
 
 
 def _coerce_raw_value_from_type_hint(raw: str, type_hint: str | None) -> object:
+    from .wizard_input import validate_text
+
+    validate_text(raw)
     hint = _short_type_hint(type_hint)
     if hint == "bool":
         lowered = raw.strip().lower()
@@ -25385,6 +25375,13 @@ def _prompt_path_sort_key(
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
+        "infra.components[].tailscale.tailnet": 110,
+        "infra.components[].tailscale.tags": 111,
+        "infra.components[].tailscale.routes": 112,
+        "infra.components[].tailscale.auth": 113,
+        "infra.components[].tailscale.onboarding.owner": 114,
+        "infra.components[].tailscale.onboarding.purpose": 115,
+        "infra.components[].tailscale.policy.rules": 116,
         "infra.components[].observability.enabled": 200,
         "infra.components[].observability.vm.logs.enabled": 201,
         "infra.components[].observability.vm.logs.systemd_units": 202,
@@ -28810,6 +28807,7 @@ def _prompt_scalar_override(
     prompt_hint: str | None = None,
     blank_text: str | None = None,
     mysterybox_eso_sync: bool = False,
+    show_empty_default: bool = False,
 ) -> tuple[object, bool]:
     if path_label.endswith(".values.slurmNodes.login.sshRootPublicKeys"):
         console.print(
@@ -28878,7 +28876,11 @@ def _prompt_scalar_override(
                 if blank_hint is not None and not required
                 else "blank keeps current"
             )
-            prompt_default = "" if blank_hint is not None and not required else default_value
+            prompt_default = (
+                ""
+                if blank_hint is not None and not required and not show_empty_default
+                else default_value
+            )
         while True:
             try:
                 raw = typer.prompt(
@@ -32757,6 +32759,10 @@ def _run_component_field_wizard(
                     current_scope=context_scope,
                 )
                 _maybe_print_soperator_worker_bulk_prompt_comment(full_path_label)
+                if entry.scope == "infra" and entry.id == "tailscale-gw":
+                    from .tailscale_wizard import print_guidance
+
+                    print_guidance(full_path_label)
                 is_soperator_worker_bulk_prompt = (
                     _soperator_worker_bulk_control_prompt(full_path_label) is not None
                 )
@@ -32816,6 +32822,15 @@ def _run_component_field_wizard(
                     and full_path_label.endswith(".inputs.labels")
                 ):
                     updated, should_stop = prompt_bucket_labels(current)
+                    write_default_to_config = True
+                elif (
+                    entry.scope == "infra"
+                    and entry.id == "tailscale-gw"
+                    and full_path_label.endswith(".tailscale.tags")
+                ):
+                    from .tailscale_wizard import prompt_tags
+
+                    updated, should_stop = prompt_tags(current, full_path_label)
                     write_default_to_config = True
                 elif (
                     entry.scope == "infra"
@@ -32920,6 +32935,11 @@ def _run_component_field_wizard(
                         choices=field_choices,
                         type_hint=field_type_hints.get(full_path_label),
                         required=prompt_required,
+                        show_empty_default=(
+                            entry.scope == "infra"
+                            and entry.id == "tailscale-gw"
+                            and full_path_label.endswith(".tailscale.policy.tag_owners")
+                        ),
                         unset_on_skip=(
                             not prompt_required
                             and not path_existed_before_prompt
@@ -32978,6 +32998,11 @@ def _run_component_field_wizard(
                         choices=field_choices,
                         type_hint=field_type_hints.get(full_path_label),
                         required=prompt_required,
+                        show_empty_default=(
+                            entry.scope == "infra"
+                            and entry.id == "tailscale-gw"
+                            and full_path_label.endswith(".tailscale.policy.tag_owners")
+                        ),
                         unset_on_skip=(
                             not prompt_required
                             and not path_existed_before_prompt

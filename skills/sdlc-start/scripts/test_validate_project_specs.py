@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("validate_project_specs.py")
@@ -138,6 +140,11 @@ Independent verification predates schema v2 evidence tracking.
 class SpecValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="sdlc-spec-validation-")
+        home = Path(self.temporary.name).resolve() / "agent-home"
+        home.mkdir(mode=0o700)
+        self.enterContext(mock.patch.dict(os.environ, {
+            "SKILLS_AGENT": "codex", "CODEX_HOME": str(home),
+        }))
         self.project = Path(self.temporary.name) / "project"
         (self.project / "docs").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(self.project)], check=True)

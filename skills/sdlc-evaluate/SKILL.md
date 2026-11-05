@@ -70,6 +70,9 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
   Before preparation, bind evidence to the accepted objective and applicable
@@ -87,7 +90,7 @@ Evaluate observed product behavior against real-world acceptance criteria.
 - `evidence/FEAT-*/evaluate.md`.
 - Screenshots, transcripts, or API/service summaries as appropriate.
 - Per-criterion `pass`, `fail`, or `inconclusive` result.
-- For every failed gate, one immutable `failure-event-v1` recorded through
+- For every failed gate, one immutable `failure-event-v2` recorded through
   `scripts/failure_contract.py`.
 
 ## Process
@@ -172,7 +175,7 @@ Evaluate observed product behavior against real-world acceptance criteria.
 - Mark `cause_status` as `proven` or `high_confidence` only when current
   evidence already establishes the responsible mechanical owner. Otherwise
   emit `ambiguous`; do not guess implementation or design.
-- Pass the resulting `failure-event-v1` to `sdlc-classify-failure`. Proven test,
+- Pass the resulting `failure-event-v2` to `sdlc-classify-failure`. Proven test,
   implementation, specification, evaluator, environment, policy, human, or
   design causes take their direct owner route. An ambiguous evaluation failure
   enters conditional troubleshooting.
@@ -254,7 +257,7 @@ Evaluate observed product behavior against real-world acceptance criteria.
 - Keep run state, plans, evidence, steering, screenshots, and transcripts under `<agent-home>/sdlc-runs/<project-id>/<run-id>/`.
 - When an active run exists, reload `current-state.json` and the latest
   checkpoint before changing phase or writing evidence.
-- Work on one feature at a time unless the user explicitly asks for a different SDLC shape.
+- Keep one delivery candidate active; eligible tasks may span features within its frozen slice.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.

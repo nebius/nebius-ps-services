@@ -610,6 +610,11 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
     },
     "tailscale-gw": {
         **_project_network_and_subnet_fields(),
+        "inputs.name": {
+            "default": "tailscale-gw",
+            "write_default_to_config": True,
+            "type_hint": "string",
+        },
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform", preset_field="inputs.preset"
         ),
@@ -640,7 +645,11 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "tailscale.onboarding.purpose": {"type_hint": "string", "required": True},
         "tailscale.onboarding.environment": {"type_hint": "string"},
         "tailscale.onboarding.admin_requirements": {"type_hint": "list(string)", "default": []},
-        "tailscale.policy.tag_owners": {"type_hint": "list(string)", "default": []},
+        "tailscale.policy.tag_owners": {
+            "type_hint": "list(string)",
+            "default": [],
+            "write_default_to_config": True,
+        },
         "tailscale.policy.auto_approve": {"type_hint": "bool", "default": True},
         "tailscale.policy.rules": {"type_hint": "list(any)", "required": True},
         "tailscale.auth": {"type_hint": "map(any)", "required": True},

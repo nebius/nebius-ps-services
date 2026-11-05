@@ -14,6 +14,111 @@ import tempfile
 from typing import Iterator
 
 
+# BEGIN shared runtime bootstrap
+def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
+    import hashlib as _hashlib
+    import os as _os
+    from pathlib import Path as _Path
+    import stat as _stat
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    def read_source(path):
+        path = _Path(_os.path.abspath(path))
+        for part in (*reversed(path.parents), path):
+            metadata = part.lstat()
+            if _stat.S_ISLNK(metadata.st_mode):
+                if metadata.st_uid != 0 or part == path:
+                    raise ImportError("shared runtime path contains an unsafe symlink")
+                metadata = part.stat()
+            if part != path:
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if (not _stat.S_ISDIR(metadata.st_mode) or metadata.st_uid not in {0, _os.getuid()}
+                        or metadata.st_mode & 0o022 and not sticky):
+                    raise ImportError("unsafe shared runtime ancestry")
+        path = path.resolve(strict=True)
+        descriptor = _os.open(path.anchor, _os.O_RDONLY | _os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = _os.open(part, _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW, dir_fd=descriptor)
+                _os.close(descriptor)
+                descriptor = child
+                metadata = _os.fstat(descriptor)
+                sticky = metadata.st_uid == 0 and metadata.st_mode & _stat.S_ISVTX
+                if metadata.st_uid not in {0, _os.getuid()} or metadata.st_mode & 0o022 and not sticky:
+                    raise ImportError("unsafe shared runtime ancestry")
+            child = _os.open(path.name, _os.O_RDONLY | _os.O_NOFOLLOW | _os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = _os.fstat(child)
+                if (not _stat.S_ISREG(before.st_mode) or before.st_uid != _os.getuid()
+                        or before.st_mode & 0o022 or before.st_nlink != 1 or before.st_size > 1048576):
+                    raise ImportError("unsafe shared runtime source")
+                data = bytearray()
+                while chunk := _os.read(child, min(65536, 1048577 - len(data))):
+                    data.extend(chunk)
+                    if len(data) > 1048576:
+                        raise ImportError("shared runtime source exceeds size limit")
+                after = _os.fstat(child)
+                bound = _os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+                def identity(value):
+                    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                if identity(before) != identity(after) or identity(after) != identity(bound):
+                    raise ImportError("shared runtime source changed while reading")
+                return bytes(data), identity(after)
+            finally:
+                _os.close(child)
+        finally:
+            _os.close(descriptor)
+
+    anchor = _Path(_os.path.abspath(anchor_file))
+    declared_paths = (declared_path,) if isinstance(declared_path, str) else declared_path
+    candidates = []
+    for declared in declared_paths:
+        relative = _Path(declared)
+        if tuple(anchor.parts[-len(relative.parts):]) == relative.parts:
+            catalog = anchor.parents[len(relative.parts) - 1]
+            candidates.append(("catalog", catalog, catalog / "global-context-management/scripts"))
+    if not source_only:
+        flat = anchor.parent.parent if anchor.parent.name == "lib" else anchor.parent
+        candidates.append(("flat", flat, flat))
+        agent = "codex" if _os.environ.get("CODEX_THREAD_ID") else _os.environ.get("SKILLS_AGENT", "codex")
+        if agent not in {"codex", "claude"}:
+            raise ImportError("SKILLS_AGENT must be codex or claude")
+        key, default = ("CODEX_HOME", ".codex") if agent == "codex" else ("CLAUDE_CONFIG_DIR", ".claude")
+        home = _Path(_os.environ.get(key, str(_Path.home() / default))).expanduser()
+        if not home.is_absolute():
+            raise ImportError("shared runtime home must be absolute")
+        candidates.append(("flat", home / "hooks", home / "hooks"))
+    for kind, root, support in candidates:
+        loader_path = support / "trusted_runtime.py"
+        if not loader_path.exists() and not loader_path.is_symlink():
+            if ((kind == "catalog" and (support.exists() or support.is_symlink()))
+                    or any((support / name).exists() or (support / name).is_symlink()
+                           for name in ("agent_runtime.py", "hook_runtime.py", "task_state_permissions.py"))):
+                raise ImportError("incomplete shared runtime bundle; reinstall current support")
+            continue
+        data, identity = read_source(loader_path)
+        digest = _hashlib.sha256(data).hexdigest()
+        cache_name = "_skills_trusted_runtime"
+        loader = _sys.modules.get(cache_name)
+        provenance = (str(loader_path), identity, digest)
+        if cache_name in _sys.modules:
+            if (type(loader) is not _ModuleType or getattr(loader, "_bootstrap_provenance", None) != provenance):
+                raise ImportError("conflicting shared runtime loader")
+        else:
+            loader = _ModuleType(cache_name)
+            loader.__file__ = str(loader_path)
+            exec(compile(data, str(loader_path), "exec"), loader.__dict__)
+            loader._bootstrap_provenance = provenance
+            loader._read_source = read_source
+            _sys.modules[cache_name] = loader
+        return loader.load_support(group, anchor=(kind, root), source_only=source_only)
+    raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
+# END shared runtime bootstrap
+_load_skill_support('git-environment', __file__, 'sdlc-workflow-test/scripts/owned_git_origin.py')
+import git_environment as git_profile  # noqa: E402
+
 SCHEMA = "agentic-sdlc/owned-git-origin-v1"
 RECEIPT = ".owned-git-origin.json"
 LOCK = ".owned-git-origin.lock"
@@ -27,22 +132,25 @@ class OriginError(RuntimeError):
     """The fixture's exact local Git ownership could not be established."""
 
 
-def _environment() -> dict[str, str]:
-    forbidden = {
-        "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_TEMPLATE_DIR",
-        "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE",
-        "GIT_EXEC_PATH", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_PROXY_COMMAND",
-        "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL", "GIT_PROTOCOL_FROM_USER",
-        "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS",
-    }
-    if any(key in os.environ for key in forbidden) or any(
-        key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")) for key in os.environ
-    ):
-        raise OriginError("Git environment overrides are forbidden for owned fixtures.")
-    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+def profile_path(project: Path) -> Path:
+    path = git_profile.discover(project)
+    if path is None:
+        raise OriginError("Owned Git configuration profile is missing; create a fresh fixture.")
+    return path
+
+
+def prepare_configuration(project: Path, owner_root: Path, owner_id: str, *, kind: str) -> Path:
+    try:
+        return git_profile.create(project, owner_root, owner_id, kind=kind)
+    except ValueError as error:
+        raise OriginError(str(error)) from error
+
+
+def environment(project: Path, *, bootstrap: bool = False, env=None) -> dict[str, str]:
+    try:
+        return git_profile.environment(project, profile=profile_path(project), bootstrap=bootstrap, env=env)
+    except ValueError as error:
+        raise OriginError(str(error)) from error
 
 
 def _git(root: Path, *arguments: str, allowed: tuple[int, ...] = (0,)) -> str:
@@ -50,7 +158,7 @@ def _git(root: Path, *arguments: str, allowed: tuple[int, ...] = (0,)) -> str:
         result = subprocess.run(
             ["git", "-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
              "-c", "core.fsmonitor=false", "-C", str(root), *arguments],
-            env=_environment(), capture_output=True, text=True, timeout=30,
+            env=environment(root, bootstrap=True), capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise OriginError("Owned fixture Git command could not complete.") from error
@@ -75,7 +183,7 @@ def _path(path: Path, *, directory: bool = True) -> None:
 
 
 def _scope(project: Path, owner_root: Path, owner_id: str) -> Path:
-    _environment()
+    environment(project, bootstrap=True)
     _path(owner_root)
     _path(project)
     if (
@@ -261,6 +369,7 @@ def validate(
     require_clean: bool = False,
 ) -> dict[str, str]:
     """Read and validate exact ownership without contacting a remote."""
+    environment(project)
     _scope(project, owner_root, owner_id)
     with _lock(owner_root, create=False):
         value = _validate(project, owner_root, owner_id, baseline=baseline)
@@ -275,6 +384,7 @@ def initialize(project: Path, owner_root: Path, owner_id: str) -> dict[str, str]
     receipt = owner_root / RECEIPT
     with _lock(owner_root, create=True):
         if origin.exists() or receipt.exists():
+            environment(project)
             return _validate(project, owner_root, owner_id)
         _project(project, origin, initialized=False)
         if _git(project, "status", "--porcelain", "--untracked-files=all"):
@@ -318,6 +428,7 @@ def initialize(project: Path, owner_root: Path, owner_id: str) -> dict[str, str]
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+        git_profile.seal(profile_path(project))
         return _validate(project, owner_root, owner_id, baseline=baseline)
 
 

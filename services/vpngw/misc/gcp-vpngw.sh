@@ -55,6 +55,7 @@ PSK1_ENV_NAME="${PSK1_ENV_NAME:-}"
 PSK2_ENV_NAME="${PSK2_ENV_NAME:-}"
 PSK1="${PSK1:-}"
 PSK2="${PSK2:-}"
+export -n PSK1 PSK2
 POSITIONAL_ARGS=()
 
 delegate_vm_ha_peer_mode() {
@@ -235,7 +236,7 @@ show_usage() {
   print_help_entry "VPN_GATEWAY_NAME" "Override the default HA VPN gateway name" "${S_CYAN}"
   print_help_entry "EXTERNAL_GW_NAME" "Override the external VPN gateway resource name" "${S_CYAN}"
   print_help_entry "TUN1_*, TUN2_*" "Override tunnel APIPA CIDRs or inner IPs explicitly" "${S_CYAN}"
-  print_help_entry "PSK1_ENV_NAME, PSK2_ENV_NAME" "Override the optional export variable names printed with the YAML block" "${S_CYAN}"
+  print_help_entry "PSK1_ENV_NAME, PSK2_ENV_NAME" "Override unknown-PSK placeholder names in the private connection file" "${S_CYAN}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
@@ -252,7 +253,7 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
   printf '%b\n' "  - This script requires the ${S_CYAN}gcloud${S_RESET} CLI to be installed and in ${S_CYAN}PATH${S_RESET}."
   printf '%b\n' "  - Create mode can run ${S_CYAN}gcloud auth login${S_RESET}; status and VM-HA peer modes require an existing login and never start authentication."
-  printf '%b\n' "  - This helper is stateless per connection: each run manages exactly one connection identified by ${S_CYAN}--connection-name${S_RESET}."
+  printf '%b\n' "  - Each run manages one connection and retains private retry credentials for its ${S_CYAN}--connection-name${S_RESET}."
   printf '%b\n' "  - Create mode requires a connection name plus a resolved GCP project, region, Nebius public IP, and Nebius peer ASN."
   printf '%b\n' "  - Status mode also requires a connection name. Nebius public IP is optional there and can come from ${S_CYAN}--nebius-public-ip${S_RESET} or ${S_CYAN}--local-config-file${S_RESET}."
   printf '%b\n' "  - The Nebius workflow is fixed to one public peer IP and exactly two tunnels on one GCP HA VPN gateway: one active and one passive."
@@ -268,7 +269,7 @@ show_usage() {
   printf '%b\n' "  - When you add another connection on a different GCP HA VPN gateway, the script auto-selects unused APIPA /30 ranges by checking the selected Cloud Router and the local config file when provided."
   printf '%b\n' "  - With ${S_CYAN}--rotate-existing-tunnels${S_RESET}, the script removes the matching BGP peers and router interfaces first, then recreates the tunnel pair with new PSKs."
   printf '%b\n' "  - Create mode prints the resolved inputs, then asks for confirmation."
-  printf '%b\n' "  - Successful runs print tunnel PSKs, optional export commands, and a complete Nebius connection block for just that connection."
+  printf '%b\n' "  - Successful runs print private credential and connection-file locations; secret values stay in those mode-0600 files."
 }
 
 require_cmd() {
@@ -898,9 +899,9 @@ router_peer_rows = parse_rows(router_peers_raw)
 
 peer_ip_by_interface: dict[str, str] = {}
 for row in router_peer_rows:
-    if len(row) < 2:
+    if len(row) < 3:
         continue
-    peer_ip_by_interface[row[0]] = row[1]
+    peer_ip_by_interface[row[1]] = row[2]
 
 current_router_tunnels: list[tuple[str, str, str]] = []
 used_router_cidrs: set[str] = set()
@@ -1180,7 +1181,8 @@ for peer in data.get("bgpPeers") or []:
                 str(peer.get("interfaceName") or ""),
                 str(peer.get("peerIpAddress") or ""),
                 str(peer.get("peerAsn") or ""),
-                str(peer.get("advertisedRoutePriority") or ""),
+                str(peer["advertisedRoutePriority"])
+                if peer.get("advertisedRoutePriority") is not None else "",
             ]
         )
     )
@@ -1596,8 +1598,8 @@ status_report() {
   local tun2_gcp_ip="${TUN2_GCP_IP}"
   local tun1_nebius_ip="${TUN1_NEBIUS_IP}"
   local tun2_nebius_ip="${TUN2_NEBIUS_IP}"
-  local psk1_display="${PSK1:-existing: no display}"
-  local psk2_display="${PSK2:-existing: no display}"
+  local psk1_display="<redacted; use the private connection file>"
+  local psk2_display="<redacted; use the private connection file>"
   local neb_asn="${NEBIUS_ASN}"
 
   if resource_exists compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}"; then
@@ -1933,29 +1935,12 @@ main() {
     tunnel2_exists="true"
   fi
 
-  if [[ "${tunnel1_exists}" == "true" && -n "${PSK1}" && "${ROTATE_EXISTING_TUNNELS}" -eq 0 ]]; then
-    log_warn "Ignoring PSK1 because ${TUNNEL1_NAME} already exists. Use --rotate-existing-tunnels to recreate it."
-    PSK1="existing: no display"
-  fi
-  if [[ "${tunnel2_exists}" == "true" && -n "${PSK2}" && "${ROTATE_EXISTING_TUNNELS}" -eq 0 ]]; then
-    log_warn "Ignoring PSK2 because ${TUNNEL2_NAME} already exists. Use --rotate-existing-tunnels to recreate it."
-    PSK2="existing: no display"
-  fi
-
-  if [[ -z "${PSK1}" ]]; then
-    if [[ "${tunnel1_exists}" == "true" && "${ROTATE_EXISTING_TUNNELS}" -eq 0 ]]; then
-      PSK1="existing: no display"
-    else
-      PSK1="$(gen_psk)"
-    fi
-  fi
-  if [[ -z "${PSK2}" ]]; then
-    if [[ "${tunnel2_exists}" == "true" && "${ROTATE_EXISTING_TUNNELS}" -eq 0 ]]; then
-      PSK2="existing: no display"
-    else
-      PSK2="$(gen_psk)"
-    fi
-  fi
+  local credential_helper
+  credential_helper="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/gcp_vpngw_credentials.py"
+  PSK1="${PSK1}" PSK2="${PSK2}" python3 "${credential_helper}" prepare \
+    "${GCP_PROJECT_ID}" "${REGION}" "${CONNECTION_NAME}" \
+    "${TUNNEL1_NAME}" "${TUNNEL2_NAME}" "${tunnel1_exists}" "${tunnel2_exists}" "${ROTATE_EXISTING_TUNNELS}"
+  unset PSK1 PSK2
 
   if [[ "${tunnel1_exists}" == "true" && "${ROTATE_EXISTING_TUNNELS}" -eq 1 ]]; then
     log_warn "Recreating tunnel ${TUNNEL1_NAME}"
@@ -1972,7 +1957,8 @@ main() {
     log_success "Tunnel exists: ${TUNNEL1_NAME}"
   else
     log_note "Creating tunnel ${TUNNEL1_NAME}"
-    gcloud compute vpn-tunnels create "${TUNNEL1_NAME}" \
+    python3 "${credential_helper}" create "${GCP_PROJECT_ID}" "${REGION}" "${CONNECTION_NAME}" "${TUNNEL1_NAME}" \
+      compute vpn-tunnels create "${TUNNEL1_NAME}" \
       --region "${REGION}" \
       --project "${GCP_PROJECT_ID}" \
       --vpn-gateway "${VPN_GATEWAY_NAME}" \
@@ -1980,8 +1966,7 @@ main() {
       --peer-external-gateway "${EXTERNAL_GW_NAME}" \
       --peer-external-gateway-interface 0 \
       --router "${CLOUD_ROUTER_NAME}" \
-      --ike-version 2 \
-      --shared-secret "${PSK1}"
+      --ike-version 2
   fi
 
   if [[ "${tunnel2_exists}" == "true" && "${ROTATE_EXISTING_TUNNELS}" -eq 1 ]]; then
@@ -1999,7 +1984,8 @@ main() {
     log_success "Tunnel exists: ${TUNNEL2_NAME}"
   else
     log_note "Creating tunnel ${TUNNEL2_NAME}"
-    gcloud compute vpn-tunnels create "${TUNNEL2_NAME}" \
+    python3 "${credential_helper}" create "${GCP_PROJECT_ID}" "${REGION}" "${CONNECTION_NAME}" "${TUNNEL2_NAME}" \
+      compute vpn-tunnels create "${TUNNEL2_NAME}" \
       --region "${REGION}" \
       --project "${GCP_PROJECT_ID}" \
       --vpn-gateway "${VPN_GATEWAY_NAME}" \
@@ -2007,8 +1993,7 @@ main() {
       --peer-external-gateway "${EXTERNAL_GW_NAME}" \
       --peer-external-gateway-interface 0 \
       --router "${CLOUD_ROUTER_NAME}" \
-      --ike-version 2 \
-      --shared-secret "${PSK2}"
+      --ike-version 2
   fi
 
   router_ifaces="$(router_interface_rows 2>/dev/null || true)"
@@ -2093,20 +2078,8 @@ main() {
 
   gcp_ip0="$(gcloud compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(vpnInterfaces[0].ipAddress)')"
   gcp_ip1="$(gcloud compute vpn-gateways describe "${VPN_GATEWAY_NAME}" --region "${REGION}" --project "${GCP_PROJECT_ID}" --format='value(vpnInterfaces[1].ipAddress)')"
-  psk_yaml_1=""
-  psk_yaml_2=""
-
-  if [[ "${PSK1}" == "existing: no display" || "${PSK2}" == "existing: no display" ]]; then
-    psk_notice=$'Existing tunnel PSKs cannot be read back from GCP.\nRotate existing tunnels if you need newly generated PSKs printed here.\nIf you already know the PSKs, replace the placeholder values in the Nebius connection block below or use env vars.'
-    printf -v psk_block 'Optional env vars:\n  %s=<existing-psk-1>\n  %s=<existing-psk-2>' "${PSK1_ENV_NAME}" "${PSK2_ENV_NAME}"
-    psk_yaml_1="\${${PSK1_ENV_NAME}}"
-    psk_yaml_2="\${${PSK2_ENV_NAME}}"
-  else
-    psk_notice=$'Literal PSKs are embedded in the Nebius connection block below.\nIf you prefer env vars instead, export them and replace the psk values with the optional variable names shown here.'
-    printf -v psk_block "Optional env vars:\n  export %s='%s'\n  export %s='%s'" "${PSK1_ENV_NAME}" "${PSK1}" "${PSK2_ENV_NAME}" "${PSK2}"
-    psk_yaml_1="${PSK1}"
-    psk_yaml_2="${PSK2}"
-  fi
+  psk_yaml_1="\${${PSK1_ENV_NAME}}"
+  psk_yaml_2="\${${PSK2_ENV_NAME}}"
 
   cat <<EOF
 
@@ -2121,10 +2094,9 @@ GCP side setup complete.
   Active route prio:   ${ACTIVE_ADVERTISED_ROUTE_PRIORITY}
   Passive route prio:  ${PASSIVE_ADVERTISED_ROUTE_PRIORITY}
 
-${psk_notice}
-${psk_block}
-
-Nebius connection block:
+EOF
+  python3 "${credential_helper}" render "${GCP_PROJECT_ID}" "${REGION}" "${CONNECTION_NAME}" <<EOF
+connections:
   - name: "${CONNECTION_NAME}"
     vendor: "gcp"
     routing_mode: "bgp"

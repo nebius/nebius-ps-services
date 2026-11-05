@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import gzip
 import hashlib
 import hmac
 import importlib.resources as resources
@@ -16,6 +18,9 @@ import typing as t
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import yaml
+
+from .. import boot_policy, ingress_policy
 from ..config_loader import GatewayGroupSpec
 from ..nebius_auth import (
     build_operator_sdk_client,
@@ -39,7 +44,12 @@ from .ordinary_ssh_enrollment import (
     OrdinarySSHEnrollmentTarget,
     enroll_ordinary_ssh_host_key,
 )
-from .ssh_client_auth import SSHClientAuth, resolve_ssh_client_auth
+from .ssh_client_auth import (
+    SSHClientAuth,
+    operator_identity,
+    require_bootstrap_public_key,
+    resolve_ssh_client_auth,
+)
 from .ssh_policy import (
     VM_HA_SSH_HOST_KEY_PATH,
     SSHHostKeyEnrollment,
@@ -71,9 +81,11 @@ from .vm_ha_identity import (
     parse_provisioning_marker,
     recover_product_host_key,
     render_provisioning_marker,
+    require_cloud_init_size,
     validate_provisioning_marker,
 )
 from .vm_ha_lifecycle import (
+    REPLACEMENT_CYCLE_PATTERN,
     VMHALifecycleJournal,
     VMHALifecycleMember,
     VMHALifecycleSnapshot,
@@ -138,6 +150,7 @@ class VMProvisioningConfig:
     disk_type: str
     disk_block_bytes: int
     cloud_init: str
+    security_group_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -264,6 +277,8 @@ class VMManager:
         self._closed = False
 
     def _require_ssh_client_auth(self) -> SSHClientAuth | None:
+        if operator_identity() is not None:
+            return operator_identity()
         if not str(self._management_public_key or "").strip():
             return None
         if self._ssh_client_auth is None:
@@ -387,7 +402,7 @@ class VMManager:
                 if candidate
                 and any(
                     re.fullmatch(
-                        rf"replace-(?:failed|missing)-(?:[2-9][0-9]*-)?{re.escape(candidate)}-{action}",
+                        rf"replace-(?:failed|missing)-(?:{REPLACEMENT_CYCLE_PATTERN}-)?{re.escape(candidate)}-{action}",
                         effect,
                     )
                     for action in replacement_actions
@@ -456,7 +471,7 @@ class VMManager:
                 )
             )
         if re.fullmatch(
-            r"(?:provision-.+|replace-(?:failed|missing)-(?:[2-9][0-9]*-)?.+-create)-compute",
+            rf"(?:provision-.+|replace-(?:failed|missing)-(?:{REPLACEMENT_CYCLE_PATTERN}-)?.+-create)-compute",
             effect,
         ):
             index = self._vm_ha_effect_member_index(effect, observation)
@@ -483,7 +498,7 @@ class VMManager:
         if (
             re.fullmatch(r"provision-.+-boot-disk", effect)
             or re.fullmatch(
-                r"replace-(?:failed|missing)-(?:[2-9][0-9]*-)?.+-(?:delete|create)-boot-disk",
+                rf"replace-(?:failed|missing)-(?:{REPLACEMENT_CYCLE_PATTERN}-)?.+-(?:delete|create)-boot-disk",
                 effect,
             )
             or re.fullmatch(
@@ -497,7 +512,9 @@ class VMManager:
             }
         ):
             return ()
-        if re.fullmatch(r"replace-failed-(?:[2-9][0-9]*-)?.+-delete-compute", effect):
+        if re.fullmatch(
+            rf"replace-failed-(?:{REPLACEMENT_CYCLE_PATTERN}-)?.+-delete-compute", effect
+        ):
             index = self._vm_ha_effect_member_index(effect, observation)
             prefix = f"/members/{index}"
             return tuple(
@@ -574,7 +591,9 @@ class VMManager:
         guard = None if transaction is None else transaction.observation_guard
         if guard is None or guard.effect != effect:
             raise RuntimeError("VM-HA cloud effect lost its durable observation guard")
-        if re.fullmatch(r"replace-failed-(?:[2-9][0-9]*-)?.+-delete-compute", effect):
+        if re.fullmatch(
+            rf"replace-failed-(?:{REPLACEMENT_CYCLE_PATTERN}-)?.+-delete-compute", effect
+        ):
             index = self._vm_ha_effect_member_index(effect, observation)
             members = observation.get("members")
             if not isinstance(members, list) or not isinstance(members[index], dict):
@@ -590,7 +609,7 @@ class VMManager:
                 raise RuntimeError("VM-HA Compute delete footprint changed unexpectedly")
             return
         if re.fullmatch(
-            r"(?:provision-.+|replace-(?:failed|missing)-(?:[2-9][0-9]*-)?.+-create)-compute",
+            rf"(?:provision-.+|replace-(?:failed|missing)-(?:{REPLACEMENT_CYCLE_PATTERN}-)?.+-create)-compute",
             effect,
         ):
             index = self._vm_ha_effect_member_index(effect, observation)
@@ -2062,7 +2081,21 @@ class VMManager:
                 raise RuntimeError(f"Gateway VM {inst_name!r} attached boot disk is unavailable")
 
             # Extract actual spec from live resources
-            actual_spec = VMSpec.from_live_vm(vm_obj, disk_obj)
+            from nebius.api.nebius.compute.v1 import GetImageRequest, ImageServiceClient
+
+            actual_image_id = str(
+                getattr(getattr(disk_obj, "status", None), "source_image_id", "") or ""
+            )
+            if not actual_image_id:
+                raise RuntimeError("Attached disk source-image authority is unavailable")
+            image = ImageServiceClient(client).get(GetImageRequest(id=actual_image_id)).wait()
+            if self._resource_id(image) != actual_image_id:
+                raise RuntimeError("Attached disk source-image identity changed")
+            actual_spec = VMSpec.from_live_vm(
+                vm_obj,
+                disk_obj,
+                image_family=str(getattr(getattr(image, "spec", None), "image_family", "") or ""),
+            )
 
             # Compare
             diff = self.diff_analyzer.compare(desired_spec, actual_spec)
@@ -2078,6 +2111,8 @@ class VMManager:
         """Get one exact VM by name, treating only typed NOT_FOUND as absence."""
         if not self.project_id:
             raise RuntimeError("Gateway VM lookup requires an exact project ID")
+        from .replacement_binding import admit, admit_absence
+
         try:
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
             from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
@@ -2086,6 +2121,7 @@ class VMManager:
             vm = isc.get_by_name(GetByNameRequest(parent_id=self.project_id, name=name)).wait()
         except Exception as error:
             if nebius_request_error_code_is(error, "NOT_FOUND"):
+                admit_absence(client, self.project_id, name)
                 return None
             raise RuntimeError(f"Gateway VM {name!r} could not be classified") from error
         metadata = getattr(vm, "metadata", None)
@@ -2095,6 +2131,7 @@ class VMManager:
             or str(getattr(metadata, "parent_id", "") or "") != self.project_id
         ):
             raise RuntimeError(f"Gateway VM {name!r} returned an inexact identity")
+        admit(vm, name)
         return vm
 
     def _get_disk_by_id(self, client: t.Any, disk_id: str) -> t.Any | None:
@@ -2339,6 +2376,8 @@ class VMManager:
         Returns:
             Public IP address string, or None if not found
         """
+        from .replacement_binding import ReplacementPending
+
         try:
             client = self._get_client()
             if client is None:
@@ -2375,6 +2414,8 @@ class VMManager:
                             # Strip CIDR suffix if present
                             ip_str = str(address).split("/")[0]
                             return ip_str
+        except ReplacementPending:
+            raise
         except Exception:
             pass
         return None
@@ -2419,14 +2460,16 @@ class VMManager:
         ip_address: str,
         timeout: int = 180,
         *,
+        username: str = "ubuntu",
         progress_callback: t.Callable[[], None] | None = None,
     ) -> bool:
-        """Wait for VM to be reachable via ping.
+        """Wait for authenticated SSH through the configured management policy.
 
         Args:
             vm_name: Name of the VM instance
-            ip_address: IP address to ping
+            ip_address: Management IP address
             timeout: Maximum seconds to wait (default 180)
+            username: Configured SSH management username
 
         Returns:
             True if VM became reachable, False if timeout
@@ -2434,35 +2477,52 @@ class VMManager:
         import subprocess
         import time
 
-        print(f"[VMManager] Waiting for {vm_name} ({ip_address}) to be reachable...")
-        start_time = time.time()
+        print(f"[VMManager] Waiting for authenticated SSH to {vm_name} ({ip_address})...")
+        start_time = time.monotonic()
+        deadline = start_time + timeout
+        if timeout <= 0:
+            return False
+        ssh_base = build_openssh_base_command(
+            key_path=(self._management_key_path if self._management_public_key is None else None),
+            client_auth=self._require_ssh_client_auth(),
+            connect_timeout=min(5, timeout),
+            policy=self._ssh_policy,
+            hostname=vm_name if self._ssh_policy is not None else None,
+        )
         attempt = 0
         printed_progress = False
 
-        while time.time() - start_time < timeout:
+        while (remaining := deadline - time.monotonic()) > 0:
             attempt += 1
             try:
-                # Ping with 1 second timeout, 1 packet
                 result = subprocess.run(
-                    ["ping", "-c", "1", "-W", "1", ip_address],
+                    [*ssh_base, f"{username}@{ip_address}", "true"],
                     capture_output=True,
-                    timeout=2,
+                    text=True,
+                    timeout=min(10, remaining),
                 )
-                if result.returncode == 0:
-                    elapsed = int(time.time() - start_time)
+                if result.returncode == 0 and time.monotonic() <= deadline:
+                    elapsed = int(time.monotonic() - start_time)
                     if printed_progress:
                         print()  # finish the progress line
                     print(f"[VMManager] ✓ {vm_name} is reachable (took {elapsed}s)")
                     return True
-                else:
-                    # Show progress
-                    if attempt % 3 == 0:  # Every 3 attempts
-                        print(".", end="", flush=True)
-                        printed_progress = True
-            except Exception:
+                detail = result.stderr.lower()
+                if (
+                    "host key verification failed" in detail
+                    or "remote host identification has changed" in detail
+                ):
+                    raise RuntimeError(f"SSH host identity verification failed for {vm_name}")
+            except subprocess.TimeoutExpired:
                 pass
 
-            time.sleep(1)
+            if attempt % 3 == 0:
+                print(".", end="", flush=True)
+                printed_progress = True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1, remaining))
             if progress_callback is not None:
                 progress_callback()
 
@@ -2775,6 +2835,8 @@ class VMManager:
     ) -> t.Any | None:
         if not self.project_id:
             raise RuntimeError("Gateway SSH discovery requires an exact project ID")
+        from .replacement_binding import admit, admit_absence
+
         try:
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
             from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
@@ -2786,6 +2848,7 @@ class VMManager:
             )
         except Exception as error:
             if nebius_request_error_code_is(error, "NOT_FOUND"):
+                admit_absence(client, self.project_id, name)
                 return None
             if nebius_request_error_code_is(
                 error, "UNAUTHENTICATED"
@@ -2805,6 +2868,7 @@ class VMManager:
             or str(getattr(metadata, "parent_id", "") or "") != self.project_id
         ):
             raise RuntimeError(f"Gateway VM {name} returned an inexact identity")
+        admit(response, name)
         return response
 
     def inspect_ordinary_targets(self, names: t.Iterable[str]) -> dict[str, tuple[str, str]]:
@@ -2838,6 +2902,8 @@ class VMManager:
     def _get_vm_by_name_for_vm_ha_preflight(self, client: t.Any, name: str) -> t.Any | None:
         if not self.project_id:
             raise RuntimeError("VM-HA member discovery requires an exact project ID")
+        from .replacement_binding import admit, admit_absence
+
         try:
             from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
             from nebius.api.nebius.compute.v1 import InstanceServiceClient  # type: ignore
@@ -2849,6 +2915,7 @@ class VMManager:
             )
         except Exception as error:
             if nebius_request_error_code_is(error, "NOT_FOUND"):
+                admit_absence(client, self.project_id, name)
                 return None
             if nebius_request_error_code_is(
                 error, "UNAUTHENTICATED"
@@ -2868,6 +2935,7 @@ class VMManager:
             or str(getattr(metadata, "parent_id", "") or "") != self.project_id
         ):
             raise RuntimeError(f"VM-HA member {name} returned an inexact identity")
+        admit(response, name)
         return response
 
     def _discover_vm_ha_members(
@@ -3180,6 +3248,9 @@ class VMManager:
         instances = tuple(planned_instances)
         self._management_public_key = management_public_key
         existing = self.discover_ordinary_gateway_members(spec)
+        missing = {instance.hostname for instance in instances} - set(existing)
+        if missing:
+            require_bootstrap_public_key(management_public_key)
         enrollment = {
             instance.hostname
             for instance in instances
@@ -3929,9 +4000,11 @@ class VMManager:
                 cloud_config_anchor + PROVISIONING_MARKER_PREFIX + provisioning_marker + "\n",
                 1,
             )
-        return rendered.replace(
+        rendered = rendered.replace(
             write_files_anchor, write_files_anchor + identity.cloud_init_entries(), 1
         ).replace(sshd_anchor, sshd_anchor + f"            HostKey {VM_HA_SSH_HOST_KEY_PATH}\n", 1)
+        require_cloud_init_size(rendered)
+        return rendered
 
     def _prepare_gateway_ssh_enrollment_cloud_inits(
         self,
@@ -3942,16 +4015,17 @@ class VMManager:
     ) -> dict[str, str]:
         if self._ssh_policy is None:
             raise RuntimeError("Gateway provisioning requires a validated immutable SSH policy")
-        base = self._build_cloud_init(
-            ssh_key=spec.vm_spec.get("ssh_public_key"),
-            local_prefixes=local_prefixes,
-            vm_ha=spec.vm_ha is not None,
-        )
         rendered: dict[str, str] = {}
         for index in range(spec.instance_count):
             name = f"{spec.name}-{index}"
             if name in existing_names and not recreate:
                 continue
+            base = self._build_cloud_init(
+                ssh_key=spec.vm_spec.get("ssh_public_key"),
+                local_prefixes=local_prefixes,
+                vm_ha=spec.vm_ha is not None,
+                ingress=spec.ingress_policies[index],
+            )
             rendered[name] = self._render_gateway_ssh_enrollment_cloud_init(
                 base,
                 self._ssh_policy.identity_for(name),
@@ -3982,134 +4056,6 @@ class VMManager:
             preserved_allocations[vm_name] = alloc_ids
             print(f"[VMManager] Preserved allocations for {vm_name}: {alloc_ids}")
         return preserved_allocations
-
-    def _delete_existing_instances_and_boot_disks(
-        self,
-        client: t.Any,
-        existing: list[t.Any],
-        spec: GatewayGroupSpec,
-    ) -> None:
-        print(
-            f"[VMManager] Recreate requested; deleting {len(existing)} instances and boot disks (preserving subnet and allocations)"
-        )
-        isc = None
-        dsc = None
-        try:
-            from nebius.api.nebius.compute.v1 import (
-                DiskServiceClient,
-                InstanceServiceClient,
-            )  # type: ignore
-
-            isc = InstanceServiceClient(client)
-            dsc = DiskServiceClient(client)
-        except Exception as e:
-            print(f"[VMManager] Cannot get service clients for deletion: {e}")
-
-        if isc is None:
-            print("[VMManager] ERROR: Cannot delete VMs - InstanceServiceClient not available")
-            raise RuntimeError("Cannot proceed with --recreate-gw: VM deletion failed")
-
-        for inst in existing:
-            inst_id = getattr(inst, "id", None)
-            if not inst_id:
-                metadata = getattr(inst, "metadata", None)
-                if metadata:
-                    inst_id = getattr(metadata, "id", None)
-
-            inst_name = getattr(getattr(inst, "metadata", None), "name", None) or getattr(
-                inst,
-                "name",
-                "unknown",
-            )
-            if not inst_id:
-                continue
-
-            try:
-                print(f"[VMManager] Deleting VM {inst_name} (id={inst_id})...")
-                from nebius.api.nebius.compute.v1 import DeleteInstanceRequest  # type: ignore
-
-                delete_req = DeleteInstanceRequest(id=inst_id)
-                op = isc.delete(delete_req)
-                if hasattr(op, "wait"):
-                    op.wait()
-                    print(f"[VMManager] VM {inst_name} deletion initiated")
-                else:
-                    time.sleep(5)
-            except Exception as e:
-                print(f"[VMManager] Failed to delete VM {inst_name}: {e}")
-
-        if existing:
-            print("[VMManager] Waiting for VM deletions to complete...")
-            time.sleep(15)
-
-        if dsc is None:
-            return
-
-        from nebius.api.nebius.common.v1 import GetByNameRequest  # type: ignore
-
-        for i in range(spec.instance_count):
-            inst_name = f"{spec.name}-{i}"
-            boot_disk_name = f"{inst_name}-boot"
-            try:
-                if self.project_id and hasattr(dsc, "get_by_name"):
-                    disk_obj = dsc.get_by_name(
-                        GetByNameRequest(parent_id=self.project_id, name=boot_disk_name)
-                    ).wait()
-                    disk_id = getattr(disk_obj, "id", None) or getattr(
-                        getattr(disk_obj, "metadata", None),
-                        "id",
-                        None,
-                    )
-                    if not disk_id:
-                        continue
-
-                    max_retries = 3
-                    for attempt in range(max_retries):
-                        try:
-                            print(
-                                f"[VMManager] Deleting boot disk {boot_disk_name} (id={disk_id})..."
-                            )
-                            from nebius.api.nebius.compute.v1 import (
-                                DeleteDiskRequest,  # type: ignore
-                            )
-
-                            delete_disk_req = DeleteDiskRequest(id=disk_id)
-                            disk_op = dsc.delete(delete_disk_req)
-                            if hasattr(disk_op, "wait"):
-                                disk_op.wait()
-                                print(
-                                    f"[VMManager] Boot disk {boot_disk_name} deleted successfully"
-                                )
-                            break
-                        except Exception as disk_err:
-                            if "FAILED_PRECONDITION" in str(
-                                disk_err
-                            ) and "read-write attachments" in str(disk_err):
-                                if attempt < max_retries - 1:
-                                    wait_time = 10 * (attempt + 1)
-                                    print(
-                                        f"[VMManager] Disk still attached, waiting {wait_time}s before retry {attempt + 2}/{max_retries}..."
-                                    )
-                                    time.sleep(wait_time)
-                                else:
-                                    print(
-                                        f"[VMManager] Could not delete boot disk {boot_disk_name} after {max_retries} attempts: {disk_err}"
-                                    )
-                            else:
-                                print(
-                                    f"[VMManager] Could not delete boot disk {boot_disk_name}: {disk_err}"
-                                )
-                                break
-            except Exception as e:
-                print(
-                    f"[VMManager] Could not find or delete boot disk {boot_disk_name} (non-fatal): {e}"
-                )
-
-        if existing:
-            print(
-                "[VMManager] Waiting for allocations to fully detach and disk deletions to complete..."
-            )
-            time.sleep(15)
 
     def _instance_exists(self, client: t.Any, inst_name: str) -> bool:
         return self._get_vm_by_name(client, inst_name) is not None
@@ -4146,15 +4092,25 @@ class VMManager:
             )
             num_nics = 1
 
+        if spec.initial_security_group_ids:
+            from .security_groups import validate_groups
+
+            _, network_id, _, _ = self._resolve_gateway_network(client, spec, strict=True)
+            validate_groups(client, network_id, spec.initial_security_group_ids)
+
         subnet_id = self._ensure_vpngw_subnet(client, spec)
         self._ensure_vpngw_route_table(client, subnet_id)
 
         ssh_key = spec.vm_spec.get("ssh_public_key")
         cloud_init = self._build_cloud_init(
-            ssh_key=ssh_key, local_prefixes=local_prefixes, vm_ha=spec.vm_ha is not None
+            ssh_key=ssh_key,
+            local_prefixes=local_prefixes,
+            vm_ha=spec.vm_ha is not None,
+            ingress=spec.ingress_policies[0],
         )
 
         return VMProvisioningConfig(
+            security_group_ids=spec.initial_security_group_ids,
             subnet_id=subnet_id,
             num_nics=num_nics,
             platform=spec.vm_spec.get("platform") or "cpu-d3",
@@ -4342,6 +4298,10 @@ class VMManager:
             metadata=ResourceMetadata(
                 name=disk_name,
                 parent_id=self.project_id or "",
+                labels={
+                    "nebius-vpngw-member": disk_name.removesuffix("-boot"),
+                    "nebius-vpngw-resource-role": "boot",
+                },
             ),
             spec=DiskSpec(
                 block_size_bytes=provisioning.disk_block_bytes,
@@ -5327,6 +5287,7 @@ class VMManager:
     ) -> bool:
         if not boot_disk_id or not boot_disk_id.strip():
             raise RuntimeError("Compute creation requires an authoritative boot disk identity")
+        require_cloud_init_size(provisioning.cloud_init)
 
         created = False
         try:
@@ -5341,6 +5302,7 @@ class VMManager:
                 NetworkInterfaceSpec,
                 PublicIPAddress,
                 ResourcesSpec,
+                SecurityGroup,
             )  # type: ignore
 
             isc = InstanceServiceClient(client)  # type: ignore
@@ -5383,6 +5345,9 @@ class VMManager:
                         ip_address=priv,
                         public_ip_address=pub if pub is not None else PublicIPAddress(),
                         subnet_id=provisioning.subnet_id,
+                        security_groups=[
+                            SecurityGroup(id=value) for value in provisioning.security_group_ids
+                        ],
                     )
                 )
                 print(
@@ -5552,6 +5517,23 @@ class VMManager:
         )
         if not created:
             raise RuntimeError("Compute creation did not complete")
+        if provisioning.security_group_ids:
+            from .security_groups import capture
+
+            created_instance = self._get_vm_by_name(client, inst_name)
+            if created_instance is None:
+                raise RuntimeError(
+                    "Created gateway identity is unavailable for Security Group verification"
+                )
+            groups = capture(client, created_instance)
+            if len(groups) != provisioning.num_nics or any(
+                group.subnet_id != provisioning.subnet_id
+                or group.explicit_ids != tuple(sorted(provisioning.security_group_ids))
+                for group in groups
+            ):
+                raise RuntimeError(
+                    "Created gateway Security Groups differ from the requested customer policy"
+                )
         if spec.vm_ha is not None:
             authoritative = self._get_ha_instance_by_name(client, inst_name)
             compute_id = self._resource_id(authoritative)
@@ -6276,8 +6258,8 @@ class VMManager:
         Pseudocode for Nebius SDK integration:
         - client = InstanceServiceClient(auth=...)
         - existing = client.list(filter=name prefix)
-        - if recreate: delete existing, wait; then create all
-        - else: create missing, skip existing
+        - create missing, skip existing
+        - existing replacements require the staged replacement coordinator
         - attach public IPs according to spec.external_ips
         - set network interface subnet to spec.vm_spec.vpn_subnet_id
 
@@ -6358,8 +6340,10 @@ class VMManager:
 
                 preserved_allocations: dict[str, list[str]] = {}
                 if recreate and existing:
-                    preserved_allocations = self._collect_preserved_allocations(existing)
-                    self._delete_existing_instances_and_boot_disks(client, existing, spec)
+                    raise RuntimeError(
+                        "Existing gateways require the approved staged replacement transaction; "
+                        "delete-first recreation is not supported"
+                    )
 
                 if spec.vm_ha is not None:
                     self._require_vm_ha_member_snapshot(
@@ -6456,7 +6440,7 @@ class VMManager:
                 self._vm_ha_shared_allocation_id = None
                 self._vm_ha_route_targets = None
                 raise RuntimeError(f"VM-HA provisioning failed closed: {e}") from e
-            if self._ssh_policy is not None:
+            if self._ssh_policy is not None or recreate:
                 raise RuntimeError(f"Gateway provisioning failed closed: {e}") from e
             print(f"[VMManager] ensure_group failed: {e}. Proceeding in scaffold mode.")
 
@@ -8088,6 +8072,7 @@ class VMManager:
         local_prefixes: list[str] | None = None,
         *,
         vm_ha: bool = False,
+        ingress: dict[str, t.Any],
     ) -> str:
         """Return a hardened cloud-init to install deps, configure security, and setup the gateway.
 
@@ -8156,6 +8141,7 @@ class VMManager:
             "  - python3-pip\n"
             "  - python3-yaml\n"
             "  - ufw\n"
+            "  - nftables\n"
             "  - fail2ban\n"
             "  - unattended-upgrades\n"
             "  - auditd\n"
@@ -8252,15 +8238,6 @@ class VMManager:
             "            Persistent=true\n"
             "            [Install]\n"
             "            WantedBy=timers.target\n"
-            "  - path: /etc/vpngw_mgmt_cidrs\n"
-            '    permissions: "0644"\n'
-            "    owner: root:root\n"
-            "    content: |\n"
-            "            # Management CIDRs allowed for SSH access (one per line)\n"
-            "            # Examples:\n"
-            "            # 203.0.113.4/32\n"
-            "            # 198.51.100.0/24\n"
-            "            # This file will be populated by the agent with allowed management IPs\n"
             "  - path: /etc/vpngw_peer_ips\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
@@ -8343,7 +8320,7 @@ class VMManager:
             "            ########################################\n"
             "            \n"
             "            # 1. Global forwarding – the box is a router\n"
-            "            net.ipv4.ip_forward = 1\n"
+            f"            net.ipv4.ip_forward = {0 if vm_ha else 1}\n"
             "            \n"
             "            # 1.1 TCP MTU probing – recover when PMTUD is blocked\n"
             "            net.ipv4.tcp_mtu_probing = 1\n"
@@ -8378,13 +8355,6 @@ class VMManager:
             "            net.ipv6.conf.default.accept_redirects = 0\n"
             "            net.ipv6.conf.all.accept_ra = 0\n"
             "            net.ipv6.conf.default.accept_ra = 0\n"
-            "  - path: /etc/systemd/system/ufw.service.d/override.conf\n"
-            '    permissions: "0644"\n'
-            "    owner: root:root\n"
-            "    content: |\n"
-            "            [Unit]\n"
-            "            After=network-online.target cloud-init.service\n"
-            "            Wants=network-online.target\n"
             "  - path: /etc/systemd/system/strongswan-starter.service.d/override.conf\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
@@ -8460,4 +8430,90 @@ class VMManager:
             "  # Log completion\n"
             "  - [ bash, -c, \"logger -t vpngw 'Cloud-init hardening complete for VPN gateway'\" ]\n"
         )
-        return cloud
+        # Project one canonical policy into boot files. YAML serialization keeps the
+        # standalone Python executable byte-identical to the selected product source.
+        policy = ingress_policy.validate(ingress)
+        document = yaml.safe_load(cloud)
+        for entry in document["write_files"]:
+            if entry["path"] == "/etc/vpngw_peer_ips":
+                entry["content"] = "\n".join(policy["peer_ips"]) + "\n"
+        for path, content, mode in (
+            (str(ingress_policy.POLICY_FILE), ingress_policy.serialized(policy), "0600"),
+            (str(ingress_policy.EXECUTABLE), Path(ingress_policy.__file__).read_text(), "0644"),
+            (
+                "/etc/systemd/system/ufw.service.d/override.conf",
+                resources.files("nebius_vpngw")
+                .joinpath("systemd/nebius-vpngw-ufw-ordering.conf")
+                .read_text(),
+                "0644",
+            ),
+            (
+                "/etc/systemd/system/nebius-vpngw-ingress.service",
+                resources.files("nebius_vpngw")
+                .joinpath("systemd/nebius-vpngw-ingress.service")
+                .read_text(),
+                "0644",
+            ),
+        ):
+            document["write_files"].append(
+                {"path": path, "content": content, "permissions": mode, "owner": "root:root"}
+            )
+        if vm_ha:
+            document["write_files"].append(
+                {
+                    "path": str(boot_policy.EXECUTABLE),
+                    "content": Path(boot_policy.__file__).read_text(),
+                    "permissions": "0644",
+                    "owner": "root:root",
+                }
+            )
+            # HA must reject unmanaged forwarding writers before applying sysctls.
+            # The ordinary bootstrap keeps its established behavior.
+            cloud = "\n".join(
+                line
+                for line in cloud.split("\n")
+                if not ("sed -i" in line and "net.ipv4.ip_forward" in line)
+            )
+            cloud = cloud.replace(
+                "  - [ sysctl, --system ]\n",
+                f"  - [ /usr/bin/python3, {boot_policy.EXECUTABLE} ]\n  - [ sysctl, --system ]\n",
+                1,
+            )
+        # Retain the canonical literal-block layout consumed by pinned host-key
+        # enrollment. Compress only bundled programs using cloud-init's native
+        # encoding; identity files and their admission anchors stay unchanged.
+        bundled_programs = {
+            str(boot_policy.EXECUTABLE),
+            str(ingress_policy.EXECUTABLE),
+            "/usr/local/bin/setup-vpngw-firewall.sh",
+            "/usr/local/bin/nebius-vpngw-esp4-preflight.sh",
+            "/usr/local/bin/log-restart-required.sh",
+        }
+        entries = "write_files:\n"
+        for entry in document["write_files"]:
+            if set(entry) != {"path", "content", "permissions", "owner"}:
+                raise RuntimeError("Unsupported cloud-init file entry")
+            entries += (
+                f"  - path: {entry['path']}\n"
+                f"    permissions: {json.dumps(entry['permissions'])}\n"
+                f"    owner: {entry['owner']}\n"
+            )
+            if entry["path"] in bundled_programs:
+                compressed = gzip.compress(entry["content"].encode("utf-8"), mtime=0)
+                encoded = base64.b64encode(compressed).decode("ascii")
+                entries += f"    encoding: gz+b64\n    content: {encoded}\n"
+            else:
+                entries += "    content: |\n" + textwrap.indent(
+                    entry["content"].rstrip("\n") + "\n", " " * 12
+                )
+        start = cloud.index("write_files:\n")
+        end = cloud.index("runcmd:\n")
+        cloud = cloud[:start] + entries + cloud[end:]
+        # Keep fail-fast shell setup first; ingress precedes UFW and first SSH push.
+        return cloud.replace(
+            "runcmd:\n  - set -eu\n",
+            "runcmd:\n  - set -eu\n"
+            "  - [ systemctl, daemon-reload ]\n"
+            "  - [ systemctl, enable, --now, nebius-vpngw-ingress.service ]\n",
+            1,
+        )

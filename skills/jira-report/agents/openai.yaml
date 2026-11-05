@@ -1,0 +1,6 @@
+interface:
+  display_name: "Jira Report"
+  short_description: "Report dated Jira involvement through MCP"
+  default_prompt: "Use $jira-report to report my Jira involvement over the last 90 days with ticket number, title, date and current status."
+policy:
+  allow_implicit_invocation: true

@@ -296,7 +296,7 @@ def _validate_admission_basis(run_dir, assignment, admission, basis, impact, sta
     if admission.get("basis_sha256") != fingerprint:
         raise ValueError("admission does not bind the assignment basis")
     historical = state.read(
-        run_dir / "bases" / assignment["feature_id"] / (fingerprint + ".json")
+        run_dir / "bases" / assignment["execution_id"] / (fingerprint + ".json")
     )
     if impact.canonical_digest(historical) != fingerprint:
         raise ValueError("historical assignment basis was modified")

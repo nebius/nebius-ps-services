@@ -897,7 +897,7 @@ causal proof, safe repair and independent verification.
   subprocess lifetimes, and emits explicit incomplete statuses without partial
   hashes. Trial schema 2 separates attempted, launched, completed, interrupted
   and launch-error counts, with null rates when no execution completes.
-- AC-011: Preserve public budget flags and schemas, diagnosis-v1, SDLC routing,
+- AC-011: Preserve public budget flags and schemas, versioned SDLC diagnosis and routing,
   trusted-loader and shared Stop ownership, and provider admission/query budgets.
 - AC-012: Compare frozen baseline/candidate payloads with twelve qualification
   cases, real local/service fixtures in each core domain and separately labeled
@@ -991,7 +991,10 @@ Agentic SDLC, or transaction-owned safety.
   their exact delegated claims, and interrupted exact-child adoption revalidates
   that delegated ownership before completing the claim. Dirty Implement
   source checkouts direct the user to a separate explicit `$commit`, and active
-  Agentic SDLC continues to require `sdlc-commit`. Task start and base-state
+  Agentic SDLC continues to require `sdlc-commit`. An SDLC objective mentioning
+  its eventual commit does not request root `begin` before admission or branch
+  preparation; prompt-hook guidance preserves that ownership distinction.
+  Task start and base-state
   recovery return one transient canonical commit context with the exact
   PATH-canonical Python-family executable, helper, exact scope cwd, worker
   root, raw session ID, authorization, claim, and prepare argv; persisted
@@ -2400,7 +2403,7 @@ run, while the negative control must remain blocked.
 
 <!-- /REQUIREMENT: REQ-024 -->
 
-<!-- REQUIREMENT: REQ-025 status=satisfied priority=P0 type=feature -->
+<!-- REQUIREMENT: REQ-025 status=active priority=P0 type=feature -->
 ### REQ-025: Maintain one project contract across every agent workflow
 
 #### User Story
@@ -2453,6 +2456,11 @@ sessions, Implement, Agentic SDLC, and delegated worker execution.
   adapter use, and safe installer retirement of obsolete project-spec hook
   registrations. Installed parity and fresh-session activation remain separate
   verification lanes.
+
+- AC-010: Owner templates and newly emitted managed regions keep metadata
+  compatible with default Markdown line-length validation. Each exception applies to
+  the indivisible machine-readable marker line; prose remains checked. Preserve
+  marker syntax, semantic records, human-owned envelopes, and paired-write guards.
 
 #### Negative Criteria
 
@@ -2894,6 +2902,22 @@ weakening ownership checks during validation and cleanup.
   transport, browser cleanup or Docker mutation.
 - AC-005: Three-tier fixture preparation establishes its clean Git baseline and
   owned origin before phase execution. Cleanup removes only exact owned state.
+- AC-006: Each fresh fixture uses one verifier-owned Git configuration profile,
+  sealed to its generation and immutable owned-origin receipt. Ambient user and
+  system configuration and attributes do not affect fixture Git operations.
+- AC-007: Startup, coordinator and worker operations, commit admission, evidence,
+  resume and cleanup share validation of the profile and exact repository scope.
+  Malformed, missing, changed or foreign context fails without ambient fallback.
+- AC-008: Ordinary user Git configuration, native homes and hooks remain
+  unchanged. Qualification installs current runtime support only in the selected
+  disposable native home; normal non-verifier workflows retain existing rules.
+
+- AC-009: Native Codex launches pin project root detection to `.git`, reject project configuration from the current directory through its validated checkout root, and ignore configuration above that root. The exact private native home and shell isolation remain mandatory; bare origins are not native launch checkouts.
+- AC-010: A sealed owned checkout or registered linked worktree may retain the
+  documented `branch.<name>.vscode-merge-base` history hint only when its value
+  exactly names the sealed owned origin default. Other values, unknown keys,
+  executable configuration, bare-origin hints and unsealed hints remain rejected.
+  The hint grants no workflow authority and changes no refs, source or profile.
 
 #### Negative Criteria
 
@@ -2904,6 +2928,10 @@ weakening ownership checks during validation and cleanup.
   identity overrides and configuration that disables the owned push guard.
 - NC-003: Do not bypass normal SDLC promotion, treat non-Git prompt parsing as
   Git admission proof, or weaken source-installed and live-evidence gates.
+- NC-004: Do not allow arbitrary Git environment overrides, repository-local
+  executable configuration, conditional includes, global attributes leakage,
+  or suppression of the owned origin's rejecting push hook. A profile pointer
+  alone is never proof of ownership or permission to use another repository.
 
 #### Validation Method
 
@@ -2998,6 +3026,9 @@ computer remains awake but its screen is locked, with real browser evidence.
   isolated. Public live-test flags retain their existing spelling.
 - AC-006: Locked-screen certification requires observed lock boundaries and
   actual agent-launched execution and screenshots inside that interval.
+- AC-007: Completion acceptance performs one UI action and waits within the
+  existing assertion deadline for the saved checked state, including asynchronous
+  confirmation and DOM replacement. Independent API/database checks remain required.
 
 #### Negative Criteria
 
@@ -3523,7 +3554,7 @@ Ordinary create-pr performs complete local code review before publication and st
 - AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork permission and identity, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
 - AC-018: Global completion discovery failures display a sanitized reason and original nonzero status and publish no targets. Target-specific receipt failures are isolated with blocked diagnostics and aggregate failure, while valid independent targets may proceed. Preserve API deadlines, receipt gates and effect permissions.
 
-- AC-019: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs.
+- AC-019: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs. When both workflow-run and commit PR associations are empty, resolve only a unique fork owner/ref match and verify the current PR head plus repository-owned Actions check-suite provenance. Stale targets produce no update; ambiguity or invalid/incomplete authoritative evidence stops discovery without effects.
 - AC-020: Completion events inspect only the producer run. Operator-dispatched merge intents and validated early result-CI routing receipts can route recovery, including failed CI. Routing identity never proves CI success. Preserve latest-attempt exact-result evidence. Target-specific malformed receipts block that target while independent valid targets proceed; authentication, permissions and incomplete global listings stop all effects.
 - AC-021: Keep the seven CI workflow identities and five result-dispatch inputs, trusted checkout ordering and success artifacts. Check policy, listener, path-filter and publication contract parity in baseline CI.
 - AC-022: Existing releases require a trusted immutable pre-publication manifest binding repository, tag object/commit, workflow run/attempt and every asset basename, size and SHA-256. Verify downloaded bytes. Missing evidence, transport/auth failures, partial or conflicting state block reconciliation; never treat errors as absence or overwrite published artifacts.
@@ -3664,11 +3695,17 @@ Users need explicit workflows to consume conversation intent and deliver verifie
 - AC-004: Steering is direct root-user input and uses the same statement-level requirements/design extraction and reconciliation as other prompts. Questions, status and execution-only instructions do not invent specification changes. Maintain Project Specs owns interpretation and paired publication through the registered integration checkout during execution and delivered checkout afterward. Workers report gaps. Execution-only/no-effect objectives do not require unnecessary specs.
 - AC-005: Implement uses one integration worktree per run, fresh task workers and existing Worktree transactions/locks/recovery. Execute committed history, preserve unrelated dirty files and block dependencies on uncommitted content.
 - AC-006: Automatically deliver to the unchanged clean original non-default branch. Source drift retains the verified result. Default or unknown-default starts deliver a feature branch and checkout while preserving the default. Reject detached/unborn starts; preserve managed outer ownership.
-- AC-007: Use a deterministic ready queue within frozen dependency waves, default at most four workers capped by observed native capacity, configuration and independent work. Refill only after termination, validated results and writer quiescence. Keep a full-wave integration barrier and stable task order. Serialize conflicting paths/resources and lease shared live targets exclusively per assignment. Unknown native capacity uses one worker.
+- AC-007: Use a deterministic ready queue within frozen dependency waves, default at most four workers capped by observed native capacity, configuration and independent work. Refill only after termination, validated results and writer quiescence. Keep a full-wave integration barrier and stable task order. Serialize conflicting paths/resources and lease shared live targets exclusively per assignment. Unknown native capacity uses one worker. Both coordinators consume one assignment-derived launch contract and one strict result-ingestion owner across native parallel and sequential dispatch; host adapters own only native launch, monitoring and termination observations. Workers receive fresh assignment-only context.
 - AC-008: Preserve worker identity/ancestry/paths/evidence, combined validation/alignment, SDLC phase responsibilities, remediation budgets, promotion and cleanup, remote authorization and read-only post-promotion docs assessment.
 - AC-009: Rename the entire verifier to `$implement-test`, preserving no flags, `--create`, `--create --keep`, `--destroy` and private root `<agent-home>/implement-test`. Preserve supported SDLC verifier modes and canonical nested fixtures. Reject obsolete flat fixtures without conversion; retain application/database migration checks.
-- AC-010: Live trials invoke public workflow intake. Preserve owner-executed test receipts/counters, source/deployment identity and headless Playwright evidence. Separate deterministic, installed, native and application results; absent proof remains NOT_RUN/PARTIAL and harness intervention cannot certify PASS.
+- AC-010: Live trials invoke public workflow intake. Preserve owner-executed test receipts/counters, source/deployment identity and headless Playwright evidence. Separate deterministic, installed, native and application results; absent proof remains NOT_RUN/PARTIAL and harness intervention cannot certify PASS. After fresh SDLC intake, the bound coordinator initializes first phase state and its checkpoint before phase observation or routing; accepted registration alone is not initialized phase state. Existing or partial history is reconciled without resetting counters or evidence. Intake helpers, hooks and verifiers do not perform this coordinator transition.
 - AC-011: Retire capture hooks, obsolete commands/names/state readers. Installer retirement removes only exact owned obsolete payloads/registrations and preserves foreign/custom hooks, private history and worktrees.
+
+- AC-012: Native workers distinguish completed implementation, material specification gaps and blocked work. Validate the complete transport result and independent native termination into an immutable per-attempt receipt bound to assignment, basis and worker identity before completion. Exact replay is idempotent; changed, sensitive, stale or foreign results fail before effects. Blocked or replan results stop new dispatch and refill while existing peers drain, without completion or integration of the affected task, automatic retry or deadline renewal. Only the existing authorized recovery or replanning path may resume work; preserve prior attempt evidence.
+
+- AC-013: Fresh workers in both workflows stop before repairing or rerunning an unexpected failed check or blocking review finding. Preserve honest failure evidence, return the shared blocked result and leave classification and authorized retry to the owning coordinator. Only negative outcomes declared before execution in immutable assignment validation are expected feedback; never relabel a discovered failure. Required safe teardown and lease release remain allowed.
+
+- AC-014: Every native worker adapter obtains its support write directories through the shared, coordinator-authorized launch admission owner. Validate the selected home, registered run/project, current binding and canonical assignment before native launch or support-directory creation. Cover the project transition lock and run state, plus shared runtime lease storage for runtime tasks and recovery. Preserve existing lock scope, workspace sandbox, approval controls, assignment ownership and claim guards; absent host capability blocks launch. Directory grants do not authorize unrelated state edits.
 
 #### Negative Criteria
 
@@ -3976,46 +4013,667 @@ Use behavioral review fixtures and offline Git/API tests. Distinguish source, in
 
 <!-- /REQUIREMENT: REQ-053 -->
 <!-- REQUIREMENT: REQ-054 status=active priority=P1 type=feature -->
-### REQ-054: Review GitHub issues and persist accepted implementation plans
+### REQ-054: Review GitHub backlogs by project and remediation batch
 
 #### User Story
 
-Maintainers need an explicitly invoked issue-review skill to assess relevance,
-validity and priority, apply justified triage decisions, and save actionable
-plans while leaving implementation and publication to the maintainer.
+Maintainers need an explicitly invoked issue-review skill that discovers the
+current open backlog, groups work by project and shared remediation, applies
+evidence-backed decisions, and saves batch plans for later implementation.
 
 #### Acceptance Criteria
 
-- AC-001: Default to an unambiguous current GitHub repository; ask for unknown or conflicting targets. Accept issue numbers or URLs and an explicit repository selector. Without selectors, select only a sole open issue; multiple issues require explicit numbers or links.
-- AC-002: Resolve owning projects from repository evidence, inspect complete relevant discussions and accepted contracts, and distinguish claims from reproduced or source-supported findings. Missing implementation or unsuccessful reproduction alone cannot establish irrelevance or invalidity.
-- AC-003: Consider severity, urgency, reach, confidence, workarounds, effort and maintenance burden separately from validity. Valid low-priority work stays open with deferral rationale; rare serious defects are not dismissed merely for rarity.
-- AC-004: Ordinary explicit invocation authorizes selected-issue decision comments and justified closure with the correct reason. Acceptance remains open and occurs only after research, design and independent readback of the saved plan. Revalidate before writes, verify outcomes and reconcile equivalent prior comments or ambiguous effects before retrying.
-- AC-005: Accepted plans are saved only under the owning project's docs/github-issues directory using the issue number and a safe title slug. Preserve existing maintainer edits and bind each plan to the full repository/issue identity. Neither comments nor chat contain implementation-plan content.
-- AC-006: Use research and design for accepted work without implementing it. Respect host read-only limits, sensitive security-reporting boundaries and missing capabilities. Report concise decisions, artifact paths, evidence limits and observed action results.
+- AC-001: Without flags, review all open issues across the unambiguous current
+  checkout's GitHub repository. Support only optional --repo comma-separated
+  repository names or URLs, --issue comma-separated positive numbers, and
+  --priority comma-separated project roots, plus side-effect-free help.
+  Validate all arguments before repository discovery or GitHub calls.
+  Check each supplied issue number in every selected repository and review
+  every existing issue match; exclude PRs. Do not retain positional aliases.
+- AC-002: Complete pagination and deduplicate full identities before ordering
+  each repository. Freeze observed targets for the collection interval, report
+  incomplete coverage, and revalidate before effects. Process repositories in
+  supplied order. Within each repository, order explicit project priorities
+  first, other projects by descending selected-issue count then path, and
+  uncertain ownership last. Priority changes order, not selection or severity.
+- AC-003: Establish one primary project owner per issue from discussion,
+  accepted contracts and source, with affected projects recorded separately.
+  Distinguish repository-wide ownership from uncertainty. Form same-project
+  remediation batches only with shared change boundaries and compatible
+  acceptance criteria; relatedness alone does not establish duplication.
+- AC-004: Assess validity and disposition per issue. Consider severity, urgency,
+  reach, confidence, workarounds, effort and maintenance separately. Order
+  batches by highest supported severity, then count, then lowest issue number;
+  unknown severity remains explicit. Rare serious defects remain actionable;
+  valid low-priority work stays open with deferral rationale.
+- AC-005: Ordinary invocation authorizes selected-issue comments and justified
+  closure, while accepted work remains open. Use research and design as internal
+  advisers and verify a complete saved plan before acceptance. Before each
+  acceptance, refresh the target and all member/dependency evidence supporting
+  its shared remediation, including relevant source state. Reverify affected
+  coverage after material drift; independently read back effects and reconcile
+  uncertain writes.
+- AC-006: Save one plan per accepted same-project batch under its owning
+  project's docs/github-issues directory. New filenames use
+  `batch-123-topic.md` with the lowest initial issue number and safe topic slug. Record full member
+  identities and per-issue acceptance criteria. Reuse matching plans, preserve
+  maintainer edits, and reconcile overlaps before creating competing artifacts.
+- AC-007: Keep issue implementation-plan content out of chat and comments.
+  Report repository/project order, batch membership, individual dispositions,
+  verified local plan paths and action/coverage limitations. Respect read-only
+  modes, missing matching checkouts and sensitive reporting boundaries.
 
 #### Negative Criteria
 
-- NC-001: No automatic backlog sweep, wrong-repository action, untrusted command execution, duplicate comments on rerun, overwrite of unrelated work, or plan disclosure through output channels.
-- NC-002: No code implementation, canonical specification rewrite during issue review, commit, push, PR creation, merge, label/assignee/milestone changes, authentication repair, or live issue mutation merely to test the skill.
+- NC-001: No wrong-repository effects, keyword-only duplicate decisions,
+  double-counted primary ownership, hidden partial coverage, automatic reopen,
+  untrusted command execution, repeated equivalent comments, overwrite of
+  unrelated work, or disclosure of implementation-plan contents.
+- NC-002: No implementation, canonical-spec rewrite during triage, Git/PR
+  actions, label/assignee/milestone changes, authentication repair, silent clone,
+  new scheduler infrastructure, or live issue mutation to test the skill.
 
 #### Validation Method
 
-Validate source structure, native invocation policy, help, references, plugin
-catalogs, paired specifications, Markdown and disposable installation parity.
-Apply scoped instruction and security review, then changed-scope alignment.
+Validate source structure, both native invocation policies, help, references,
+paired specifications, scoped Markdown and disposable installation parity.
+Apply changed-scope alignment with instruction and security review.
 
 #### Test Method
 
-Use synthetic repository/issue fixtures and mocked GitHub effects for target
-selection, triage decisions, file-only plans, partial failures and reruns.
+Use synthetic multi-repository issue fixtures and mocked effects for discovery,
+priority, ownership, batch plans, individual dispositions, failures and reruns.
 
 #### Evaluation Method
 
-Maintain canonical positive/near-miss trigger cases and output assertions.
-Report static, installation, fresh native triggering and comparative quality
-evidence separately; unavailable runners do not count as passes.
+Maintain trigger and quality assertions including actual nested adviser
+composition. Distinguish static, installed, runtime and comparative quality
+proof; missing clean runners or authentication remain unavailable evidence.
 
 <!-- /REQUIREMENT: REQ-054 -->
 
+<!-- REQUIREMENT: REQ-055 status=active priority=P0 type=feature -->
+### REQ-055: Complete document-package intake and phased delivery
+
+#### User Story
+
+Workflow users need complete document-package intake and phased delivery for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Inventory portable normative sources with relative paths, content digests, authority and stable source IDs. Reject missing references, duplicate IDs, unresolved conflicts and source drift before dispatch. Preserve accepted architecture and original IDs while mapping all obligations to canonical requirements/features; do not flatten source catalogs into bounded prompt lists.
+- AC-002: Represent phase/package dependencies and exit criteria separately from private delivery slices and task plans. Track scoped checks, full acceptance and release gates independently; partial slices cannot certify whole features or phases.
+- AC-003: Use one semantic spec publisher. Publish concise canonical specs and referenced portable contract assets; workers report gaps. Keep private paths, secrets, raw prompts and runtime state out of reusable artifacts.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-055 -->
+
+<!-- REQUIREMENT: REQ-056 status=active priority=P0 type=feature -->
+### REQ-056: Bounded scalable execution across ready features
+
+#### User Story
+
+Workflow users need bounded scalable execution across ready features for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Validate dependency graphs iteratively for more than 2000 tasks independent of input ordering. Use indexed dependency lookups and dependency-scoped incoming evidence rather than all historical task output.
+- AC-002: Keep one root coordinator, one active delivery candidate, at most four active workers and four retained task worktrees by default. Integrate, validate and clean bounded batches before allocating successors. Each batch shares its frozen base; dependent batches start from the validated preceding integration tip.
+- AC-003: Admit tasks across ready features only within open phase/package barriers and frozen slice membership. Serialize shared files/contracts/runtime resources. Preserve quiescence, fences, deterministic integration, checkpoint recovery, repair budgets and explicit continuation.
+- AC-004: Preserve the original selected branch; after verified merge allocate the next slice from the current default. Partial slice completion does not satisfy the full feature. Unsupported old execution state remains preserved without automatic conversion.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-056 -->
+
+<!-- REQUIREMENT: REQ-057 status=active priority=P0 type=feature -->
+### REQ-057: Evidence-bound conditional SDLC merge completion
+
+#### User Story
+
+Workflow users need evidence-bound conditional sdlc merge completion for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Default completion to reviewed PR; an explicit run-start opt-in may authorize derived exact-PR merges within accepted repository/default/objective/delivery/live-operation scope without repeated approval. Cluster availability alone grants no merge authority.
+- AC-002: Require source, basis, head/base, promoted commit, acceptance plan, deployed artifact/configuration and environment/trial identity to match independently produced execution evidence. Every mandatory slice/regression criterion must pass; missing, skipped, stale, forged or intervened evidence fails closed. Reviewed non-applicability is limited to genuinely non-runtime changes.
+- AC-003: Share protected direct-merge admission and result observation beneath separate ordinary and SDLC owners. Never recursively enter ordinary repair or bypass branch protection, required human approvals or merge-triggered effect authority. Reject queues and unsupported setup until separately qualified.
+- AC-004: Distinguish submitted, merged and result-verified. Reconcile uncertain effects before retry; preserve deadlines. Result verification failure pauses dependencies without repeating merge. Head/base drift requires corrective integration and fresh evidence.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-057 -->
+
+<!-- REQUIREMENT: REQ-058 status=active priority=P0 type=feature -->
+### REQ-058: Composable SDLC phase and specialist contracts
+
+#### User Story
+
+Workflow users need composable sdlc phase and specialist contracts for safe, recoverable large-project delivery.
+
+#### Acceptance Criteria
+
+- AC-001: Retain SDLC phase adapters and sole coordinator ownership while reusing bounded research/design/validation specialists. Gather local evidence first; preserve accepted supplied decisions and selectively route only unresolved specialist questions.
+- AC-002: Keep TDD, tests, evaluation and UAT distinct. General align fixes invalidate affected evidence and return to the parent gate sequence. Retire the redundant sdlc-align-specs surface into align without an alias.
+- AC-003: Maintain public help, explicit-only phase metadata, portable installation dependencies, source/installed parity and separate static/runtime/quality evidence. Synthetic fixtures must not copy confidential source packages.
+
+#### Negative Criteria
+
+- NC-001: No unverified completion, authority inferred from status labels, automatic legacy conversion, unrelated mutation or publication of private input.
+
+#### Validation Method
+
+Use focused deterministic contracts, disposable Git tests and changed-scope alignment.
+
+#### Test Method
+
+Exercise positive, adversarial, scaling, interruption and ordinary-workflow regression cases.
+
+#### Evaluation Method
+
+Report source, installation, fresh host, live application and actual merge evidence separately; unavailable lanes never pass.
+
+<!-- /REQUIREMENT: REQ-058 -->
+
+<!-- REQUIREMENT: REQ-059 status=active priority=P1 type=feature -->
+### REQ-059: Evidence-backed GitHub activity and open backlog reports
+
+#### User Story
+
+Contributors need concise manager-ready reports of completed issue and PR activity for all human contributors plus the current open repository backlog, grouped by repository and user and supported by dated GitHub evidence.
+
+#### Acceptance Criteria
+
+- AC-001: Provide github-report with --date YYYY-MM-DD, one comma-separated --repo OWNER/REPO list, optional --project REPO_RELATIVE_FOLDER, optional --user TEXT and side-effect-free -h/--help. Default to all eligible GitHub User accounts, excluding API-identified bots, current checkout and the previous 90 times 24 hours through collection start. Explicit dates start at local midnight and accept today or earlier. Match one nonempty literal user substring case-insensitively against observed login or public profile name after repository/project eligibility; null names are valid, and duplicate flags/control characters are rejected before reads.
+- AC-002: Group by repository, then by user login in stable alphabetical order. Each eligible user has Worked PRs and Worked Issues, retaining empty headings for open-only contributors. Render one shared Open Backlog with Open PRs and Open Issues after user groups; --user never changes backlog membership, attribution or counts. Use the existing six columns. Shared completed items appear under every qualifying contributor with only that user's roles and evidence. Repository totals use distinct selected completed item IDs union all retained backlog IDs; overlapping user counts are not additive. Preserve whole-PR metrics and coverage, with no rankings, opening highlights or My role column.
+- AC-003: Attribute authored/coauthored commits, PR authorship, reviews, discussion and evidenced issue triage through GitHub identity and dated evidence. Include earlier authored/contributed work merged in the window with an explicit delivery label. Mentions and assignments alone do not establish work.
+- AC-004: Independently paginate current open issues/PRs without a date cutoff and interval activity once per repository, deduplicating before enrichment. Open items appear only in shared backlog, including bot-created and untouched items. In progress identifies all evidenced human contributors with role/date, independently of --user. Completed work includes dated activity and earlier authorship/commit contributions merged in the period. Verified issue fixes require the individual user's authored/commit-contributed closing PR and complete current completed-closure evidence; review alone never grants fix credit. Retain frozen dates and internal observation/coverage metadata.
+- AC-005: Keep reporting read-only and independent of any private CLI. Use existing authentication, fixed read queries and safe argument handling; never execute issue text, install tools, repair auth, publish, or persist real reports automatically.
+
+- AC-006: Resolve folder scope from observed PR paths, formal same-repository issue relationships, then bounded title/description assessment corroborated by collected repository paths or README evidence. Keep observed and inferred provenance distinct; complete contradictory PR file evidence wins. With --project, include supported matches and unresolved items inline as Project uncertain, exclude supported nonmatches and report uncertain counts separately from supported matches. Remove the Unclassified section. Use host inference only for bounded folder assessments and narrative; deterministic validation owns identity, eligibility, dates, attribution, metrics, section placement and counts. Preserve partial file/tree evidence; unavailable inference leaves uncertainty, never silent exclusion.
+
+- AC-007: Use exactly two header lines per repository: User plus Repository and optional Folder; Date with start/end local timestamps and numeric offsets. Omit Account, Personal activity, Observed, API collection and separate Timezone header lines. Preserve material partial/unknown evidence in the footer. No-match results retain the full shared backlog; incomplete discovery says no matching contributors observed, never proves exhaustive absence. Do not infer identity from free-text Git names/emails.
+
+#### Negative Criteria
+
+- NC-001: No fabricated business impact, deployment proof, issue-resolution relationship, complete coverage, zero metric for missing data, or credit from assignment/mention alone.
+- NC-002: No secrets, private activity, customer data or environment-specific identifiers in reusable sources, fixtures or logs; no unrelated edits, credential changes, Git operations or automatic report files.
+
+#### Validation Method
+
+Validate target skill structure, public help, both native catalogs, installation and documentation against the report contract and current official GitHub API references.
+
+#### Test Method
+
+Use synthetic offline fixtures for dates, selectors, actor attribution, pagination, issue relationships, metric completeness, partial failures, identity mismatch and hostile content. Run scoped lint, structure and manifest checks.
+
+#### Evaluation Method
+
+Use positive/near-miss trigger cases and ordinary/incomplete-report output assertions; distinguish static checks, fresh native triggering and comparative output quality. Report unavailable lanes without claiming a pass.
+
+<!-- /REQUIREMENT: REQ-059 -->
+
+<!-- REQUIREMENT: REQ-060 status=active priority=P0 type=feature -->
+### REQ-060: Bound productive worker execution and preserve failure diagnostics
+
+#### User Story
+
+Workflow users need enough bounded time for implementation, review and real validation without allowing stalled workers or unbounded retries.
+
+#### Acceptance Criteria
+
+- AC-001: Shared Agentic SDLC and Implement workers receive a frozen 3600-second wall-clock limit per attempt, including runtime waits, builds, tests, review and reporting. Warn during the final 300 seconds. Progress and heartbeats never extend this deadline.
+- AC-002: Use a frozen 300-second startup window from task arming to successful task-start. Preserve a 30-second direct-heartbeat target cadence and the enforced 240-second stale-heartbeat limit, read-only budgets, scope precedence, native termination evidence, resource leases and existing repair limits. Coordinator-owned recovery requires a stopped predecessor and fresh identity; it is not a deadline extension.
+- AC-003: Assignment creation, validation and sequential native dispatch consume one canonical startup and maximum-runtime policy. Complete handoff preparation before arming; dispatch the native worker immediately after arming, before unrelated persistence or inspection. Reject obsolete or tampered limits before effects; do not migrate running assignments or add runtime override aliases.
+- AC-004: Failed owned Compose commands return their actual nonzero outcome with bounded, sanitized diagnostics when safe. Remove known private runtime secret values before output, withhold credential-like output, and never treat diagnostic text or a successful log read as passing test evidence.
+- AC-005: Live verification services immutable worker runtime requests promptly and batches their declared sequential operations. Preserve failures, generation fencing and worker-owned leases; do not suspend the worker clock or perform product-owned transitions in the harness.
+
+- AC-006: A sequential native process exiting zero while its assignment is exactly PENDING_START remains WORKER_FAILED. Preserve only bounded, canonically validated and sensitive-screened blocked/replan diagnostics under the distinct prestart_result field. Invalid, oversized, sensitive or implemented pre-start output yields fixed reasons without payload. Diagnostics grant no task result, receipt, recovery or replanning authority.
+
+#### Negative Criteria
+
+- NC-001: No unlimited deadlines, automatic budget renewal, background heartbeats, altered acceptance or source repair inside an active frozen trial.
+- NC-002: No persisted secrets, raw prompts, private deployment data or unqualified live completion claims.
+
+#### Validation Method
+
+Validate the canonical pair, shared policy consumers, scoped lint and source-installed parity.
+
+#### Test Method
+
+Exercise a legitimate delayed native start, exact startup and runtime warning/timeout boundaries, stall/scope precedence, obsolete assignment rejection and sanitized nonzero Compose failures.
+
+#### Evaluation Method
+
+Run a fresh owned native three-tier trial. Report deterministic timeout coverage separately from actual native elapsed time and full application acceptance.
+
+<!-- /REQUIREMENT: REQ-060 -->
+
+<!-- REQUIREMENT: REQ-061 status=active priority=P0 type=feature -->
+### REQ-061: Route pre-execution validation to an available authoring owner
+
+#### User Story
+
+Workflow users need a proven mechanical artifact failure before execution preparation to return to its responsible authoring phase without inventing implementation state or weakening architectural admission.
+
+#### Acceptance Criteria
+
+- AC-001: A proven or high-confidence VALIDATION_DEFECT with lifecycle unprepared routes to its exact known pre-execution phase: requirements, context, design, steering, planning or execution preparation.
+- AC-002: Unsupported phase identities in unprepared validation fail closed. Prepared and later validation routing remains unchanged; ambiguous causes still require diagnosis.
+- AC-003: A formatting or schema repair does not become DESIGN_DEFECT or authorize changes to accepted architecture. Canonical specification publication remains owned by maintain-project-specs through the routed adapters.
+- AC-004: Dispatch, completion, immutable failure history, event deduplication and existing blocker/feature budgets remain enforced. A failed direct repair requires diagnosis before attempt two.
+- AC-005: A proven or high-confidence validation diagnosis can return to the same supported validation owner after a failed counted repair. Require structured causal evidence, a bounded repair target, affected files and the original regression check; preserve the first attempt and all counters.
+- AC-006: Use one canonical diagnosis-v3 contract across the classifier, diagnostic handoff, corrective planning, Stop guard and verifier. Reject older active or referenced diagnosis records before dispatch or completion writes, without conversion; preserve historical reports.
+
+#### Negative Criteria
+
+- NC-001: No fabricated plan, integration checkout, basis or worker; no bypass of validation, design admission or canonical publication.
+- NC-002: No legacy phase aliases, new public flags, budget resets or retroactive success for failed live trials.
+
+#### Validation Method
+
+Validate the canonical pair, classifier consumers and scoped documentation; inspect source-installed parity.
+
+#### Test Method
+
+Reproduce the observed unprepared design failure, verify every supported phase route and unknown-phase denial, and exercise failed first repair, required diagnosis, second counted repair, immutable duplicate handling and unchanged ceilings. Reject incomplete, stale, altered, sensitive, unsupported-phase and retired-schema diagnosis records. Preserve prepared and ambiguous controls.
+
+#### Evaluation Method
+
+Install the repaired owner, run the installed preflight and replay the frozen three-tier workflow in a fresh owned lifecycle. Keep deterministic route proof distinct from live application acceptance.
+
+<!-- /REQUIREMENT: REQ-061 -->
+
+<!-- REQUIREMENT: REQ-062 status=active priority=P0 type=feature -->
+### REQ-062: Recreate owned live-test services at every startup
+
+#### User Story
+
+Workflow maintainers need the disposable live-test runtime to start from current Compose configuration without retaining stale service discovery from replaced networks or earlier checkouts.
+
+#### Acceptance Criteria
+
+- AC-001: Every owned Compose startup explicitly recreates both web and db, waits for health, and runs detached. Missing recreation, partial service selection, conflicting flags or volume replacement options fail before target resolution or Docker dispatch.
+- AC-002: Build is a separate owned action. Startup preserves the named database volume, current generation fence, exact target and worker lease guards. It never changes source, phase, assignment or recovery authority.
+- AC-003: A startup failure preserves its real error and ends the current batch before checks, with owned teardown. The caller rediscovers endpoints and resource identities after recreation; UAT persistence uses the separate restart action.
+- AC-004: Documentation, rendered objective, helper guidance and deterministic tests describe one startup contract. Conditional diagnosis uses its owner evidence, not an invented canonical phase receipt.
+
+#### Negative Criteria
+
+- NC-001: No silent argument rewriting, implicit compatibility path, volume reset, acceptance relaxation or environment-recovery authority expansion.
+- NC-002: No retrofit of a failed live trial or claim that source tests establish live application acceptance.
+
+#### Validation Method
+
+Review the exact helper boundary, runtime consumers, docs and paired specifications; run alignment and inspect installed parity.
+
+#### Test Method
+
+Reject unsafe or incomplete startup shapes before any target or Docker call. Verify the explicit two-service startup dispatch and existing generation, lease, target, build and restart controls.
+
+#### Evaluation Method
+
+Run deterministic preflight followed by a fresh native three-tier trial. Verify actual service discovery, loopback publication, volume identity and application checks independently; retain all prior failed reports.
+
+<!-- /REQUIREMENT: REQ-062 -->
+
+<!-- REQUIREMENT: REQ-063 status=active priority=P0 type=feature -->
+### REQ-063: Recover bounded environment failures during active worker execution
+
+#### User Story
+
+Workflow users need a proven recoverable environment failure to return through the existing worker handoff without losing work, inventing a code defect or weakening permissions and failure evidence.
+
+#### Acceptance Criteria
+
+- AC-001: A proven or high-confidence ENVIRONMENT_DEFECT at active_task and canonical phase sdlc-implement-plan routes to the existing task-attempt owner. The coordinator establishes an authorized bounded remedy and consumes the normal localized repair budget before retry.
+- AC-002: Both workflows use one shared recovery engine: preserve the complete blocked receipt, independently observe predecessor termination, release runtime ownership, retain assignment/basis/scope and use a fresh worker identity. A new attempt has its own fixed deadline; recovery never renews a running attempt or admits a failed result.
+- AC-003: The worker reruns the original failed operation through an authorized mechanism and completes its original validation. Successful remediation requires downstream validation, tests, evaluation, documentation, alignment and commit revalidation before resolution.
+- AC-004: Shared worker guidance distinguishes known permission prerequisites from executed failures. Use supported tools and native approval mechanisms before actions requiring access; approval requests do not grant permissions. Denied approvals and policy/human blockers remain stops. Unexpected executed failures still return blocked before repair or retry.
+- AC-005: Unsupported phases, other execution lifecycles and unresolved causes gain no new recovery authority. Preserve the existing unchanged-commit environment gate recovery after completed waves, immutable history, idempotency and all retry ceilings.
+
+#### Negative Criteria
+
+- NC-001: No second worker engine, coordinator nesting, automatic retry, manual state repair, environment permission expansion or stale/live-trial evidence rehabilitation.
+- NC-002: No reopening completed or sealed work, changed assignment contracts, erased receipts, compatibility aliases or claims that deterministic proof certifies native recovery.
+
+#### Validation Method
+
+Validate the canonical pair, classifier routing, shared prompt and both coordinator consumers; apply scoped alignment and installed parity checks.
+
+#### Test Method
+
+Reproduce active environment blocking before repair, exercise counted idempotent recovery and downstream revalidation, retain uncertain/policy/human/post-wave controls, and run the shared real-Git blocked-worker recovery and denial cases for both coordinators.
+
+#### Evaluation Method
+
+Run a fresh native three-tier workflow after installation. Distinguish actual environment-recovery observations, ordinary successful worker execution and full application acceptance; preserve every failed prior trial.
+
+<!-- /REQUIREMENT: REQ-063 -->
+
+<!-- REQUIREMENT: REQ-064 status=active priority=P0 type=feature -->
+### REQ-064: Preserve revalidation obligations across successive failures
+
+#### User Story
+
+Workflow users need a new independent or recurring failure to retain earlier repair obligations and continue through supported gates without manual state repair or lost evidence.
+
+#### Acceptance Criteria
+
+- AC-001: Before replacing a prior cursor, archive its exact progress and authorizing context immutably. Preserve original classifications, dispatches and gate receipts.
+- AC-002: A routed classification carries validated immutable references to prior invalidations and their canonical ordered union with new obligations. A distinct blocker retains its own diagnosis, route and budget; inherited checks do not grant new repair authority.
+- AC-003: Successful counted repair starts a fresh cursor for all inherited and newly invalidated gates, bound to its own successful dispatch. Earlier completed receipts and commit bindings are historical and never reused after a new repair.
+- AC-004: Exact replay preserves cursor progress and counters. Missing, inconsistent or tampered inherited authority fails closed. Failed or blocked repair cannot resolve prior obligations.
+- AC-005: The final allowed dispatch may complete its required revalidation. Another dispatch or an over-limit counter remains blocked; no ceiling is raised or reset.
+
+- AC-006: Environment failures preserve their exact phase identity while invalidation records use the existing canonical gate surface. Unsupported phases remain blocked without an executable recovery mode; earlier immutable obligations survive that block and later classification.
+
+#### Negative Criteria
+
+- NC-001: No second worker engine, manual cursor restoration, discarded failure evidence, automatic checker retry, compatibility path or live-trial migration.
+- NC-002: No expansion of unchanged-commit environment recovery when unrelated invalidations remain, and no acceptance claim from synthetic tests alone.
+
+#### Validation Method
+
+Review classifier, Stop guard and gate consumers against immutable provenance and the canonical pair; apply scoped alignment and installation parity checks.
+
+#### Test Method
+
+Reproduce the independent checker failure before repair, then verify ordered cumulative gates, exact replay, archived progress, failed repairs, tampered provenance and final-dispatch continuation with existing current-commit and fingerprint controls.
+
+#### Evaluation Method
+
+Run full installed preflight and a new native three-tier trial after cleanup. Preserve failed reports and distinguish runtime implementation evidence from canonical browser acceptance and UAT.
+
+<!-- /REQUIREMENT: REQ-064 -->
+
+<!-- REQUIREMENT: REQ-065 status=active priority=P1 type=feature -->
+### REQ-065: Report dated Jira involvement through connected MCP tools
+
+#### User Story
+
+A user needs a concise report of Jira tickets they were involved in, reusable
+across organizations and compatible connected Jira deployments.
+
+#### Acceptance Criteria
+
+- AC-001: Provide jira-report with optional --user EMAIL_OR_ID, --date
+  YYYY-MM-DD and --title TEXT, plus side-effect-free -h/--help. Default to the
+  authenticated user and the preceding 90 times 24 hours; explicit dates start
+  at local midnight and end at collection start. Title matching is a literal,
+  case-insensitive substring combined with identity and interval selection.
+- AC-002: Include dated creation, reporter, assignment-to-user, authored changes,
+  any authored comments, and explicit contribution/resolution credit in others'
+  comments. Old relationships without qualifying interval evidence do not count.
+  Resolve unique identities and distinguish comment creation from verified edits.
+- AC-003: Emit one row per ticket with Ticket #, Title, Date and Status. Link
+  ticket numbers, use latest qualifying recorded involvement, preserve current
+  status verbatim, and sort newest involvement first then ticket key.
+- AC-004: Discover existing MCP capabilities and paginate candidate issues and
+  required comments/history. Search broadly enough to find third-party credit;
+  apply exact event times locally. Report inaccessible, truncated or unavailable
+  evidence without claiming exhaustive absence or company-global visibility.
+- AC-005: Keep source and fixtures company-neutral, read-only, self-contained and
+  portable; integrate catalog, metadata, plugin lists and focused evaluations.
+
+#### Negative Criteria
+
+- NC-001: Do not infer involvement from mere mentions, stale assignments, another
+  user's edit timestamp or current role fields lacking dated evidence.
+- NC-002: Do not infer Done from comment prose, silently truncate results, install
+  or repair connectors/authentication, write Jira, or save reports automatically.
+- NC-003: Do not embed real accounts, ticket data, private URLs or credentials in
+  public skill sources, tests or documentation.
+
+#### Validation Method
+
+Validate the portable/Codex/Claude skill profiles, catalog wiring, generic
+sources and npx copied payloads; apply scoped code/security and alignment review.
+
+#### Test Method
+
+Use synthetic trigger and output cases for attribution, dates, identity,
+substring selection, deduplication, hostile content and partial evidence.
+
+#### Evaluation Method
+
+Separate static, distribution, fresh native triggering, comparative output and
+live MCP evidence. Missing higher-tier evidence remains explicit.
+
+<!-- /REQUIREMENT: REQ-065 -->
+
+<!-- REQUIREMENT: REQ-066 status=active priority=P0 type=feature -->
+### REQ-066: Retain verifier-owned runtime inventory diagnostics
+
+#### User Story
+
+Workflow maintainers need failed runtime registration to preserve decisive safe
+observations through automatic cleanup and to keep development evidence separate
+from clean application acceptance.
+
+#### Acceptance Criteria
+
+- AC-001: The private record-runtime operation discovers exactly one owned web
+  and db service and derives the current image, sole shared network and named
+  database volume from inspected relationships. Historical owned images remain
+  cleanup targets. Ambiguity, unexpected mounts/networks, public or missing web
+  bindings and published database ports fail closed.
+- AC-002: Inputs are required web and health route paths and optional paired
+  worker-task/assignment-digest selectors. Derive the origin from the actual
+  loopback publication and preserve /api/v1/tasks. Reject complete URLs,
+  alternate origins, double slashes, queries, fragments and control characters.
+- AC-003: Persist immutable observations before teardown, with target identity,
+  named predicates, bounded sanitized expected/observed values, time, operation
+  and digest. Distinguish product predicate failures, inspection failures and
+  unexpected observer exceptions without retaining raw inspection or tracebacks.
+- AC-004: Worker observations consume the exact active assignment lease and
+  remain development-only. Acceptance requires the clean selected revision and
+  matching build. Failed observations cannot update canonical runtime inventory.
+- AC-005: Preserve earlier failures; development recovery references existing
+  classifier and successful recovery evidence. Unknown causes remain
+  blocked_missing_evidence, and later PASS cannot silently resolve a failure.
+- AC-006: Retain sanitized diagnostics in lifecycle state and reports through
+  successful or interrupted cleanup. Recommend inventory, environment or browser
+  investigation according to observed evidence. Version changed private contracts
+  and reject incompatible active state without migrating historical reports.
+- AC-007: Shared Git and native-hook consumers admit retained lifecycle state
+  through its existing 1 MiB bound while keeping profile/configuration files
+  bounded at 64 KiB. Reject oversized, unsafe, stale or malformed state with
+  the relevant diagnostic; never discard observations to fit a consumer.
+- AC-008: Read-only classifier phase observations may inspect expected unsealed
+  files only on the exact registered integration checkout while the bound native
+  coordinator is running classification. Preserve objective, basis, branch, HEAD,
+  ownership and ancestry checks. This observation exception never admits runtime
+  mutations, canonical inventory, build certification or application acceptance.
+- AC-009: Final historical validation retains the original admitted TDD receipt
+  across owner-admitted appended corrective waves only when immutable plan bytes,
+  preserved completed task definitions, original TDD seal, replan succession and
+  unchanged execution identity prove that lineage. This does not admit stale
+  acceptance evidence or allow replacement of failed or altered receipts.
+
+#### Negative Criteria
+
+- NC-001: No caller-supplied resource IDs or complete URLs, compatibility aliases,
+  newest-resource selection, manual application implementation by the outer
+  operator, credential disclosure or weakened canonical acceptance gates.
+- NC-002: No acceptance retry that erases a failure, fixture reset between UAT
+  stages, or aggregate live qualification inferred from a three-tier result.
+
+#### Validation Method
+
+Run focused regressions, affected lifecycle/target/report suites, deterministic
+preflight, source alignment, installation parity and installed checks.
+
+#### Test Method
+
+Cover ownership and relationship failures, stale generation and assignment,
+missing lease, dirty target/build mismatch, malformed inspection, daemon failure,
+observer exceptions, sensitive and oversized diagnostics, tampered receipts,
+immutable failures and diagnostic survival through cleanup interruption.
+
+#### Evaluation Method
+
+After quiescence and installation, use a fresh frozen native three-tier trial
+through normal SDLC, independent application evaluation, clean promotion, five
+owned Django test classes and restart-persistence UAT. Retain failure evidence
+and verify exact cleanup; report each unavailable proof boundary separately.
+
+<!-- /REQUIREMENT: REQ-066 -->
+
+<!-- REQUIREMENT: REQ-067 status=active priority=P0 type=feature -->
+### REQ-067: Resume prepared execution after an admitted design correction
+
+#### User Story
+
+A native coordinator must be able to correct a proven design defect discovered
+by an unmerged worker without bypassing Git ownership, losing failed work, or
+reusing an assignment that belongs to the earlier contract.
+
+#### Acceptance Criteria
+
+- AC-001: A coordinator-only Worktree transition consumes the current proven
+  DESIGN_DEFECT classification and its existing counted design dispatch. It
+  revalidates design admission and any required approval without changing limits.
+- AC-002: Before publication, reconcile every allocated writer from exact native
+  termination or admitted-result evidence, require released runtime leases, and
+  retain immutable assignment, failure, branch and worktree evidence. Retire only
+  unmerged affected waves; reject partial integration and foreign or live writers.
+- AC-003: The existing paired spec owner remains the sole semantic publisher.
+  After publication, a Worktree-owned seal admits only the exact validated
+  canonical snapshot in the registered integration checkout, stages from the
+  repository root after a narrow path guard, commits it, and advances its tip.
+- AC-004: Preserve the original TDD and worker lineage. Replan with fresh task,
+  assignment and execution-basis identities; reject old assignments and do not
+  manufacture steering, reopen TDD, admit blocked results, or weaken clean-tree
+  dispatch and final-promotion gates.
+- AC-005: Journal the revision before mutation and retain immutable receipts.
+  Exact retries recover a commit completed before state persistence without a
+  second commit, retirement, dispatch or budget charge. Changed authority,
+  snapshots, parameters, unrelated dirt and unjournaled HEAD drift fail closed.
+
+#### Negative Criteria
+
+- NC-001: No raw Git/state workaround, compatibility alias, semantic publication
+  by the execution owner, speculative repair, expanded approval authority, or
+  replacement of earlier failure evidence with a later PASS.
+- NC-002: This repair does not authorize integrated-wave correction, steering,
+  cancellation, arbitrary contract changes, or external publication.
+
+#### Validation Method
+
+Use regression-first real-Git workflow fixtures, exact authority and quiescence
+checks, focused owner suites, deterministic preflight and installed parity.
+
+#### Test Method
+
+Cover valid revision and fresh dispatch; wrong or missing classification,
+unknown diagnosis, stale basis/HEAD, live writers/leases, partial integration,
+unrelated files, retained evidence tampering, interrupted sealing and replay.
+
+#### Evaluation Method
+
+After old writers stop and exact cleanup completes, align and install the source
+repair, then run a fresh native three-tier trial. Keep source checks, actual
+recovery execution, application acceptance and restart UAT as separate claims.
+
+<!-- /REQUIREMENT: REQ-067 -->
+<!-- REQUIREMENT: REQ-068 status=active priority=P1 type=feature -->
+### REQ-068: Carry verified issue resolutions into native merge closure
+
+#### User Story
+
+Maintainers can implement a saved issue batch plan and request closure after
+merge, retaining individual acceptance evidence across local delivery and PR
+publication without turning issue review into a delivery coordinator.
+
+#### Acceptance Criteria
+
+- AC-001: Plans identify accepted issue identities and individual acceptance
+  criteria separately from related nonmembers. Triage comments remain concise,
+  evidence-based and idempotent; accepted work remains open.
+- AC-002: Implement may normalize a referenced plan once as objective input,
+  freezing its digest, members, criteria and separate direct-user closure intent.
+  Uncommitted product/spec inputs remain prohibited. A plan cannot grant remote
+  authority, and local completion remains distinct from PR creation and merge.
+- AC-003: A coordinator-owned private resolution receipt binds the objective,
+  plan and delivered commit to complete per-issue criterion results. Only fully
+  resolved accepted members with explicit closure intent are eligible.
+- AC-004: Authorized PR work refreshes live issue and exact-head evidence, posts
+  concise verified implementation/validation comments and emits fully qualified
+  closing references only for eligible issues. Related or partial issues stay
+  open; stale, missing or conflicting evidence cannot grant closure.
+- AC-005: GitHub owns automatic closure on default-branch merge. Report disabled
+  or unknown capability accurately without changing settings. Merge verification
+  reads actual issue states independently of exact-result CI; no automatic reopen.
+- AC-006: Resumption preserves private provenance and verified comment receipts;
+  reconcile ambiguous writes before retry, preserve human PR content and comments,
+  and require explicit identification when a private handoff is unavailable.
+
+#### Negative Criteria
+
+- NC-001: No issue closure from mentions, worker claims alone, copied plan
+  authority, same-number matches in another repo, or partial acceptance.
+- NC-002: No nested implementation from triage, implicit publication/merge,
+  new background service, expanded broker permissions, or public private evidence.
+
+#### Validation Method
+
+Run focused objective/receipt/publication regressions, affected workflow suites,
+canonical validation, skill structure and changed-surface alignment.
+
+#### Test Method
+
+Cover mixed results, full identities, drift, absent intent, unsafe state,
+retry/readback, default/nondefault targets, manual merges and disabled closure.
+
+#### Evaluation Method
+
+Use deterministic private-state and mocked GitHub fixtures. Report separately
+source proof, installed distribution and native/live GitHub execution.
+
+<!-- /REQUIREMENT: REQ-068 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

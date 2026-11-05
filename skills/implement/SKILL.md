@@ -81,6 +81,9 @@ $implement --help
 
 - Applicable instructions, the current plan/request and relevant source/tests.
 - `references/implementation-loop.md` and `references/objective-contract.md`.
+- For a saved issue plan, read
+  `../worktree/references/issue-resolution.md` for intake, per-issue evidence
+  and the private completion handoff. Closure intent never authorizes publication.
 - The exact validated run binding, objective revision, checkpoint, immutable
   basis, plan, assignments, results and recovery journal before continuation.
 - Canonical specs when they apply. Do not bootstrap documents for a justified
@@ -101,7 +104,10 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    writes before editing specs. If unavailable, report `ENVIRONMENT_BLOCKER`;
    never bypass native controls or imply that workspace file writes allow Git.
    Inspect source dirt: execute committed history and block if the task depends
-   on uncommitted content. Never copy source dirt into a worker.
+   on uncommitted product/spec content. A saved issue plan may be snapshotted
+   once as normalized objective input under the issue-resolution contract; it
+   must not remain a live worker dependency or write target. Never copy source
+   dirt into a worker.
 2. Normalize accepted outcome, scope, constraints, acceptance criteria,
    clarifications and provenance. Use the shared private `workflow_intake.py`
    owner `implement` to accept, observe or explicitly continue. Do not invent
@@ -140,14 +146,62 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
 6. Prepare a deterministic ready queue within the current dependency wave.
    Each worker uses the same frozen wave base and a fresh worktree and native
    identity. Give assignment-only context, including paths, validation and
-   instructions. Arm only available slots. Task-start is the first transition
+   instructions. Arm only available slots and consume its canonical `launch`
+   envelope through the shared `task-arm` CLI admission (or `authorize-recovery`
+   for recovery). Grant its validated `support_write_roots` before spawning;
+   unavailable native support blocks launch. Preserve sandbox and approval policy.
+   Configure fresh assignment-only
+   context in the native host and use the returned prompt, cwd, command arguments
+   and schema identity. Host adapters do not reconstruct this contract.
+   Task-start is the first transition
    after immediate Git identity inspection.
-7. Workers implement only their claims, validate and use code-review. After
-   native termination, the coordinator finishes through the shared owner
-   transaction for one direct-child commit. They do
+7. Workers implement only their claims, validate and use code-review. Only an
+   `implemented` result may proceed after native termination; the coordinator
+   finishes through the shared owner transaction for one direct-child commit.
+   Ingest the full result using
+   `task-result --result <private-json> --termination <observation>`; pass its
+   canonical receipt to `task-finish --receipt`, with the termination observation
+   and commit message. Never project summary, validation or review into a second
+   completion path. They do
    not publish specs or touch coordinator/other worktrees. Return typed spec
-   gaps for root reconciliation. Observe liveness and interrupt failed/stalled
-   workers; never infer progress from background heartbeat loops.
+   gaps as `replan_required` for root reconciliation. A non-specification failure
+   with incomplete work or validation returns `blocked` with empty gaps and honest
+   evidence. The dispatcher returns exit 2 and `WORKER_BLOCKED` with validated
+   `worker_result`, stops later tasks, and leaves diagnosis to the coordinator.
+   Before `task-start`, a validated `prestart_result` may accompany
+   `WORKER_FAILED`; use it only for diagnosis. It grants no result receipt,
+   completion, recovery or replanning authority.
+   Neither blocked nor replan results enter `task-finish`, admission or integration;
+   they authorize no automatic retry. The shared core fences new dispatch/refill
+   while already running peers may drain. Recovery uses the same launch builder
+   and current coordinator's immutable authorization, preserving old receipts.
+   Before repairing or rerunning an unexpected failed check or blocking review
+   finding, workers preserve private failure evidence, stop changes, safely
+   tear down and release owned runtime, and return blocked. Only negative
+   outcomes declared before execution in immutable assignment validation are
+   expected feedback; never relabel an observed failure. Normal implementation
+   and prescribed formatting before checks remain allowed. The Implement
+   coordinator owns diagnosis and authorizes existing recovery or replan;
+   it does not invoke the SDLC coordinator. For a proven environment failure,
+   establish an in-scope bounded remedy and preserve the original failed
+   operation and assignment checks. Independently observe the stopped worker
+   and runtime release before authorizing the same shared fresh-worker
+   recovery; rerun those original checks through authorized mechanisms.
+   Known permission prerequisites use native approvals before execution;
+   approval denial remains a policy/authority stop. Recovery grants no access,
+   creates no automatic retry and never reopens completed work.
+   Observe liveness and interrupt failed/stalled
+   workers; never infer progress from background heartbeat loops. Shared worker
+   startup has a 300-second window from arming to `task-start`. Prepare handoff
+   details before arming, spawn immediately afterward, then persist observations.
+   Repeated arming never resets this window. Started attempts have a
+   3600-second wall-clock limit including external waits,
+   validation and review, with `WORKER_DEADLINE_NEAR` in the final 300 seconds.
+   Target 30-second direct heartbeats at available work/wait boundaries, using
+   short yielding waits where supported. Record actual cadence gaps honestly;
+   ACTIVE does not certify every target interval. Preserve the enforced
+   240-second stale-heartbeat limit;
+   progress never renews the deadline. Finish bounded tasks or report the stop.
 8. Independently validate identity, assignment/basis, ancestry, changed paths,
    native termination and result evidence. Admit a result only when its writer
    is quiescent. Refill the free slot immediately from the ready queue. Shared
@@ -159,7 +213,11 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    the next dependency wave.
 10. Reconcile coordinator-owned specs/docs/changelog, record separate
     implementation and verification evidence, and complete `$align` before
-    sealing. Deliver automatically to the clean unchanged original non-default
+    sealing. When issue metadata is present, independently evaluate every
+    accepted criterion and supply the private seal-feature --issue-evidence
+    input. Local completion emits a verified issue-resolution.json handoff;
+    report closure pending PR/merge, never completed from local delivery.
+    Deliver automatically to the clean unchanged original non-default
     branch. Source drift retains the verified result and reports the blocker.
     Default/unknown-default starts deliver the verified feature branch and
     checkout while leaving the source branch unchanged; this is local completion.

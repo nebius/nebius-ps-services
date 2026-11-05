@@ -321,6 +321,30 @@ JSON mapping is keyed by secret name, then payload key; use the exact rendered
 module name. Noninteractive execution fails when required payloads are missing.
 Do not put the runtime values in versioned config or shell history.
 
+## Tailscale access settings
+
+`infra.components[id=tailscale-gw].inputs.management_cidrs` contains the source
+IPv4 ranges permitted to SSH to the router VMs on TCP port 22. Private-service
+access is controlled separately by `tailscale.policy.rules`.
+
+Each rule retains explicit `sources` and private `destinations` within the
+advertised routes. `protocol: all` with `ports: []` permits all protocols and
+ports within that scope. TCP/UDP rules require string ports or ranges; ICMP uses
+an empty ports list. The wizard defaults new rules to VPN-style access and keeps
+existing detailed/mixed rules intact. Added routes never expand saved destinations.
+Changing config does not revoke already-applied Tailscale grants.
+
+`tailscale.onboarding.owner` and `purpose` are required descriptive metadata for
+the administrator handoff. Prefer a work email for the responsible person or a
+monitored team; existing owner text remains valid. Tags are proposed shared router
+identities requiring approval before activation; the wizard does not check availability.
+The name prompt defaults to `tailscale-gw`; tag owners visibly default to `[]`
+(administrator-managed). Saved explicit names and owner lists are preserved.
+`tailscale.auth.storage` is a wizard choice, not a
+config field: it produces a `tailscale.auth.secretstash` reference or leaves
+protected environment/file references to be supplied during onboarding. Linked
+containers are metadata-only. See the [Tailscale field guide](tailscale.md#wizard-field-guide).
+
 ## Observability and rendered artifacts
 
 Telemetry supports local, remote, or both. Ordinary MK8s defaults to Nebius-managed
@@ -384,7 +408,7 @@ Explicit `routing.enabled: false` in YAML prepares a new gateway without changin
 workload attachments, or restores original routes for an active gateway.
 Deploy honors this operational setting; completing the normal wizard resets it
 to `true`.
-Existing shared-policy configurations must detach, run `nat refresh-routes`, and
+Existing shared-policy configurations must detach, run `nat-gateway refresh-routes`, and
 review the per-target policies before reactivation.
 
 ## WireGuard access

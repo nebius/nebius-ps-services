@@ -55,8 +55,8 @@ requested. Domain skills own known platform implementation.
   and 120 active minutes; hard maxima: 10 attempts and 180 minutes.
 - Expected behavior, actual symptom, target identity, time window, affected and
   unaffected cases, prior interventions, permitted actions, and success criteria.
-- In Agentic SDLC: immutable `failure-event-v1`, exact integration commit and
-  worktree, accepted criteria, fingerprints, `repair-control-v1`, and route.
+- In Agentic SDLC: immutable `failure-event-v2`, exact integration commit and
+  worktree, accepted criteria, fingerprints, `repair-control-v2`, and route.
 
 ## Required Reads
 
@@ -159,7 +159,7 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      lifecycle, migrations, or cross-component workflows. Size alone is not a
      design change. If that owner is unavailable, report the exact handoff.
    - In Agentic SDLC diagnostic mode, stop at the causal handoff: return one
-     `diagnosis-v1` to `sdlc-classify-failure`, remove temporary instrumentation,
+     `diagnosis-v3` to `sdlc-classify-failure`, remove temporary instrumentation,
      and let classifier/coordinator select the next owner. Do not commit fixes,
      change acceptance or specs, or route directly to design or implementation.
 9. **REMEDIATED — restore the invariant.** Apply the smallest durable owner-correct

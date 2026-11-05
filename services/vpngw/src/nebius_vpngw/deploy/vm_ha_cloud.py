@@ -14,6 +14,8 @@ import re
 import tempfile
 import time
 import typing as t
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -23,6 +25,38 @@ VM_HA_PER_RETRY_TIMEOUT_SECONDS = 10.0
 VM_HA_REQUEST_RETRIES = 3
 VM_HA_OPERATION_TIMEOUT_SECONDS = 300.0
 VM_HA_OPERATION_POLL_INTERVAL_SECONDS = 1.0
+_OBSERVATION_DEADLINE: ContextVar[t.Callable[[], float] | None] = ContextVar(
+    "vm_ha_observation_remaining", default=None
+)
+
+
+@contextmanager
+def vm_ha_observation_budget(
+    *,
+    seconds: float = VM_HA_REQUEST_TIMEOUT_SECONDS,
+    clock: t.Callable[[], float] = time.monotonic,
+) -> t.Iterator[None]:
+    """One thread-local cumulative read budget, including nested route reads."""
+    parent = _OBSERVATION_DEADLINE.get()
+    deadline = clock() + seconds
+
+    def remaining() -> float:
+        value = deadline - clock()
+        if parent is not None:
+            value = min(value, parent())
+        if value <= 0:
+            raise TimeoutError("VM-HA observation deadline exceeded")
+        return value
+
+    token = _OBSERVATION_DEADLINE.set(remaining)
+    try:
+        remaining()
+        yield
+        remaining()
+    finally:
+        _OBSERVATION_DEADLINE.reset(token)
+
+
 _VM_HA_IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9-]+", flags=re.ASCII)
 
 
@@ -52,10 +86,12 @@ def vm_ha_idempotency_key(operation_id: str) -> str:
 
 
 def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
+    provider = _OBSERVATION_DEADLINE.get()
+    remaining = VM_HA_REQUEST_TIMEOUT_SECONDS if provider is None else provider()
     value: dict[str, t.Any] = {
-        "timeout": VM_HA_REQUEST_TIMEOUT_SECONDS,
-        "auth_timeout": VM_HA_REQUEST_TIMEOUT_SECONDS,
-        "per_retry_timeout": VM_HA_PER_RETRY_TIMEOUT_SECONDS,
+        "timeout": min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
+        "auth_timeout": min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
+        "per_retry_timeout": min(VM_HA_PER_RETRY_TIMEOUT_SECONDS, remaining),
         "retries": VM_HA_REQUEST_RETRIES,
     }
     if operation_id:
@@ -355,7 +391,7 @@ class NebiusSDKCloudClient:
         remaining = float(self._request_timeout_provider())
         if not (0 < remaining < float("inf")):
             raise TimeoutError("VM-HA cloud request deadline has expired")
-        request_timeout = min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining)
+        request_timeout = min(float(kwargs["timeout"]), remaining)
         kwargs.update(
             timeout=request_timeout,
             auth_timeout=request_timeout,
@@ -438,6 +474,19 @@ class NebiusSDKCloudClient:
         self._require_operation_success(operation)
         if journal is not None and accepted is not None:
             journal.clear(accepted)
+
+    def settle_pending_action(self, operation_id: str | None, kind: str | None) -> None:
+        """Settle acceptance before a controller can acknowledge cloud postconditions."""
+        if self.operation_journal is None:
+            return
+        accepted = self.operation_journal.load()
+        if accepted is None:
+            return
+        if accepted.action_operation_id != operation_id or accepted.kind != kind:
+            raise PermanentHACloudError(
+                "accepted cloud receipt does not match the pending controller action"
+            )
+        self.finalize_accepted_operation(accepted)
 
     def finalize_accepted_operation(self, expected: AcceptedCloudOperation) -> None:
         """Read and clear one exact terminal operation without resubmitting it."""
@@ -829,9 +878,11 @@ class VMHACloudAdapter:
             if not allow_missing_former:
                 raise
             former_missing = True
+            # Absence proves no attachment on that exact Compute identity,
+            # but it is never an authoritative STOPPED read for a takeover.
             former = ComputeObservation(
                 instance_id=former_owner.instance_id,
-                state=InstanceCloudState.STOPPED,
+                state=InstanceCloudState.UNKNOWN,
                 resource_version="0",
                 nic_allocations=((former_owner.network_interface_name, ""),),
                 nic_alias_allocations=((former_owner.network_interface_name, ()),),
@@ -842,7 +893,11 @@ class VMHACloudAdapter:
             raise AmbiguousHACloudError(
                 f"allocation {allocation_id} ownership changed during observation"
             )
-        if former_missing and after.owner != candidate:
+        if former_missing and not (
+            after.owner == candidate
+            and current.state is InstanceCloudState.RUNNING
+            and current.has_alias_allocation(candidate.network_interface_name, allocation_id)
+        ):
             raise PermanentHACloudError(
                 "missing former Compute is not bound to exact candidate ownership"
             )

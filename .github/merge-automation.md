@@ -292,6 +292,16 @@ Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
 so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
 runs do not enter that aggregate path.
 
+Fork CI can omit both run-to-PR and commit-to-PR associations. In that case,
+discovery queries only the producer fork owner/ref, requires one open match
+before base filtering, and reloads that PR. Shared validation binds the producer
+repository, fork, branch, exact head, creation time and repository-owned Actions
+check suite. Closed, moved, deleted-fork or nondefault-base targets receive no
+update; ambiguous or invalid evidence and API failures stop discovery without
+status writes. Discovery emits sanitized `method=fork-head` diagnostics to stderr
+while stdout remains the JSON target list. Hourly recovery is the safety net;
+normal CI start/completion handlers should update the affected head directly.
+
 Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
 recovery. A separate default-branch-only status-write job repairs Required CI
 for all open default-base PRs. Completion event discovery reads the producer
@@ -306,3 +316,20 @@ bounded journal scans for uncertain effects. Target-specific malformed receipts
 produce blocked matrix entries and failing run status while valid independent
 targets proceed. Global API, authentication and incomplete-listing errors stop
 all candidate effects and preserve sanitized diagnostics.
+
+### Qualifying a fork CI discovery repair
+
+After the helper reaches the default branch, use a dedicated unmerged PR from a
+maintainer-owned fork with a harmless change that triggers the applicable CI.
+Record the exact PR head, producer run and status-updater run. Its logs must show
+`method=fork-head` selecting that PR when both association sources are empty.
+Verify that the producer's completion handler publishes successful Required CI,
+then rerun CI at the same head and observe pending followed by success.
+
+Bind each transition to the event handler's status target URL. If hourly/manual
+recovery supplies the transition, repeat the trial; that observation proves only
+recovery. If the empty-association condition cannot be observed, report live
+fallback qualification as incomplete. GitHub scheduling has no promised latency
+here. Keep source tests, deployed behavior and downstream helper installation
+parity separate. Roll back a defective helper through a reviewed revert while
+preserving hourly recovery.

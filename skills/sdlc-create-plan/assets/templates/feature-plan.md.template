@@ -1,18 +1,21 @@
 <!-- markdownlint-disable MD033 -->
 
-# FEAT-<id> Plan v<N>
+# SLICE-<id> Plan v<N>
 
 ## Scope
 
-- Feature: FEAT-<id>
+- Delivery slice: SLICE-<id>
+- Features: FEAT-<id>
 - Requirements: REQ-<id>
 - Plan status: locked when matching `.lock` exists
+
+Qualification plan SHA256: <private qualification plan digest>
 
 ## Corrective Plan
 
 - Plan kind: <initial or corrective>
 - Supersedes: <exact prior plan filename or none>
-- Diagnosis: <diagnosis-v1 ID or none>
+- Diagnosis: <diagnosis-v3 ID or none>
 - Regression oracle: <original failed evaluator oracle or none>
 - Completed task manifest digest: <sha256 digest or none>
 - Corrective tasks: <appended TASK IDs or none>
@@ -49,6 +52,7 @@ that task rather than guessing that it is parallel-safe.
 ### TASK-001
 
 - Requirements: REQ-<id>
+- Features: FEAT-<id>
 - Goal: <one coherent implementation result>
 - Depends on: none
 - Write claims: exact: <repo-relative-file>; prefix: <repo-relative-directory>
@@ -56,7 +60,7 @@ that task rather than guessing that it is parallel-safe.
 - Validation: <focused command or evidence>
 - Done criteria: <observable completion condition>
 - Rollback or stop conditions: <fail-closed boundary>
-- Diagnosis: <diagnosis-v1 ID for a corrective task, or none>
+- Diagnosis: <diagnosis-v3 ID for a corrective task, or none>
 - Regression oracle: <original evaluator oracle for a corrective task, or none>
 
 ## Planned Dependency Waves

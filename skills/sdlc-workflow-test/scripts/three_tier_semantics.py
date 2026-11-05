@@ -10,6 +10,8 @@ from typing import Any
 import three_tier_target
 import three_tier_browser
 import three_tier_tests
+import three_tier_runtime
+from agent_runtime import agent_name
 
 
 SCENARIO = "three-tier-task-board-v1"
@@ -241,6 +243,30 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         raise SemanticEvidenceError(
             "Semantic three-tier results schema/profile is invalid."
         )
+    try:
+        three_tier_runtime.validate_acceptance_inventory(
+            state,
+            {"path": state["project_root"], "head": state["git"].get("promoted_sha")},
+        )
+        observations = three_tier_runtime.validate_observations(state)
+        failed = [
+            (summary, value)
+            for summary, value in zip(state["runtime_observations"], observations)
+            if value["mode"] == "development" and value["outcome"] == "FAIL"
+        ]
+        three_tier_target.inventory_recovery_evidence(
+            state,
+            failed,
+            skills_root=Path(__file__).resolve().parents[2],
+            agent=agent_name(),
+        )
+    except (
+        three_tier_runtime.RuntimeEvidenceError,
+        three_tier_target.TargetError,
+    ) as error:
+        raise SemanticEvidenceError(
+            "Runtime inventory evidence is incomplete or changed."
+        ) from error
     try:
         three_tier_target.validate_startup_receipt(state)
     except three_tier_target.TargetError as error:

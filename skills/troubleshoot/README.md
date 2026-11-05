@@ -70,16 +70,26 @@ then routes to the recorded design, plan, or other owning phase.
 
 `troubleshoot` is absent from the happy path. The classifier selects it only
 for an ambiguous, persistent, intermittent, or cross-boundary failure. The
-diagnostic session stays in the registered private integration worktree,
-preserves the exact failed commit and criteria, and may use only reversible,
+diagnostic session for prepared execution stays in the registered private
+integration worktree. Before preparation, it inspects only the phase-owned
+candidate evidence and read-only accepted context without inventing a plan or
+integration checkout. It preserves the exact failed commit and criteria and may
+use only reversible,
 uncommitted instrumentation that is removed before handoff.
 
 It does not commit a product fix or call design, planning, or implementation.
-It returns one structured `diagnosis-v1` to `sdlc-classify-failure`, including
+It returns one structured `diagnosis-v3` to `sdlc-classify-failure`, including
 the earliest divergence, violated invariant, causal chain, counterfactual,
 alternatives eliminated, confidence, regression oracle, evidence references,
 and the bounded owner handoff. Missing evidence and competing hypotheses stop;
 failure to find an implementation bug does not authorize redesign.
+
+The `validation_defect` result supports diagnosis after a failed counted
+mechanical repair. Complete causal proof, bounded repair scope, affected files
+and the original regression check are required. Classification and the next
+counted dispatch remain with their existing owner; this diagnostic branch does
+not repair the candidate or reset counters. Retired active diagnosis records are
+rejected without conversion.
 
 Each autonomous blocker tranche defaults to five remediation attempts and 120
 active minutes. Users can set a session profile up to 10/180 with optional

@@ -83,6 +83,6 @@ evidence, and use only `UNRESOLVED`, `BLOCKED_MISSING_EVIDENCE`, or
 `DIAGNOSED_NOT_FIXED`. Return a hook-supplied redacted exhaustion report
 verbatim. A new user instruction is required before another tranche.
 
-In Agentic SDLC diagnostic mode, return the required `diagnosis-v1` to
+In Agentic SDLC diagnostic mode, return the required `diagnosis-v3` to
 `sdlc-classify-failure`, including the result, confidence, owner handoff or
 exact missing evidence, instrumentation cleanup, and return route.

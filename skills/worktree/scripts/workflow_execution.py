@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from workflow_interop import (
     reconcile_promotion as reconcile_outer_promotion,
     record_promotion as record_outer_promotion,
     record_resource as record_outer_resource,
+    record_integration_intent as record_outer_integration_intent,
 )
 from workflow_security import contains_sensitive as _contains_sensitive
 
@@ -63,24 +65,27 @@ from project_specs_lib.contracts import (  # noqa: E402
     inspect_pair_bytes as inspect_project_spec_pair,
 )
 from workflow_objectives import validate_run, check_dispatch  # noqa: E402 — verified runtime support precedes imports
-from workflow_state import WorkflowError  # noqa: E402 — verified runtime support precedes imports
+from workflow_state import git_environment, WorkflowError  # noqa: E402 — verified runtime support precedes imports
+from workflow_liveness import (  # noqa: E402
+    WORKER_START_SECONDS,
+    WORKER_MAX_SECONDS,
+    WORKER_DEADLINE_WARNING_SECONDS,
+)
 
 
-COORDINATOR_SCHEMA = "workflow/execution-coordinator-v1"
-WAVE_SCHEMA = "workflow/execution-wave-v1"
-TASK_SCHEMA = "workflow/execution-task-v1"
-ASSIGNMENT_SCHEMA = "workflow/worker-assignment-v1"
-RESULT_SCHEMA = "workflow/worker-result-v1"
-INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v1"
-TASK_FINISH_INTENT_SCHEMA = "agentic-sdlc/task-finish-intent-v1"
+COORDINATOR_SCHEMA = "workflow/execution-coordinator-v2"
+WAVE_SCHEMA = "workflow/execution-wave-v2"
+TASK_SCHEMA = "workflow/execution-task-v2"
+ASSIGNMENT_SCHEMA = "workflow/worker-assignment-v2"
+RESULT_SCHEMA = "workflow/worker-result-v3"
+INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v2"
+TASK_FINISH_INTENT_SCHEMA = "workflow/task-finish-intent-v3"
 WORKER_HEARTBEAT_SECONDS = 30
-WORKER_START_SECONDS = 60
 WORKER_STANDARD_WARNING_SECONDS = 240
 WORKER_STANDARD_READ_ONLY_SECONDS = 300
 WORKER_INTEGRATION_WARNING_SECONDS = 360
 WORKER_INTEGRATION_READ_ONLY_SECONDS = 420
 WORKER_STALL_SECONDS = 240
-WORKER_MAX_SECONDS = 1800
 WORKER_PHASES = (
     "preflight",
     "implementing",
@@ -89,13 +94,13 @@ WORKER_PHASES = (
     "reporting",
 )
 FEATURE_ID_RE = re.compile(r"FEAT-[0-9]{3,}")
+EXECUTION_ID_RE = re.compile(r"(?:FEAT|SLICE)-[0-9]{3,}")
 REQUIREMENT_ID_RE = re.compile(r"REQ-[0-9]{3,}")
 WAVE_ID_RE = re.compile(r"WAVE-[0-9]{3,}")
 TASK_ID_RE = re.compile(r"TASK-[0-9]{3,}")
 SAFE_ID_RE = re.compile(r"[^a-z0-9._-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-SPEC_GAP_KINDS = {"requirement", "design", "traceability"}
 SINGLETON_DOMAIN_CLASSES = {
     "database",
     "external",
@@ -121,38 +126,8 @@ class ExecutionError(RuntimeError):
 
 
 def _valid_spec_gaps(value: object) -> bool:
-    if not isinstance(value, list):
-        return False
-    for gap in value:
-        if (
-            not isinstance(gap, dict)
-            or set(gap)
-            != {"kind", "summary", "evidence", "requirement_ids", "design_ids"}
-            or gap.get("kind") not in SPEC_GAP_KINDS
-            or not isinstance(gap.get("summary"), str)
-            or not str(gap["summary"]).strip()
-            or _contains_sensitive(str(gap["summary"]))
-            or not isinstance(gap.get("evidence"), list)
-            or not gap["evidence"]
-            or any(
-                not isinstance(item, str)
-                or not item.strip()
-                or _contains_sensitive(item)
-                for item in gap["evidence"]
-            )
-            or not isinstance(gap.get("requirement_ids"), list)
-            or any(
-                REQUIREMENT_ID_RE.fullmatch(str(item)) is None
-                for item in gap["requirement_ids"]
-            )
-            or not isinstance(gap.get("design_ids"), list)
-            or any(
-                FEATURE_ID_RE.fullmatch(str(item)) is None
-                for item in gap["design_ids"]
-            )
-        ):
-            return False
-    return True
+    from workflow_worker_contract import _spec_gap_rejection
+    return _spec_gap_rejection(value) is None
 
 
 def _impact(action: str, callback, *args):
@@ -163,21 +138,21 @@ def _impact(action: str, callback, *args):
 
 
 def _verify_execution_objective_impact(
-    run_dir: Path, feature_id: str, coordinator: dict[str, Any]
+    run_dir: Path, execution_id: str, coordinator: dict[str, Any]
 ) -> None:
     _impact(
         "objective impact execution basis is stale",
         verify_objective_impact_execution,
         run_dir,
-        feature_id,
+        execution_id,
         str(coordinator.get("plan_digest") or ""),
         Path(str(coordinator["selected_project_root"])),
     )
 
 
-def _assert_current_assignment(run_dir, feature_id, coordinator, assignment):
+def _assert_current_assignment(run_dir, execution_id, coordinator, assignment):
     basis = _impact("assignment execution basis is stale", verify_objective_impact_execution,
-                    run_dir, feature_id, coordinator["plan_digest"],
+                    run_dir, execution_id, coordinator["plan_digest"],
                     Path(coordinator["selected_project_root"]))
     if canonical_digest(basis) != assignment["basis_sha256"]:
         raise ExecutionError("REPLAN_REQUIRED", "assignment belongs to a superseded execution basis")
@@ -211,6 +186,7 @@ class TaskPlan:
     diagnosis_id: str | None
     regression_oracle: str | None
     ownership_complete: bool
+    feature_ids: tuple[str, ...] = ()
 
 
 def utc_now() -> str:
@@ -336,10 +312,10 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 
 
 @contextmanager
-def _execution_transition_lock(run_dir: Path, feature_id: str) -> Iterator[None]:
+def _execution_transition_lock(run_dir: Path, execution_id: str) -> Iterator[None]:
     from workflow_state import lock, WorkflowError
     try:
-        with lock(run_dir.parent), lock(execution_dir(run_dir, feature_id)):
+        with lock(run_dir.parent), lock(execution_dir(run_dir, execution_id)):
             yield
     except WorkflowError as error:
         raise ExecutionError(error.code, str(error)) from error
@@ -347,17 +323,17 @@ def _execution_transition_lock(run_dir: Path, feature_id: str) -> Iterator[None]
 
 def _claim_worker_session(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     session_hash: str,
 ) -> None:
-    directory = execution_dir(run_dir, feature_id) / "sessions"
+    directory = execution_dir(run_dir, execution_id) / "sessions"
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)
     path = directory / f"{session_hash}.json"
     claim = {
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "wave_id": wave_id,
         "task_id": task_id,
         "worker_session_hash": session_hash,
@@ -462,6 +438,7 @@ def _run(
         result = subprocess.run(
             argv,
             cwd=str(cwd),
+            env=git_environment(cwd),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -715,6 +692,9 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
         fields = _plan_fields(text[match.end() : end], task_id)
         dependencies = _split_values(_field(fields, "Depends on", task_id))
         requirements = _split_values(_field(fields, "Requirements", task_id))
+        feature_ids = _split_values(_optional_field(fields, "Features") or "none")
+        if any(FEATURE_ID_RE.fullmatch(item) is None for item in feature_ids):
+            raise ExecutionError("PLAN_INVALID", f"{task_id} has malformed feature IDs")
         if any(
             REQUIREMENT_ID_RE.fullmatch(item) is None for item in requirements
         ):
@@ -777,6 +757,7 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 diagnosis_id=diagnosis_id,
                 regression_oracle=regression_oracle,
                 ownership_complete=ownership_complete,
+                feature_ids=feature_ids,
             )
         )
     known = {task.task_id for task in tasks}
@@ -795,26 +776,33 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
     return tasks
 
 
-def _verify_acyclic(tasks: list[TaskPlan]) -> None:
+def _topological_tasks(tasks: list[TaskPlan]) -> list[TaskPlan]:
+    """Stable iterative ordering: valid deep graphs never depend on recursion."""
     by_id = {task.task_id: task for task in tasks}
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(task_id: str) -> None:
-        if task_id in visiting:
-            raise ExecutionError(
-                "DEPENDENCY_CYCLE", "task dependency graph contains a cycle"
-            )
-        if task_id in visited:
-            return
-        visiting.add(task_id)
-        for dependency in by_id[task_id].dependencies:
-            visit(dependency)
-        visiting.remove(task_id)
-        visited.add(task_id)
-
+    remaining = {task.task_id: len(set(task.dependencies)) for task in tasks}
+    children: dict[str, list[str]] = {task_id: [] for task_id in by_id}
     for task in tasks:
-        visit(task.task_id)
+        for dependency in set(task.dependencies):
+            if dependency not in by_id:
+                raise ExecutionError("PLAN_INVALID", "unknown task dependency")
+            children[dependency].append(task.task_id)
+    ready = [(task.position, task.task_id) for task in tasks if not remaining[task.task_id]]
+    heapq.heapify(ready)
+    ordered = []
+    while ready:
+        _position, task_id = heapq.heappop(ready)
+        ordered.append(by_id[task_id])
+        for child in children[task_id]:
+            remaining[child] -= 1
+            if not remaining[child]:
+                heapq.heappush(ready, (by_id[child].position, child))
+    if len(ordered) != len(tasks):
+        raise ExecutionError("DEPENDENCY_CYCLE", "task dependency graph contains a cycle")
+    return ordered
+
+
+def _verify_acyclic(tasks: list[TaskPlan]) -> None:
+    _topological_tasks(tasks)
 
 
 def claim_overlap(left: WriteClaim, right: WriteClaim) -> bool:
@@ -853,33 +841,25 @@ def tasks_conflict(left: TaskPlan, right: TaskPlan) -> bool:
     return False
 
 
-def build_dependency_waves(tasks: list[TaskPlan]) -> list[list[TaskPlan]]:
-    waves: list[list[TaskPlan]] = []
-    wave_index: dict[str, int] = {}
-    unresolved = list(sorted(tasks, key=lambda item: item.position))
-    while unresolved:
-        progressed = False
-        for task in tuple(unresolved):
-            if any(dependency not in wave_index for dependency in task.dependencies):
-                continue
-            earliest = (
-                max((wave_index[item] for item in task.dependencies), default=-1) + 1
-            )
-            target = earliest
-            while target < len(waves) and any(
-                tasks_conflict(task, peer) for peer in waves[target]
-            ):
-                target += 1
-            if target == len(waves):
-                waves.append([])
-            waves[target].append(task)
-            wave_index[task.task_id] = target
-            unresolved.remove(task)
-            progressed = True
-        if not progressed:
-            raise ExecutionError(
-                "DEPENDENCY_CYCLE", "task dependency graph cannot advance"
-            )
+def build_dependency_waves(tasks: list[TaskPlan], *, prefix=()) -> list[list[TaskPlan]]:
+    """Freeze batches of at most four retained worktrees, independently of slots."""
+    waves: list[list[TaskPlan]] = [list(wave) for wave in prefix]
+    wave_index = {task.task_id: index for index, wave in enumerate(waves) for task in wave}
+    first_available = len(waves)
+    for task in _topological_tasks(tasks):
+        if task.task_id in wave_index:
+            continue
+        target = max(first_available, max((wave_index[item] for item in task.dependencies), default=-1) + 1)
+        while target < len(waves) and (
+            len(waves[target]) >= 4 or any(tasks_conflict(task, peer) for peer in waves[target])
+        ):
+            target += 1
+        if target == len(waves):
+            waves.append([])
+        waves[target].append(task)
+        wave_index[task.task_id] = target
+        while first_available < len(waves) and len(waves[first_available]) >= 4:
+            first_available += 1
     return waves
 
 
@@ -900,6 +880,10 @@ def effective_capacity(run_dir: Path, requested: int) -> int:
     return min(4, requested, configured, observed["native_slots"], max(1, os.cpu_count() or 1))
 
 
+def _wave_index(waves: list[list[TaskPlan]]) -> dict[str, str]:
+    return {task.task_id: f"WAVE-{index:03d}" for index, tasks in enumerate(waves, 1) for task in tasks}
+
+
 def _safe_id(value: str) -> str:
     normalized = SAFE_ID_RE.sub("-", value.lower()).strip("-._")
     if not normalized:
@@ -907,43 +891,43 @@ def _safe_id(value: str) -> str:
     return normalized[:48]
 
 
-def execution_dir(run_dir: Path, feature_id: str) -> Path:
-    return run_dir / "execution" / _require_id(feature_id, FEATURE_ID_RE, "feature ID")
+def execution_dir(run_dir: Path, execution_id: str) -> Path:
+    return run_dir / "execution" / _require_id(execution_id, EXECUTION_ID_RE, "execution ID")
 
 
-def coordinator_path(run_dir: Path, feature_id: str) -> Path:
-    return execution_dir(run_dir, feature_id) / "coordinator.json"
+def coordinator_path(run_dir: Path, execution_id: str) -> Path:
+    return execution_dir(run_dir, execution_id) / "coordinator.json"
 
 
-def wave_path(run_dir: Path, feature_id: str, wave_id: str) -> Path:
+def wave_path(run_dir: Path, execution_id: str, wave_id: str) -> Path:
     return (
-        execution_dir(run_dir, feature_id)
+        execution_dir(run_dir, execution_id)
         / "waves"
         / f"{_require_id(wave_id, WAVE_ID_RE, 'wave ID')}.json"
     )
 
 
-def task_path(run_dir: Path, feature_id: str, wave_id: str, task_id: str) -> Path:
+def task_path(run_dir: Path, execution_id: str, wave_id: str, task_id: str) -> Path:
     return (
-        execution_dir(run_dir, feature_id)
+        execution_dir(run_dir, execution_id)
         / "tasks"
         / _require_id(wave_id, WAVE_ID_RE, "wave ID")
         / f"{_require_id(task_id, TASK_ID_RE, 'task ID')}.json"
     )
 
 
-def assignment_path(run_dir: Path, feature_id: str, wave_id: str, task_id: str) -> Path:
+def assignment_path(run_dir: Path, execution_id: str, wave_id: str, task_id: str) -> Path:
     return (
-        execution_dir(run_dir, feature_id)
+        execution_dir(run_dir, execution_id)
         / "assignments"
         / _require_id(wave_id, WAVE_ID_RE, "wave ID")
         / f"{_require_id(task_id, TASK_ID_RE, 'task ID')}.json"
     )
 
 
-def result_path(run_dir: Path, feature_id: str, wave_id: str, task_id: str) -> Path:
+def result_path(run_dir: Path, execution_id: str, wave_id: str, task_id: str) -> Path:
     return (
-        execution_dir(run_dir, feature_id)
+        execution_dir(run_dir, execution_id)
         / "results"
         / _require_id(wave_id, WAVE_ID_RE, "wave ID")
         / f"{_require_id(task_id, TASK_ID_RE, 'task ID')}.json"
@@ -951,23 +935,23 @@ def result_path(run_dir: Path, feature_id: str, wave_id: str, task_id: str) -> P
 
 
 def incoming_handoff_path(
-    run_dir: Path, feature_id: str, wave_id: str, task_id: str
+    run_dir: Path, execution_id: str, wave_id: str, task_id: str
 ) -> Path:
     return (
-        execution_dir(run_dir, feature_id)
+        execution_dir(run_dir, execution_id)
         / "incoming-handoffs"
         / _require_id(wave_id, WAVE_ID_RE, "wave ID")
         / f"{_require_id(task_id, TASK_ID_RE, 'task ID')}.json"
     )
 
 
-def journal_path(run_dir: Path, feature_id: str, name: str) -> Path:
-    return execution_dir(run_dir, feature_id) / "journals" / f"{name}.jsonl"
+def journal_path(run_dir: Path, execution_id: str, name: str) -> Path:
+    return execution_dir(run_dir, execution_id) / "journals" / f"{name}.jsonl"
 
 
 def _task_json(task: TaskPlan) -> dict[str, Any]:
     value = asdict(task)
-    for field in ("requirements", "dependencies", "conflict_domains"):
+    for field in ("requirements", "dependencies", "conflict_domains", "feature_ids"):
         value[field] = list(value[field])
     value["write_claims"] = [asdict(item) for item in task.write_claims]
     return value
@@ -977,8 +961,8 @@ def _task_definition_digest(task: TaskPlan) -> str:
     return sha256_json(_task_json(task))
 
 
-def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
-    value = read_json(coordinator_path(run_dir, feature_id))
+def _load_coordinator(run_dir: Path, execution_id: str) -> dict[str, Any]:
+    value = read_json(coordinator_path(run_dir, execution_id))
     if value.get("schema") in {
         "agentic-sdlc/execution-coordinator-v1",
         "agentic-sdlc/execution-coordinator-v2",
@@ -987,6 +971,7 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
         "agentic-sdlc/execution-coordinator-v5",
         "agentic-sdlc/execution-coordinator-v6",
         "agentic-sdlc/execution-coordinator-v7",
+        "workflow/execution-coordinator-v1",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
@@ -1031,31 +1016,31 @@ def _load_coordinator(run_dir: Path, feature_id: str) -> dict[str, Any]:
     return value
 
 
-def _save_coordinator(run_dir: Path, feature_id: str, value: dict[str, Any]) -> None:
+def _save_coordinator(run_dir: Path, execution_id: str, value: dict[str, Any]) -> None:
     value["updated_at"] = utc_now()
-    write_json_atomic(coordinator_path(run_dir, feature_id), value)
+    write_json_atomic(coordinator_path(run_dir, execution_id), value)
 
 
-def prepare_specifications(run_dir: Path, project_root: Path, feature_id: str) -> dict[str, Any]:
+def prepare_specifications(run_dir: Path, project_root: Path, execution_id: str) -> dict[str, Any]:
     """Allocate the sole Implement integration checkout before spec publication."""
-    return _prepare_execution(run_dir, project_root, feature_id, None, 1)
+    return _prepare_execution(run_dir, project_root, execution_id, None, 1)
 
 
 def prepare_execution(
-    run_dir: Path, project_root: Path, feature_id: str, plan_path: Path, capacity: int,
+    run_dir: Path, project_root: Path, execution_id: str, plan_path: Path, capacity: int,
 ) -> dict[str, Any]:
-    return _prepare_execution(run_dir, project_root, feature_id, plan_path, capacity)
+    return _prepare_execution(run_dir, project_root, execution_id, plan_path, capacity)
 
 
 def _prepare_execution(
     run_dir: Path,
     project_root: Path,
-    feature_id: str,
+    execution_id: str,
     plan_path: Path | None,
     capacity: int,
 ) -> dict[str, Any]:
     bootstrap = plan_path is None
-    feature_id = _require_id(feature_id, FEATURE_ID_RE, "feature ID")
+    execution_id = _require_id(execution_id, EXECUTION_ID_RE, "execution ID")
     accepted_run, objective = check_dispatch(run_dir)
     if bootstrap and accepted_run["owner"] != "implement":
         raise ExecutionError("OWNERSHIP_INVALID", "specification bootstrap belongs to Implement")
@@ -1112,13 +1097,15 @@ def _prepare_execution(
         plan_digest = sha256_bytes(plan_bytes)
         plan_text = plan_bytes.decode("utf-8")
         if (
-            re.search(rf"(?m)^# {re.escape(feature_id)} Plan v[0-9]+\s*$", plan_text)
+            re.search(rf"(?m)^# {re.escape(execution_id)} Plan v[0-9]+\s*$", plan_text)
             is None
         ):
             raise ExecutionError(
                 "PLAN_INVALID", "locked plan heading does not match the feature ID"
             )
         tasks = parse_locked_plan(plan_text)
+        from workflow_program import slice_basis
+        slice_basis(run_dir, selected_project_root, execution_id, tasks)
         _verify_claim_paths(project_root, project_scope, tasks)
         waves = build_dependency_waves(tasks)
         _impact(
@@ -1130,7 +1117,7 @@ def _prepare_execution(
     if accepted_run["owner"] == "implement":
         from workflow_spec_bootstrap import verify_source_specs
         verify_source_specs(project_root, project_scope, accepted_run["source_head"])
-        if (not bootstrap and not coordinator_path(run_dir, feature_id).exists()):
+        if (not bootstrap and not coordinator_path(run_dir, execution_id).exists()):
             raise ExecutionError("SPEC_BOOTSTRAP_REQUIRED", "prepare-specs must precede Implement planning")
     if accepted_run["owner"] == "implement" and (
         head(project_root) != accepted_run["source_head"]
@@ -1140,6 +1127,13 @@ def _prepare_execution(
     anchor = _interop(
         "outer worktree inspection", inspect_outer_anchor, selected_project_root
     )
+    if accepted_run["owner"] == "agentic-sdlc" and not coordinator_path(run_dir, execution_id).exists():
+        if anchor.get("status") == "unmanaged":
+            from workflow_delivery import prepare_source
+            prepare_source(run_dir, selected_project_root, execution_id)
+        from workflow_spec_bootstrap import seal_sdlc_contract
+        seal_sdlc_contract(run_dir, selected_project_root, execution_id, plan_digest, anchor)
+        anchor = _interop("outer worktree inspection", inspect_outer_anchor, selected_project_root)
     if anchor.get("status") == "managed":
         promotion: dict[str, object] = {
             "promotion_branch": str(anchor["branch"]),
@@ -1204,7 +1198,7 @@ def _prepare_execution(
         )
     current_branch = str(promotion["promotion_branch"])
     base_head = str(promotion["promotion_initial_head"])
-    base_path = run_dir / "prepared-bases" / (feature_id + ".json")
+    base_path = run_dir / "prepared-bases" / (execution_id + ".json")
     base_identity = {"schema": "workflow/prepared-base-v1", "base_head": base_head,
                      "source_branch": current_branch, "git_common_dir": str(common_dir)}
     if base_path.exists():
@@ -1213,10 +1207,10 @@ def _prepare_execution(
     else:
         from workflow_state import write
         write(base_path, base_identity, exclusive=True)
-    state_path = coordinator_path(run_dir, feature_id)
+    state_path = coordinator_path(run_dir, execution_id)
     recovering = state_path.exists()
     if state_path.exists():
-        coordinator = _load_coordinator(run_dir, feature_id)
+        coordinator = _load_coordinator(run_dir, execution_id)
         expected = {
             "project_root": str(project_root),
             "selected_project_root": str(selected_project_root),
@@ -1245,16 +1239,17 @@ def _prepare_execution(
                 raise ExecutionError("REPLAN_REQUIRED", "bootstrap objective changed; retain the prior checkout")
             coordinator.update(plan_path=str(plan_path), plan_digest=plan_digest,
                                capacity=capacity, wave_ids=[f"WAVE-{i:03d}" for i in range(1, len(waves) + 1)],
+                               task_waves=_wave_index(waves),
                                status="specs_sealing")
-            _save_coordinator(run_dir, feature_id, coordinator)
+            _save_coordinator(run_dir, execution_id, coordinator)
         elif coordinator.get("plan_digest") != plan_digest:
             raise ExecutionError("REPLAN_REQUIRED", "prepared execution plan changed")
         if not bootstrap and coordinator.get("status") == "specs_sealing":
             from workflow_spec_bootstrap import seal_specifications
-            coordinator = seal_specifications(run_dir, feature_id, coordinator)
+            coordinator = seal_specifications(run_dir, execution_id, coordinator)
         if not bootstrap:
             _impact("objective impact settlement failed", settle_objective_impact_execution,
-                    run_dir, feature_id, plan_digest, selected_project_root,
+                    run_dir, execution_id, plan_digest, selected_project_root,
                     coordinator.get("bootstrap_objective_sha256") is not None)
         integration = Path(str(coordinator["integration_worktree"])).resolve()
         integration_branch = str(coordinator["integration_branch"])
@@ -1272,11 +1267,11 @@ def _prepare_execution(
             return coordinator
     else:
         run_id = _safe_id(run_dir.name)
-        feature_name = _safe_id(feature_id)
+        feature_name = _safe_id(execution_id)
         integration_branch = (f"feature/implement-{run_id}" if promotion.get("delivery_mode") == "feature"
                               else f"codex/{accepted_run['owner']}/{run_id}/{feature_name}/integration")
         integration_worktree = (
-            run_dir / "worktrees" / feature_id / "integration"
+            run_dir / "worktrees" / execution_id / "integration"
         ).resolve()
         if integration_worktree.exists():
             raise ExecutionError(
@@ -1292,7 +1287,7 @@ def _prepare_execution(
             "owner": accepted_run["owner"],
             "coordinator_session_sha256": accepted_run["coordinator_session_sha256"],
             "delivery_mode": promotion.get("delivery_mode", "source"),
-            "feature_id": feature_id,
+            "execution_id": execution_id,
             "run_id": run_dir.name,
             "project_root": str(project_root),
             "git_root": str(project_root),
@@ -1314,6 +1309,8 @@ def _prepare_execution(
             "integration_worktree": str(integration_worktree),
             "integration_head": base_head,
             "wave_ids": [f"WAVE-{index:03d}" for index in range(1, len(waves) + 1)],
+            "task_waves": _wave_index(waves),
+            "retained_worker_limit": 4,
             "active_wave": None,
             "promoted_head": None,
             "cleanup_retained": [],
@@ -1327,14 +1324,14 @@ def _prepare_execution(
                 "objective impact settlement failed",
                 settle_objective_impact_execution,
                 run_dir,
-                feature_id,
+                execution_id,
                 plan_digest,
                 selected_project_root,
                 True,
             )
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
         append_journal(
-            journal_path(run_dir, feature_id, "coordinator"),
+            journal_path(run_dir, execution_id, "coordinator"),
             {
                 "event": "prepare_intent",
                 "branch": integration_branch,
@@ -1342,7 +1339,7 @@ def _prepare_execution(
             },
         )
     from workflow_publication import register as register_spec_owner
-    register_spec_owner(run_dir, feature_id, selected_project_root)
+    register_spec_owner(run_dir, execution_id, selected_project_root)
     _interop(
         "outer lease acquisition",
         acquire_outer_lease,
@@ -1351,18 +1348,20 @@ def _prepare_execution(
         project_scope,
         base_head,
     )
-    _interop(
+    resource_state = _interop(
         "integration resource registration",
-        record_outer_resource,
+        record_outer_integration_intent,
         run_dir,
         selected_project_root,
-        kind="integration",
         path=integration_worktree,
         branch=integration_branch,
-        state="planned",
     )
     registration = worktrees(project_root).get(integration_worktree)
     branch_exists = local_branch_exists(project_root, integration_branch)
+    if resource_state == "present" and (
+        registration is None or not branch_exists or not integration_worktree.is_dir()
+    ):
+        raise ExecutionError("WORKTREE_CONFLICT", "recorded integration resource is missing; do not recreate it")
     try:
         if not branch_exists:
             if registration is not None or integration_worktree.exists():
@@ -1413,7 +1412,7 @@ def _prepare_execution(
                 "path": str(integration_worktree),
             }
         ]
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
         raise
     if (
         branch(integration_worktree) != integration_branch
@@ -1422,7 +1421,7 @@ def _prepare_execution(
         or git_common_dir(integration_worktree) != common_dir
     ):
         coordinator["status"] = "blocked"
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
         raise ExecutionError(
             "WORKTREE_CONFLICT", "created integration identity is invalid"
         )
@@ -1439,8 +1438,8 @@ def _prepare_execution(
     if bootstrap:
         coordinator["status"] = "specs_prepared"
         coordinator["cleanup_retained"] = []
-        _save_coordinator(run_dir, feature_id, coordinator)
-        append_journal(journal_path(run_dir, feature_id, "coordinator"),
+        _save_coordinator(run_dir, execution_id, coordinator)
+        append_journal(journal_path(run_dir, execution_id, "coordinator"),
                        {"event": "specs_prepared", "head": coordinator["integration_head"]})
         return coordinator
     if recovering and coordinator.get("wave_ids") != [
@@ -1452,7 +1451,7 @@ def _prepare_execution(
         expected_wave = {
             "schema": WAVE_SCHEMA,
             "wave_id": wave_id,
-            "feature_id": feature_id,
+            "execution_id": execution_id,
             "status": "planned",
             "task_ids": [item.task_id for item in wave_tasks],
             "ready_task_ids": [item.task_id for item in wave_tasks],
@@ -1464,10 +1463,10 @@ def _prepare_execution(
             "integration_head": None,
             "cleanup_retained": [],
         }
-        wave_file = wave_path(run_dir, feature_id, wave_id)
+        wave_file = wave_path(run_dir, execution_id, wave_id)
         if wave_file.exists():
             existing_wave = read_json(wave_file)
-            for key in ("schema", "wave_id", "feature_id", "task_ids", "capacity"):
+            for key in ("schema", "wave_id", "execution_id", "task_ids", "capacity"):
                 if existing_wave.get(key) != expected_wave[key]:
                     raise ExecutionError(
                         "EXECUTION_STATE_INVALID", f"recorded {wave_id} changed"
@@ -1499,7 +1498,7 @@ def _prepare_execution(
                 "heartbeat_phase": None,
                 "finish_intent": None,
             }
-            task_file = task_path(run_dir, feature_id, wave_id, task.task_id)
+            task_file = task_path(run_dir, execution_id, wave_id, task.task_id)
             if task_file.exists():
                 existing_task = read_json(task_file)
                 _validate_task_liveness(existing_task)
@@ -1517,9 +1516,9 @@ def _prepare_execution(
                 write_json_atomic(task_file, expected_task)
     coordinator["status"] = "prepared" if accepted_run["owner"] == "agentic-sdlc" else "tdd_sealed"
     coordinator["cleanup_retained"] = []
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     append_journal(
-        journal_path(run_dir, feature_id, "coordinator"),
+        journal_path(run_dir, execution_id, "coordinator"),
         {"event": "prepared", "head": base_head, "waves": coordinator["wave_ids"]},
     )
     return coordinator
@@ -1527,14 +1526,14 @@ def _prepare_execution(
 
 def replan_future(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     plan_path: Path,
     capacity: int,
 ) -> dict[str, Any]:
-    with _execution_transition_lock(run_dir, feature_id):
+    with _execution_transition_lock(run_dir, execution_id):
         return _replan_future_locked(
             run_dir,
-            feature_id,
+            execution_id,
             plan_path,
             capacity,
         )
@@ -1542,11 +1541,11 @@ def replan_future(
 
 def _replan_future_locked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     plan_path: Path,
     capacity: int,
 ) -> dict[str, Any]:
-    coordinator = _load_coordinator(run_dir, feature_id)
+    coordinator = _load_coordinator(run_dir, execution_id)
     selected_project_root = Path(str(coordinator["selected_project_root"]))
     _impact(
         "objective impact verification failed",
@@ -1554,7 +1553,7 @@ def _replan_future_locked(
         run_dir,
         selected_project_root,
     )
-    if coordinator.get("status") in {"sealed", "promoted", "done"}:
+    if coordinator.get("status") in {"sealed", "promoted", "done", "design_revision_pending"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "sealed execution cannot replan"
         )
@@ -1580,37 +1579,44 @@ def _replan_future_locked(
             "objective impact settlement failed",
             settle_objective_impact_execution,
             run_dir,
-            feature_id,
+            execution_id,
             digest,
             selected_project_root,
             False,
         )
         return coordinator
     text = raw.decode("utf-8")
-    if re.search(rf"(?m)^# {re.escape(feature_id)} Plan v[0-9]+\s*$", text) is None:
+    if re.search(rf"(?m)^# {re.escape(execution_id)} Plan v[0-9]+\s*$", text) is None:
         raise ExecutionError("PLAN_INVALID", "replacement plan heading is invalid")
     tasks = parse_locked_plan(text)
+    from workflow_program import slice_basis
+    slice_basis(run_dir, selected_project_root, execution_id, tasks)
     _verify_claim_paths(
         Path(str(coordinator["project_root"])), str(coordinator["project_scope"]), tasks
     )
-    retired_ids = {task for path in (execution_dir(run_dir, feature_id) / "waves").glob("*.json")
+    retired_ids = {task for path in (execution_dir(run_dir, execution_id) / "waves").glob("*.json")
                    for row in [read_json(path)] if row.get("status") == "superseded" for task in row["task_ids"]}
     if any(set(task.dependencies) & retired_ids for task in tasks if task.task_id not in retired_ids):
         raise ExecutionError("REPLAN_REQUIRED", "new tasks cannot depend on superseded work")
-    new_waves = build_dependency_waves(tasks)
     old_wave_ids = list(coordinator["wave_ids"])
     preserved = 0
+    prefix = []
+    by_id = {task.task_id: task for task in tasks}
     for wave_id in old_wave_ids:
-        wave = read_json(wave_path(run_dir, feature_id, wave_id))
+        wave = read_json(wave_path(run_dir, execution_id, wave_id))
         if wave.get("status") == "planned":
             break
+        if any(task_id not in by_id for task_id in wave["task_ids"]):
+            raise ExecutionError("REPLAN_REQUIRED", "replacement plan removes active history")
+        prefix.append([by_id[task_id] for task_id in wave["task_ids"]])
         preserved += 1
+    new_waves = build_dependency_waves(tasks, prefix=prefix)
     if len(new_waves) < preserved:
         raise ExecutionError(
             "REPLAN_REQUIRED", "replacement plan removes active history"
         )
     for index in range(preserved):
-        old = read_json(wave_path(run_dir, feature_id, old_wave_ids[index]))
+        old = read_json(wave_path(run_dir, execution_id, old_wave_ids[index]))
         new_ids = [task.task_id for task in new_waves[index]]
         if old.get("task_ids") != new_ids:
             raise ExecutionError(
@@ -1620,7 +1626,7 @@ def _replan_future_locked(
             recorded = read_json(
                 task_path(
                     run_dir,
-                    feature_id,
+                    execution_id,
                     old_wave_ids[index],
                     task.task_id,
                 )
@@ -1636,23 +1642,23 @@ def _replan_future_locked(
                     "REPLAN_REQUIRED",
                     "replacement plan changes a completed or active task definition",
                 )
-    feature_execution = execution_dir(run_dir, feature_id)
+    feature_execution = execution_dir(run_dir, execution_id)
     integration = Path(str(coordinator["integration_worktree"]))
     registered_worktrees = worktrees(integration)
     old_future_wave_ids = old_wave_ids[preserved:]
     for wave_id in old_future_wave_ids:
-        wave = read_json(wave_path(run_dir, feature_id, wave_id))
+        wave = read_json(wave_path(run_dir, execution_id, wave_id))
         if wave.get("status") != "planned":
             raise ExecutionError(
                 "REPLAN_REQUIRED", "future wave already owns resources"
             )
         assignments = feature_execution / "assignments" / wave_id
         results = feature_execution / "results" / wave_id
-        worker_root = (run_dir / "worktrees" / feature_id / "waves" / wave_id).resolve()
-        journal = journal_path(run_dir, feature_id, wave_id)
+        worker_root = (run_dir / "worktrees" / execution_id / "waves" / wave_id).resolve()
+        journal = journal_path(run_dir, execution_id, wave_id)
         task_ids = [str(item) for item in wave.get("task_ids", [])]
         branch_names = [
-            f"codex/{coordinator['owner']}/{_safe_id(run_dir.name)}/{_safe_id(feature_id)}/"
+            f"codex/{coordinator['owner']}/{_safe_id(run_dir.name)}/{_safe_id(execution_id)}/"
             f"{_safe_id(wave_id)}/{_safe_id(task_id)}"
             for task_id in task_ids
         ]
@@ -1677,7 +1683,7 @@ def _replan_future_locked(
         if wave_id in old_future_wave_ids:
             continue
         if (
-            wave_path(run_dir, feature_id, wave_id).exists()
+            wave_path(run_dir, execution_id, wave_id).exists()
             or (feature_execution / "tasks" / wave_id).exists()
         ):
             raise ExecutionError(
@@ -1685,7 +1691,7 @@ def _replan_future_locked(
             )
     old_digest = str(coordinator["plan_digest"])
     append_journal(
-        journal_path(run_dir, feature_id, "coordinator"),
+        journal_path(run_dir, execution_id, "coordinator"),
         {
             "event": "future_replan_intent",
             "old_digest": old_digest,
@@ -1705,7 +1711,7 @@ def _replan_future_locked(
             {
                 "schema": WAVE_SCHEMA,
                 "wave_id": wave_id,
-                "feature_id": feature_id,
+                "execution_id": execution_id,
                 "status": "planned",
                 "task_ids": [task.task_id for task in wave_tasks],
                 "ready_task_ids": [task.task_id for task in wave_tasks],
@@ -1775,16 +1781,17 @@ def _replan_future_locked(
         updated["plan_digest"] = digest
         updated["capacity"] = capacity
         updated["wave_ids"] = new_wave_ids
+        updated["task_waves"] = _wave_index(new_waves)
         _impact(
             "objective impact settlement failed",
             settle_objective_impact_execution,
             run_dir,
-            feature_id,
+            execution_id,
             digest,
             selected_project_root,
             True,
         )
-        _save_coordinator(run_dir, feature_id, updated)
+        _save_coordinator(run_dir, execution_id, updated)
         coordinator = updated
     except Exception:
         for live in reversed(installed):
@@ -1800,15 +1807,15 @@ def _replan_future_locked(
         shutil.rmtree(stage_root, ignore_errors=True)
         shutil.rmtree(backup_root, ignore_errors=True)
     append_journal(
-        journal_path(run_dir, feature_id, "coordinator"),
+        journal_path(run_dir, execution_id, "coordinator"),
         {"event": "future_replanned", "old_digest": old_digest, "new_digest": digest},
     )
     return coordinator
 
 
-def seal_tdd_base(run_dir: Path, feature_id: str, message: str) -> dict[str, Any]:
+def seal_tdd_base(run_dir: Path, execution_id: str, message: str) -> dict[str, Any]:
     _reject_sensitive_evidence(message)
-    coordinator = _load_coordinator(run_dir, feature_id)
+    coordinator = _load_coordinator(run_dir, execution_id)
     if coordinator["status"] not in {"prepared", "tdd_sealed"}:
         raise ExecutionError("EXECUTION_STATE_INVALID", "TDD base cannot be sealed now")
     integration = Path(coordinator["integration_worktree"])
@@ -1820,7 +1827,7 @@ def seal_tdd_base(run_dir: Path, feature_id: str, message: str) -> dict[str, Any
         return coordinator
     recorded_head = coordinator["integration_head"]
     current_head = head(integration)
-    coordinator_journal = journal_path(run_dir, feature_id, "coordinator")
+    coordinator_journal = journal_path(run_dir, execution_id, "coordinator")
     if current_head != recorded_head:
         parents = git(
             integration,
@@ -1864,9 +1871,9 @@ def seal_tdd_base(run_dir: Path, feature_id: str, message: str) -> dict[str, Any
             raise
     coordinator["integration_head"] = head(integration)
     coordinator["status"] = "tdd_sealed"
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     append_journal(
-        journal_path(run_dir, feature_id, "coordinator"),
+        journal_path(run_dir, execution_id, "coordinator"),
         {"event": "tdd_sealed", "head": coordinator["integration_head"]},
     )
     return coordinator
@@ -1897,6 +1904,7 @@ def _task_plan_from_state(value: dict[str, Any]) -> TaskPlan:
             else None
         ),
         ownership_complete=bool(raw["ownership_complete"]),
+        feature_ids=tuple(raw.get("feature_ids", [])),
     )
 
 
@@ -1912,12 +1920,13 @@ def _read_incoming_handoff(path: Path) -> dict[str, Any]:
     value = read_json(path)
     required = {
         "schema",
-        "feature_id",
+        "execution_id",
         "wave_id",
         "task_id",
         "assignment_base_head",
         "dependencies",
         "predecessors",
+        "dependency_index",
         "created_at",
         "handoff_digest",
     }
@@ -1959,13 +1968,23 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
     fingerprint = str(assignment.get("basis_sha256", ""))
     if re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
         raise ExecutionError("BASIS_INVALID", "assignment basis identity is invalid")
-    basis = read_json(Path(assignment["run_dir"]) / "bases" / assignment["feature_id"] / (fingerprint + ".json"))
+    basis = read_json(Path(assignment["run_dir"]) / "bases" / assignment["execution_id"] / (fingerprint + ".json"))
     if (canonical_digest(basis) != fingerprint or assignment.get("owner") != basis["owner"]
             or basis["plan_digest"] != assignment["plan_digest"]):
         raise ExecutionError("BASIS_INVALID", "immutable assignment provenance changed")
     helper = Path(str(assignment.get("execution_helper") or ""))
     bound_run_dir = Path(str(assignment.get("run_dir") or ""))
     dependencies = assignment.get("dependencies")
+    features = assignment.get("feature_ids")
+    if (not isinstance(features, list) or not features
+            or any(not isinstance(value, str) or FEATURE_ID_RE.fullmatch(value) is None for value in features)):
+        raise ExecutionError("BASIS_INVALID", "assignment feature mappings are missing")
+    frozen = read_json(task_path(bound_run_dir, assignment["execution_id"], assignment["wave_id"], assignment["task_id"]))
+    expected_features = frozen.get("task", {}).get("feature_ids")
+    if not expected_features and FEATURE_ID_RE.fullmatch(assignment["execution_id"]):
+        expected_features = [assignment["execution_id"]]
+    if features != expected_features:
+        raise ExecutionError("BASIS_INVALID", "assignment feature mappings differ from its frozen task")
     if not isinstance(dependencies, list) or any(
         not isinstance(item, str) for item in dependencies
     ):
@@ -2028,6 +2047,18 @@ def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) 
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "worker result digest is invalid"
         )
+    from workflow_worker_results import read_receipt
+    _, received = _impact("worker result receipt is invalid", read_receipt, assignment, {
+        "attempt": result.get("attempt"), "worker_session_hash": result.get("worker_session_hash"),
+    })
+    payload = received["worker_result"]
+    if (received["receipt_sha256"] != result.get("worker_result_receipt_sha256")
+            or payload["status"] != "implemented"
+            or any(result.get(key) != payload[key] for key in (
+                "task_id", "assignment_digest", "summary", "decisions", "open_risks",
+                "spec_gaps", "validation", "review",
+            ))):
+        raise ExecutionError("RESULT_INVALID", "committed result differs from its native receipt")
     expected_oracle = assignment.get("regression_oracle")
     evidence = result.get("regression_oracle_evidence")
     if expected_oracle:
@@ -2115,56 +2146,49 @@ def _build_regression_oracle_evidence(
 
 
 def _find_task_wave(
-    run_dir: Path, feature_id: str, coordinator: dict[str, Any], task_id: str
+    run_dir: Path, execution_id: str, coordinator: dict[str, Any], task_id: str
 ) -> str | None:
-    for candidate_wave in coordinator["wave_ids"]:
-        candidate = read_json(wave_path(run_dir, feature_id, candidate_wave))
-        if task_id in candidate.get("task_ids", []):
-            return str(candidate_wave)
-    return None
+    return _task_wave_index(run_dir, execution_id, coordinator).get(task_id)
+
+
+def _task_wave_index(run_dir: Path, execution_id: str, coordinator: dict[str, Any]) -> dict[str, str]:
+    index = coordinator.get("task_waves")
+    allowed_waves = set(coordinator["wave_ids"])
+    if not isinstance(index, dict) or any(
+        not isinstance(key, str) or TASK_ID_RE.fullmatch(key) is None or value not in allowed_waves
+        for key, value in index.items()
+    ):
+        raise ExecutionError("EXECUTION_STATE_INVALID", "task-to-wave index is invalid")
+    return index
 
 
 def _build_incoming_handoff(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     coordinator: dict[str, Any],
     wave_id: str,
     task: TaskPlan,
     base_head: str,
     created_at: str,
+    *, persist_index: bool = False,
 ) -> dict[str, Any]:
     predecessors: list[dict[str, Any]] = []
-    predecessor_ids: list[str] = []
-    wave_position = coordinator["wave_ids"].index(wave_id)
-    for prior_wave_id in coordinator["wave_ids"][:wave_position]:
-        prior_wave = read_json(wave_path(run_dir, feature_id, prior_wave_id))
-        if prior_wave.get("status") == "superseded":
-            if not _wave_satisfied(run_dir, feature_id, coordinator, prior_wave_id):
-                raise ExecutionError("EXECUTION_STATE_INVALID", "retired predecessor is not reconciled")
-            if set(task.dependencies) & set(prior_wave["task_ids"]):
-                raise ExecutionError("EXECUTION_STATE_INVALID", "task depends on retired work")
-            # Retention proves quiescence, not delivered predecessor results.
-            continue
-        predecessor_ids.extend(str(item) for item in prior_wave["task_ids"])
-    predecessor_ids.extend(
-        dependency
-        for dependency in task.dependencies
-        if dependency not in predecessor_ids
-    )
+    predecessor_ids = list(dict.fromkeys(task.dependencies))
+    task_waves = _task_wave_index(run_dir, execution_id, coordinator) if predecessor_ids else {}
     for dependency in predecessor_ids:
-        dependency_wave = _find_task_wave(run_dir, feature_id, coordinator, dependency)
+        dependency_wave = task_waves.get(dependency)
         if dependency_wave is None:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "dependency task state is missing"
             )
         dependency_task = read_json(
-            task_path(run_dir, feature_id, dependency_wave, dependency)
+            task_path(run_dir, execution_id, dependency_wave, dependency)
         )
         dependency_assignment = read_json(
-            assignment_path(run_dir, feature_id, dependency_wave, dependency)
+            assignment_path(run_dir, execution_id, dependency_wave, dependency)
         )
         dependency_result = read_json(
-            result_path(run_dir, feature_id, dependency_wave, dependency)
+            result_path(run_dir, execution_id, dependency_wave, dependency)
         )
         _validate_assignment_record(dependency_assignment)
         _validate_result_record(dependency_result, dependency_assignment)
@@ -2191,35 +2215,41 @@ def _build_incoming_handoff(
                 "assignment_digest": dependency_assignment.get("assignment_digest"),
                 "result_digest": dependency_result.get("result_digest"),
                 "commit": dependency_result.get("commit"),
-                "changed_paths": dependency_result.get("changed_paths"),
-                "summary": dependency_result.get("summary"),
-                "decisions": dependency_result.get("decisions"),
-                "open_risks": dependency_result.get("open_risks"),
-                "spec_gaps": dependency_result.get("spec_gaps"),
-                "validation": dependency_result.get("validation"),
-                "review": dependency_result.get("review"),
+                "result_path": str(result_path(run_dir, execution_id, dependency_wave, dependency).relative_to(run_dir)),
+                "summary": str(dependency_result.get("summary", ""))[:512],
             }
         )
-        dependency_wave_record = read_json(wave_path(run_dir, feature_id, dependency_wave))
+        dependency_wave_record = read_json(wave_path(run_dir, execution_id, dependency_wave))
         if dependency_wave_record.get("combined_failure") is not None:
             predecessors[-1]["combined_failure"] = dependency_wave_record["combined_failure"]
+    index = {"schema": "workflow/dependency-index-v1", "execution_id": execution_id,
+             "wave_id": wave_id, "task_id": task.task_id, "predecessors": predecessors}
+    index_path = execution_dir(run_dir, execution_id) / "dependency-indexes" / wave_id / (task.task_id + ".json")
+    if persist_index and not index_path.exists():
+        from workflow_state import write
+        write(index_path, index, exclusive=True)
+    if not index_path.exists() or read_json(index_path) != index:
+        raise ExecutionError("EXECUTION_STATE_INVALID", "dependency evidence index changed or is missing")
     value: dict[str, Any] = {
         "schema": INCOMING_HANDOFF_SCHEMA,
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "wave_id": wave_id,
         "task_id": task.task_id,
         "assignment_base_head": base_head,
         "dependencies": list(task.dependencies),
-        "predecessors": predecessors,
+        "predecessors": predecessors[:16],
+        "dependency_index": {"path": str(index_path.relative_to(run_dir)), "sha256": sha256_json(index), "count": len(predecessors)},
         "created_at": created_at,
     }
     value["handoff_digest"] = sha256_json(value)
+    if len(json.dumps(value).encode()) > 64 * 1024:
+        raise ExecutionError("PLAN_INVALID", "task dependency handoff exceeds 64 KiB; split its fan-in")
     return value
 
 
 def _validate_assignment_handoff(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     coordinator: dict[str, Any],
     assignment: dict[str, Any],
     task: TaskPlan,
@@ -2227,7 +2257,7 @@ def _validate_assignment_handoff(
     path = Path(str(assignment.get("incoming_handoff_path") or ""))
     _validate_assignment_record(assignment)
     expected_path = incoming_handoff_path(
-        run_dir, feature_id, str(assignment["wave_id"]), task.task_id
+        run_dir, execution_id, str(assignment["wave_id"]), task.task_id
     ).resolve()
     if not path.is_absolute() or path.resolve() != expected_path:
         raise ExecutionError(
@@ -2236,7 +2266,7 @@ def _validate_assignment_handoff(
     handoff = _read_incoming_handoff(path)
     expected = _build_incoming_handoff(
         run_dir,
-        feature_id,
+        execution_id,
         coordinator,
         str(assignment["wave_id"]),
         task,
@@ -2252,13 +2282,15 @@ def _validate_assignment_handoff(
     return handoff
 
 
-def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, Any]]:
-    coordinator = _load_coordinator(run_dir, feature_id)
+def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str, Any]]:
+    from workflow_worker_results import require_dispatchable
+    _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
+    coordinator = _load_coordinator(run_dir, execution_id)
     _impact(
         "objective impact execution basis is stale",
         verify_objective_impact_execution,
         run_dir,
-        feature_id,
+        execution_id,
         str(coordinator.get("plan_digest") or ""),
         Path(str(coordinator["selected_project_root"])),
     )
@@ -2276,14 +2308,17 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
         raise ExecutionError("EXECUTION_STATE_INVALID", "another wave is active")
     if wave_id not in coordinator["wave_ids"]:
         raise ExecutionError("EXECUTION_STATE_INVALID", "unknown wave")
-    wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    wave = read_json(wave_path(run_dir, execution_id, wave_id))
+    if (coordinator.get("retained_worker_limit") != 4 or len(wave["task_ids"]) > 4
+            or int(coordinator["capacity"]) > 4):
+        raise ExecutionError("RESOURCE_LIMIT", "retained task worktree bound is invalid")
     if coordinator["status"] == "integrated" and wave["status"] != "planned":
         raise ExecutionError(
             "EXECUTION_STATE_INVALID",
             "integrated execution can prepare only an appended planned wave",
         )
     if wave["status"] in {"running", "integrating", "integrated", "done"}:
-        assignments = [read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+        assignments = [read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
                        for task_id in wave["active_task_ids"]]
         for assignment in assignments:
             _validate_assignment_record(assignment)
@@ -2293,21 +2328,21 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     wave_position = coordinator["wave_ids"].index(wave_id)
     unresolved = []
     for prior in coordinator["wave_ids"][:wave_position]:
-        prior_record = read_json(wave_path(run_dir, feature_id, prior))
-        if prior_record.get("status") == "failed" and not _wave_satisfied(run_dir, feature_id, coordinator, prior):
+        prior_record = read_json(wave_path(run_dir, execution_id, prior))
+        if prior_record.get("status") == "failed" and not _wave_satisfied(run_dir, execution_id, coordinator, prior):
             unresolved.append(prior_record)
-        elif not _wave_satisfied(run_dir, feature_id, coordinator, prior):
+        elif not _wave_satisfied(run_dir, execution_id, coordinator, prior):
             raise ExecutionError("EXECUTION_STATE_INVALID", "prior wave is incomplete")
     if unresolved:
         latest = unresolved[-1]
-        authority = _validated_wave_failure(run_dir, feature_id, latest, active=True)
+        authority = _validated_wave_failure(run_dir, execution_id, latest, active=True)
         if any(
-            _validated_wave_failure(run_dir, feature_id, item)[key] != authority[key]
+            _validated_wave_failure(run_dir, execution_id, item)[key] != authority[key]
             for item in unresolved for key in ("blocker_key", "oracle")
         ):
             raise ExecutionError("REPLAN_REQUIRED", "failed waves require separate repair ownership")
         for task_id in wave["task_ids"]:
-            task = _task_plan_from_state(read_json(task_path(run_dir, feature_id, wave_id, task_id)))
+            task = _task_plan_from_state(read_json(task_path(run_dir, execution_id, wave_id, task_id)))
             if task.diagnosis_id != authority["diagnosis_id"] or task.regression_oracle != authority["oracle"]:
                 raise ExecutionError("REPLAN_REQUIRED", "unresolved wave requires its authorized corrective task")
         wave["corrects"] = [item["wave_id"] for item in unresolved]
@@ -2360,24 +2395,24 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     wave["active_task_ids"].extend(newly_selected)
     wave["ready_task_ids"] = wave["ready_task_ids"][free:]
     selected = [task_id for task_id in wave["active_task_ids"]
-                if (lambda record: record["status"] == "planned" or record["status"] == "assigned" and record.get("dispatched_at") is None)(read_json(task_path(run_dir, feature_id, wave_id, task_id)))]
-    write_json_atomic(wave_path(run_dir, feature_id, wave_id), wave)
+                if (lambda record: record["status"] == "planned" or record["status"] == "assigned" and record.get("dispatched_at") is None)(read_json(task_path(run_dir, execution_id, wave_id, task_id)))]
+    write_json_atomic(wave_path(run_dir, execution_id, wave_id), wave)
     coordinator["active_wave"] = wave_id
     coordinator["status"] = "waves_running"
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     assignments: list[dict[str, Any]] = []
     for task_id in selected:
-        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
         task_record = read_json(task_record_path)
         task = _task_plan_from_state(task_record)
         branch_name = (
-            f"codex/{coordinator['owner']}/{_safe_id(run_dir.name)}/{_safe_id(feature_id)}/"
+            f"codex/{coordinator['owner']}/{_safe_id(run_dir.name)}/{_safe_id(execution_id)}/"
             f"{_safe_id(wave_id)}/{_safe_id(task_id)}"
         )
         worktree_path = (
-            run_dir / "worktrees" / feature_id / "waves" / wave_id / task_id
+            run_dir / "worktrees" / execution_id / "waves" / wave_id / task_id
         ).resolve()
-        assignment_file = assignment_path(run_dir, feature_id, wave_id, task_id)
+        assignment_file = assignment_path(run_dir, execution_id, wave_id, task_id)
         if assignment_file.exists():
             existing = read_json(assignment_file)
             _validate_assignment_record(existing)
@@ -2399,11 +2434,11 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
                     "WORKTREE_CONFLICT", f"recorded worker drifted for {task_id}"
                 )
             _validate_assignment_handoff(
-                run_dir, feature_id, coordinator, existing, task
+                run_dir, execution_id, coordinator, existing, task
             )
             assignments.append(existing)
             continue
-        handoff_file = incoming_handoff_path(run_dir, feature_id, wave_id, task_id)
+        handoff_file = incoming_handoff_path(run_dir, execution_id, wave_id, task_id)
         existing_handoff = (
             _read_incoming_handoff(handoff_file) if handoff_file.exists() else None
         )
@@ -2414,12 +2449,13 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
         )
         incoming_handoff = _build_incoming_handoff(
             run_dir,
-            feature_id,
+            execution_id,
             coordinator,
             wave_id,
             task,
             base_head,
             created_at,
+            persist_index=True,
         )
         handoff_file.parent.mkdir(parents=True, exist_ok=True)
         handoff_file.parent.chmod(0o700)
@@ -2434,8 +2470,8 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "owner": coordinator["owner"],
             "selected_project_root": coordinator["selected_project_root"],
             "basis_sha256": canonical_digest(verify_objective_impact_execution(
-                run_dir, feature_id, coordinator["plan_digest"], Path(coordinator["selected_project_root"]))),
-            "feature_id": feature_id,
+                run_dir, execution_id, coordinator["plan_digest"], Path(coordinator["selected_project_root"]))),
+            "execution_id": execution_id,
             "wave_id": wave_id,
             "task_id": task_id,
             "plan_digest": coordinator["plan_digest"],
@@ -2454,6 +2490,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
             "write_claims": [asdict(item) for item in task.write_claims],
             "conflict_domains": list(task.conflict_domains),
             "requirements": list(task.requirements),
+            "feature_ids": list(task.feature_ids) or ([execution_id] if FEATURE_ID_RE.fullmatch(execution_id) else []),
             "root_intent_sha256": impact_receipt["intent_sha256"],
             "project_spec_receipt": project_spec_receipt,
             "goal": task.goal,
@@ -2506,7 +2543,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
                 )
         else:
             append_journal(
-                journal_path(run_dir, feature_id, wave_id),
+                journal_path(run_dir, execution_id, wave_id),
                 {
                     "event": "worker_create_intent",
                     "task_id": task_id,
@@ -2539,7 +2576,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
                         "add",
                         "--lock",
                         "--reason",
-                        f"Agentic SDLC {feature_id} {task_id}",
+                        f"Agentic SDLC {execution_id} {task_id}",
                         str(worktree_path),
                         branch_name,
                     ],
@@ -2555,7 +2592,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
                         "path": str(worktree_path),
                     }
                 )
-                write_json_atomic(wave_path(run_dir, feature_id, wave_id), wave)
+                write_json_atomic(wave_path(run_dir, execution_id, wave_id), wave)
                 raise
         if (
             branch(worktree_path) != branch_name
@@ -2589,15 +2626,17 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     wave["status"] = "running"
     wave["blocker"] = None
     wave["cleanup_retained"] = []
-    write_json_atomic(wave_path(run_dir, feature_id, wave_id), wave)
+    write_json_atomic(wave_path(run_dir, execution_id, wave_id), wave)
     return assignments
 
 
-def refill_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, Any]]:
-    with _execution_transition_lock(run_dir, feature_id):
-        coordinator = _load_coordinator(run_dir, feature_id)
-        _verify_execution_objective_impact(run_dir, feature_id, coordinator)
-        path = wave_path(run_dir, feature_id, wave_id)
+def refill_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str, Any]]:
+    with _execution_transition_lock(run_dir, execution_id):
+        coordinator = _load_coordinator(run_dir, execution_id)
+        _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+        from workflow_worker_results import require_dispatchable
+        _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
+        path = wave_path(run_dir, execution_id, wave_id)
         wave = read_json(path)
         if wave["status"] != "running":
             raise ExecutionError("EXECUTION_STATE_INVALID", "only a running wave can refill slots")
@@ -2605,27 +2644,27 @@ def refill_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str, 
             return []
         wave["status"] = "preparing"
         write_json_atomic(path, wave)
-        return prepare_wave(run_dir, feature_id, wave_id)
+        return prepare_wave(run_dir, execution_id, wave_id)
 
 
-def admit_task(run_dir: Path, feature_id: str, wave_id: str, task_id: str,
+def admit_task(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
                termination_path: Path) -> dict[str, Any]:
     """Validate result and independently observed native exit before freeing a slot."""
-    with _execution_transition_lock(run_dir, feature_id):
-        coordinator = _load_coordinator(run_dir, feature_id)
-        _verify_execution_objective_impact(run_dir, feature_id, coordinator)
-        wave_file = wave_path(run_dir, feature_id, wave_id)
+    with _execution_transition_lock(run_dir, execution_id):
+        coordinator = _load_coordinator(run_dir, execution_id)
+        _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+        wave_file = wave_path(run_dir, execution_id, wave_id)
         wave = read_json(wave_file)
-        assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+        assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
         _validate_assignment_record(assignment)
-        current_basis = verify_objective_impact_execution(run_dir, feature_id, coordinator["plan_digest"], Path(coordinator["selected_project_root"]))
+        current_basis = verify_objective_impact_execution(run_dir, execution_id, coordinator["plan_digest"], Path(coordinator["selected_project_root"]))
         if canonical_digest(current_basis) != assignment["basis_sha256"]:
             raise ExecutionError("REPLAN_REQUIRED", "result belongs to a superseded execution basis")
-        task = read_json(task_path(run_dir, feature_id, wave_id, task_id))
-        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
+        task = read_json(task_path(run_dir, execution_id, wave_id, task_id))
+        result = read_json(result_path(run_dir, execution_id, wave_id, task_id))
         _validate_result_record(result, assignment)
         termination_path = termination_path.absolute()
-        if termination_path.parent != execution_dir(run_dir, feature_id) / "terminations":
+        if termination_path.parent != execution_dir(run_dir, execution_id) / "terminations":
             raise ExecutionError("OWNERSHIP_INVALID", "native termination evidence must be owned by this execution")
         termination = read_json(termination_path)
         if (termination.get("schema") != "workflow/worker-termination-v1"
@@ -2654,7 +2693,7 @@ def admit_task(run_dir: Path, feature_id: str, wave_id: str, task_id: str,
                    "assignment_digest": assignment["assignment_digest"], "result_digest": result["result_digest"],
                    "termination_sha256": sha256_json(termination), "termination_path": str(termination_path),
                    "basis_sha256": assignment["basis_sha256"]}
-        receipt_path = execution_dir(run_dir, feature_id) / "admissions" / f"{task_id}.json"
+        receipt_path = execution_dir(run_dir, execution_id) / "admissions" / f"{task_id}.json"
         if receipt_path.exists() and read_json(receipt_path) != receipt:
             raise ExecutionError("RESULT_INVALID", "immutable admission already differs")
         if not receipt_path.exists():
@@ -2671,36 +2710,38 @@ def admit_task(run_dir: Path, feature_id: str, wave_id: str, task_id: str,
 
 def arm_task(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     assignment_digest: str,
     *,
     clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
-    with _execution_transition_lock(run_dir, feature_id):
-        coordinator = _load_coordinator(run_dir, feature_id)
-        _verify_execution_objective_impact(run_dir, feature_id, coordinator)
+    with _execution_transition_lock(run_dir, execution_id):
+        coordinator = _load_coordinator(run_dir, execution_id)
+        _verify_execution_objective_impact(run_dir, execution_id, coordinator)
         assignment = read_json(
-            assignment_path(run_dir, feature_id, wave_id, task_id)
+            assignment_path(run_dir, execution_id, wave_id, task_id)
         )
         _validate_assignment_record(assignment)
-        _assert_current_assignment(run_dir, feature_id, coordinator, assignment)
+        _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
         if assignment.get("assignment_digest") != assignment_digest:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "assignment digest mismatch"
             )
-        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        from workflow_worker_results import require_dispatchable
+        _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
+        task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
         task_record = read_json(task_record_path)
         _validate_task_liveness(task_record)
         _validate_assignment_handoff(
             run_dir,
-            feature_id,
+            execution_id,
             coordinator,
             assignment,
             _task_plan_from_state(task_record),
         )
-        wave = read_json(wave_path(run_dir, feature_id, wave_id))
+        wave = read_json(wave_path(run_dir, execution_id, wave_id))
         if task_id not in wave["active_task_ids"]:
             raise ExecutionError("EXECUTION_STATE_INVALID", "task does not own an active worker slot")
         if task_record.get("status") != "assigned":
@@ -2721,15 +2762,18 @@ def arm_task(
             task_record["dispatched_at"] = _clock_utc(clock)
             write_json_atomic(task_record_path, task_record)
             append_journal(
-                journal_path(run_dir, feature_id, wave_id),
+                journal_path(run_dir, execution_id, wave_id),
                 {"event": "worker_armed", "task_id": task_id},
             )
-        return task_record
+        from workflow_worker_contract import launch_contract
+        return {**task_record, "launch": launch_contract(
+            assignment_path(run_dir, execution_id, wave_id, task_id), assignment,
+        )}
 
 
 def requeue_task(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     assignment_digest: str,
@@ -2741,23 +2785,23 @@ def requeue_task(
         raise ExecutionError(
             "WORKSPACE_BUSY", "previous prestart worker must be confirmed stopped"
         )
-    with _execution_transition_lock(run_dir, feature_id):
-        coordinator = _load_coordinator(run_dir, feature_id)
-        _verify_execution_objective_impact(run_dir, feature_id, coordinator)
+    with _execution_transition_lock(run_dir, execution_id):
+        coordinator = _load_coordinator(run_dir, execution_id)
+        _verify_execution_objective_impact(run_dir, execution_id, coordinator)
         assignment = read_json(
-            assignment_path(run_dir, feature_id, wave_id, task_id)
+            assignment_path(run_dir, execution_id, wave_id, task_id)
         )
         _validate_assignment_record(assignment)
         if assignment.get("assignment_digest") != assignment_digest:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "assignment digest mismatch"
             )
-        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
         task_record = read_json(task_record_path)
         _validate_task_liveness(task_record)
         _validate_assignment_handoff(
             run_dir,
-            feature_id,
+            execution_id,
             coordinator,
             assignment,
             _task_plan_from_state(task_record),
@@ -2800,7 +2844,7 @@ def requeue_task(
         task_record["dispatched_at"] = None
         write_json_atomic(task_record_path, task_record)
         append_journal(
-            journal_path(run_dir, feature_id, wave_id),
+            journal_path(run_dir, execution_id, wave_id),
             {"event": "worker_requeued", "task_id": task_id},
         )
         return task_record
@@ -2808,7 +2852,7 @@ def requeue_task(
 
 def start_task(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     assignment_digest: str,
@@ -2817,10 +2861,10 @@ def start_task(
     *,
     clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
-    with _execution_transition_lock(run_dir, feature_id):
+    with _execution_transition_lock(run_dir, execution_id):
         return _start_task_locked(
             run_dir,
-            feature_id,
+            execution_id,
             wave_id,
             task_id,
             assignment_digest,
@@ -2832,7 +2876,7 @@ def start_task(
 
 def _start_task_locked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     assignment_digest: str,
@@ -2841,11 +2885,11 @@ def _start_task_locked(
     *,
     clock: Callable[[], datetime],
 ) -> dict[str, Any]:
-    coordinator = _load_coordinator(run_dir, feature_id)
-    _verify_execution_objective_impact(run_dir, feature_id, coordinator)
-    assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+    coordinator = _load_coordinator(run_dir, execution_id)
+    _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+    assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
     _validate_assignment_record(assignment)
-    _assert_current_assignment(run_dir, feature_id, coordinator, assignment)
+    _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
     if assignment.get("assignment_digest") != assignment_digest:
         raise ExecutionError("EXECUTION_STATE_INVALID", "assignment digest mismatch")
     worktree_path = Path(assignment["worktree"])
@@ -2857,12 +2901,12 @@ def _start_task_locked(
         worktree_path
     ) != Path(assignment["git_common_dir"]):
         raise ExecutionError("WORKTREE_CONFLICT", "worker start identity mismatch")
-    task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+    task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
     task_record = read_json(task_record_path)
     _validate_task_liveness(task_record)
     task = _task_plan_from_state(task_record)
-    _validate_assignment_handoff(run_dir, feature_id, coordinator, assignment, task)
-    wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    _validate_assignment_handoff(run_dir, execution_id, coordinator, assignment, task)
+    wave = read_json(wave_path(run_dir, execution_id, wave_id))
     if task_id not in wave["active_task_ids"]:
         raise ExecutionError("EXECUTION_STATE_INVALID", "task does not own an active worker slot")
     if task_record["status"] not in {"assigned", "running"}:
@@ -2874,8 +2918,10 @@ def _start_task_locked(
             raise ExecutionError(
                 "WORKSPACE_BUSY", "task belongs to another worker session"
             )
-        _claim_worker_session(run_dir, feature_id, wave_id, task_id, session_hash)
+        _claim_worker_session(run_dir, execution_id, wave_id, task_id, session_hash)
         return assignment
+    from workflow_worker_results import require_dispatchable
+    _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
     dispatched_at = task_record.get("dispatched_at")
     if dispatched_at is None:
         raise ExecutionError(
@@ -2899,7 +2945,7 @@ def _start_task_locked(
         raise ExecutionError(
             "WORKER_PRESTART_TIMEOUT", "worker missed the task-start deadline"
         )
-    for other in execution_dir(run_dir, feature_id).glob("tasks/*/*.json"):
+    for other in execution_dir(run_dir, execution_id).glob("tasks/*/*.json"):
         if other == task_record_path:
             continue
         value = read_json(other)
@@ -2910,7 +2956,7 @@ def _start_task_locked(
             raise ExecutionError(
                 "FRESH_SESSION_REQUIRED", "worker session already owns another task"
             )
-    _claim_worker_session(run_dir, feature_id, wave_id, task_id, session_hash)
+    _claim_worker_session(run_dir, execution_id, wave_id, task_id, session_hash)
     task_record["status"] = "running"
     task_record["worker_started_at"] = now_text
     task_record["last_heartbeat_at"] = now_text
@@ -2921,7 +2967,7 @@ def _start_task_locked(
     task_record["attempt"] = max(1, int(task_record.get("attempt") or 0) + 1)
     write_json_atomic(task_record_path, task_record)
     append_journal(
-        journal_path(run_dir, feature_id, wave_id),
+        journal_path(run_dir, execution_id, wave_id),
         {"event": "worker_started", "task_id": task_id, "attempt": task_record["attempt"]},
     )
     return assignment
@@ -3007,6 +3053,7 @@ def _validate_finish_intent(value: object) -> dict[str, Any]:
         "tree",
         "message",
         "evidence_digest",
+        "worker_result_receipt_sha256",
         "intent_digest",
     }
     unsigned = dict(value)
@@ -3020,6 +3067,7 @@ def _validate_finish_intent(value: object) -> dict[str, Any]:
         is None
         or re.fullmatch(r"[0-9a-f]{64}", str(value.get("evidence_digest") or ""))
         is None
+        or SHA256_RE.fullmatch(str(value.get("worker_result_receipt_sha256") or "")) is None
         or not isinstance(value.get("message"), str)
         or not value["message"]
         or not isinstance(recorded, str)
@@ -3086,13 +3134,12 @@ def _worker_guard_status(
         status = "WORKER_STALLED"
     else:
         status = "ACTIVE"
-    warning = (
-        "READ_ONLY_DEADLINE_NEAR"
-        if status == "ACTIVE"
-        and not progress_observed
-        and elapsed >= int(assignment["read_only_warning_seconds"])
-        else None
-    )
+    warning = None
+    if status == "ACTIVE":
+        if int(assignment["max_seconds"]) - elapsed <= WORKER_DEADLINE_WARNING_SECONDS:
+            warning = "WORKER_DEADLINE_NEAR"
+        elif not progress_observed and elapsed >= int(assignment["read_only_warning_seconds"]):
+            warning = "READ_ONLY_DEADLINE_NEAR"
     return {
         "status": status,
         "warning": warning,
@@ -3108,7 +3155,7 @@ def _worker_guard_status(
 
 def heartbeat_task(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     assignment_digest: str,
@@ -3122,9 +3169,9 @@ def heartbeat_task(
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "worker heartbeat phase is invalid"
         )
-    with _execution_transition_lock(run_dir, feature_id):
+    with _execution_transition_lock(run_dir, execution_id):
         assignment = read_json(
-            assignment_path(run_dir, feature_id, wave_id, task_id)
+            assignment_path(run_dir, execution_id, wave_id, task_id)
         )
         _validate_assignment_record(assignment)
         if assignment.get("assignment_digest") != assignment_digest:
@@ -3136,7 +3183,7 @@ def heartbeat_task(
             raise ExecutionError(
                 "WORKTREE_CONFLICT", "worker heartbeat scope cwd mismatch"
             )
-        task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+        task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
         task_record = read_json(task_record_path)
         _validate_task_liveness(task_record)
         if (
@@ -3165,23 +3212,23 @@ def heartbeat_task(
 
 def watch_task(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     assignment_digest: str,
     *,
     clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, object]:
-    with _execution_transition_lock(run_dir, feature_id):
+    with _execution_transition_lock(run_dir, execution_id):
         assignment = read_json(
-            assignment_path(run_dir, feature_id, wave_id, task_id)
+            assignment_path(run_dir, execution_id, wave_id, task_id)
         )
         _validate_assignment_record(assignment)
         if assignment.get("assignment_digest") != assignment_digest:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "assignment digest mismatch"
             )
-        task_record = read_json(task_path(run_dir, feature_id, wave_id, task_id))
+        task_record = read_json(task_path(run_dir, execution_id, wave_id, task_id))
         _validate_task_liveness(task_record)
         if task_record.get("status") == "assigned":
             now_text = _clock_utc(clock)
@@ -3315,6 +3362,7 @@ def _verify_integration_commit(
 def _finish_evidence_digest(
     assignment: dict[str, Any],
     *,
+    worker_result_receipt_sha256: str,
     validation: str,
     review: str,
     message: str,
@@ -3326,6 +3374,7 @@ def _finish_evidence_digest(
     return sha256_json(
         {
             "assignment_digest": assignment["assignment_digest"],
+            "worker_result_receipt_sha256": worker_result_receipt_sha256,
             "validation": validation,
             "review": review,
             "message": message,
@@ -3343,6 +3392,7 @@ def _finish_intent_record(
     tree: str,
     message: str,
     evidence_digest: str,
+    worker_result_receipt_sha256: str,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "schema": TASK_FINISH_INTENT_SCHEMA,
@@ -3351,6 +3401,7 @@ def _finish_intent_record(
         "tree": tree,
         "message": message,
         "evidence_digest": evidence_digest,
+        "worker_result_receipt_sha256": worker_result_receipt_sha256,
     }
     value["intent_digest"] = sha256_json(value)
     return value
@@ -3363,6 +3414,7 @@ def _adopt_finish_commit(
     *,
     message: str,
     evidence_digest: str,
+    worker_result_receipt_sha256: str,
 ) -> str:
     intent_value = task_record.get("finish_intent")
     if intent_value is None:
@@ -3393,6 +3445,7 @@ def _adopt_finish_commit(
         tree=tree,
         message=message,
         evidence_digest=evidence_digest,
+        worker_result_receipt_sha256=worker_result_receipt_sha256,
     )
     if (
         intent != expected
@@ -3412,7 +3465,7 @@ def _adopt_finish_commit(
 
 def recover_task(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     session_identity: str,
@@ -3422,10 +3475,10 @@ def recover_task(
     confirmed_stopped: bool,
     clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
-    with _execution_transition_lock(run_dir, feature_id):
+    with _execution_transition_lock(run_dir, execution_id):
         return _recover_task_locked(
             run_dir,
-            feature_id,
+            execution_id,
             wave_id,
             task_id,
             session_identity,
@@ -3438,7 +3491,7 @@ def recover_task(
 
 def _recover_task_locked(
     run_dir: Path,
-    feature_id: str,
+    execution_id: str,
     wave_id: str,
     task_id: str,
     session_identity: str,
@@ -3452,16 +3505,16 @@ def _recover_task_locked(
         raise ExecutionError(
             "WORKSPACE_BUSY", "previous worker must be explicitly confirmed stopped"
         )
-    coordinator = _load_coordinator(run_dir, feature_id)
-    assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+    coordinator = _load_coordinator(run_dir, execution_id)
+    assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
     _validate_assignment_record(assignment)
-    _assert_current_assignment(run_dir, feature_id, coordinator, assignment)
-    task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+    _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
+    task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
     task_record = read_json(task_record_path)
     _validate_task_liveness(task_record)
     history = _validated_session_history(task_record)
     task = _task_plan_from_state(task_record)
-    _validate_assignment_handoff(run_dir, feature_id, coordinator, assignment, task)
+    _validate_assignment_handoff(run_dir, execution_id, coordinator, assignment, task)
     if task_record.get("status") != "running":
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "only a running task can recover"
@@ -3470,16 +3523,24 @@ def _recover_task_locked(
         raise ExecutionError(
             "WORKSPACE_BUSY", "worker recovery attempt changed before transfer"
         )
-    approval = read_json(execution_dir(run_dir, feature_id) / 'recoveries' / f'{task_id}-{expected_attempt}.json')
+    from workflow_reconcile import recovery_path
+    from workflow_state import digest as state_digest
+    current_coordinator = validate_run(run_dir)[0]['coordinator_session_sha256']
+    approval = read_json(recovery_path(run_dir, execution_id, task_id, expected_attempt, current_coordinator))
     observed = read_json(Path(str(approval.get('termination_path', ''))))
     if (approval.get('schema') != 'workflow/recovery-authorization-v1'
             or approval.get('assignment_digest') != assignment['assignment_digest']
             or approval.get('attempt') != expected_attempt
             or approval.get('prior_worker_session_hash') != task_record['worker_session_hash']
             or approval.get('next_worker_session_hash') != _session_hash(session_identity)
-            or approval.get('coordinator_session_hash') != validate_run(run_dir)[0]['coordinator_session_sha256']
-            or approval.get('termination_sha256') != sha256_json(observed)):
+            or approval.get('coordinator_session_hash') != current_coordinator
+            or approval.get('termination_sha256') != state_digest(observed)):
         raise ExecutionError('OWNERSHIP_INVALID', 'recovery requires exact coordinator authorization and native exit evidence')
+    from workflow_worker_results import receipt_path, read_receipt
+    if receipt_path(assignment, task_record['attempt']).exists():
+        _, received = _impact('worker result receipt is invalid', read_receipt, assignment, task_record)
+        if received['worker_result']['status'] != 'blocked':
+            raise ExecutionError('REPLAN_REQUIRED', 'completed or specification-gap results cannot renew a worker attempt')
     from workflow_resources import require_released
     require_released(run_dir, assignment)
     new_hash = _session_hash(session_identity)
@@ -3487,7 +3548,7 @@ def _recover_task_locked(
         raise ExecutionError(
             "FRESH_SESSION_REQUIRED", "recovery requires a fresh session"
         )
-    for other in execution_dir(run_dir, feature_id).glob("tasks/*/*.json"):
+    for other in execution_dir(run_dir, execution_id).glob("tasks/*/*.json"):
         if other == task_record_path:
             continue
         value = read_json(other)
@@ -3518,7 +3579,7 @@ def _recover_task_locked(
         claims,
         str(assignment["project_scope"]),
     )
-    _claim_worker_session(run_dir, feature_id, wave_id, task_id, new_hash)
+    _claim_worker_session(run_dir, execution_id, wave_id, task_id, new_hash)
     recovered_at = _clock_utc(clock)
     task_record["worker_session_hash"] = new_hash
     task_record["worker_session_hash_history"].append(new_hash)
@@ -3531,7 +3592,7 @@ def _recover_task_locked(
     task_record["recovered_at"] = recovered_at
     write_json_atomic(task_record_path, task_record)
     append_journal(
-        journal_path(run_dir, feature_id, wave_id),
+        journal_path(run_dir, execution_id, wave_id),
         {"event": "worker_recovered", "task_id": task_id, "attempt": task_record["attempt"]},
     )
     return assignment
@@ -3594,91 +3655,52 @@ def _verify_worker_paths(
 
 
 def finish_task(
-    run_dir: Path,
-    feature_id: str,
-    wave_id: str,
-    task_id: str,
-    validation: str,
-    review: str,
-    message: str,
-    *,
-    summary: str,
-    decisions: Iterable[str] = (),
-    open_risks: Iterable[str] = (),
+    run_dir: Path, execution_id: str, wave_id: str, task_id: str,
+    receipt: Path, message: str, *, termination: Path, session_identity: str,
     regression_oracle_evidence: dict[str, Any] | None = None,
     clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
-    with _execution_transition_lock(run_dir, feature_id):
+    with _execution_transition_lock(run_dir, execution_id):
         return _finish_task_locked(
-            run_dir,
-            feature_id,
-            wave_id,
-            task_id,
-            validation,
-            review,
-            message,
-            summary=summary,
-            decisions=decisions,
-            open_risks=open_risks,
-            regression_oracle_evidence=regression_oracle_evidence,
-            clock=clock,
+            run_dir, execution_id, wave_id, task_id, receipt, message,
+            termination=termination, session_identity=session_identity,
+            regression_oracle_evidence=regression_oracle_evidence, clock=clock,
         )
 
 
 def _finish_task_locked(
-    run_dir: Path,
-    feature_id: str,
-    wave_id: str,
-    task_id: str,
-    validation: str,
-    review: str,
-    message: str,
-    *,
-    summary: str,
-    decisions: Iterable[str],
-    open_risks: Iterable[str],
+    run_dir: Path, execution_id: str, wave_id: str, task_id: str,
+    receipt: Path, message: str, *, termination: Path, session_identity: str,
     regression_oracle_evidence: dict[str, Any] | None,
     clock: Callable[[], datetime],
 ) -> dict[str, Any]:
-    if (
-        not validation.strip()
-        or not review.strip()
-        or not message.strip()
-        or message != message.strip()
-    ):
-        raise ExecutionError(
-            "INTEGRATION_VALIDATION_FAILED",
-            "worker validation, review, and canonical commit message are required",
-        )
-    summary_value = summary
-    decision_values = list(decisions)
-    risk_values = list(open_risks)
-    if (
-        not summary_value.strip()
-        or any(
-            not isinstance(item, str) or not item.strip() for item in decision_values
-        )
-        or any(not isinstance(item, str) or not item.strip() for item in risk_values)
-    ):
-        raise ExecutionError(
-            "EXECUTION_STATE_INVALID", "worker handoff evidence is invalid"
-        )
-    _reject_sensitive_evidence(
-        validation, review, message, summary_value, *decision_values, *risk_values
-    )
-    coordinator = _load_coordinator(run_dir, feature_id)
-    assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+    if not isinstance(message, str) or not message.strip() or message != message.strip():
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "canonical commit message is required")
+    _reject_sensitive_evidence(message)
+    from workflow_reconcile import termination as observe_termination
+    _impact("worker termination is required", observe_termination,
+            run_dir, execution_id, wave_id, task_id, termination, session_identity)
+    coordinator = _load_coordinator(run_dir, execution_id)
+    assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
     _validate_assignment_record(assignment)
-    _assert_current_assignment(run_dir, feature_id, coordinator, assignment)
+    _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
     from workflow_resources import require_released
     require_released(run_dir, assignment)
     worktree_path = Path(assignment["worktree"])
-    task_record_path = task_path(run_dir, feature_id, wave_id, task_id)
+    task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
     task_record = read_json(task_record_path)
     _validate_task_liveness(task_record)
+    from workflow_worker_results import implemented_result
+    received = _impact("worker completion requires a validated result", implemented_result,
+                       assignment, task_record, receipt)
+    payload = received["worker_result"]
+    validation, review = payload["validation"], payload["review"]
+    summary_value = payload["summary"]
+    decision_values, risk_values = payload["decisions"], payload["open_risks"]
+    worker_result_receipt_sha256 = received["receipt_sha256"]
     _validate_assignment_handoff(
         run_dir,
-        feature_id,
+        execution_id,
         coordinator,
         assignment,
         _task_plan_from_state(task_record),
@@ -3699,6 +3721,7 @@ def _finish_task_locked(
     _validate_regression_oracle_claim(assignment, regression_oracle_evidence)
     evidence_digest = _finish_evidence_digest(
         assignment,
+        worker_result_receipt_sha256=worker_result_receipt_sha256,
         validation=validation,
         review=review,
         message=message,
@@ -3708,7 +3731,7 @@ def _finish_task_locked(
         regression_oracle_evidence=regression_oracle_evidence,
     )
     if task_record["status"] == "committed":
-        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
+        result = read_json(result_path(run_dir, execution_id, wave_id, task_id))
         _validate_result_record(result, assignment)
         adopted = _adopt_finish_commit(
             worktree_path,
@@ -3716,6 +3739,7 @@ def _finish_task_locked(
             task_record,
             message=message,
             evidence_digest=evidence_digest,
+            worker_result_receipt_sha256=worker_result_receipt_sha256,
         )
         expected_oracle = _build_regression_oracle_evidence(
             assignment, regression_oracle_evidence, adopted
@@ -3747,6 +3771,7 @@ def _finish_task_locked(
             task_record,
             message=message,
             evidence_digest=evidence_digest,
+            worker_result_receipt_sha256=worker_result_receipt_sha256,
         )
     else:
         guard = _worker_guard_status(assignment, task_record, clock=clock)
@@ -3805,13 +3830,14 @@ def _finish_task_locked(
                 tree=tree,
                 message=message,
                 evidence_digest=evidence_digest,
+                worker_result_receipt_sha256=worker_result_receipt_sha256,
             )
             existing_intent = task_record.get("finish_intent")
             if existing_intent is None:
                 task_record["finish_intent"] = intent
                 write_json_atomic(task_record_path, task_record)
                 append_journal(
-                    journal_path(run_dir, feature_id, wave_id),
+                    journal_path(run_dir, execution_id, wave_id),
                     {
                         "event": "task_finish_intent",
                         "task_id": task_id,
@@ -3899,10 +3925,11 @@ def _finish_task_locked(
         "owner": assignment["owner"],
         "basis_sha256": assignment["basis_sha256"],
         "worker_session_hash": task_record["worker_session_hash"],
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "wave_id": wave_id,
         "task_id": task_id,
         "assignment_digest": assignment["assignment_digest"],
+        "worker_result_receipt_sha256": worker_result_receipt_sha256,
         "commit": task_head,
         "changed_paths": changed_paths,
         "summary": summary_value,
@@ -3914,7 +3941,7 @@ def _finish_task_locked(
         "regression_oracle_evidence": oracle_evidence,
         "attempt": int(task_record.get("attempt") or 1),
     }
-    result_file = result_path(run_dir, feature_id, wave_id, task_id)
+    result_file = result_path(run_dir, execution_id, wave_id, task_id)
     if result_file.exists():
         result = read_json(result_file)
         _validate_result_record(result, assignment)
@@ -3938,23 +3965,23 @@ def _split_nul(value: str) -> list[str]:
     return [item for item in value.split("\x00") if item]
 
 
-def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, Any]:
-    coordinator = _load_coordinator(run_dir, feature_id)
+def integrate_wave(run_dir: Path, execution_id: str, wave_id: str) -> dict[str, Any]:
+    coordinator = _load_coordinator(run_dir, execution_id)
     _impact(
         "objective impact execution basis is stale",
         verify_objective_impact_execution,
         run_dir,
-        feature_id,
+        execution_id,
         str(coordinator.get("plan_digest") or ""),
         Path(str(coordinator["selected_project_root"])),
     )
-    wave_file = wave_path(run_dir, feature_id, wave_id)
+    wave_file = wave_path(run_dir, execution_id, wave_id)
     wave = read_json(wave_file)
     if wave["status"] == "integrated":
         if head(Path(coordinator["integration_worktree"])) != wave["integration_head"]:
             raise ExecutionError("WORKTREE_CONFLICT", "integrated wave tip drifted")
         coordinator["integration_head"] = wave["integration_head"]
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
         return wave
     if wave["status"] not in {"running", "integrating"}:
         raise ExecutionError(
@@ -3969,26 +3996,26 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
     wave["status"] = "integrating"
     write_json_atomic(wave_file, wave)
     for task_id in wave["task_ids"]:
-        task_record = read_json(task_path(run_dir, feature_id, wave_id, task_id))
+        task_record = read_json(task_path(run_dir, execution_id, wave_id, task_id))
         if task_record["status"] != "committed":
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", f"{task_id} is not committed"
             )
-        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
-        assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+        result = read_json(result_path(run_dir, execution_id, wave_id, task_id))
+        assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
         _validate_assignment_handoff(
             run_dir,
-            feature_id,
+            execution_id,
             coordinator,
             assignment,
             _task_plan_from_state(task_record),
         )
         _validate_assignment_record(assignment)
-        _assert_current_assignment(run_dir, feature_id, coordinator, assignment)
+        _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
         _validate_result_record(result, assignment)
-        admission = read_json(execution_dir(run_dir, feature_id) / "admissions" / f"{task_id}.json")
+        admission = read_json(execution_dir(run_dir, execution_id) / "admissions" / f"{task_id}.json")
         termination_file = Path(str(admission.get("termination_path", "")))
-        if termination_file.parent != execution_dir(run_dir, feature_id) / "terminations":
+        if termination_file.parent != execution_dir(run_dir, execution_id) / "terminations":
             raise ExecutionError("RESULT_INVALID", "admitted termination is outside this execution")
         observation = read_json(termination_file)
         if (admission.get("schema") != "workflow/result-admission-v1"
@@ -4032,7 +4059,7 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
             write_json_atomic(wave_file, wave)
             continue
         append_journal(
-            journal_path(run_dir, feature_id, wave_id),
+            journal_path(run_dir, execution_id, wave_id),
             {"event": "merge_intent", "task_id": task_id, "commit": result["commit"]},
         )
         try:
@@ -4058,41 +4085,41 @@ def integrate_wave(run_dir: Path, feature_id: str, wave_id: str) -> dict[str, An
     wave["integration_head"] = head(integration)
     write_json_atomic(wave_file, wave)
     coordinator["integration_head"] = wave["integration_head"]
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     return wave
 
 
 def complete_wave(
-    run_dir: Path, feature_id: str, wave_id: str, evidence: str
+    run_dir: Path, execution_id: str, wave_id: str, evidence: str
 ) -> dict[str, Any]:
-    with _execution_transition_lock(run_dir, feature_id):
-        return _complete_wave_locked(run_dir, feature_id, wave_id, evidence)
+    with _execution_transition_lock(run_dir, execution_id):
+        return _complete_wave_locked(run_dir, execution_id, wave_id, evidence)
 
 
 def _complete_wave_locked(
-    run_dir: Path, feature_id: str, wave_id: str, evidence: str,
+    run_dir: Path, execution_id: str, wave_id: str, evidence: str,
     *, failure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not evidence.strip():
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED", "combined evidence is empty"
         )
-    coordinator = _load_coordinator(run_dir, feature_id)
-    _verify_execution_objective_impact(run_dir, feature_id, coordinator)
-    wave_file = wave_path(run_dir, feature_id, wave_id)
+    coordinator = _load_coordinator(run_dir, execution_id)
+    _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+    wave_file = wave_path(run_dir, execution_id, wave_id)
     wave = read_json(wave_file)
     if failure is None and wave.get("combined_failure") is not None:
         raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "failed wave cannot be completed as passing")
     if wave["status"] == "done":
         # A historical replay must never rewind a later wave or its active owner.
         if coordinator.get("active_wave") == wave_id:
-            _resolve_corrected_waves(run_dir, feature_id, coordinator, wave)
+            _resolve_corrected_waves(run_dir, execution_id, coordinator, wave)
             coordinator["active_wave"] = None
             coordinator["status"] = "integrated" if all(
-                _wave_satisfied(run_dir, feature_id, coordinator, item)
+                _wave_satisfied(run_dir, execution_id, coordinator, item)
                 for item in coordinator["wave_ids"]
             ) else "waves_running"
-            _save_coordinator(run_dir, feature_id, coordinator)
+            _save_coordinator(run_dir, execution_id, coordinator)
         return wave
     cleanup_retry = (
         wave["status"] == "blocked" and wave.get("blocker") == "CLEANUP_BLOCKED"
@@ -4110,12 +4137,12 @@ def _complete_wave_locked(
         wave["combined_failure"] = failure
         write_json_atomic(wave_file, wave)
     elif wave.get("corrects"):
-        _repair_authority(run_dir, feature_id, wave["repair_authority"], active=True)
+        _repair_authority(run_dir, execution_id, wave["repair_authority"], active=True)
     retained: list[dict[str, str]] = []
     for task_id in reversed(wave["task_ids"]):
-        assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
+        assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
         worker = Path(assignment["worktree"])
-        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
+        result = read_json(result_path(run_dir, execution_id, wave_id, task_id))
         _validate_assignment_record(assignment)
         _validate_result_record(result, assignment)
         task_commit = result["commit"]
@@ -4147,28 +4174,28 @@ def _complete_wave_locked(
     wave.pop("blocker", None)
     write_json_atomic(wave_file, wave)
     if failure is None:
-        _resolve_corrected_waves(run_dir, feature_id, coordinator, wave)
+        _resolve_corrected_waves(run_dir, execution_id, coordinator, wave)
     coordinator["active_wave"] = None
     if all(
-        _wave_satisfied(run_dir, feature_id, coordinator, item)
+        _wave_satisfied(run_dir, execution_id, coordinator, item)
         for item in coordinator["wave_ids"]
     ):
         coordinator["status"] = "integrated"
     else:
         coordinator["status"] = "repair_required" if failure is not None else "waves_running"
     coordinator["integration_head"] = wave["integration_head"]
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     return wave
 
 
-def _repair_authority(run_dir, feature_id, binding, *, active=False):
+def _repair_authority(run_dir, execution_id, binding, *, active=False):
     scripts = Path(__file__).resolve().parents[2] / "sdlc-classify-failure" / "scripts"
     if str(scripts) not in sys.path:
         sys.path.insert(0, str(scripts))
     from repair_control import RepairControlError, integrated_wave_authority
     try:
         authority = integrated_wave_authority(
-            run_dir, feature_id, binding["classification_id"], binding["dispatch_id"],
+            run_dir, execution_id, binding["classification_id"], binding["dispatch_id"],
             require_active=active,
         )
     except (RepairControlError, KeyError) as error:
@@ -4178,7 +4205,7 @@ def _repair_authority(run_dir, feature_id, binding, *, active=False):
     return authority
 
 
-def _validated_wave_failure(run_dir, feature_id, wave, *, active=False):
+def _validated_wave_failure(run_dir, execution_id, wave, *, active=False):
     failure = wave.get("combined_failure")
     if not isinstance(failure, dict):
         raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave has no failure receipt")
@@ -4190,19 +4217,19 @@ def _validated_wave_failure(run_dir, feature_id, wave, *, active=False):
         or failure.get("integration_head") != wave["integration_head"]
     ):
         raise ExecutionError("EXECUTION_STATE_INVALID", "wave failure receipt is invalid")
-    authority = _repair_authority(run_dir, feature_id, failure["authority"], active=active)
+    authority = _repair_authority(run_dir, execution_id, failure["authority"], active=active)
     if authority["integration_commit"] != wave["integration_head"]:
         raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave commit drifted")
     return authority
 
 
-def fail_wave(run_dir, feature_id, wave_id, classification_id, dispatch_id, evidence):
+def fail_wave(run_dir, execution_id, wave_id, classification_id, dispatch_id, evidence):
     """Retire an integrated failed wave without certifying successful validation."""
-    with _execution_transition_lock(run_dir, feature_id):
-        coordinator = _load_coordinator(run_dir, feature_id)
-        wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    with _execution_transition_lock(run_dir, execution_id):
+        coordinator = _load_coordinator(run_dir, execution_id)
+        wave = read_json(wave_path(run_dir, execution_id, wave_id))
         if wave.get("status") == "failed":
-            authority = _validated_wave_failure(run_dir, feature_id, wave)
+            authority = _validated_wave_failure(run_dir, execution_id, wave)
             if (authority["classification_id"], authority["dispatch_id"], wave["combined_evidence"]) != (
                 classification_id, dispatch_id, evidence.strip()
             ):
@@ -4210,14 +4237,14 @@ def fail_wave(run_dir, feature_id, wave_id, classification_id, dispatch_id, evid
             if coordinator.get("active_wave") == wave_id:
                 coordinator["active_wave"] = None
                 coordinator["status"] = "repair_required"
-                _save_coordinator(run_dir, feature_id, coordinator)
+                _save_coordinator(run_dir, execution_id, coordinator)
             return wave
         scripts = Path(__file__).resolve().parents[2] / "sdlc-classify-failure" / "scripts"
         if str(scripts) not in sys.path:
             sys.path.insert(0, str(scripts))
         from repair_control import RepairControlError, integrated_wave_authority
         try:
-            authority = integrated_wave_authority(run_dir, feature_id, classification_id, dispatch_id)
+            authority = integrated_wave_authority(run_dir, execution_id, classification_id, dispatch_id)
         except RepairControlError as error:
             raise ExecutionError("REPLAN_REQUIRED", "failed wave lacks canonical repair authority") from error
         if (
@@ -4233,20 +4260,20 @@ def fail_wave(run_dir, feature_id, wave_id, classification_id, dispatch_id, evid
             "evidence": evidence.strip(),
         }
         failure["digest"] = sha256_json(failure)
-        return _complete_wave_locked(run_dir, feature_id, wave_id, evidence, failure=failure)
+        return _complete_wave_locked(run_dir, execution_id, wave_id, evidence, failure=failure)
 
 
-def _wave_satisfied(run_dir, feature_id, coordinator, wave_id):
-    wave = read_json(wave_path(run_dir, feature_id, wave_id))
+def _wave_satisfied(run_dir, execution_id, coordinator, wave_id):
+    wave = read_json(wave_path(run_dir, execution_id, wave_id))
     if wave.get("status") == "done":
         return True
     if wave.get("status") == "superseded":
         from workflow_reconcile import validate_retained_wave
-        validate_retained_wave(run_dir, feature_id, wave)
+        validate_retained_wave(run_dir, execution_id, wave)
         return not wave.get("active_task_ids") and not wave.get("merged_task_ids")
     if wave.get("status") != "failed":
         return False
-    _validated_wave_failure(run_dir, feature_id, wave)
+    _validated_wave_failure(run_dir, execution_id, wave)
     resolution = wave.get("failure_resolution")
     if resolution is None:
         return False
@@ -4261,22 +4288,22 @@ def _wave_satisfied(run_dir, feature_id, coordinator, wave_id):
         or coordinator["wave_ids"].index(correcting_id) <= coordinator["wave_ids"].index(wave_id)
     ):
         raise ExecutionError("EXECUTION_STATE_INVALID", "wave resolution identity is invalid")
-    correcting = read_json(wave_path(run_dir, feature_id, correcting_id))
-    expected = _resolution_record(run_dir, feature_id, wave, correcting)
+    correcting = read_json(wave_path(run_dir, execution_id, correcting_id))
+    expected = _resolution_record(run_dir, execution_id, wave, correcting)
     if resolution != expected:
         raise ExecutionError("EXECUTION_STATE_INVALID", "wave resolution proof drifted")
     return True
 
 
-def _resolution_record(run_dir, feature_id, failed, correcting):
+def _resolution_record(run_dir, execution_id, failed, correcting):
     if correcting.get("status") != "done" or failed["wave_id"] not in correcting.get("corrects", []):
         raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective wave is not validated")
-    authority = _repair_authority(run_dir, feature_id, correcting["repair_authority"])
-    failed_authority = _validated_wave_failure(run_dir, feature_id, failed)
+    authority = _repair_authority(run_dir, execution_id, correcting["repair_authority"])
+    failed_authority = _validated_wave_failure(run_dir, execution_id, failed)
     if any(authority[key] != failed_authority[key] for key in ("blocker_key", "oracle")):
         raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "correction does not cover failed oracle")
     proofs = {}
-    coordinator = _load_coordinator(run_dir, feature_id)
+    coordinator = _load_coordinator(run_dir, execution_id)
     repository = Path(coordinator["integration_worktree"])
     if not repository.exists():
         repository = Path(coordinator["project_root"])
@@ -4286,8 +4313,8 @@ def _resolution_record(run_dir, feature_id, failed, correcting):
     ):
         raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective integration ancestry drifted")
     for task_id in correcting["task_ids"]:
-        assignment = read_json(assignment_path(run_dir, feature_id, correcting["wave_id"], task_id))
-        result = read_json(result_path(run_dir, feature_id, correcting["wave_id"], task_id))
+        assignment = read_json(assignment_path(run_dir, execution_id, correcting["wave_id"], task_id))
+        result = read_json(result_path(run_dir, execution_id, correcting["wave_id"], task_id))
         _validate_assignment_record(assignment)
         _validate_result_record(result, assignment)
         if not _is_ancestor(repository, result["commit"], correcting["integration_head"]):
@@ -4304,21 +4331,21 @@ def _resolution_record(run_dir, feature_id, failed, correcting):
     return value
 
 
-def _resolve_corrected_waves(run_dir, feature_id, coordinator, wave):
+def _resolve_corrected_waves(run_dir, execution_id, coordinator, wave):
     for failed_id in wave.get("corrects", []):
-        failed_path = wave_path(run_dir, feature_id, failed_id)
+        failed_path = wave_path(run_dir, execution_id, failed_id)
         failed = read_json(failed_path)
-        value = _resolution_record(run_dir, feature_id, failed, wave)
+        value = _resolution_record(run_dir, execution_id, failed, wave)
         if failed.get("failure_resolution") not in (None, value):
             raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave already has another resolution")
         failed["failure_resolution"] = value
         write_json_atomic(failed_path, failed)
 
 
-def _require_resolved_failures(run_dir, feature_id, coordinator):
+def _require_resolved_failures(run_dir, execution_id, coordinator):
     for item in coordinator["wave_ids"]:
-        wave = read_json(wave_path(run_dir, feature_id, item))
-        if wave.get("combined_failure") and not _wave_satisfied(run_dir, feature_id, coordinator, item):
+        wave = read_json(wave_path(run_dir, execution_id, item))
+        if wave.get("combined_failure") and not _wave_satisfied(run_dir, execution_id, coordinator, item):
             raise ExecutionError("PROMOTION_BLOCKED", "feature has an unresolved failed wave")
 
 
@@ -4425,26 +4452,32 @@ def _cleanup_internal_resource(
 
 
 def seal_feature(
-    run_dir: Path, feature_id: str, evidence: str, message: str
+    run_dir: Path, execution_id: str, evidence: str, message: str,
+    issue_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Seal final integration-only changes before project-branch promotion."""
 
-    with _execution_transition_lock(run_dir, feature_id):
-        return _seal_feature_locked(run_dir, feature_id, evidence, message)
+    with _execution_transition_lock(run_dir, execution_id):
+        return _seal_feature_locked(run_dir, execution_id, evidence, message, issue_evidence)
 
 
 def _seal_feature_locked(
-    run_dir: Path, feature_id: str, evidence: str, message: str
+    run_dir: Path, execution_id: str, evidence: str, message: str,
+    issue_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Seal final integration-only changes before project-branch promotion."""
 
     if not evidence.strip():
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
     _reject_sensitive_evidence(evidence, message)
-    coordinator = _load_coordinator(run_dir, feature_id)
-    _verify_execution_objective_impact(run_dir, feature_id, coordinator)
-    _require_resolved_failures(run_dir, feature_id, coordinator)
+    coordinator = _load_coordinator(run_dir, execution_id)
+    _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+    _require_resolved_failures(run_dir, execution_id, coordinator)
+    from workflow_issue_resolution import seal_evidence, objective_context
+    normalized_issues = seal_evidence(run_dir, issue_evidence)
     if coordinator["status"] == "sealed":
+        if coordinator.get("issue_evidence") != normalized_issues:
+            raise ExecutionError("PROMOTION_BLOCKED", "sealed issue evidence changed")
         integration = Path(coordinator["integration_worktree"])
         if head(integration) != coordinator["integration_head"] or not clean(
             integration
@@ -4456,7 +4489,7 @@ def _seal_feature_locked(
     integration = Path(coordinator["integration_worktree"])
     recorded_head = coordinator["integration_head"]
     current_head = head(integration)
-    coordinator_journal = journal_path(run_dir, feature_id, "coordinator")
+    coordinator_journal = journal_path(run_dir, execution_id, "coordinator")
     if current_head != recorded_head:
         parents = git(
             integration,
@@ -4508,25 +4541,29 @@ def _seal_feature_locked(
             raise
     coordinator["integration_head"] = head(integration)
     coordinator["final_evidence"] = evidence.strip()
+    if normalized_issues is not None:
+        coordinator["issue_evidence"] = normalized_issues
+        coordinator["issue_evidence_head"] = coordinator["integration_head"]
+        coordinator["issue_objective_sha256"] = objective_context(run_dir)[2]["sha256"]
     coordinator["status"] = "sealed"
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     append_journal(
-        journal_path(run_dir, feature_id, "coordinator"),
+        journal_path(run_dir, execution_id, "coordinator"),
         {"event": "feature_sealed", "head": coordinator["integration_head"]},
     )
     return coordinator
 
 
-def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, Any]:
+def promote_feature(run_dir: Path, execution_id: str, evidence: str) -> dict[str, Any]:
     if not evidence.strip():
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
-    coordinator = _load_coordinator(run_dir, feature_id)
-    _require_resolved_failures(run_dir, feature_id, coordinator)
+    coordinator = _load_coordinator(run_dir, execution_id)
+    _require_resolved_failures(run_dir, execution_id, coordinator)
     _impact(
         "objective impact execution basis is stale",
         verify_objective_impact_execution,
         run_dir,
-        feature_id,
+        execution_id,
         str(coordinator.get("plan_digest") or ""),
         Path(str(coordinator["selected_project_root"])),
     )
@@ -4537,7 +4574,7 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
         if (not clean(integration) or head(integration) != coordinator["integration_head"]
                 or branch(integration) != coordinator["integration_branch"]):
             raise ExecutionError("PROMOTION_BLOCKED", "verified feature checkout drifted")
-        if any(not _wave_satisfied(run_dir, feature_id, coordinator, wave_id)
+        if any(not _wave_satisfied(run_dir, execution_id, coordinator, wave_id)
                for wave_id in coordinator["wave_ids"]):
             raise ExecutionError("CLEANUP_BLOCKED", "worker resources are not reconciled")
         from workflow_reconcile import resource_inventory
@@ -4545,7 +4582,7 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
         coordinator.update(status="done", promoted_head=coordinator["integration_head"],
                            delivered_checkout=str(integration), promotion_evidence=evidence.strip(),
                            delivery_result="feature-checkout", cleanup_retained=retained)
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
         return coordinator
     if coordinator["status"] in {"promoted", "cleanup", "done"}:
         promoted_head = coordinator.get("promoted_head")
@@ -4599,7 +4636,7 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
             except GitPromotionError as exc:
                 raise ExecutionError("PROMOTION_BLOCKED", str(exc)) from exc
         append_journal(
-            journal_path(run_dir, feature_id, "coordinator"),
+            journal_path(run_dir, execution_id, "coordinator"),
             {
                 "event": "promotion_intent",
                 "base": coordinator["base_head"],
@@ -4630,7 +4667,7 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
         coordinator["promoted_head"] = coordinator["integration_head"]
         coordinator["promotion_evidence"] = evidence.strip()
         coordinator["status"] = "promoted"
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
     if (
         branch(project) != coordinator["base_branch"]
         or head(project) != coordinator["promoted_head"]
@@ -4638,9 +4675,9 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
     ):
         raise ExecutionError("PROMOTION_BLOCKED", "promoted project checkout drifted")
     coordinator["status"] = "cleanup"
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     append_journal(
-        journal_path(run_dir, feature_id, "coordinator"),
+        journal_path(run_dir, execution_id, "coordinator"),
         {
             "event": "integration_cleanup_intent",
             "branch": coordinator["integration_branch"],
@@ -4670,23 +4707,23 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
         item for item in resource_inventory(run_dir) if item["kind"] == "worker"
     ]
     if retained:
-        _save_coordinator(run_dir, feature_id, coordinator)
+        _save_coordinator(run_dir, execution_id, coordinator)
         raise ExecutionError("CLEANUP_BLOCKED", "integration resources remain")
     coordinator["status"] = "done"
-    _save_coordinator(run_dir, feature_id, coordinator)
+    _save_coordinator(run_dir, execution_id, coordinator)
     return coordinator
 
 
-def describe_status(run_dir: Path, feature_id: str) -> dict[str, Any]:
-    coordinator = _load_coordinator(run_dir, feature_id)
+def describe_status(run_dir: Path, execution_id: str) -> dict[str, Any]:
+    coordinator = _load_coordinator(run_dir, execution_id)
     worker_liveness: list[dict[str, object]] = []
     active_wave = coordinator.get("active_wave")
     if isinstance(active_wave, str):
-        active_wave_path = wave_path(run_dir, feature_id, active_wave)
+        active_wave_path = wave_path(run_dir, execution_id, active_wave)
         if active_wave_path.exists():
             active_wave_record = read_json(active_wave_path)
             for task_id in active_wave_record.get("task_ids", []):
-                record_path = task_path(run_dir, feature_id, active_wave, task_id)
+                record_path = task_path(run_dir, execution_id, active_wave, task_id)
                 if not record_path.exists():
                     continue
                 task_record = read_json(record_path)
@@ -4705,7 +4742,7 @@ def describe_status(run_dir: Path, feature_id: str) -> dict[str, Any]:
                     }
                 )
     return {
-        "feature_id": feature_id,
+        "execution_id": execution_id,
         "status": coordinator["status"],
         "base_branch": coordinator["base_branch"],
         "base_head": coordinator["base_head"],
@@ -4721,7 +4758,7 @@ def describe_status(run_dir: Path, feature_id: str) -> dict[str, Any]:
             {"wave_id": item, "failure": wave.get("combined_failure"),
              "resolution": wave.get("failure_resolution")}
             for item in coordinator["wave_ids"]
-            if (wave := read_json(wave_path(run_dir, feature_id, item))).get("combined_failure")
+            if (wave := read_json(wave_path(run_dir, execution_id, item))).get("combined_failure")
         ],
     }
 
@@ -4740,7 +4777,7 @@ def _serialized_transition(function):
     return serialized
 
 
-# The preparation signature has project_root before feature_id; forwarding the
+# The preparation signature has project_root before execution_id; forwarding the
 # second positional argument unchanged preserves the public helper contract.
 for _transition_name in (
     "prepare_execution", "prepare_wave", "refill_wave", "admit_task", "arm_task",

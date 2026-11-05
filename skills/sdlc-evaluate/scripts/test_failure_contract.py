@@ -28,7 +28,7 @@ def payload(
 ) -> dict[str, object]:
     return {
         "schema": failure_contract.INPUT_SCHEMA,
-        "feature_id": "FEAT-001",
+        "execution_id": "FEAT-001",
         "criterion_id": "AC-001",
         "expected": "The user-visible response is accepted.",
         "observed": "The user-visible response is rejected.",
@@ -100,7 +100,7 @@ class FailureContractTests(unittest.TestCase):
             )
             self.assertEqual(
                 second["repair_control"]["schema"],
-                "agentic-sdlc/repair-control-v1",
+                "agentic-sdlc/repair-control-v2",
             )
 
 

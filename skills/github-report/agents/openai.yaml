@@ -1,0 +1,6 @@
+interface:
+  display_name: "GitHub Report"
+  short_description: "Report activity by user and a shared open backlog"
+  default_prompt: "Use $github-report to report all human contributors' completed GitHub activity for the last 90 days grouped by user, followed by one shared current open backlog per repository."
+policy:
+  allow_implicit_invocation: true

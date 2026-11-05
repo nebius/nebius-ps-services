@@ -1,7 +1,12 @@
 # Accepted objective contract
 
-Normalize only outcome, scope, constraints, acceptance_criteria, clarifications
-and provenance (kind and source_sha256). Lists contain accepted statements;
+Normalize outcome, scope, constraints, acceptance_criteria, clarifications
+and provenance (kind and source_sha256). For a referenced issue batch plan,
+include optional issue_resolution using the strict
+[handoff contract](../../worktree/references/issue-resolution.md). Its separate
+closure request comes only from direct user intent. Ordinary objectives omit
+this field. Document-delivery inputs/completion remain their owning workflow
+contracts; issue metadata never changes Implement into remote publication. Lists contain accepted statements;
 outcome is one string. Provenance kind is direct_request, current_plan or
 steering. Never persist the source turn. The coordinator supplies these fields
 through the shared Worktree intake helper; a user never edits a managed prompt.

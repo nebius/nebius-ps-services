@@ -7,6 +7,7 @@ import stat
 import subprocess
 import tempfile
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,10 @@ def _configured_public_key(value: str | None) -> tuple[str, str]:
 
 
 def _validate_private_key_path(path: Path, *, label: str) -> Path:
-    expanded = path.expanduser()
+    from .operator_keys import safe_ancestors
+
+    expanded = path.expanduser().absolute()
+    safe_ancestors(expanded)
     try:
         metadata = expanded.lstat()
     except OSError as error:
@@ -121,6 +125,50 @@ class SSHClientAuth:
         return self._key_type == key_type and self._key_data == key_data
 
 
+# Command-scoped, never part of YAML, deployment identity, or guest state.
+OPERATOR_IDENTITY: ContextVar[SSHClientAuth | None] = ContextVar(
+    "vpngw_operator_identity", default=None
+)
+
+
+def operator_identity() -> SSHClientAuth | None:
+    return OPERATOR_IDENTITY.get()
+
+
+def require_bootstrap_public_key(public_key: str | None) -> None:
+    """Admit fresh-VM authorization without changing the selected operator."""
+    if not (public_key or "").strip():
+        raise ValueError(
+            "Creating a gateway member requires a bootstrap SSH public key. "
+            "With --ssh-identity, supply gateway_group.vm_spec.ssh_public_key inline; "
+            "the operator identity does not select new-VM authorization."
+        )
+    selected = operator_identity()
+    if selected is not None and not selected.matches(*_configured_public_key(public_key)):
+        raise ValueError(
+            "The bootstrap SSH public key must match --ssh-identity when creating a gateway member"
+        )
+
+
+def select_operator_identity(path: Path) -> SSHClientAuth:
+    """Select an exact local private identity or an exact ssh-agent public key."""
+    selected = path.expanduser().absolute()
+    if selected.suffix == ".pub":
+        from .operator_keys import read_public_file
+
+        return resolve_ssh_client_auth(
+            read_public_file(selected), agent_only=True, use_operator_override=False
+        )
+    private = _validate_private_key_path(selected, label="The selected operator private key")
+    expected = _public_key_from_private(private)
+    return SSHClientAuth(
+        source="operator-private-key",
+        _key_type=expected[0],
+        _key_data=expected[1],
+        _key_path=private,
+    )
+
+
 def _agent_identity_file(key_type: str, key_data: str) -> tuple[Path, Any]:
     owner = tempfile.TemporaryDirectory(prefix="nebius-vpngw-ssh-auth-")
     path = Path(owner.name) / "identity.pub"
@@ -143,9 +191,14 @@ def resolve_ssh_client_auth(
     explicit_private_key: Path | None = None,
     home: Path | None = None,
     paramiko_module: Any | None = None,
+    agent_only: bool = False,
+    use_operator_override: bool = True,
 ) -> SSHClientAuth:
     """Resolve exactly the configured public key without authentication fallback."""
 
+    selected = operator_identity() if use_operator_override else None
+    if selected is not None:
+        return selected
     expected = _configured_public_key(configured_public_key)
     if explicit_private_key is not None:
         private_path = _validate_private_key_path(
@@ -190,6 +243,11 @@ def resolve_ssh_client_auth(
             _pkey=matching_agent[0],
             _identity_file=identity_file,
             _temporary_owner=owner,
+        )
+
+    if agent_only:
+        raise ValueError(
+            "The selected public key is not loaded in ssh-agent; run ssh-add for its private key"
         )
 
     ssh_directory = (home or Path.home()).expanduser() / ".ssh"

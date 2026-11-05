@@ -81,6 +81,9 @@ def manager(monkeypatch, tmp_path):
     monkeypatch.setattr(ops, "JOURNAL", tmp_path / "ordinary/operation.json")
     monkeypatch.setattr(ops, "ROUTING_LOCK", tmp_path / "routing.lock")
     manager = ops.Manager(time.monotonic() + 30)
+    # A distro FRR service may already be running at container boot. Quiesce
+    # that writer before replacing its unit with the test's controlled writer.
+    command("systemctl", "stop", "frr.service")
     unit = Path("/etc/systemd/system/frr.service")
     unit.write_text(
         "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\nExecReload=/bin/true\n"
@@ -101,6 +104,66 @@ def begin(manager):
         manager=manager,
         network=manager.network(),
     )
+
+
+@pytest.mark.parametrize("boundary", ["manager", "routing"])
+def test_final_settlement_waits_for_real_guarded_timer_job(
+    manager, tmp_path, monkeypatch, boundary
+):
+    from nebius_vpngw.deploy import ordinary_remote
+
+    timer = Path("/etc/systemd/system/frr.timer")
+    assert not timer.exists()
+    service = Path("/etc/systemd/system/frr.service")
+    marker = tmp_path / "guard-observed"
+    script = tmp_path / "guarded-maintenance.py"
+    monkeypatch.setattr(ordinary_remote, "ROUTING_LOCK", ops.ROUTING_LOCK)
+    script.write_text(
+        "import fcntl,time\nfrom pathlib import Path\n"
+        "from nebius_vpngw import ordinary_operations as ops\n"
+        f"ops.JOURNAL = Path({str(ops.JOURNAL)!r})\n"
+        f"lock = open({str(ops.ROUTING_LOCK)!r}, 'a')\n"
+        "fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "try:\n    ops.require_idle()\n"
+        "except ops.OperationBlocked:\n"
+        f"    Path({str(marker)!r}).write_text('pending')\n"
+        "    time.sleep(0.6)\n"
+        "else:\n    raise RuntimeError('pending operation was not guarded')\n"
+    )
+    service.write_text(
+        "[Service]\nType=oneshot\n"
+        f"Environment=PYTHONPATH={Path(ops.__file__).parents[1]}\n"
+        f"ExecStart={sys.executable} {script}\n"
+    )
+    timer.write_text(
+        "[Timer]\nOnBootSec=1ms\nAccuracySec=1us\nOnUnitActiveSec=5min\nUnit=frr.service\n"
+    )
+    command("systemctl", "daemon-reload")
+    try:
+        with ops.mutation_lock():
+            operation = begin(manager)
+        owner = operation.check()["owner"]
+        command("systemctl", "start", "frr.timer")
+        try:
+            eventually(marker.exists)
+        except AssertionError:
+            pytest.fail(command("journalctl", "-u", "frr.service", "-n", "25", "--no-pager"))
+        assert marker.read_text() == "pending"
+        assert not manager.quiet((*ops.MANAGEMENT, *ops.DATAPLANE))
+        if boundary == "routing":
+            with ordinary_remote.routing_lock(operation) as waited:
+                assert waited
+        ordinary_remote._wait_final_settlement(operation)
+        assert manager.quiet((*ops.MANAGEMENT, *ops.DATAPLANE))
+        assert operation.check()["owner"] == owner
+        assert ops.Journal().read()["state"] == "active"
+        with pytest.raises(ops.OperationBlocked):
+            ops.require_idle()
+        operation.complete()
+    finally:
+        command("systemctl", "stop", "frr.timer", "frr.service")
+        timer.unlink()
+        command("systemctl", "daemon-reload")
 
 
 @pytest.mark.parametrize("fault", [None, "wrong", "loser", "multipath"])
@@ -537,6 +600,9 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env={
+                **os.environ,
+            },
         )
         processes.append(child)
         child.stdin.write(code.encode().hex() + "\n")
@@ -549,6 +615,7 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
                     artifact="3" * 64,
                     approval="4" * 64,
                     ha=ha,
+                    ingress_policy={"peer_ips": []},
                 )
             )
             + "\n"
@@ -560,6 +627,8 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
         first = reserve(inspect())
 
         def accepted():
+            if first.poll() is not None:
+                raise AssertionError("handoff holder exited: " + first.stderr.read())
             value = ops.Journal().read()
             return value and any(e["state"] == "accepted" for e in value["effects"])
 

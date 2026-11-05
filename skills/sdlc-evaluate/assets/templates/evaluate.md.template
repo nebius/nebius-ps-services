@@ -80,7 +80,7 @@
 
 | Field | Value |
 | --- | --- |
-| Failure Event | <failure-event-v1 ID or none> |
+| Failure Event | <failure-event-v2 ID or none> |
 | Stable Blocker Key | <component \| operation \| error class \| source boundary, or none> |
 | Expected Behavior | <criterion expectation or none> |
 | Observed Behavior | <bounded deviation or none> |

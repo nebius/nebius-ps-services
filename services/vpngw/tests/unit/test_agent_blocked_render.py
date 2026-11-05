@@ -15,6 +15,175 @@ from nebius_vpngw.agent.frr_renderer import FRRRenderer
 from nebius_vpngw.agent.strongswan_renderer import StrongSwanRenderer
 
 
+@pytest.fixture(autouse=True)
+def isolated_ha_writer_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", tmp_path / "vm-ha")
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_ha_operational_selection_uses_runtime_only_xfrm_on_reload(monkeypatch, tmp_path, changed):
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    config = {"gateway": {}, "connections": []}
+    path = tmp_path / "config.yaml"
+    path.write_text(json.dumps(config))
+    state_dir = tmp_path / "ha"
+    monkeypatch.setattr(agent_main, "CONFIG_PATH", path)
+    monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "applied.json")
+    monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", state_dir)
+    monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda _: {"enabled": True})
+    monkeypatch.setattr(agent_main, "require_vm_ha_current_boot_readiness", lambda: None)
+    monkeypatch.setattr(agent_main, "update_firewall_from_config", lambda *a, **k: None)
+    monkeypatch.setattr(agent_main, "enforce_routing_invariants_locked", lambda cfg: None)
+    monkeypatch.setattr(
+        agent_main,
+        "acquire_routing_lock",
+        lambda **k: os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
+    )
+    monkeypatch.setattr(
+        tunnel_runtime,
+        "load_effective_config",
+        lambda cfg, _: {**cfg, "_ha_tunnel_selections": {"site": "backup"}},
+    )
+    agent = agent_main.Agent()
+    if not changed:
+        agent.state.save_last_applied(config)
+    agent.ss = Mock()
+    endpoints = [{"name": "xfrm0"}]
+    agent.ss.build_interface_endpoints.return_value = endpoints
+    agent.ss.render_and_apply.return_value = endpoints
+    agent.xfrm = Mock()
+    agent.frr = Mock()
+    agent.reload()
+    if not changed:
+        agent.ss.render_and_apply.assert_not_called()
+        agent.frr.render_and_apply.assert_not_called()
+    agent.xfrm.setup_interfaces.assert_called_once_with(endpoints, persist_sysctl=False)
+    assert not agent.state.is_changed(config)
+
+    # A between-phase reload must not perform even routine firewall/route work.
+    monkeypatch.setattr(tunnel_runtime, "tunnel_operation_pending", lambda *a: True)
+    agent.ss.reset_mock()
+    firewall = Mock()
+    monkeypatch.setattr(agent_main, "update_firewall_from_config", firewall)
+    agent.reload()
+    firewall.assert_not_called()
+    agent.ss.render_and_apply.assert_not_called()
+
+
+def test_ha_reload_preserves_ready_owner_with_failed_redundant_path(monkeypatch, tmp_path):
+    from nebius_vpngw.agent.routing_guard import require_vm_ha_current_boot_ready
+
+    config = {"gateway": {}, "connections": []}
+    path = tmp_path / "config.yaml"
+    path.write_text(json.dumps(config))
+    state_dir = tmp_path / "ha"
+    state_dir.mkdir()
+    boot = tmp_path / "boot"
+    boot.write_text("boot-a")
+    status = state_dir / "status.json"
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "nebius-vpngw/vm-ha-status-v1",
+                "controller_ready_boot_id": "boot-a",
+                "guard_boot_id": "boot-a",
+                "promotion_ready": True,
+                "data_plane_mode": "active",
+                "state": "degraded-path",
+            }
+        )
+    )
+    guard = state_dir / "guard.json"
+    guard.write_text(json.dumps({"guard_boot_id": "boot-a", "data_plane_mode": "active"}))
+    monkeypatch.setattr(agent_main, "CONFIG_PATH", path)
+    monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "applied.json")
+    monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", state_dir)
+    monkeypatch.setattr(agent_main, "VM_HA_GUARD_PATH", guard)
+    monkeypatch.setattr(agent_main, "_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda _: {"enabled": True})
+    monkeypatch.setattr(
+        agent_main,
+        "require_vm_ha_current_boot_readiness",
+        lambda: require_vm_ha_current_boot_ready(
+            {"vm_ha": {}}, status_path=status, boot_id_path=boot
+        ),
+    )
+    monkeypatch.setattr(
+        agent_main, "_vm_ha_materialization_authorized", Mock(side_effect=RuntimeError)
+    )
+    fence = Mock()
+    monkeypatch.setattr(agent_main, "_install_vm_ha_cold_start_guard_locked", fence)
+    monkeypatch.setattr(agent_main, "update_firewall_from_config", Mock())
+    monkeypatch.setattr(agent_main, "enforce_routing_invariants_locked", Mock())
+    monkeypatch.setattr(
+        agent_main,
+        "acquire_routing_lock",
+        lambda **k: os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
+    )
+    agent = agent_main.Agent()
+    agent.state.save_last_applied(config)
+    agent.ss = Mock()
+    agent.ss.build_interface_endpoints.return_value = []
+    agent.frr = Mock()
+    agent.reload()
+
+    fence.assert_not_called()
+    agent.ss.render_and_apply.assert_not_called()
+    agent.frr.render_and_apply.assert_not_called()
+    agent_main.enforce_routing_invariants_locked.assert_called_once()
+
+
+def test_ha_reload_serializes_before_routing_writer(monkeypatch, tmp_path):
+    config = tmp_path / "config.yaml"
+    config.write_text('{"gateway":{},"connections":[]}')
+    state_dir = tmp_path / "ha"
+    monkeypatch.setattr(agent_main, "CONFIG_PATH", config)
+    monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "applied.json")
+    monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", state_dir)
+    monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda _: {"enabled": True})
+
+    def routing_lock(**kwargs):
+        probe = os.open(state_dir / "rearm.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(probe)
+        raise KeyboardInterrupt("stop after lock proof")
+
+    state_dir.mkdir()
+    monkeypatch.setattr(agent_main, "acquire_routing_lock", routing_lock)
+    with pytest.raises(KeyboardInterrupt, match="lock proof"):
+        agent_main.Agent().reload()
+
+
+def test_candidate_static_preparation_uses_runtime_only_sysctls(monkeypatch, tmp_path):
+    resolved = {"tunnels": []}
+    endpoints = [{"name": "xfrm0", "if_id": 1}]
+    monkeypatch.setattr(agent_main, "_resolved_vm_ha_data_plane_config", lambda _: resolved)
+
+    def render(config, *, rendered_files):
+        assert config is resolved
+        rendered_files[strongswan_module.SWANCTL_CONF] = "fixture"
+
+    monkeypatch.setattr(
+        agent_main,
+        "StrongSwanRenderer",
+        lambda: SimpleNamespace(
+            render_and_apply=render,
+            build_interface_endpoints=lambda cfg: endpoints,
+        ),
+    )
+    writer = Mock()
+    setup = Mock()
+    monkeypatch.setattr(strongswan_module, "_write_secret_file", writer)
+    monkeypatch.setattr(agent_main, "XFRMManager", lambda: SimpleNamespace(setup_interfaces=setup))
+    agent_main._prepare_vm_ha_static_tunnels(tmp_path / "config.yaml")
+    setup.assert_called_once_with(endpoints, persist_sysctl=False)
+    writer.assert_called_once_with(strongswan_module.SWANCTL_CONF, "fixture")
+
+
 def _prepare_mtls_writer_lock(state_dir: Path) -> Path:
     mtls_dir = state_dir / "mtls"
     mtls_dir.mkdir(parents=True, mode=0o700)
@@ -29,7 +198,10 @@ def test_vm_ha_blocked_boot_renders_without_data_plane_effects(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[tuple[str, bool]] = []
 
     class Renderer:
@@ -72,7 +244,10 @@ def test_vm_ha_force_reconcile_without_routing_lock_has_no_effects(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[str] = []
 
     class Renderer:
@@ -111,7 +286,10 @@ def test_vm_ha_force_reconcile_serializes_with_rearm_writer(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     state_dir = tmp_path / "vm-ha"
     rearm_lock_path = state_dir / "rearm.lock"
     mtls_lock_path = _prepare_mtls_writer_lock(state_dir)
@@ -170,7 +348,10 @@ def test_vm_ha_force_reconcile_fails_closed_when_rearm_writer_is_busy(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     state_dir = tmp_path / "vm-ha"
     state_dir.mkdir()
     rearm_lock = os.open(state_dir / "rearm.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -206,7 +387,10 @@ def test_vm_ha_force_reconcile_fails_closed_when_mtls_writer_is_busy(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     state_dir = tmp_path / "vm-ha"
     mtls_lock_path = _prepare_mtls_writer_lock(state_dir)
     mtls_lock = os.open(mtls_lock_path, os.O_RDWR)
@@ -248,7 +432,10 @@ def test_vm_ha_force_reconcile_requires_complete_authority_tuple(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[str] = []
 
     monkeypatch.setattr(agent_main, "CONFIG_PATH", config_path)
@@ -276,7 +463,10 @@ def test_passive_authority_materializes_locally_without_active_effects(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     vm_ha = {
         "node": {"node_id": "node-a"},
         "generation": {"generation_id": "a" * 64},
@@ -308,7 +498,8 @@ def test_passive_authority_materializes_locally_without_active_effects(
             return [{"name": "xfrm0"}] if self.name == "strongswan" else None
 
     class XFRM:
-        def setup_interfaces(self, endpoints):
+        def setup_interfaces(self, endpoints, *, persist_sysctl=True):
+            assert persist_sysctl is False, "HA passive preparation must preserve boot fencing"
             calls.append(("xfrm", endpoints))
 
     monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "state.json")
@@ -353,11 +544,23 @@ def test_passive_authority_materializes_locally_without_active_effects(
     agent.reload()
 
     assert calls == [
-        ("firewall", {"version": 1, "connections": []}, {"require_reload": True}),
+        (
+            "firewall",
+            {"version": 1, "gateway": {}, "connections": []},
+            {"require_reload": True},
+        ),
         ("strongswan", True, True, False, False),
         ("xfrm", [{"name": "xfrm0"}]),
         ("frr", True, False, True, True),
-        ("hygiene", {"version": 1, "connections": []}),
+        (
+            "hygiene",
+            {
+                "version": 1,
+                "gateway": {},
+                "connections": [],
+                "_ha_static_passive": True,
+            },
+        ),
     ]
     assert json.loads((tmp_path / "material.json").read_text()) == {
         "schema": "nebius-vpngw/vm-ha-materialization-v1",
@@ -372,7 +575,10 @@ def test_active_vm_ha_preparation_restores_bgp_origination_before_forwarding(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("gateway:\n  local_prefixes: [10.0.0.0/24]\n", encoding="utf-8")
+    config_path.write_text(
+        "gateway:\n  local_prefixes: [10.0.0.0/24]\n",
+        encoding="utf-8",
+    )
     calls: list[tuple[str, object]] = []
 
     class Renderer:
@@ -391,14 +597,22 @@ def test_active_vm_ha_preparation_restores_bgp_origination_before_forwarding(
     assert calls[0] == (
         "firewall",
         {
-            "cfg": {"gateway": {"local_prefixes": ["10.0.0.0/24"]}},
+            "cfg": {
+                "gateway": {
+                    "local_prefixes": ["10.0.0.0/24"],
+                }
+            },
             "require_reload": True,
         },
     )
     assert calls[1] == (
         "frr",
         {
-            "cfg": {"gateway": {"local_prefixes": ["10.0.0.0/24"]}},
+            "cfg": {
+                "gateway": {
+                    "local_prefixes": ["10.0.0.0/24"],
+                }
+            },
             "advertise_local_prefixes": True,
             "require_reload": True,
         },
@@ -410,7 +624,10 @@ def test_blocked_vm_ha_preparation_installs_required_deny_all_exports(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("gateway:\n  local_prefixes: [10.0.0.0/24]\n", encoding="utf-8")
+    config_path.write_text(
+        "gateway:\n  local_prefixes: [10.0.0.0/24]\n",
+        encoding="utf-8",
+    )
     calls: list[dict[str, object]] = []
 
     class Renderer:
@@ -423,7 +640,11 @@ def test_blocked_vm_ha_preparation_installs_required_deny_all_exports(
 
     assert calls == [
         {
-            "cfg": {"gateway": {"local_prefixes": ["10.0.0.0/24"]}},
+            "cfg": {
+                "gateway": {
+                    "local_prefixes": ["10.0.0.0/24"],
+                }
+            },
             "advertise_local_prefixes": False,
             "require_reload": True,
             "prepare_vm_ha_controller_access": True,
@@ -437,7 +658,10 @@ def test_force_reconcile_bypasses_unchanged_config_short_circuit(
     ordinary_operation_guest,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     calls: list[str] = []
 
     class StrongSwan:
@@ -623,11 +847,18 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
 ) -> None:
     config_path = tmp_path / "config.yaml"
     state_path = tmp_path / "last-applied.json"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     from nebius_vpngw.agent.state_store import StateStore
 
     StateStore(state_path).save_last_applied(
-        {"version": 1, "connections": [], "gateway": {"local_prefixes": []}}
+        {
+            "version": 1,
+            "connections": [],
+            "gateway": {"local_prefixes": []},
+        }
     )
     previous_state = state_path.read_bytes()
 
@@ -676,7 +907,7 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
         agent.reload()
 
     assert state_path.read_bytes() == previous_state
-    assert agent.state.is_changed({"version": 1, "connections": []})
+    assert agent.state.is_changed({"version": 1, "gateway": {}, "connections": []})
 
 
 def test_passive_materialization_hygiene_failure_does_not_write_receipt(
@@ -684,7 +915,10 @@ def test_passive_materialization_hygiene_failure_does_not_write_receipt(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: 1\nconnections: []\n", encoding="utf-8")
+    config_path.write_text(
+        "version: 1\ngateway: {}\nconnections: []\n",
+        encoding="utf-8",
+    )
     materialization_path = tmp_path / "material.json"
     lock_fd = os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
 
@@ -756,7 +990,10 @@ def test_blocked_frr_render_does_not_install_kernel_routes(
     monkeypatch.setattr("nebius_vpngw.agent.frr_renderer.FRR_CONF", tmp_path / "frr.conf")
 
     renderer.render_and_apply(
-        {"gateway": {"local_prefixes": ["10.0.0.0/24"]}, "connections": []},
+        {
+            "gateway": {"local_prefixes": ["10.0.0.0/24"]},
+            "connections": [],
+        },
         activate=False,
     )
 
@@ -822,7 +1059,10 @@ def _bgp_config() -> dict:
                 },
             }
         },
-        "gateway": {"local_asn": 65010, "local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {
+            "local_asn": 65010,
+            "local_prefixes": ["10.0.0.0/24"],
+        },
         "connections": [
             {
                 "name": "peer",

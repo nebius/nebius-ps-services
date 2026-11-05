@@ -71,7 +71,7 @@ class NatState:
             if record is None or record[1] != {"owner": self.owner}:
                 holder = record[1].get("owner", "unknown") if record else "unknown"
                 raise RuntimeError(
-                    f"NAT shared lock held or acquisition uncertain (owner {holder}); stop prior writers before explicit nat unlock"
+                    f"NAT shared lock held or acquisition uncertain (owner {holder}); stop prior writers before explicit nat-gateway unlock"
                 ) from None
             self.lock_etag = record[0]
         else:

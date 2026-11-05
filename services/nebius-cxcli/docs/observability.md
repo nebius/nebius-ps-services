@@ -1,7 +1,8 @@
 # Observability and Grafana installation
 
-Install Grafana and configure its storage, collectors and query connections on
-an existing cxcli-managed MK8s target:
+Use the focused Grafana setup command to configure Grafana, storage, collectors
+and query connections on an existing cxcli-managed MK8s target, then render and
+deploy the project:
 
 ```bash
 nebius-cxcli grafana install --config /path/to/config.yaml --target CLUSTER_TARGET
@@ -23,8 +24,9 @@ backends were selected earlier. Backtracking to disable observability removes
 only the routing and dependencies introduced by that wizard.
 Settings persist under `observability.routing` on the matching managed component
 or `infra.external_clusters[]` record. Apps remain
-separate entries in `apps.charts[]`. Apps selection saves configuration intent;
-use the full `render`/`deploy` workflow to apply native Soperator routing changes.
+separate entries in `apps.charts[]`. Unlike `grafana install`, `component add`
+only saves configuration for later rendering and deployment. Use the full
+`render`/`deploy` workflow to apply native Soperator routing changes.
 The ordinary Apps deployment path cannot apply protected native changes.
 
 After confirmation, the command atomically saves changed desired settings,

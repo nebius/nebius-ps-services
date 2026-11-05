@@ -4,6 +4,296 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Align commit contract checks with Implement's documented dirty-source boundary,
+  native termination, typed result ingestion and coordinator-owned commit receipt.
+  Include the shared Git environment module in hook installation expectations.
+
+- Carry accepted issue plans through optional typed Implement objective metadata,
+  sealed per-issue validation and an immutable local-delivery receipt. Authorized
+  PR work refreshes current-head evidence, verifies concise comments and renders
+  fully qualified native closing references for resolved members only. Merge
+  verification reports actual issue states separately from result CI. Preserve
+  triage-only ownership, partial issues, human PR content and explicit authority;
+  add no watcher, issue-write broker or publication/merge permission.
+
+- Align GitHub issue batch review by validating every argument before discovery
+  and refreshing shared member/source evidence before each acceptance. Cover
+  sibling drift, frozen selection and reuse of a shared plan for one selected
+  member without changing unselected issues or maintainer edits.
+
+- Extend `review-github-issues` to review the full open backlog by default,
+  with comma-separated `--repo`, `--issue` and ordered project `--priority`.
+  Check every issue number in every selected repo and finish repos in input
+  order. Group by project, prioritize remaining groups by issue count, and
+  review shared remediation batches by severity then size. Save one verified
+  file-only plan per accepted batch with individual issue acceptance criteria;
+  preserve per-issue decisions, existing edits and partial-effect readback.
+  Replace positional selectors without compatibility aliases.
+
+- Admit the specific editor branch-history hint in sealed owned Git checkouts
+  only when it names the frozen origin default. Preserve configuration bytes,
+  reject other values and unsupported settings, and retain failed evidence
+  through exact cleanup.
+
+- Route missing native-environment evidence to its phase owner instead of
+  inferring a Docker failure from the word environment. Preserve explicit
+  inspection, Docker/Compose, inventory and browser investigation routes.
+
+- Keep canonical spec templates and emitted metadata compatible with default
+  Markdown line-length checks using marker-only next-line MD013 exceptions.
+  Preserve prose validation, exact marker syntax, existing human-owned envelopes,
+  line endings and paired-publication guards.
+
+- Admit a complete validation diagnosis after a failed counted artifact repair
+  through the existing owner route, preserving failures and repair ceilings.
+  Version the private diagnosis contract to v3 across diagnostic, corrective-plan,
+  Stop-hook and verifier consumers, including the plan template; reject retired
+  active and referenced records before dispatch or completion writes, without migration.
+
+- Validate preserved original TDD evidence across completed appended corrective
+  waves using locked plans, owner replan records, unchanged completed tasks and
+  the original seal. Keep current submissions and later acceptance bound to the
+  current execution basis; reject missing, changed or ambiguous lineage.
+  Lifecycle v7 rejects older active state without migrating historical reports.
+
+- Permit read-only classifier phase observations on the exact unsealed integration
+  checkout during native classification. Preserve runtime/acceptance cleanliness,
+  worker isolation and Git identity checks without requiring an early commit.
+
+- Align the shared Git reader with the three-tier lifecycle's existing 1 MiB
+  state limit so retained diagnostics do not block native commands or cleanup.
+  Keep small profile files bounded at 64 KiB and preserve size/integrity errors
+  instead of misreporting them as malformed JSON.
+
+- Wait for saved checkbox state after one completion action in three-tier browser
+  acceptance. Support asynchronous confirmation and DOM replacement, preserve
+  API/database checks, and reject unconfirmed or already-completed state. Freeze
+  the shared helper and cover it with real headless control regressions.
+
+- Add guarded prepared-design revision transitions for proven active-task design
+  defects. Consume the existing counted repair authority, preserve terminated
+  failed workers, seal only the semantic owner's canonical pair, recover the
+  exact interrupted commit, and schedule fresh tasks after immutable history.
+
+- Make three-tier runtime registration discover and inspect owned services from
+  path-only route inputs. Retain immutable sanitized inventory diagnostics through
+  cleanup; separate worker lease evidence from clean build-bound acceptance and
+  require classifier-linked development recovery. Versioned state rejects old active
+  state while preserving historical reports.
+
+- Preserve SDLC repair obligations across successive failures with immutable
+  cursor archives and inherited classification references. Restart combined
+  revalidation under the new successful dispatch, and allow the final admitted
+  repair to finish its gates without increasing the retry ceiling.
+
+### Workflow and runtime changes
+
+- Document the live verifier's existing Compose action list and worker teardown
+  with `stop web db`; keep resource deletion with lifecycle cleanup. Expose the
+  list in helper help and rejection errors. Require outer observations to retain
+  named failing predicates and sanitized values before teardown changes state.
+
+- Clarify SDLC first-start initialization after accepted registration and before
+  checkpoint reads, startup observation or routing. Preserve reconciliation of
+  existing and partial history; keep phase transitions with the bound coordinator.
+
+- Bound live Codex project-config admission to the validated checkout root,
+  including linked worktrees, instead of rejecting ordinary config above it.
+  Require the exact `.git` root marker and reject bare-origin native launches.
+
+- Normalize SDLC environment-failure invalidations to their existing canonical
+  gate surface while preserving the original phase evidence. Keep unsupported
+  phases blocked and retain inherited obligations across later classifications.
+
+- Route proven environment failures during active SDLC implementation through
+  the existing counted task-attempt and shared fresh-worker recovery path.
+  Preserve failed evidence, stopped-writer and lease checks, assignment scope,
+  downstream revalidation and later-stage recovery boundaries. Clarify native
+  permission prerequisites in the common Implement/SDLC worker envelope.
+
+- Require explicit recreation of both owned three-tier services at every
+  startup, with detached health waiting and a separate web build. Preserve the
+  database volume and reject ambiguous startup requests before Docker runs.
+  Clarify that conditional troubleshooting produces diagnosis evidence rather
+  than an extra canonical phase receipt.
+
+- Clarify failure-record timestamp errors and input help to the existing
+  whole-second UTC format, including the required `Z` suffix; keep validation
+  behavior unchanged.
+
+- Default `github-report` to all human contributors grouped by repository/user,
+  with optional `--user TEXT` substring matching on login or public profile name.
+  Keep one full shared open backlog independent of the user filter; preserve
+  per-user roles and count shared GitHub items once in repository totals. Use
+  a two-line User/Repository/Folder and Date header. Replace the internal output
+  with schema v3, preserving verified issue credit, folder inference, partial
+  evidence and read-only behavior without legacy aliases.
+
+- Share an explicit stop-before-repair worker handoff across Implement and SDLC.
+  Preserve unexpected failed checks and blocking review findings for coordinator
+  classification before retry; expected negative feedback must be declared in
+  advance. Clarify the 30-second heartbeat target and unchanged 240-second guard.
+
+- Preserve the original null execution basis of an immutable classification
+  receipt admitted before preparation. Historical validation checks admission
+  order, objective, artifact integrity and ancestry; current receipts still
+  require the current basis and invalid preparation remains an error.
+
+- Give shared SDLC and Implement worker startup a canonical five-minute window,
+  separate from the one-hour work limit. Prepare handoffs before arming and
+  dispatch immediately; reject obsolete startup limits and preserve guards
+  against prestart edits, scope violations and deadline renewal.
+
+- Share observed loopback-binding validation across three-tier registration,
+  deployment and restart, accepting IPv4 or IPv6 without an internal-port
+  assumption while rejecting extra publications and mismatched literal hosts.
+  Isolate project-spec validation fixtures from the ordinary agent home and
+  bind promoted-checkout fixtures to their actual synthetic coordinator.
+
+- Share assignment-derived worker launch contracts and immutable native-result
+  receipts across Implement and SDLC, including sequential adapters. Completion
+  consumes only a validated implemented receipt; blocked/replan results fence
+  new dispatch while active peers drain. Preserve recovery evidence across
+  coordinator succession and use one digest convention for recovery authority.
+  Return resource-owner failures as structured CLI errors.
+
+- Reject mismatched three-tier API paths and endpoint origins before runtime
+  inventory updates or browser attempts. Bind independent API checks to the
+  frozen `/api/v1/tasks` contract and report malformed URLs as controlled errors.
+
+- Add an honest blocked outcome for native workers whose work or validation is
+  incomplete without a material specification gap. Return validated evidence as
+  `WORKER_BLOCKED`, stop later dispatch, and preserve coordinator-owned diagnosis
+  and strict completion/admission checks.
+
+- Preserve bounded, screened blocked/replan diagnostics when a sequential worker
+  exits successfully before `task-start`. Keep `WORKER_FAILED` and a distinct
+  diagnostic-only `prestart_result`; retain all liveness and admission guards.
+  Malformed JSON, including oversized integer tokens, returns a fixed error.
+
+- Admit native workers before spawning and supply the shared engine's required
+  project-state and runtime-lease directories. Validate selected-home, run,
+  project, assignment and coordinator identity before grants or storage setup.
+  Both hosts retain existing sandbox, approval, locking and ownership controls.
+
+- Preserve failed three-tier acceptance validation records against replacement,
+  with idempotent identical replays. Clarify that repairable authoring and
+  development checks retain phase evidence and counted repair history; an
+  existing acceptance failure still requires a fresh trial.
+
+- Document the exact three-tier phase-result input path in the live procedure
+  and recorder help, and include it in path-rejection diagnostics. Preserve
+  strict canonical-path admission and recorder-owned immutable archives.
+
+- Preserve the exact worker-result rejection guard as a fixed diagnostic label
+  so failure classification can distinguish invalid result conditions. Keep
+  rejected content private, retain all admission rules, and return controlled
+  failures for malformed status and spec-gap kinds.
+
+- Check SDLC design candidate Markdown before paired publication and require
+  descriptive source links. Preserve project settings for private candidates,
+  existing template exceptions, shared publication and counted failure routing.
+  A private checker exempts only canonical machine-marker line length in memory,
+  retains prose and citation checks, and reports original lines without source
+  excerpts or candidate edits.
+
+- Recognize bounded CSRF lookup expressions in SDLC hook and worker-evidence
+  secret screening, including a trailing JavaScript semicolon. Preserve literal,
+  ambiguous-input and provider-specific guards, and prevent unrelated placeholder
+  text from suppressing a credential match.
+
+- Bind live failure-classification receipts to their actual pre- or
+  post-preparation context, retaining strict execution-basis and integration
+  checkout checks during prepared execution. A selected feature or locked plan
+  alone no longer implies preparation; partial execution evidence and missing
+  previously observed execution remain errors.
+
+- Use a provider-supported worker output schema so native workers can start.
+  Preserve conditional spec-gap and unique-ID rules in local validation, and
+  report native failure exit codes with fixed safe schema-rejection diagnostics.
+
+- Route proven pre-execution validation failures to their exact supported
+  authoring phase, preserving counted repairs, canonical publication and the
+  architectural design gate. Reject unsupported phase identities without
+  requiring a nonexistent plan or integration checkout.
+
+- Give shared SDLC and Implement worker attempts a canonical one-hour wall-clock
+  limit with a five-minute warning. Preserve heartbeat, stall, scope and repair
+  guards, and reject obsolete assignment limits before dispatch. Failed owned
+  Compose actions now retain bounded safe diagnostics and their command exit
+  code while redacting runtime credentials and withholding sensitive output.
+
+- Launch disposable native coordinators with a minimal inherited environment,
+  exact private native home and isolated shell initialization. Require Codex
+  login-shell and snapshot restrictions, keep authentication in its private store,
+  and test synthetic credential exclusion through child and worker environments.
+
+- Keep live worker runtime imports available through lease validation and the
+  checked Compose action, then restore the complete prior import path. Cover
+  missing leases, valid leases and execution errors in fresh-process regressions.
+
+- Make SDLC preparation own the initial canonical contract commit, including
+  exact admitted document inputs, publication provenance and interrupted-commit
+  recovery. Acquire managed ownership at clean intake before authoring, retain
+  clean promotion guards, and reject unrelated changes or unjournaled commits.
+  Exercise this owner in three-tier composition fixtures instead of committing
+  the canonical pair manually during test setup.
+
+- Repair execution command dispatch after the execution-identity rename:
+  preparation, worker transitions and failure classification now consume the
+  canonical `--execution` argument. Align worker reconciliation with that
+  interface and add command-level real-Git and failure-classification coverage.
+
+- Isolate deterministic hook fixture imports from the verifier's runtime when
+  checking a separate source catalog, and report fixture setup failures without
+  exposing raw diagnostics or losing the verification report.
+
+- Clarify commit prompt-hook ownership during SDLC startup: an eventual SDLC
+  commit phase does not require a standalone root commit transaction before
+  admission. Preserve default-branch protection and delegated commit authority.
+
+- Add sealed, verifier-owned Git configuration profiles for disposable SDLC
+  tests. Share validation across startup, workers, commit admission, evidence,
+  resume and cleanup; exclude inherited configuration and attributes while
+  rejecting local executable settings, foreign scopes and profile tampering.
+  Preserve ordinary Git settings and hooks. Isolate regression fixture homes
+  and restore their environment even after failed setup.
+  Keep prompt-hook routing checks independent of the selected home directory's
+  name while still rejecting SDLC command names and arguments.
+
+- Require document coverage, phased delivery, source freshness and bounded
+  execution regressions in the SDLC verifier. Check installed shared owners,
+  remove duplicate aggregate test execution, align protected merge authority
+  guidance and state unqualified native/remote delivery boundaries in reports.
+  Isolate the shared commit-lock test from verifier Git configuration overrides
+  while preserving production environment admission guards; correct the UAT
+  fixture to follow the coordinator route with future work still pending.
+
+- Align SDLC UAT routing, metadata and evals with promoted delivery slices and
+  inherited regressions; complete the protected merge skill stateful contract.
+  Bind protected merge intent to the validated review snapshot and reject SDLC
+  qualification changes between approval and merge submission. Keep Stop
+  continuation on the coordinator-selected phase instead of inferring UAT from
+  aggregate feature-status labels. Reconcile steering templates with immutable
+  objective snapshots and require qualification/admission/recovery regressions
+  in the verifier merge-safety capability.
+
+- Add portable source inventories, full obligation coverage and explicit phase /
+  delivery-slice contracts; preserve canonical REQ/FEAT ownership.
+- Use iterative task DAG validation, four-task integration batches and direct
+  dependency handoffs. Private execution identities and changed state contracts
+  now use v2; old runs are preserved without conversion.
+- Add executed qualification and SDLC-owned protected direct-merge admission,
+  run-level opt-in, ambiguous submission recovery and exact-result verification.
+  Queues remain unsupported; live/native merge qualification is a separate gate.
+- Reuse research/design in advisory SDLC modes and consolidate advisory spec
+  traceability in align; retire sdlc-align-specs without a compatibility alias.
+
+- Repair fork Required CI discovery when GitHub omits both run and commit PR
+  associations. Resolve a unique current fork/ref with shared check-suite
+  provenance validation, preserve same-head rerun updates and fail-closed
+  ambiguity handling, and expose sanitized discovery diagnostics.
+
 - Add explicit-only `review-github-issues` for selected GitHub issue triage,
   evidence-based disposition and file-only implementation plans. Keep valid
   low-priority work open, verify saved project plans before acceptance, preserve
@@ -35,6 +325,27 @@ All notable changes to the reusable Agent Skills are tracked here.
 - Document SDK-first Kubernetes workload identity for Nebius IAM APIs and direct SecretStash access. Add exact OIDC trust and renewable projected-token helpers; separate resource grants, application-secret refresh and optional ESO 2.10.0+ synchronization.
 
 ### Added
+
+- Add `jira-report`, a company-neutral, read-only Jira MCP reporting skill with
+  `--user`, `--date` and literal `--title` filtering. Report ticket number, title,
+  latest dated involvement and current status; include authored comments and
+  explicit credited contributions while exposing incomplete collection. Add
+  portable metadata, plugin/catalog registration and synthetic trigger/output evals.
+
+- Add `github-report --project FOLDER` with exact descendant-path filtering,
+  confirmed Project work and a separate Unclassified work table that retains
+  personal PR/issue activity with unknown folder membership. Preserve whole-PR
+  metrics, contribution/date rules and explicit partial coverage.
+
+- Add `github-report` for read-only personal GitHub manager reports, with a
+  rolling 90-day default, past/current `--date`, comma-separated `--repo`,
+  table-only output with projects/folders from paginated changed files, linked
+  issue/PR outcomes and whole-PR line/commit metrics. Omit opening highlights
+  and the My role column while retaining accurate contribution wording. Preserve
+  typed GraphQL access/rate errors when gh exits nonzero and request `--repo`
+  clearly outside a checkout. Keep partial evidence explicit and reporting independent of private tools, GitHub writes, automatic files and productivity scores. Remove stale
+  plugin entries for the already-retired `sdlc-align-specs` folder during catalog
+  reconciliation.
 
 - Extend `ai-agent-design` with provider-neutral rules for derived-context
   lineage and revocation, mandatory-context budgets, bounded artifact access,

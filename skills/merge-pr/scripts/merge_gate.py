@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import fnmatch
 import io
 import json
@@ -357,6 +358,23 @@ def review_record(review, pr, allowed):
         and all(isinstance(v, str) and 0 < len(v) <= 1000 for v in value["validation"]),
         "Review lacks validation evidence",
     )
+    if "sdlc" in value:
+        delivery = value["sdlc"]
+        require(isinstance(delivery, dict) and set(delivery) == {"schema", "execution_id", "objective_sha256",
+                "basis_sha256", "qualification_sha256", "candidate", "live", "criteria"}
+                and delivery["schema"] == "workflow/sdlc-delivery-v1"
+                and re.fullmatch(r"SLICE-[0-9]{3,}", str(delivery["execution_id"]))
+                and all(re.fullmatch(r"[0-9a-f]{64}", str(delivery[k])) for k in
+                        ("objective_sha256", "basis_sha256", "qualification_sha256"))
+                and type(delivery["live"]) is bool
+                and isinstance(delivery["criteria"], list) and delivery["criteria"]
+                and all(isinstance(c, str) and 0 < len(c) <= 128 for c in delivery["criteria"])
+                and len(set(delivery["criteria"])) == len(delivery["criteria"]), "Invalid SDLC admission attestation")
+        candidate = delivery["candidate"]
+        require(isinstance(candidate, dict) and set(candidate) == {"head", "artifact_sha256", "configuration_sha256"}
+                and candidate["head"] == value["head"]
+                and all(re.fullmatch(r"[0-9a-f]{64}", str(candidate[k])) for k in
+                        ("artifact_sha256", "configuration_sha256")), "Invalid SDLC candidate identity")
     return value
 
 
@@ -387,31 +405,85 @@ def changes_workflows(files):
     return any(path.startswith(".github/workflows/") for path in changed_paths(files))
 
 
+def fork_run_pr(api, run):
+    """Resolve omitted fork associations; never infer identity from a SHA alone."""
+    try:
+        repository = run["head_repository"]
+        if repository is None:  # The source fork may have been deleted.
+            return None
+        fork = repository["full_name"]
+        require(
+            bool(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", fork)),
+            "Invalid CI fork identity",
+        )
+        if fork == api.repo:
+            return None
+        require(
+            run["repository"]["full_name"] == api.repo, "Invalid CI producer repository"
+        )
+        ref, head, suite_id = run["head_branch"], run["head_sha"], run["check_suite_id"]
+        require(
+            isinstance(ref, str) and bool(ref) and bool(SHA.fullmatch(head)),
+            "Invalid fork CI head",
+        )
+        require(type(suite_id) is int and suite_id > 0, "Invalid fork CI check suite")
+        created = datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+        selector = quote(f"{fork.split('/')[0]}:{ref}", safe="")
+        opened = api.pages(f"pulls?state=open&head={selector}")
+        if not opened:
+            return None
+        # Count before base filtering: two PRs from one ref remain ambiguous.
+        require(len(opened) == 1, "Ambiguous fork CI PR selector")
+        number = opened[0]["number"]
+        require(type(number) is int and number > 0, "Invalid fork CI PR identity")
+        pr = api.api(f"pulls/{number}")
+        require(pr["number"] == number, "Fork CI PR identity changed")
+        require(
+            isinstance(pr["base"]["ref"], str) and bool(pr["base"]["ref"]),
+            "Invalid fork CI base",
+        )
+        if (
+            pr["head"]["repo"] is None
+            or pr["state"] != "open"
+            or pr["base"]["repo"]["full_name"] != api.repo
+            or pr["head"]["repo"]["full_name"] != fork
+            or pr["head"]["ref"] != ref
+            or pr["head"]["sha"] != head
+            or created < datetime.strptime(pr["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+        ):
+            return None
+        suite = api.api(f"check-suites/{suite_id}")
+        require(
+            suite["id"] == suite_id
+            and suite["app"]["id"] == 15368
+            and suite["repository"]["full_name"] == api.repo
+            and suite["head_sha"] == head
+            and suite["head_branch"] == ref,
+            "Fork CI check-suite identity mismatch",
+        )
+        return pr
+    except (KeyError, TypeError, ValueError) as error:
+        raise Blocked("Malformed fork CI association evidence") from error
+
+
 def run_matches_pr(api, run, pr):
     attached = run.get("pull_requests", [])
     if attached:
         return any(p["number"] == pr["number"] for p in attached)
-    # GitHub omits this association for fork PRs. Bind the authoritative
-    # fork/ref/head to one open PR and the repository-owned Actions check suite.
-    if (
-        pr["head"]["repo"]["full_name"] == api.repo
-        or run.get("head_branch") != pr["head"]["ref"]
-        or run.get("repository", {}).get("full_name") != api.repo
-        or not run.get("check_suite_id")
-        or run.get("created_at", "") < pr["created_at"]
-    ):
+    try:
+        candidate = fork_run_pr(api, run)
+    except ApiFailure:
+        raise
+    except Blocked:
         return False
-    owner = pr["head"]["repo"]["full_name"].split("/")[0]
-    selector = quote(f"{owner}:{pr['head']['ref']}", safe="")
-    opened = api.pages(f"pulls?state=open&head={selector}")
-    if [p["number"] for p in opened] != [pr["number"]]:
-        return False
-    suite = api.api(f"check-suites/{int(run['check_suite_id'])}")
-    return (
-        suite["app"]["id"] == 15368
-        and suite["repository"]["full_name"] == api.repo
-        and suite["head_sha"] == pr["head"]["sha"]
-        and suite["head_branch"] == pr["head"]["ref"]
+    return bool(
+        candidate
+        and candidate["number"] == pr["number"]
+        and candidate["head"]["sha"] == pr["head"]["sha"]
+        and candidate["head"]["ref"] == pr["head"]["ref"]
+        and candidate["head"]["repo"]["full_name"] == pr["head"]["repo"]["full_name"]
+        and candidate["base"]["ref"] == pr["base"]["ref"]
+        and candidate["base"]["repo"]["full_name"] == pr["base"]["repo"]["full_name"]
     )
 
 
@@ -523,7 +595,7 @@ def checks_ready(api, pr, files, policy):
         require(status["state"] == "success", "Commit status failed")
 
 
-def snapshot(api, number, head, policy, review_id=None):
+def snapshot(api, number, head, policy, review_id=None, *, allowed_ids=None):
     require(
         type(review_id) is int and review_id > 0, "Positive local review ID required"
     )
@@ -542,7 +614,9 @@ def snapshot(api, number, head, policy, review_id=None):
         type(review.get("id")) is int and review["id"] == review_id,
         "Review ID mismatch",
     )
-    review_record(review, pr, operator_ids())
+    evidence = review_record(review, pr, operator_ids() if allowed_ids is None else allowed_ids)
+    if "sdlc" in evidence:
+        require(policy.get("sdlc_contract") == "workflow/sdlc-delivery-v1", "SDLC broker contract is not enabled")
     no_objections(api.pages(f"pulls/{number}/reviews"))
     api.threads(number)
     checks_ready(api, pr, files, policy)
@@ -553,7 +627,7 @@ def snapshot(api, number, head, policy, review_id=None):
         and pr["mergeable_state"] not in {"dirty", "behind", "draft"},
         "PR is conflicted or requires base synchronization",
     )
-    return pr, files
+    return pr, files, evidence
 
 
 def trusted_runtime(api):
@@ -582,13 +656,14 @@ def admitted_intent(api, number, head, review_id, method, policy):
         type(review_id) is int and review_id > 0, "Positive local review ID required"
     )
     require(method in {"squash", "merge", "rebase"}, "Invalid merge method")
-    pr, files = snapshot(api, number, head, policy, review_id)
+    pr, files, review = snapshot(api, number, head, policy, review_id)
     require(
         pr["user"]["id"] != ACTIONS_BOT_ID,
         "Actions cannot approve its own PR; maintainer required",
     )
     return {
         "schema": INTENT_SCHEMA,
+        **({"sdlc": review["sdlc"]} if "sdlc" in review else {}),
         "repository": api.repo,
         "pr": number,
         "head": head,
@@ -682,7 +757,11 @@ def execute(api, number, head, review_id, method, policy, intent=None):
             },
         )
     # Repeat admission/CI/objections after approval. A new push cannot inherit it.
-    refreshed, _ = snapshot(api, number, head, policy, review_id)
+    refreshed, _, refreshed_review = snapshot(api, number, head, policy, review_id)
+    require(
+        refreshed_review.get("sdlc") == expected.get("sdlc"),
+        "SDLC admission evidence changed after approval; qualify and review again",
+    )
     require(
         refreshed["base"]["sha"] == expected["base_sha"],
         "Base advanced; refresh review and checks",
@@ -748,7 +827,9 @@ def ci_targets(api, event, policy, *, recovery=False):
     elif os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
         prs = [api.api(f"pulls/{int(event['inputs']['pr'])}")]
     elif os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
-        run = api.api(f"actions/runs/{int(event['workflow_run']['id'])}")
+        run_id = int(event["workflow_run"]["id"])
+        run = api.api(f"actions/runs/{run_id}")
+        require(isinstance(run, dict), "Invalid PR CI producer")
         if run["event"] != "pull_request":
             return []
         require(
@@ -756,13 +837,38 @@ def ci_targets(api, event, policy, *, recovery=False):
             in {f".github/workflows/{w['file']}" for w in policy["ci_workflows"]},
             "Unrecognized PR CI producer",
         )
-        require(bool(SHA.fullmatch(run["head_sha"])), "Invalid PR CI head")
-        # GitHub may omit pull_requests on fork runs. The commit association is
-        # still bounded to the triggering head, never a repository-wide scan.
+        require(
+            isinstance(run.get("head_sha"), str)
+            and bool(SHA.fullmatch(run["head_sha"])),
+            "Invalid PR CI head",
+        )
+        # Both association sources can be empty for fork runs. The final
+        # selector is still scoped to that fork/ref, never all open PRs.
         associated = run.get("pull_requests") or api.pages(
             f"commits/{run['head_sha']}/pulls"
         )
-        prs = [api.api(f"pulls/{int(p['number'])}") for p in associated]
+        if associated:
+            prs = [api.api(f"pulls/{int(p['number'])}") for p in associated]
+        else:
+            try:
+                pr = fork_run_pr(api, run)
+            except Blocked:
+                print(
+                    f"CI discovery run={run_id} method=fork-head rejected",
+                    file=sys.stderr,
+                )
+                raise
+            if pr and pr["base"]["ref"] != default:
+                pr = None
+            prs = [pr] if pr else []
+            target = (
+                f"pr={pr['number']} head={pr['head']['sha']}"
+                if pr
+                else "no-current-match"
+            )
+            print(
+                f"CI discovery run={run_id} method=fork-head {target}", file=sys.stderr
+            )
         prs = [p for p in prs if p["head"]["sha"] == run["head_sha"]]
     else:
         return []
@@ -884,7 +990,7 @@ def main():
             event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
             result = candidates(api, event)
         elif args.action == "check":
-            _, files = snapshot(api, args.pr, args.head, policy, args.review_id)
+            _, files, _ = snapshot(api, args.pr, args.head, policy, args.review_id)
             result = {
                 "ready": True,
                 "workflows": changes_workflows(files),

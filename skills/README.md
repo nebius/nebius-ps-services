@@ -45,6 +45,12 @@ within an authorized task, with secure operational storage and no disclosure.
 Explicit restrictive-instruction repair routes through `project-agent-instructions`;
 `maintain-project-specs` records policy without inventing another approval gate.
 
+Issue-plan delivery uses a shared
+[resolution handoff](worktree/references/issue-resolution.md): review saves plans,
+Implement records per-issue acceptance evidence, create-pr adds verified closing
+references when requested, and merge-pr checks actual issue states. GitHub performs
+native closure on default-branch merge; review remains a triage/planning workflow.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Table of Contents
@@ -58,7 +64,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 73 flat skill folders with shared execution instructions,
+The catalog contains 74 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -67,6 +73,26 @@ a missing capability is reported explicitly.
 `config-codex` configures Codex; `config-claude` configures Claude using its
 native instructions, settings and roles. Installing either skill does not apply
 personal configuration.
+
+Implement and Agentic SDLC keep separate coordinators over one
+[Worktree execution core](worktree/references/workflow-contract.md). They share
+worker launch contracts, result ingestion, dependency waves, runtime leases and
+recovery. Both use `maintain-project-specs` for canonical requirements/design
+publication.
+Workers preserve unexpected failed checks and return to their coordinator before
+repair or rerun. Expected negative test feedback must be declared in advance.
+Known permission prerequisites use supported native approvals. Proven active
+worker environment failures return through the same fresh-worker recovery;
+SDLC additionally requires its classified, counted dispatch and downstream
+revalidation. Recovery never grants permissions or reopens completed work.
+Environment gate records preserve the failed phase while invalidations use the
+existing canonical gate surface. Unsupported phases remain blocked and preserve
+earlier repair obligations.
+The live verifier isolates native configuration and checks project overrides
+within the validated Git checkout boundary.
+The shared policy separates a five-minute worker startup window from the
+one-hour work limit; both coordinators prepare handoffs before arming and
+dispatch immediately afterward.
 
 The [catalog alignment report](docs/agent-portability-alignment.md) records each
 skill's preservation inventory and static, installation and runtime evidence.
@@ -102,6 +128,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with headless Playwright Test GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
+| `jira-report` | Implicit allowed | Report one person's dated Jira involvement through an existing MCP connection; filter by user, start date and title text, with ticket number, title, latest involvement date and current status. |
 | `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations, including Nebius Docs, and recovery. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, selected MCP integrations such as Nebius Docs, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, protected token cache, and enforced read-only tools. |
@@ -111,6 +138,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
+| `github-report` | Implicit allowed | Report completed GitHub activity grouped by human contributor and one shared open backlog; filter users by login/profile-name substring and retain dated roles, folder evidence, unique item counts and whole-PR metrics. |
 | `commit` | Implicit allowed | Create one local commit with task-scoped safe retries for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Implicit allowed | Commit all current feature-branch changes with safe no-commit retries and push the branch to `origin` without opening a pull request. |
 | `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated repairs across frozen targets with recorded synchronization and explicit task closure; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
@@ -118,7 +146,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
-| `review-github-issues` | Explicit only | Triage selected GitHub issues, apply justified decisions, and save accepted plans only to project files; never implement work. |
+| `review-github-issues` | Explicit only | Review open backlogs or selected issues by project and shared remediation; apply justified decisions and save batch plans without implementation. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -143,7 +171,7 @@ measuring performance.
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
-| `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, and migrate or validate specs without gating tools, Stop, or workflow completion. |
+| `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, preserve prose lint while exempting indivisible metadata lines, and migrate or validate specs without gating tools, Stop, or workflow completion. |
 | `nebius` | Implicit allowed | Advise on Nebius provider constraints using documentation MCP reads with official-page fallback; build and inspect compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
 | `nebius-capacity-planning` | Implicit or explicit; quota submission explicit only | Derive Nebius resources from conversation/design docs, compare tenant totals across all regions by default, and save a capacity report. |
 | `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
@@ -175,7 +203,6 @@ support for ambiguous failure diagnosis.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `sdlc-align-specs` | Explicit only | Report advisory SDLC spec-alignment context outside the required phase sequence; normal workflow alignment uses `align`. |
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
 | `sdlc-classify-failure` | Explicit only | Validate normalized failure/diagnosis records, enforce repair budgets and design admission, and route proven causes or conditional troubleshooting. |
 | `sdlc-commit` | Explicit only | Seal final integration changes, ff-only promote the exact verified tip to the unchanged project branch, and non-force-clean integration resources; never pushes. |
@@ -186,13 +213,13 @@ support for ambiguous failure diagnosis.
 | `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
 | `sdlc-gui-test` | Explicit only | Evaluate web GUI acceptance with owned headless Playwright Test and optional isolated headless MCP exploration; honor explicit native-desktop requirements separately. |
 | `sdlc-implement-plan` | Explicit only | Coordinate immutable dependency/corrective waves, preserve diagnosis/oracle bindings, integrate in order, rerun invalidated evidence, and clean without force. |
-| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request, final readiness checks, and exact promoted/reviewed head verification. |
+| `sdlc-merge-pr` | Coordinator only | Complete an opted-in delivery slice through protected admission, direct merge and independent result verification. |
 | `sdlc-prepare-execution` | Explicit only | Prepare or resume the persistent feature integration worktree and deterministic task waves after plan lock and before TDD. |
 | `sdlc-start` | Explicit only | Coordinate accepted objectives, explicit session bindings, authoritative repair-control pointers, conditional diagnosis, and exactly one next phase. |
 | `sdlc-tdd` | Explicit only | Convert acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests before implementation. |
 | `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
 | `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented and evaluated SDLC evidence without editing requirements or design. |
-| `sdlc-uat-tests` | Explicit only | Run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before PR creation. |
+| `sdlc-uat-tests` | Explicit only | Qualify each promoted delivery slice and inherited product regressions, using authorized live tests or reviewed non-runtime N/A, before PR creation. |
 | `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature and planned slice. |
 | `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation for the current feature, then use `code-review` as a review-only quality gate. |
 
@@ -262,7 +289,7 @@ $worktree integrate project-fix-trigger-validation-a7c2f9 from the primary check
 
 $worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
 
-$review-github-issues 123 --repo example-org/example-repo
+$review-github-issues --issue 123,124 --repo example-org/example-repo
 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
@@ -517,6 +544,12 @@ actual Plan Mode remains binding. `maintain-project-specs` is the sole owner of
 canonical requirements/design updates, with `design` returning decisions and
 evidence rather than publishing project design documents itself.
 
+The SDLC design adapter checks the complete design candidate's Markdown before
+paired publication and writes source citations as descriptive links. It uses
+the selected project's settings or its private Markdown checker, which exempts
+only machine-marker line length in memory while preserving candidate bytes,
+prose and citation checks, failure classification and shared-owner publication.
+
 For AI applications, `design` identifies the subsystem and delegates its
 behavior, topology, policy, and contract design once to `ai-agent-design`.
 That skill classifies deterministic code, direct model calls, deterministic AI
@@ -734,6 +767,12 @@ shared runtime targets constrain scheduling. A shared runtime requires an
 assignment-bound exclusive lease. Unavailable native capacity means one isolated
 worker, with actual concurrency reported honestly.
 
+Native workers distinguish completed implementation, material specification gaps
+and blocked work. A blocked result preserves honest incomplete validation evidence
+without inventing a specification gap. The dispatcher returns `WORKER_BLOCKED`
+and stops later tasks; the coordinator owns diagnosis, and blocked work cannot
+enter completion, admission or integration.
+
 Execution uses committed history. Unrelated source dirt is preserved; dependencies
 on uncommitted inputs block preparation. An unchanged clean non-default source
 branch receives the verified result automatically. Default or unknown-default
@@ -811,9 +850,37 @@ removes inspection edits inside the exact disposable owned run.
 
 ### `sdlc-workflow-test`
 
+Prepared SDLC execution supports admitted active-task design correction through
+the shared Worktree owners. Failed worker artifacts remain retained; semantic
+publication, exact contract sealing and fresh plan/basis dispatch are distinct
+steps. See the [recovery contract](sdlc-prepare-execution/references/execution-plane.md#recovery).
+
+Runtime inventory is verifier-owned, with immutable safe failure diagnostics
+retained after cleanup and separate development/acceptance authority. See the
+[runtime inventory contract](sdlc-workflow-test/references/runtime-inventory.md).
+Report recommendations follow the observed owner; a generic native-environment
+evidence gap does not imply a Docker failure.
+Shared Git consumers honor the lifecycle's 1 MiB state bound while retaining
+the 64 KiB limit for small profile files and preserving precise rejection causes.
+Sealed checkouts accept the specific editor branch-history hint only when its
+value matches the bound owned origin default; unknown or executable settings
+remain rejected, and ordinary Git configuration stays unchanged.
+Read-only classifier observations may inspect unsealed registered integration
+files during classification. Runtime and acceptance cleanliness gates remain
+unchanged; observation never authorizes a deployment or application test.
+
+Final certification retains original TDD evidence across appended corrective
+waves only when owner replan records, locked plans, completed task definitions
+and the original seal prove its lineage. Later acceptance uses the current basis.
+
 Three-tier test acceptance uses owner-executed result receipts tied to the
 clean promoted image; free-form logs cannot certify PASS. Post-UAT documentation
 assessment is read-only, and required edits use a corrective run with fresh gates.
+
+Worker runtime teardown uses owned `stop web db` before lease release; final
+resource deletion belongs to lifecycle cleanup. Helper help lists its admitted
+Compose actions. Outer observers preserve named predicates and sanitized values
+before teardown so an observation failure retains usable diagnostic evidence.
 
 `sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks `docs/agentic-sdlc-design.md`, required source-installed
@@ -830,6 +897,18 @@ across every commit in the supplied history. It writes under
 `<agent-home>/sdlc-verification/` and must not change real projects, installed
 skills, hooks, hook trust, or agent configuration.
 
+Required deterministic coverage includes portable document obligations,
+phase/slice barriers, source freshness, large task graphs, indexed handoffs and
+bounded worktree retention. Parity includes shared specification and protected
+delivery owners. Missing tests fail; skipped tests remain partial. Current live
+profiles do not qualify native multi-slice document delivery or remote merging.
+
+Disposable Git fixtures use one sealed configuration profile bound to their
+owned origin and generation. Startup, workers, commits, evidence and cleanup
+validate that same profile; personal/system settings and global attributes do
+not enter the fixture. Local executable settings, foreign repositories and
+altered profiles fail closed. Ordinary Git configuration and hooks are unchanged.
+
 The rename is an intentional ownership hard cut. Destroy retained live
 verifier environments before installing it; the renamed skill does not read or
 clean old-format ownership markers, labels, or Compose names.
@@ -841,8 +920,12 @@ fresh browser GUI, Django/Gunicorn web/API server, and PostgreSQL database
 through the normal two-command Agentic SDLC workflow. It runs four fresh owned headless Chrome stages with Playwright Test,
 using two owned Docker Compose containers, a dynamic loopback web port and an
 internal-only database. Assertions, screenshots, traces, exact target SHAs and
-API/database observations are bound to stage receipts. The outer verifier
-restarts Compose between UAT stages while retaining the volume and rediscovering
+API/database observations are bound to stage receipts. Completion acceptance
+clicks the control once and waits for its saved checked state, including
+asynchronous confirmation and DOM replacement, before independent correlation.
+The interaction helper is frozen with the oracle; incomplete older bundles are
+rejected. The outer verifier restarts Compose between UAT stages while retaining
+the volume and rediscovering
 the port. Every stage closes its owned processes, even with `--keep`.
 
 Native desktop capture, foreground windows, monitor selection and screen unlock
@@ -983,6 +1066,38 @@ execution, TDD, implementation, validation, tests, evaluation, documentation,
 alignment, commit, UAT, and any separately authorized PR/merge phases. Shared
 Worktree execution uses frozen bases, ready slots, immutable worker evidence,
 and exclusive shared-runtime leases. It never nests another coordinator.
+Each worker attempt has a one-hour wall-clock limit, including external waits,
+builds, tests, review and handoff, with a warning five minutes before expiry.
+Thirty-second heartbeats and four-minute stale-heartbeat detection remain
+independent. Progress never renews the deadline; large tasks should be split.
+
+Worker output schemas use the native provider's supported subset; local
+validators enforce status-dependent spec gaps and unique typed IDs. Native
+launch failures retain the exit code and safe fixed diagnostics.
+Invalid structured results identify the failed validation guard using fixed
+reason labels, without reflecting rejected content or weakening admission.
+Zero-exit workers still awaiting `task-start` may retain bounded, screened
+blocked/replan diagnostics as `prestart_result`. They remain `WORKER_FAILED`;
+the diagnostic grants no receipt, completion, recovery or replanning authority.
+
+Shared native admission validates the registered project/run, selected home and
+coordinator before granting required project-state and runtime-lease directories.
+Both host adapters preserve sandbox and approval controls; directory access does
+not authorize unrelated state edits. Sequential workers are admitted before
+spawn, and unavailable host capability blocks execution.
+
+SDLC intake registers the accepted objective and ownership before the coordinator
+initializes its first phase checkpoint. Startup observation and phase routing
+follow that initialization. Existing or partial history is reconciled without
+resetting evidence or counters; hooks and verifiers never create phase state.
+
+Hook and worker-evidence secret screening accepts bounded unquoted lookup/call
+expressions, including CSRF DOM access with a trailing JavaScript semicolon.
+Literal credentials and ambiguous syntax remain blocked across write tools.
+
+Proven artifact-validation failures before execution preparation return to the
+exact supported authoring phase through counted repair. They never require a
+fabricated integration checkout or weaken the architectural redesign gate.
 
 `maintain-project-specs` owns canonical requirements/design interpretation. Initial
 requests, clarification answers and steering share its statement-level extraction
@@ -996,7 +1111,14 @@ read-only: drift starts a corrective run. General project-spec maintenance remai
 independent of workflow intake, without prompt capture or session-completion gates.
 
 Phase evidence binds the accepted objective and, after preparation, immutable
-execution basis. Preserve failed and superseded attempts. Passing deterministic
+execution basis. Three-tier observation inputs use the exact private path
+`<run-root>/evidence/phases/<phase>.json`; the recorder owns attempt archives.
+Canonical acceptance validation failures are immutable and require a fresh
+trial. Repairable authoring and development checks retain their ordinary phase
+evidence and counted repair history instead of becoming acceptance records.
+Classifier receipts distinguish a selected plan from actual
+preparation state; partial or missing prepared execution still fails validation.
+Preserve failed and superseded attempts. Passing deterministic
 checks, installed hooks, fresh native-agent execution, and live application
 behavior are separate evidence layers. The two verification skills use public
 workflow entry points and cannot certify a workflow by performing its private
@@ -1403,17 +1525,50 @@ dependency workflow for new projects, generated and reviewed `uv.lock`,
 profile-selected dependencies, `src/` layout, Ruff, pytest, and locked CI. It
 preserves an existing package manager unless migration is explicitly requested.
 
+### `github-report`
+
+`github-report` groups completed GitHub activity by repository and human
+contributor, with Worked PRs and Worked Issues per user followed by one shared
+Open Backlog. Defaults are all eligible users and the last 90 days; use
+`--user TEXT` for a case-insensitive login/profile-name substring. The shared
+open inventory includes every author and age and is unchanged by that filter.
+Use `--date YYYY-MM-DD`, comma-separated `--repo`, and `--project FOLDER` as
+needed. Folder inference remains evidence-backed with inline uncertainty.
+Shared work repeats with each contributor's role; repository totals count
+unique GitHub items. The header contains only User/Repository/optional Folder
+and Date. Reporting is read-only and does not save files or publish. See
+[usage and evidence boundaries](github-report/README.md).
+
+### `jira-report`
+
+`jira-report` reports dated Jira involvement through the connected MCP, using
+the authenticated user and last 90 days by default. Use `--user EMAIL_OR_ID`,
+`--date YYYY-MM-DD`, and `--title TEXT` to select a person, start date and literal
+case-insensitive title substring. Assignments, reporting, any authored comments
+and explicit credited contributions require dated evidence in the interval.
+The four columns are Ticket #, Title, Date and Status. Date is latest qualifying
+recorded involvement; Status is Jira's current exact value. Missing comments,
+history or pagination remain explicit coverage limits. The skill is company-neutral,
+read-only and does not configure connectors or save reports automatically. See
+[usage and evidence boundaries](jira-report/README.md).
+
 ### `review-github-issues`
 
-`review-github-issues` assesses selected GitHub issues against their owning
-project's supported scope, evidence and priorities. It asks for an unknown
-repository and for issue numbers/links when multiple issues remain unselected.
+`review-github-issues` reviews all open issues in the current GitHub repository
+by default. Optional `--repo` accepts comma-separated repository names or URLs;
+`--issue` checks comma-separated numbers in every selected repo. Finish repos
+in supplied order. Within each repo, `--priority` orders comma-separated project
+roots first, then remaining projects follow by issue count. Related issues form
+shared remediation batches ordered by severity, then size; each issue retains
+its own assessment and disposition.
+
 Explicit invocation applies justified comments and closures; valid low-priority
-issues stay open. Accepted work uses `research` and `design`, saves and verifies
-`<project>/docs/github-issues/<number>-<title-slug>.md`, then posts acceptance.
-Plans never appear in chat or issue comments. The maintainer owns implementation,
-commits, pushes, PRs and merges. Existing plan edits and unrelated work remain
-protected. See [usage and boundaries](review-github-issues/README.md).
+issues stay open. Accepted batches use internal `research` and `design` advisers,
+save one verified plan under the owning project's `docs/github-issues/` using
+`batch-<anchor-number>-<topic-slug>.md`, then publish individual acceptance.
+Plans never appear in chat or comments. Existing artifact edits, unrelated work,
+read-only modes and maintainer implementation/Git ownership remain protected.
+See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
 
@@ -1503,14 +1658,22 @@ reporting. Active Agentic SDLC work sends the causal handoff first to
 `sdlc-classify-failure`; after it records the failure class, retry accounting,
 and `next_recommended_skill`, the coordinator routes to the recorded owner.
 In that diagnostic mode, `troubleshoot` preserves the failed integration commit
-and accepted criteria, may use only reversible uncommitted instrumentation in
-the private integration worktree, removes it before handoff, commits no product
-repair, invokes no design phase, and returns one `diagnosis-v1` to
+and accepted criteria. Prepared execution uses the private integration worktree;
+before preparation, validation inspects the phase-owned candidate and read-only
+accepted context without creating an integration checkout. Instrumentation is
+reversible and uncommitted. The diagnostic branch removes it before handoff,
+commits no product
+repair, invokes no design phase, and returns one `diagnosis-v3` to
 classification. A known mechanical owner bypasses this branch. Missing
 decisive evidence, competing hypotheses, and “no implementation bug found”
 stop without speculative redesign.
 
-Agentic SDLC uses its own authoritative `repair-control-v1`: two localized
+A complete `validation_defect` diagnosis can return to the same validation
+owner after a failed counted repair. It requires causal proof, bounded scope and
+the original regression check. Active handoffs use only diagnosis v3; earlier
+active records are rejected while historical reports remain intact.
+
+Agentic SDLC uses its own authoritative `repair-control-v2`: two localized
 attempts, one design-scale attempt, three total attempts and 60 active minutes
 per stable blocker tranche, plus four repair dispatches per feature. A failed
 first direct repair requires troubleshooting before attempt two. Each retry
@@ -1865,3 +2028,41 @@ existence alone is not success.
 
 The Nebius skill includes an [SDK-first Kubernetes workload identity workflow](nebius/references/kubernetes-workload-identity.md)
 for direct SecretStash and other IAM APIs, with optional ESO synchronization.
+
+### Document programs and bounded delivery
+
+The shared [document delivery contract](worktree/references/document-delivery.md)
+defines portable source coverage, private phase/slice plans, cross-feature tasks,
+four-worker/four-retained-worktree bounds and explicit completion policy. Extract
+requirements before reconciling supplied designs; preserve accepted contracts.
+The default stops at a reviewed PR. Opted-in protected direct merge additionally
+requires executed qualification, exact review/CI identity and merged-result checks.
+A cluster alone grants no merge authority. Queue configurations are unsupported.
+
+```mermaid
+flowchart LR
+  A[Source manifest and obligations] --> B[REQ and FEAT reconciliation]
+  B --> C[Phase barriers and frozen slice]
+  C --> D[Bounded parallel task worktrees]
+  D --> E[Task reviews and commits]
+  E --> F[Batch integration and checks]
+  F --> G[Slice review and align]
+  G --> H[Seal and promote]
+  H --> I[Qualification and reviewed PR]
+  I --> J{Accepted merge opt-in}
+  J -->|No| K[Reviewed PR checkpoint]
+  J -->|Yes| L[Protected broker and result verification]
+  L --> C
+```
+
+`sdlc-align-specs` is retired without an alias; its advisory traceability checks
+belong to `align`. Reinstall through the existing source-owned installer cleanup;
+unmanaged or other-source installations require explicit owner reconciliation.
+Old active workflow schemas remain on disk and require explicit recovery.
+
+### Repair obligation continuity
+
+SDLC retains prior invalidations across successive failures and archives earlier
+cursor progress. A new successful repair reruns the combined ordered gates under
+its own authority. The final admitted repair may complete revalidation without
+raising the dispatch ceiling. Both workflows still share the Worktree engine.

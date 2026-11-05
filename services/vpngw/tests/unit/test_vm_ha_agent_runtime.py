@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import replace
+import threading
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -72,6 +74,7 @@ from nebius_vpngw.agent.vm_ha.inhibition import (
 )
 from nebius_vpngw.agent.vm_ha.models import (
     DigestSet,
+    HeartbeatEvidence,
     PeerHeartbeat,
     StalePeerStateError,
     StateValidationError,
@@ -93,7 +96,7 @@ from nebius_vpngw.agent.vm_ha.restoration import (
     StandbyRestorationError,
     StandbyRestorationStore,
 )
-from nebius_vpngw.agent.vm_ha.runtime import _expected_bgp_exports
+from nebius_vpngw.agent.vm_ha.runtime import VMHARuntimePorts, _expected_bgp_exports
 from nebius_vpngw.agent.vm_ha.transport import PeerTransportError
 from nebius_vpngw.agent.vm_ha_controller import (
     ActionKind,
@@ -110,6 +113,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     RecoverableController,
     RouteReconciliationContext,
     TransferIntent,
+    VMHAController,
 )
 from nebius_vpngw.agent.vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
 from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
@@ -262,6 +266,87 @@ def _apply_owner_adoption() -> dict[str, object]:
         },
         "operation_id": "f" * 64,
     }
+
+
+@pytest.mark.parametrize("delay", [12, 20])
+def test_default_runtime_keeps_heartbeats_fresh_during_multiple_cloud_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delay: int
+) -> None:
+    """Pump the sender's clock while the real controller thread is blocked in a read."""
+    now = [0.0]
+    entered, release = threading.Event(), threading.Event()
+    sent, cloud_reads, errors = [], [], []
+    cloud = CloudObservation(
+        True, "allocation-a", "node-a", "node-b", ComputeState.STOPPED, True, True, True, "7"
+    )
+
+    def observe_cloud():
+        cloud_reads.append(True)
+        entered.set()
+        assert release.wait(5)
+        return cloud
+
+    adapter = VMHASnapshotAdapter(
+        config=_runtime_config(),
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, None),
+            readiness=lambda: LocalReadiness(True, True, True, True),
+            cloud=observe_cloud,
+            data_plane=lambda: DataPlaneMode.ACTIVE,
+            routes=lambda: None,
+        ),
+        state_dir=tmp_path,
+        clock=lambda: now[0],
+        boot_id=lambda: "boot-a",
+    )
+
+    def step():
+        adapter.observe()
+        return {"promotion_ready": False}
+
+    runtime = DefaultVMHAControllerRuntime(
+        SimpleNamespace(
+            snapshots=adapter, step=step, controller=SimpleNamespace(effects=SimpleNamespace())
+        ),
+        SimpleNamespace(
+            install_shutdown_guard=lambda **kw: None,
+            heartbeat=lambda **kw: kw,
+            peer_runtime=SimpleNamespace(
+                prepare=lambda hb: hb, send=lambda payload, **kw: sent.append((now[0], payload))
+            ),
+            close=lambda: None,
+        ),
+        boot_id="boot-a",
+        sequence_path=tmp_path / "sequence.json",
+        guard_path=tmp_path / "guard.json",
+        clock=lambda: now[0],
+    )
+    monkeypatch.setattr(runtime, "_start_peer_listener", lambda: None)
+    monkeypatch.setattr(runtime.publisher, "start", lambda: None)
+
+    def run():
+        try:
+            runtime.step()
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert entered.wait(2)
+        for _ in range(delay):
+            now[0] += 1
+            runtime.publisher.publish()
+        assert worker.is_alive()
+        assert len(sent) == delay and len(cloud_reads) == 1
+        assert max(b[0] - a[0] for a, b in zip(sent, sent[1:], strict=False)) == 1
+        assert all(item[1]["snapshot"] is None for item in sent)
+        assert all(item[1]["evidence"].state == "unknown" for item in sent)
+    finally:
+        release.set()
+        worker.join(5)
+        runtime.close()
+    assert not errors and not worker.is_alive()
 
 
 def test_snapshot_adapter_requires_binding_and_observes_current_guard(tmp_path: Path) -> None:
@@ -433,6 +518,8 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
     assert status["state"] == "blocked"
     assert status["reasons"] == ["mtls-rotation-active"]
     assert status["controller_capabilities"] == [
+        "independent-heartbeat-v5",
+        "connection-tunnel-selection-v1",
         "vm-ha-mtls-rotation-quiescence-v1",
         "vm-ha-live-peer-replacement-v4",
         "vm-ha-standby-replacement-inhibition-v2",
@@ -453,7 +540,9 @@ def test_runtime_config_includes_resolved_top_level_bgp_export_policy(tmp_path: 
     path.write_text(
         yaml.safe_dump(
             {
-                "gateway": {"local_prefixes": ["10.96.0.0/13"]},
+                "gateway": {
+                    "local_prefixes": ["10.96.0.0/13"],
+                },
                 "connections": [
                     {
                         "name": "peer-a",
@@ -475,7 +564,9 @@ def test_runtime_config_includes_resolved_top_level_bgp_export_policy(tmp_path: 
     config = _read_vm_ha_config(path)
 
     assert config is not None
-    assert config["gateway"] == {"local_prefixes": ["10.96.0.0/13"]}
+    assert config["gateway"] == {
+        "local_prefixes": ["10.96.0.0/13"],
+    }
     assert _expected_bgp_exports(config, [{"connection": "peer-a"}]) == {
         "169.254.10.2": frozenset({"10.96.0.0/13"})
     }
@@ -1667,6 +1758,126 @@ def test_apply_owner_adoption_retires_exact_prior_generation_promotion_receipt(
     assert not (tmp_path / "transfer-lineage.json").exists()
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        "blocked",
+        "passive",
+        "active",
+        "old-boot",
+        "foreign-node",
+        "cloud-effect",
+        "wrong-operation",
+        "wrong-allocation",
+        "wrong-epoch",
+        "wrong-incarnation",
+        "old-guard",
+    ],
+)
+def test_generation_adoption_defers_retirement_until_local_passive_replay_finishes(
+    tmp_path: Path, case: str
+) -> None:
+    config = _passive_runtime_config()
+    guard_mode = "active" if case == "active" else "blocked"
+    (tmp_path / "guard.json").write_text(
+        json.dumps(
+            {
+                "guard_boot_id": "boot-old" if case == "old-guard" else "boot-a",
+                "data_plane_mode": guard_mode,
+            }
+        )
+    )
+    receipt = _promotion_receipt()
+    receipt["generation_id"] = "d" * 64
+    receipt["digests"] = {
+        "configuration": "d" * 64,
+        "static_routes": "e" * 64,
+        "bgp_policy": "f" * 64,
+    }
+    receipt_path = tmp_path / "promotion-receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+    (tmp_path / "apply-owner-adoption.json").write_text(json.dumps(_apply_owner_adoption()))
+    action = ControllerAction(
+        kind=ActionKind.STOP_FORMER_OWNER if case == "cloud-effect" else ActionKind.ENTER_PASSIVE,
+        operation_id="boot-a:1:enter-passive:node-b" if case != "wrong-operation" else "foreign",
+        boot_id="boot-old" if case == "old-boot" else "boot-a",
+        target_node_id="node-a" if case == "foreign-node" else "node-b",
+        allocation_id="allocation-other" if case == "wrong-allocation" else "allocation-a",
+        ownership_epoch="10" if case == "wrong-epoch" else "9",
+        generation_id="d" * 64,
+        digests=DigestSet("d" * 64, "e" * 64, "f" * 64),
+        ownership_incarnation=1 if case == "wrong-incarnation" else 0,
+    )
+    checkpoints = VMHACheckpointFileStore(tmp_path / "controller-checkpoint.json")
+    checkpoint = ControllerCheckpoint(sequence=1, pending_action=action)
+    checkpoints.save(checkpoint)
+    mode = DataPlaneMode(case) if case in {"active", "passive"} else DataPlaneMode.BLOCKED
+    cloud = CloudObservation(
+        True, "allocation-a", "node-b", "node-a", ComputeState.RUNNING, True, True, True, "9"
+    )
+    adapter = VMHASnapshotAdapter(
+        config=config,
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, None),
+            readiness=lambda: LocalReadiness(True, True, True, True),
+            cloud=lambda: cloud,
+            data_plane=lambda: mode,
+            routes=lambda: None,
+            apply_lock_operation_id=lambda: "f" * 64,
+        ),
+        state_dir=tmp_path,
+        clock=lambda: 30.0,
+        boot_id=lambda: "boot-a",
+    )
+    original_receipt = receipt_path.read_bytes()
+    if case not in {"blocked", "passive"}:
+        with pytest.raises(RuntimeError, match="authority changed"):
+            adapter.observe()
+        assert receipt_path.read_bytes() == original_receipt
+        assert checkpoints.load() == checkpoint
+        return
+    # The snapshot must reach the pure controller without retiring any old proof.
+    snapshot = adapter.observe()
+    assert snapshot.apply_owner_adoption and snapshot.apply_locked
+    assert receipt_path.read_bytes() == original_receipt
+    assert checkpoints.load() == checkpoint
+    binding = SimpleNamespace(
+        shared_allocation_id=snapshot.cloud.allocation_id,
+        generation_id=snapshot.local_generation_id,
+        configuration_digest=snapshot.local_digests.configuration,
+        static_routes_digest=snapshot.local_digests.static_routes,
+        bgp_policy_digest=snapshot.local_digests.bgp_policy,
+    )
+
+    def enter_passive(current: ControllerAction) -> None:
+        nonlocal mode
+        assert checkpoints.load().pending_action == current
+        VMHARuntimePorts._require_action_identity(SimpleNamespace(binding=binding), current)
+        mode = DataPlaneMode.PASSIVE
+
+    controller = RecoverableController(
+        policy=VMHAController(peer_timeout_seconds=5, suspicion_seconds=1),
+        snapshots=adapter,
+        checkpoints=checkpoints,
+        effects=SimpleNamespace(apply=enter_passive),
+    )
+    decision = controller.step()
+    if case == "blocked":
+        assert decision.action is not None and decision.action.kind is ActionKind.ENTER_PASSIVE
+        assert decision.action.generation_id == snapshot.local_generation_id
+        assert decision.action.digests == snapshot.local_digests
+        assert decision.action.operation_id != action.operation_id
+        assert decision.checkpoint.sequence == checkpoint.sequence + 1
+        assert receipt_path.read_bytes() == original_receipt
+        assert controller.step().checkpoint.pending_action is None
+    else:
+        assert decision.action is None
+        assert decision.checkpoint.pending_action is None
+    # Only after the controller completes/clears that local effect may retirement run.
+    assert adapter.observe().apply_owner_adoption
+    assert not receipt_path.exists()
+
+
 @pytest.mark.parametrize("apply_locked", [False, True])
 def test_prior_generation_promotion_receipt_retirement_remains_fail_closed(
     tmp_path: Path,
@@ -2165,8 +2376,10 @@ def test_automatic_promotion_commit_ignores_unusable_restoration_evidence(
     _advance_standby_restoration(status=status, state_dir=tmp_path, clock=lambda: 13.0)
 
 
+@pytest.mark.parametrize("defer_receipt", [False, True])
 def test_automatic_promotion_runtime_disables_unusable_restoration_across_steps(
     tmp_path: Path,
+    defer_receipt: bool,
 ) -> None:
     config = _passive_runtime_config()
     generation = config["generation"]
@@ -2202,7 +2415,10 @@ def test_automatic_promotion_runtime_disables_unusable_restoration_across_steps(
         def poll(self, *, timeout_seconds: float) -> None:
             raise PeerTransportError(f"offline peer fixture {timeout_seconds}")
 
-        def send(self, _heartbeat: object) -> None:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
             return None
 
     class Ports:
@@ -2222,8 +2438,17 @@ def test_automatic_promotion_runtime_disables_unusable_restoration_across_steps(
         def close(self) -> None:
             return None
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
         def step(self) -> dict[str, object]:
+            self.snapshots.observation_observer(SimpleNamespace())
             return status
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -2238,6 +2463,15 @@ def test_automatic_promotion_runtime_disables_unusable_restoration_across_steps(
         clock=lambda: 12.0,
     )
     try:
+        if defer_receipt:
+            writer = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+            assert writer is not None
+            try:
+                assert runtime.step() == status
+                assert lineage_path.exists()
+                assert not receipt_path.exists()
+            finally:
+                os.close(writer)
         assert runtime.step() == status
         assert runtime.step() == status
     finally:
@@ -2380,7 +2614,10 @@ def test_default_runtime_defers_restoration_advance_while_writer_lock_is_held(
         def poll(self, *, timeout_seconds: float) -> None:
             raise PeerTransportError(f"fixture timeout {timeout_seconds}")
 
-        def send(self, _heartbeat: object) -> None:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
             return None
 
     class Ports:
@@ -2395,8 +2632,17 @@ def test_default_runtime_defers_restoration_advance_while_writer_lock_is_held(
         def close(self) -> None:
             return None
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
         def step(self) -> dict[str, object]:
+            self.snapshots.observation_observer(SimpleNamespace())
             return status
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -3803,7 +4049,10 @@ def test_effect_adapter_failure_event_omits_exception_text(tmp_path: Path) -> No
     assert "fixture-secret" not in json.dumps(events)
 
 
-def test_current_boot_gate_rejects_stale_status_and_preserves_non_ha(tmp_path: Path) -> None:
+@pytest.mark.parametrize("state", ["active", "degraded", "degraded-path"])
+def test_current_boot_gate_rejects_stale_status_and_preserves_non_ha(
+    tmp_path: Path, state: str
+) -> None:
     boot = tmp_path / "boot-id"
     status = tmp_path / "status.json"
     guard = tmp_path / "guard.json"
@@ -3818,7 +4067,7 @@ def test_current_boot_gate_rejects_stale_status_and_preserves_non_ha(tmp_path: P
         "guard_boot_id": "boot-a",
         "promotion_ready": True,
         "data_plane_mode": "active",
-        "state": "active",
+        "state": state,
     }
     status.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RuntimeError, match="current boot"):
@@ -3826,6 +4075,12 @@ def test_current_boot_gate_rejects_stale_status_and_preserves_non_ha(tmp_path: P
     payload["controller_ready_boot_id"] = "boot-a"
     status.write_text(json.dumps(payload), encoding="utf-8")
     require_vm_ha_current_boot_ready({"vm_ha": {}}, status_path=status, boot_id_path=boot)
+    payload["promotion_ready"] = False
+    status.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="current boot"):
+        require_vm_ha_current_boot_ready({"vm_ha": {}}, status_path=status, boot_id_path=boot)
+    payload["promotion_ready"] = True
+    status.write_text(json.dumps(payload), encoding="utf-8")
     guard.write_text(
         json.dumps({"guard_boot_id": "boot-a", "data_plane_mode": "blocked"}),
         encoding="utf-8",
@@ -4834,6 +5089,19 @@ def test_corrupt_rearm_status_cannot_fail_the_safety_controller(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
+    "peer_case",
+    (
+        "complete",
+        "in-progress",
+        "stale",
+        "unknown",
+        "serving",
+        "stopped",
+        "wrong-peer",
+        "alias-present",
+    ),
+)
+@pytest.mark.parametrize(
     ("rearm_receipt_id", "expected_phase", "expected_redundancy"),
     (
         ("receipt-a", "running", True),
@@ -4842,6 +5110,7 @@ def test_corrupt_rearm_status_cannot_fail_the_safety_controller(tmp_path: Path) 
 )
 def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
     tmp_path: Path,
+    peer_case: str,
     rearm_receipt_id: str,
     expected_phase: str,
     expected_redundancy: bool,
@@ -4862,6 +5131,12 @@ def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
         True,
         "7",
     )
+    if peer_case == "stopped":
+        cloud = replace(cloud, former_owner_compute_state=ComputeState.STOPPED)
+    elif peer_case == "wrong-peer":
+        cloud = replace(cloud, former_owner_node_id="other-node")
+    elif peer_case == "alias-present":
+        cloud = replace(cloud, former_attachment_absent=False)
     routes = RouteReconciliationContext(
         owner_node_id="node-a",
         allocation_id="allocation-a",
@@ -4899,24 +5174,81 @@ def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
         ),
         encoding="utf-8",
     )
-    peer = PeerHeartbeat(
+    # Compose the actual producer, receiver freshness proof, status projection and
+    # CLI terminal predicate. A manually supplied promotion flag hid this mismatch.
+    from tests.unit.test_vm_ha_controller import _snapshot
+
+    from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
+    from nebius_vpngw.cli import _vm_ha_planned_owner_redundancy_matches
+
+    binding = VMHARuntimeBinding.model_validate(config["runtime_binding"])
+    producer = SimpleNamespace(
+        binding=binding,
+        local=SimpleNamespace(node_id="node-b", role=ConfiguredRole.PASSIVE),
+        peer=SimpleNamespace(node_id="node-a"),
+        mtls_snapshot_provider=lambda: SimpleNamespace(epoch=1, certificate_fingerprint="d" * 64),
+        auto_healing_policy_provider=lambda: ("enabled", "e" * 64),
+        tunnel_recovery_provider=lambda: None,
+    )
+    standby_snapshot = _snapshot(
+        now=9.0,
+        boot_id="boot-b",
         cluster_id="cluster-a",
-        node_id="node-b",
+        local_node_id="node-b",
+        peer_node_id="node-a",
+        local_generation_id="a" * 64,
+        local_digests=digests,
+        cloud=CloudObservation(
+            authoritative=True,
+            allocation_id="allocation-a",
+            observed_owner_node_id="node-a",
+            former_owner_node_id="node-a",
+            former_owner_compute_state=ComputeState.RUNNING,
+            ownership_epoch="7",
+            former_attachment_absent=False,
+            candidate_attachment_exact=False,
+            ownership_re_read_exact=True,
+            former_attachment_exact=True,
+            candidate_attachment_absent=True,
+        ),
+    )
+    receiver_time = [9.0]
+    tracker = PeerEvidenceTracker(
+        local_node_id="node-a",
+        peer_node_id="node-b",
+        generation_id="a" * 64,
+        clock=lambda: receiver_time[0],
+    )
+    # issue() needs a locally bound message; only its random nonce is used here.
+    challenge_message = VMHARuntimePorts.heartbeat(
+        producer,
+        boot_id="boot-b",
+        sequence=1,
+        clock=9.0,
+        snapshot=standby_snapshot,
+    )
+    challenge = tracker.issue(replace(challenge_message, node_id="node-a")).evidence.challenge
+    peer = VMHARuntimePorts.heartbeat(
+        producer,
         boot_id="boot-b",
         sequence=3,
-        sent_at="2026-08-17T00:00:00Z",
-        configured_role="passive",
-        observed_owner_id="node-a",
-        generation_id="a" * 64,
-        mtls_epoch=1,
-        certificate_fingerprint="d" * 64,
-        digests=digests,
-        service_healthy=True,
-        route_ready=True,
-        promotion_ready=True,
-        auto_healing_policy_state="enabled",
-        auto_healing_policy_digest="e" * 64,
+        clock=9.0,
+        snapshot=standby_snapshot,
+        local_readiness=LocalReadiness(True, True, True, True),
+        evidence=HeartbeatEvidence(
+            state="unknown" if peer_case == "unknown" else "healthy",
+            serving=peer_case == "serving",
+            process_id="f" * 32,
+            sample_id=1,
+            echo=challenge,
+            cloud_status="in-progress" if peer_case == "in-progress" else "complete",
+            cloud_age_seconds=1.0,
+        ),
     )
+    assert peer.promotion_ready is (peer_case not in {"in-progress", "unknown"})
+    if peer_case == "stale":
+        receiver_time[0] = 20.0  # Expired challenge grants no health proof.
+    peer = tracker.accept(peer)
     runtime = build_vm_ha_controller_runtime(
         config_path=config_path,
         providers=VMHASnapshotProviders(
@@ -4935,10 +5267,18 @@ def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
     _run_vm_ha_controller(runtime, once=True, config_path=config_path)
 
     status = json.loads((tmp_path / "status.json").read_text())
-    assert status["promotion_ready"] is True
+    assert status["promotion_ready"] is (peer_case not in {"alias-present", "wrong-peer"})
     assert status["standby_ready"] is False
     assert status["rearm_phase"] == expected_phase
-    assert status["redundancy_ready"] is expected_redundancy
+    assert status["redundancy_ready"] is (
+        expected_redundancy and peer_case in {"complete", "in-progress"}
+    )
+    context = SimpleNamespace(
+        target_member=SimpleNamespace(node_id="node-a"), runtime_binding=binding
+    )
+    assert _vm_ha_planned_owner_redundancy_matches(status, context=context) is (
+        expected_redundancy and peer_case in {"complete", "in-progress"}
+    )
     if rearm_receipt_id == "stale-receipt":
         assert status["rearm_reason"] == "rearm-status-unavailable"
 
@@ -4992,6 +5332,10 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
         def __init__(self, local_id: str, peer_id: str) -> None:
             self.local_id = local_id
             self.peer_id = peer_id
+
+        def settle_pending_action(self, action) -> None:
+            # This synchronous fake has no outstanding accepted operations.
+            pass
 
         def observe(self) -> CloudObservation:
             owner = shared["owner"]
@@ -5056,11 +5400,26 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
         def poll(self, *, timeout_seconds: float) -> None:
             raise PeerTransportError(f"offline peer fixture {timeout_seconds}")
 
-        def send(self, _heartbeat: PeerHeartbeat) -> None:
+        def send(self, _heartbeat: PeerHeartbeat, *, timeout_seconds=2.0) -> None:
             return None
 
+        def prepare(self, heartbeat):
+            return heartbeat
+
+    @dataclass
     class Ports:
-        def __init__(self, config: dict[str, object], state_dir: Path) -> None:
+        config: dict[str, object]
+        state_dir: Path
+        tunnel_recovery_provider: object = None
+
+        def __init__(
+            self,
+            config: dict[str, object],
+            state_dir: Path,
+            tunnel_recovery_provider: object = None,
+        ) -> None:
+            self.config = config
+            self.tunnel_recovery_provider = tunnel_recovery_provider
             self.binding = VMHARuntimeBinding.model_validate(config["runtime_binding"])
             node = config["node"]
             assert isinstance(node, dict)
@@ -5138,7 +5497,16 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
 
             return {kind: effect for kind in ActionKind}
 
-        def heartbeat(self, *, boot_id: str, sequence: int, clock: float) -> PeerHeartbeat:
+        def heartbeat(
+            self,
+            *,
+            boot_id: str,
+            sequence: int,
+            clock: float,
+            snapshot,
+            local_readiness=None,
+            evidence=None,
+        ) -> PeerHeartbeat:
             owner = shared["owner"]
             return PeerHeartbeat(
                 cluster_id="cluster-a",
@@ -5161,6 +5529,9 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
 
         def close(self) -> None:
             return None
+
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
 
     def fake_ports(config: dict[str, object], *, state_dir: Path, **_kwargs: object) -> Ports:
         return Ports(config, state_dir)
@@ -5237,13 +5608,18 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
 
 def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_path: Path) -> None:
     calls: list[str] = []
+    sent = threading.Event()
 
     class Peer:
         def poll(self, *, timeout_seconds: float) -> None:
             calls.append(f"receive:{timeout_seconds}")
 
-        def send(self, _heartbeat: object) -> None:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
             calls.append("send")
+            sent.set()
 
     class Ports:
         local = type("Local", (), {"role": type("Role", (), {"value": "active"})()})()
@@ -5259,8 +5635,17 @@ def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_pat
         def close(self) -> None:
             calls.append("close")
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
         def step(self) -> dict[str, object]:
+            self.snapshots.observation_observer(SimpleNamespace())
             calls.append("step")
             return {}
 
@@ -5273,6 +5658,7 @@ def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_pat
         clock=lambda: 10.0,
     )
     runtime.step()
+    assert sent.wait(2)
     runtime.close()
     runtime.close()
 
@@ -5287,6 +5673,7 @@ def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_pat
     assert persisted["next_sequence"] == 1
 
     calls.clear()
+    sent.clear()
     restarted = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
         Controller(),
         Ports(),
@@ -5296,20 +5683,26 @@ def test_default_service_runtime_exchanges_peer_state_and_closes_guarded(tmp_pat
         clock=lambda: 11.0,
     )
     restarted.step()
+    assert sent.wait(2)
     restarted.close(restore_guard=False)
     assert "heartbeat:1" in calls
 
 
 def test_default_service_runtime_retries_bounded_peer_send(tmp_path: Path) -> None:
     sends = 0
+    finished = threading.Event()
     sleeps: list[float] = []
 
     class Peer:
-        def send(self, _heartbeat: object) -> None:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
             nonlocal sends
             sends += 1
             if sends < 3:
                 raise PeerTransportError("fixture unavailable")
+            finished.set()
 
         def poll(self, *, timeout_seconds: float) -> None:
             raise PeerTransportError(f"fixture timeout {timeout_seconds}")
@@ -5327,8 +5720,17 @@ def test_default_service_runtime_retries_bounded_peer_send(tmp_path: Path) -> No
         def close(self) -> None:
             return None
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
         def step(self) -> dict[str, object]:
+            self.snapshots.observation_observer(SimpleNamespace())
             return {}
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -5342,10 +5744,11 @@ def test_default_service_runtime_retries_bounded_peer_send(tmp_path: Path) -> No
     )
 
     runtime.step()
+    assert finished.wait(2)
     runtime.close(restore_guard=False)
 
     assert sends == 3
-    assert sleeps == [0.05, 0.05, 0.05]
+    assert sleeps == [0.05]  # Listener startup only; sender owns bounded retry waits.
 
 
 @pytest.mark.parametrize(
@@ -5363,8 +5766,14 @@ def test_default_service_runtime_treats_authenticated_invalid_peer_state_as_advi
     class Ports:
         peer_runtime = Peer()
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
-        object(),
+        SimpleNamespace(
+            snapshots=SimpleNamespace(clock=time.monotonic),
+            controller=SimpleNamespace(effects=SimpleNamespace()),
+        ),
         Ports(),
         boot_id="boot-a",
         sequence_path=tmp_path / "sequence.json",
@@ -5386,7 +5795,10 @@ def test_default_service_runtime_consumes_validated_manual_failback_after_restor
         def poll(self, *, timeout_seconds: float) -> None:
             raise PeerTransportError(f"fixture timeout {timeout_seconds}")
 
-        def send(self, _heartbeat: object) -> None:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
             return None
 
     class Ports:
@@ -5406,8 +5818,17 @@ def test_default_service_runtime_consumes_validated_manual_failback_after_restor
         def close(self) -> None:
             return None
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
         def step(self) -> dict[str, object]:
+            self.snapshots.observation_observer(SimpleNamespace())
             return {"promotion_ready": True, "observed_owner_node_id": "node-a"}
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -5437,7 +5858,10 @@ def test_default_service_runtime_consumes_validated_manual_failover_after_promot
         def poll(self, *, timeout_seconds: float) -> None:
             raise PeerTransportError(f"fixture timeout {timeout_seconds}")
 
-        def send(self, _heartbeat: object) -> None:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
             return None
 
     class Ports:
@@ -5457,8 +5881,17 @@ def test_default_service_runtime_consumes_validated_manual_failover_after_promot
         def close(self) -> None:
             return None
 
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
     class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
         def step(self) -> dict[str, object]:
+            self.snapshots.observation_observer(SimpleNamespace())
             return {"promotion_ready": True, "observed_owner_node_id": "node-b"}
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -5508,3 +5941,160 @@ def test_rule_only_table_220_cleanup_does_not_record_a_spurious_failure(monkeypa
         assert not remaining_rule[0]
     finally:
         local_commands.CURRENT.reset(token)
+
+
+@pytest.mark.parametrize("race", ["none", "apply", "inhibition", "transfer", "writer"])
+def test_owner_repair_uses_the_same_dispatch_writer_exclusion(tmp_path, race):
+    import fcntl
+
+    from nebius_vpngw.agent.vm_ha_rearm import REARM_LOCK_PATH
+
+    action = ControllerAction(
+        ActionKind.REPAIR_LOCAL_DATAPLANE,
+        "repair",
+        "boot",
+        "owner",
+        "allocation",
+        "7",
+        "a" * 64,
+        DigestSet("a" * 64, "b" * 64, "c" * 64),
+        repair_deadline_at=15,
+        repair_reasons=("bgp-not-ready",),
+    )
+    snapshots = SimpleNamespace(
+        last_snapshot=SimpleNamespace(transfer_intent=None, transfer_effect_started=False),
+        providers=SimpleNamespace(
+            apply_lock_operation_id=lambda: "apply" if race == "apply" else None,
+            transfer_inhibition_operation_id=lambda: "rotation" if race == "inhibition" else None,
+            transfer_intent=lambda: (
+                ("planned-failover", False) if race == "transfer" else (None, False)
+            ),
+        ),
+    )
+    descriptor = None
+    try:
+        if race == "writer":
+            descriptor = os.open(tmp_path / REARM_LOCK_PATH.name, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with _vm_ha_transfer_effect_guard(
+            action, snapshots=snapshots, state_dir=tmp_path
+        ) as permitted:
+            assert permitted is (race == "none")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+@pytest.mark.parametrize(
+    "dispatch", [None, "accepted", "lineage", "foreign", "rearm", "malformed", "dangling"]
+)
+def test_automatic_stop_cancellation_is_durable_only_before_dispatch(tmp_path, dispatch):
+    from tests.unit.test_vm_ha_controller import _cloud, _peer, _snapshot
+
+    from nebius_vpngw.agent.main import VM_HA_CHECKPOINT_PATH, VM_HA_TRANSFER_LINEAGE_PATH
+    from nebius_vpngw.agent.vm_ha_controller import VMHAController
+    from nebius_vpngw.deploy.vm_ha_cloud import AcceptedCloudOperation, VMHACloudOperationJournal
+
+    policy = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+    stale = _snapshot(
+        peer_received_at=80,
+        cloud=replace(_cloud(), former_attachment_exact=True, candidate_attachment_absent=True),
+    )
+    decision = policy.decide(
+        stale,
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90, suspicion_boot_id=stale.boot_id
+        ),
+    )
+    action = decision.action
+    assert action.kind is ActionKind.STOP_FORMER_OWNER
+    store = VMHACheckpointFileStore(tmp_path / VM_HA_CHECKPOINT_PATH.name)
+    store.save(decision.checkpoint)
+    fresh = replace(stale, peer_received_at=100, peer_heartbeat=_peer())
+    observations = iter([stale, fresh])
+    config = {
+        "cluster_id": "cluster",
+        "node": {"node_id": "node-b", "role": "passive"},
+        "generation": {
+            "generation_id": stale.local_generation_id,
+            "digests": stale.local_digests.to_dict(),
+        },
+        "runtime_binding": {
+            "shared_allocation_id": "allocation",
+            "nodes": [{"node_id": "node-a"}, {"node_id": "node-b"}],
+        },
+    }
+    snapshots = SimpleNamespace(
+        config=config,
+        last_snapshot=stale,
+        observe=lambda: next(observations),
+        providers=SimpleNamespace(
+            apply_lock_operation_id=lambda: None,
+            transfer_inhibition_operation_id=lambda: None,
+            transfer_intent=lambda: (None, False),
+        ),
+    )
+    journal_path = tmp_path / (
+        "rearm-cloud-operation.json" if dispatch == "rearm" else "accepted-cloud-operation.json"
+    )
+    if dispatch in {"accepted", "foreign", "rearm"}:
+        VMHACloudOperationJournal(journal_path).save(
+            AcceptedCloudOperation(
+                action.operation_id if dispatch == "accepted" else "different",
+                "stop-instance" if dispatch != "rearm" else "start-instance",
+                "cloud-operation",
+            )
+        )
+    if dispatch == "malformed":
+        journal_path.write_text("{}")
+    if dispatch == "dangling":
+        journal_path.symlink_to(tmp_path / "absent")
+    if dispatch == "lineage":
+        journal_path = tmp_path / VM_HA_TRANSFER_LINEAGE_PATH.name
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "nebius-vpngw/vm-ha-transfer-lineage-v1",
+                    "cluster_id": "cluster",
+                    "candidate_node_id": "node-b",
+                    "former_owner_node_id": "node-a",
+                    "allocation_id": "allocation",
+                    "generation_id": stale.local_generation_id,
+                    "digests": stale.local_digests.to_dict(),
+                    "first_operation_id": action.operation_id,
+                    "intent": "automatic-failover",
+                    "started_at": 1000,
+                }
+            )
+        )
+    before = journal_path.read_bytes() if journal_path.exists() else None
+    calls = []
+    effects = VMHAEffectAdapter(
+        {kind: lambda value: calls.append(value) for kind in ActionKind},
+        receipt_path=tmp_path / "effect.json",
+        effect_guard=lambda value: _vm_ha_transfer_effect_guard(
+            value, snapshots=snapshots, state_dir=tmp_path
+        ),
+    )
+    controller = RecoverableController(
+        policy=policy, snapshots=snapshots, checkpoints=store, effects=effects
+    )
+    if dispatch in {"foreign", "rearm", "malformed", "dangling"}:
+        with pytest.raises((RuntimeError, ValueError)):
+            controller.step()
+        assert not calls and store.load().pending_action == action
+    else:
+        result = controller.step()
+        if dispatch is None:
+            assert result.state is HAState.NORMAL and result.action is None
+            assert store.load().pending_action is None and store.load().suspect_since is None
+            assert store.load().sequence == decision.checkpoint.sequence
+            assert not calls
+            assert not (tmp_path / VM_HA_TRANSFER_LINEAGE_PATH.name).exists()
+        else:
+            assert calls == [action] and result.action == action
+            assert store.load().pending_action == action
+    if before is not None:
+        assert journal_path.read_bytes() == before
+    if dispatch == "dangling":
+        assert journal_path.is_symlink()

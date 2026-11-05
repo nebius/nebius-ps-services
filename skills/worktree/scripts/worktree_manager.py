@@ -150,8 +150,9 @@ def _redact_detail(value: str) -> str:
     return redacted
 
 
-def _environment() -> dict[str, str]:
-    environment = os.environ.copy()
+def _environment(cwd: Path) -> dict[str, str]:
+    from workflow_state import git_environment
+    environment = git_environment(cwd)
     environment.update(
         {
             "LC_ALL": "C",
@@ -173,7 +174,7 @@ def _run(
         result = subprocess.run(
             list(arguments),
             cwd=cwd,
-            env=_environment(),
+            env=_environment(cwd),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -200,7 +201,7 @@ def _run_bytes(
         result = subprocess.run(
             list(arguments),
             cwd=cwd,
-            env=_environment(),
+            env=_environment(cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
@@ -316,7 +317,7 @@ def _reject_obsolete_lanes(repository: Path, branch: str | None) -> None:
     present = False
     if branch:
         for marker in markers:
-            result = subprocess.run(["git", "-C", str(repository), "config", "--local", "--get", f"branch.{branch}.{marker}"], capture_output=True, check=False)
+            result = subprocess.run(["git", "-C", str(repository), "config", "--local", "--get", f"branch.{branch}.{marker}"], capture_output=True, check=False, env=_environment(repository))
             if result.returncode not in {0, 1}:
                 raise WorktreeError("cannot establish obsolete worktree ownership")
             present = present or result.returncode == 0

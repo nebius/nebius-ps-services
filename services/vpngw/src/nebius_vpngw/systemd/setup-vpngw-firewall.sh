@@ -2,69 +2,48 @@
 set -euo pipefail
 
 PUBLIC_IF="eth0"
-# Get public IP - try metadata endpoint first, fall back to ip command
-PUBLIC_IP="$(curl -s -m 5 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || ip -4 addr show dev eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || echo '')"
+# Admission is installed atomically before any broad UFW permits. Its independent
+# input hook survives UFW reloads and precedes established/VPC/XFRM accepts.
+python3 /usr/local/lib/nebius-vpngw-ingress.py apply
 
-# Load peer IPs from config file (will be populated by agent)
-PEER_IP_FILE="/etc/vpngw_peer_ips"
-mapfile -t PEER_IPS < <(grep -vE '^[[:space:]]*(#|$)' "$PEER_IP_FILE" 2>/dev/null || true)
-
-# Load management CIDRs
-MGMT_CIDR_FILE="/etc/vpngw_mgmt_cidrs"
-mapfile -t MGMT_CIDRS < <(grep -vE '^[[:space:]]*(#|$)' "$MGMT_CIDR_FILE" 2>/dev/null || true)
-
-logger -t vpngw-firewall "Setting up UFW for VPN gateway"
-
-# Reset and set defaults
-ufw --force reset
-ufw default deny incoming
-ufw default allow outgoing
-
-# Allow loopback
+logger -t vpngw-firewall "Updating VPN gateway UFW permits without resetting customer rules"
+if ! ufw status | grep -q '^Status: active'; then
+  ufw default deny incoming
+  ufw default allow outgoing
+fi
 ufw allow in on lo
+# These permits remain subordinate to managed ingress AND other customer filters.
+ufw allow in proto tcp to any port 22 comment "VPNGW SSH admission"
+ufw allow in proto udp to any port 500 comment "VPNGW IKE admission"
+ufw allow in proto udp to any port 4500 comment "VPNGW NAT-T admission"
+ufw allow in proto esp from any to any comment "VPNGW ESP admission"
 
-# Allow SSH from management CIDRs only
-if [ "${#MGMT_CIDRS[@]}" -gt 0 ]; then
-  for cidr in "${MGMT_CIDRS[@]}"; do
-    ufw allow in on "$PUBLIC_IF" proto tcp from "$cidr" to any port 22 comment "SSH from management"
-  done
-  logger -t vpngw-firewall "Allowed SSH from ${#MGMT_CIDRS[@]} management CIDR(s)"
-else
-  # Fallback: allow SSH from anywhere (will be restricted by fail2ban)
-  logger -t vpngw-firewall "WARNING: No management CIDRs configured, allowing SSH from anywhere"
-  ufw allow in on "$PUBLIC_IF" proto tcp to any port 22 comment "SSH (unrestricted)"
-fi
-
-# Allow IPsec protocols from peer IPs
-if [ "${#PEER_IPS[@]}" -gt 0 ]; then
-  for peer in "${PEER_IPS[@]}"; do
-    # IKE (Internet Key Exchange)
-    ufw allow in on "$PUBLIC_IF" proto udp from "$peer" to "$PUBLIC_IP" port 500 comment "IKE from $peer"
-    # NAT-T (NAT Traversal)
-    ufw allow in on "$PUBLIC_IF" proto udp from "$peer" to "$PUBLIC_IP" port 4500 comment "NAT-T from $peer"
-    # ESP (Encapsulating Security Payload)
-    ufw allow in on "$PUBLIC_IF" proto esp from "$peer" to "$PUBLIC_IP" comment "ESP from $peer"
-  done
-  logger -t vpngw-firewall "Allowed IPsec from ${#PEER_IPS[@]} peer(s)"
-else
-  # No peers yet - allow from anywhere (will be restricted later by agent)
-  logger -t vpngw-firewall "WARNING: No peer IPs configured yet, allowing IPsec from anywhere temporarily"
-  ufw allow in on "$PUBLIC_IF" proto udp to any port 500 comment "IKE (unrestricted)"
-  ufw allow in on "$PUBLIC_IF" proto udp to any port 4500 comment "NAT-T (unrestricted)"
-  ufw allow in on "$PUBLIC_IF" proto esp comment "ESP (unrestricted)"
-fi
-
-# BGP runs only over XFRM interfaces; do not expose TCP 179 on public interface
-# Remove any existing TCP/179 allow rule (if present)
-if ufw --force delete allow 179/tcp >/dev/null 2>&1; then
-  logger -t vpngw-firewall "Removed TCP/179 allow rule"
-else
-  logger -t vpngw-firewall "No TCP/179 allow rule to remove"
-fi
+# BGP host permits remain on XFRM interfaces; preserve customer UFW rules.
 
 # Allow traffic from local VPC subnets (forwarding through gateway)
 # This enables VMs in the VPC to reach remote networks via VPN
 LOCAL_PREFIXES_FILE="/etc/vpngw_local_prefixes"
+# Reconcile only the exact rule shape/comment owned by this script. A whole UFW
+# reset previously removed withdrawn prefixes but also erased customer rules.
+python3 - <<'PY'
+import ipaddress
+import shlex
+import subprocess
+from pathlib import Path
+
+path = Path("/etc/vpngw_local_prefixes")
+desired = {
+    str(ipaddress.ip_network(line.strip(), strict=False))
+    for line in (path.read_text().splitlines() if path.exists() else [])
+    if line.strip() and not line.lstrip().startswith("#")
+}
+result = subprocess.run(["ufw", "show", "added"], check=True, capture_output=True, text=True, timeout=30)
+for line in result.stdout.splitlines():
+    args = shlex.split(line)
+    if len(args) == 6 and args[:3] == ["ufw", "allow", "from"] and args[4:] == ["comment", "Local VPC subnet"]:
+        if str(ipaddress.ip_network(args[3], strict=False)) not in desired:
+            subprocess.run(["ufw", "--force", "delete", *args[1:]], check=True, timeout=30)
+PY
 if [ -f "$LOCAL_PREFIXES_FILE" ]; then
   mapfile -t LOCAL_PREFIXES < <(grep -vE '^[[:space:]]*(#|$)' "$LOCAL_PREFIXES_FILE" 2>/dev/null || true)
   for prefix in "${LOCAL_PREFIXES[@]}"; do
@@ -179,7 +158,7 @@ try:
     if changed:
         path.write_text("\n".join(lines).rstrip() + "\n")
 except Exception as exc:
-    print(f"[vpngw-firewall] Failed to update before.rules: {exc}")
+    raise RuntimeError("Unable to update VPN gateway ICMP/MSS policy") from exc
 PY
 fi
 
@@ -214,11 +193,12 @@ PY
 # Enable firewall
 ufw --force enable
 
-# Preserve the exact private VM-HA mTLS peer rule across the full UFW reset.
+# Retain the exact private VM-HA mTLS peer rule.
 if [ -x /usr/local/bin/nebius-vpngw-vm-ha-peer-firewall.sh ]; then
   /usr/local/bin/nebius-vpngw-vm-ha-peer-firewall.sh \
     /etc/nebius-vpngw/config-resolved.yaml
 fi
 
+python3 /usr/local/lib/nebius-vpngw-ingress.py verify
 logger -t vpngw-firewall "UFW configuration complete"
 ufw status verbose | logger -t vpngw-firewall

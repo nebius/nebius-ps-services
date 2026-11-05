@@ -691,7 +691,7 @@ class NatDeployment:
                 current = sdk.subnet(target["subnet_id"], record["network_id"])
             else:
                 raise RuntimeError(
-                    "NAT attachment has an unknown submission outcome; use nat reconcile only after confirming prior requests have settled"
+                    "NAT attachment has an unknown submission outcome; use nat-gateway reconcile only after confirming prior requests have settled"
                 )
         expected = target["installed"] or target["original"]
         if current.spec.route_table_id == desired:
@@ -737,7 +737,7 @@ class NatDeployment:
                     self.restore_activations()
                 except Exception as recovery_error:
                     raise RuntimeError(
-                        "NAT activation failed; restoration or probe cleanup is pending. Inspect nat status and resume after resolving the reported drift or operation."
+                        "NAT activation failed; restoration or probe cleanup is pending. Inspect nat-gateway status and resume after resolving the reported drift or operation."
                     ) from recovery_error
             raise error
 

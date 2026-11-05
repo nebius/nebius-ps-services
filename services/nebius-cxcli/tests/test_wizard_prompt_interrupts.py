@@ -4844,6 +4844,64 @@ def test_prompt_scalar_override_accepts_comma_list_for_string_sets(monkeypatch) 
     assert value == ["zone-a", "zone-b"]
 
 
+@pytest.mark.parametrize("type_hint", ["list(string)", "set(string)"])
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("443", ["443"]),
+        ("true", ["true"]),
+        ("*", ["*"]),
+        ("80,443", ["80", "443"]),
+        ('["443", "group:ops"]', ["443", "group:ops"]),
+    ],
+)
+def test_string_lists_preserve_literal_tokens(monkeypatch, type_hint, raw, expected):
+    monkeypatch.setattr(cli.typer, "prompt", lambda *a, **k: raw)
+    assert cli._prompt_scalar_override("values", [], type_hint=type_hint, required=True) == (
+        expected,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "bad,good,hint,current,expected",
+    [
+        ("\x1b[B", "group:ops", "list(string)", [], ["group:ops"]),
+        ("\x1b[A", "group:ops", "list(string)", [], ["group:ops"]),
+        ('["unterminated', "group:ops", "list(string)", [], ["group:ops"]),
+        ('["\\e[B"]', "group:ops", "list(string)", [], ["group:ops"]),
+        ("[443]", "443", "list(string)", [], ["443"]),
+        ("{broken", '{"a": 1}', "map(any)", {}, {"a": 1}),
+        ('{"value": "\\u001b[B"}', '{"a": 1}', "map(any)", {}, {"a": 1}),
+        ('{"\\u001b[B": 1}', '{"a": 1}', "map(any)", {}, {"a": 1}),
+        ('["\\u001b[B"]', "[1]", "list(any)", [], [1]),
+        ("\x1b[B", "team", "string", None, "team"),
+        ("\x00hidden", "team", "string", "previous", "team"),
+    ],
+)
+def test_prompt_retries_invalid_input_without_disclosing_it(
+    monkeypatch, bad, good, hint, current, expected
+):
+    inputs = iter([bad, good])
+    messages = []
+    monkeypatch.setattr(cli.typer, "prompt", lambda *a, **k: next(inputs))
+    monkeypatch.setattr(cli.console, "print", lambda value: messages.append(str(value)))
+    assert cli._prompt_scalar_override("field", current, type_hint=hint, required=True) == (
+        expected,
+        False,
+    )
+    assert len(messages) == 1 and "Invalid value" in messages[0]
+    assert bad not in messages[0]
+
+
+def test_structured_input_preserves_escaped_whitespace_and_handles_aliases():
+    assert cli._parse_complex_prompt_value(
+        '{"text": "line one\\nline two\\tvalue"}', type_hint="map(any)"
+    ) == {"text": "line one\nline two\tvalue"}
+    value = cli._parse_complex_prompt_value("&items [*items]", type_hint="list(any)")
+    assert value[0] is value
+
+
 def test_prompt_scalar_override_reprompts_invalid_string_sequence(monkeypatch) -> None:
     prompts = iter(["ns1,,ns2", "ns1,ns2"])
     messages: list[str] = []

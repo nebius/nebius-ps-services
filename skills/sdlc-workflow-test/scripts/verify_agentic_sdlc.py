@@ -183,6 +183,19 @@ REQUIRED_RUNTIME_SUPPORT_SKILLS = (
 SOURCE_PARITY_SKILLS = (
     *REQUIRED_SDLC_SKILLS,
     *REQUIRED_RUNTIME_SUPPORT_SKILLS,
+    # Shared semantic/advisory/delivery owners are installed dependencies, not
+    # additional golden-path phases or project-lifecycle admission gates.
+    "maintain-project-specs",
+    "global-context-management",
+    "design",
+    "research",
+    "code-review",
+    "apply-security",
+    "linter",
+    "create-pr",
+    "review-pr",
+    "commit",
+    "merge-pr",
     "sdlc-workflow-test",
 )
 DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS = 120
@@ -191,6 +204,10 @@ CAPABILITY_SUITE_TIMEOUT_SECONDS = {
     "execution": 900,
     "three-tier": 900,
     "task-waves": 900,
+    # Real owned-origin setup measured 259s for the verifier aggregate.
+    "verifier": 600,
+    # Complete both-host hook regression run measured 214s.
+    "hooks": 600,
 }
 
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
@@ -234,7 +251,7 @@ DESIGN_REQUIRED_TERMS = (
     "$sdlc-start",
     "$sdlc-start <objective>",
     "$sdlc-start continue [project-folder]",
-    "workflow/accepted-objective-v1",
+    "workflow/accepted-objective-v2",
     "workflow/session-binding-v1",
     "immutable execution basis",
     "normalized objective",
@@ -408,7 +425,7 @@ EVIDENCE_PROFILES = {
     "safety",
 }
 PROFILE_SOURCE_SCHEMAS = {
-    "lightweight": "workflow/accepted-objective-v1",
+    "lightweight": "workflow/accepted-objective-v2",
     "three-tier": "agentic-sdlc/three-tier-results-v3",
 }
 SKILL_REQUIRED_PROFILES = {
@@ -437,6 +454,8 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "objective.binding",
         "objective.lifecycle",
         "spec.validation-receipt",
+        "source.obligations",
+        "program.source-admission",
     },
     "sdlc-prepare-execution": {
         "execution.scope",
@@ -444,6 +463,9 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "execution.replan",
         "execution.secret-gate",
         "git.promotion-safety",
+        "program.phase-slices",
+        "program.completion-freshness",
+        "execution.bounded-scale",
     },
     "sdlc-implement-plan": {
         "execution.sequential-fallback",
@@ -451,6 +473,7 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "interop.outer-lease-v4",
         "interop.shared-execution",
         "interop.implement-promotion",
+        "execution.bounded-scale",
     },
 }
 SKILL_LANE_REQUIREMENTS = {
@@ -890,8 +913,12 @@ def has_non_directory_parent_or_non_file_target(path: Path, root: Path) -> bool:
     return path.exists() and not path.is_file()
 
 
-def git_output(project: Path, *args: str) -> str | None:
-    result = run(["git", *args], cwd=project, timeout=15)
+def git_output(project: Path, *args: str, bootstrap: bool = False) -> str | None:
+    try:
+        env = owned_git_origin.environment(project, bootstrap=bootstrap)
+    except owned_git_origin.OriginError:
+        return None
+    result = run(["git", *args], cwd=project, timeout=15, env=env)
     if result.returncode != 0:
         return None
     return result.stdout.strip()
@@ -1305,7 +1332,7 @@ def check_vertical_slice_contract(ctx: Context) -> None:
             / "templates"
             / "feature-plan.md.template",
             [
-                "# FEAT-<id> Plan v<N>",
+                "# SLICE-<id> Plan v<N>",
                 "## End-To-End Slice",
                 "Layer flow: <frontend -> API -> service -> database, or N/A>",
                 "Cross-layer validation target: <expected observable result>",
@@ -1507,7 +1534,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "replan-future",
                 "explicit merge commits",
                 "fast-forward the unchanged clean",
-                "workflow/execution-coordinator-v1",
+                "workflow/execution-coordinator-v2",
             ],
         ),
         "locked plan task graph": (
@@ -1543,7 +1570,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "workflow/execution-coordinator-v1",
+                "workflow/execution-coordinator-v2",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "bindings/<native-session-sha256>.json",
@@ -1601,20 +1628,10 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "sdlc-merge-pr",
             ],
         ),
-        "active SDLC exact merge mode": (
+        "active SDLC protected delivery mode": (
             ctx.skills_root / "sdlc-merge-pr" / "SKILL.md",
-            [
-                "exact promoted and reviewed SHA",
-                "--match-head-commit <promoted-sha>",
-                "exact_command",
-                "base_head: <recorded-default-head>",
-                "explicit_user_request: true",
-                "explicit PR number or URL",
-                "--admin",
-                "--delete-branch",
-                "compound merge command",
-                "does not use a GitHub merge MCP call",
-            ],
+            ["accepted run-level opt-in", "attest-delivery", "submit-delivery",
+             "reconcile-delivery", "merged-verification-failed", "Queue rules fail closed"],
         ),
         "guarded PR creation actions": (
             ctx.skills_root
@@ -1629,8 +1646,8 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "explicit_current_branch_refspec",
                 "gh_pr_create_head_matches",
                 "is_github_pr_merge_tool",
-                "canonical_gh_pr_merge_target",
-                "merge_auth_valid",
+                "github_delivery_effect",
+                "protected delivery adapter",
                 "sensitive_command_wrapper_reason",
                 "expected_checks_status",
                 "expected_review_status",
@@ -1648,7 +1665,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
                 "`agentic-sdlc/execution-coordinator-v1` through `v7`",
-                "workflow/execution-coordinator-v1",
+                "workflow/execution-coordinator-v2",
                 "sdlc-update-documents, then align",
             ],
         ),
@@ -1670,11 +1687,11 @@ def check_repair_loop_contract(ctx: Context) -> None:
         "repair-control helper": (
             ctx.skills_root / "sdlc-classify-failure" / "scripts" / "repair_control.py",
             [
-                "agentic-sdlc/failure-event-v1",
-                "agentic-sdlc/diagnosis-v1",
-                "agentic-sdlc/design-approval-v1",
-                "agentic-sdlc/repair-control-v1",
-                "agentic-sdlc/revalidation-evidence-v1",
+                "agentic-sdlc/failure-event-v2",
+                "agentic-sdlc/diagnosis-v3",
+                "agentic-sdlc/design-approval-v2",
+                "agentic-sdlc/repair-control-v2",
+                "agentic-sdlc/revalidation-evidence-v2",
                 "blocked_missing_evidence",
                 "localized_limit",
                 "design_limit",
@@ -1690,7 +1707,7 @@ def check_repair_loop_contract(ctx: Context) -> None:
             ctx.skills_root / "troubleshoot" / "references" / "workflow-handoffs.md",
             [
                 "Agentic SDLC Diagnostic Mode",
-                "Return one `diagnosis-v1` to `sdlc-classify-failure`",
+                "Return one `diagnosis-v3` to `sdlc-classify-failure`",
                 "Do not commit product fixes",
                 "No implementation bug found",
             ],
@@ -1717,11 +1734,11 @@ def check_repair_loop_contract(ctx: Context) -> None:
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 "agentic-sdlc/repair-state-pointer-v1",
-                "repair-control-v1",
+                "repair-control-v2",
                 "conditional diagnostic branch",
                 "60 active",
                 "four repair dispatches",
-                "revalidation-cursor-v1",
+                "revalidation-cursor-v2",
             ],
         ),
         "corrective execution assignment": (
@@ -1870,9 +1887,11 @@ def check_skill_discovery(ctx: Context) -> None:
             unsafe_symlinks.append(f"{name} source")
         if installed_digest.startswith("unsafe-symlink:"):
             unsafe_symlinks.append(f"{name} installed")
-        if source.resolve(strict=False) == installed.resolve(strict=False):
+        if not (source / "SKILL.md").is_file() or not (installed / "SKILL.md").is_file():
+            mismatches.append(name)
+        elif source.resolve(strict=False) == installed.resolve(strict=False):
             continue
-        if source_digest != installed_digest:
+        elif source_digest != installed_digest:
             mismatches.append(name)
     ctx.add(
         "Skill discovery results",
@@ -2017,6 +2036,17 @@ def hook_command_targets(
     return False
 
 
+def hook_command_mentions_sdlc(command: str, host_home: Path) -> bool:
+    """Keep routing names/arguments visible without treating the home as code."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return True
+    prefix = str(host_home) + os.sep
+    return any("sdlc" in (word[len(prefix):] if word.startswith(prefix) else word).lower()
+               for word in words)
+
+
 def check_hook_config(ctx: Context) -> None:
     hooks_sources: list[tuple[Path, dict[str, Any]]] = []
     malformed_sources: list[Path] = []
@@ -2133,13 +2163,13 @@ def check_hook_config(ctx: Context) -> None:
         command for event, command in all_commands if event == "UserPromptSubmit"
     ]
     if user_prompt_commands and any(
-        "sdlc" in command.lower() for command in user_prompt_commands
+        hook_command_mentions_sdlc(command, ctx.host_home) for command in user_prompt_commands
     ):
         ctx.add(
             "Hook configuration results",
             "UserPromptSubmit SDLC routing",
             "FAIL",
-            "UserPromptSubmit command appears to mention SDLC routing.",
+            "UserPromptSubmit command tokens outside the owned home prefix mention SDLC routing.",
         )
     else:
         detail = "UserPromptSubmit hooks do not mention SDLC routing."
@@ -2165,13 +2195,13 @@ def check_hook_config(ctx: Context) -> None:
         if stop_found:
             hook_files.extend(["stop_sdlc_continue.py", "stop_lifecycle_arbiter.py"])
         if any("hook_runtime.py" in command for _, command in all_commands):
-            hook_files.extend(["agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"])
+            hook_files.extend(["agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"])
         mismatches: list[str] = []
         unsafe_symlinks: list[str] = []
         for relative in hook_files:
             source_root = (
                 ctx.skills_root / "global-context-management/scripts"
-                if relative in {"agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"}
+                if relative in {"agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"}
                 else source_hook_root
             )
             source_path = source_root / relative
@@ -2215,7 +2245,7 @@ def check_hook_config(ctx: Context) -> None:
 
 
 def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return run(["git", *args], cwd=project, timeout=15)
+    return run(["git", *args], cwd=project, timeout=15, env=owned_git_origin.environment(project, bootstrap=True))
 
 
 def ensure_private_directory(path: Path) -> None:
@@ -2291,6 +2321,11 @@ def setup_disposable_project(ctx: Context) -> bool:
             return False
     project.mkdir(parents=True, exist_ok=True)
     try:
+        context = ctx.verification_root / owned_git_origin.git_profile.DIRECTORY / "context.json"
+        if not context.exists() and not context.is_symlink():
+            if git_path.exists() or any(project.iterdir()):
+                raise owned_git_origin.OriginError("Existing fixture has no owned Git profile; use a fresh verification root.")
+            owned_git_origin.prepare_configuration(project, ctx.verification_root, "lightweight", kind="lightweight")
         owned_git_origin.preflight(project)
     except owned_git_origin.OriginError as error:
         ctx.add("Disposable SDLC golden-path run results", "Git configuration", "FAIL", str(error))
@@ -2431,7 +2466,7 @@ def setup_disposable_project(ctx: Context) -> bool:
         ),
     )
 
-    baseline_head = git_output(project, "rev-parse", "HEAD")
+    baseline_head = git_output(project, "rev-parse", "HEAD", bootstrap=True)
     if baseline_head and SHA_RE.fullmatch(baseline_head):
         try:
             origin = owned_git_origin.initialize(
@@ -2511,18 +2546,40 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
             temporary_path.unlink()
 
 
+class FixtureSetupError(RuntimeError):
+    """A bounded deterministic fixture failure that must reach the report."""
+
+
 def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
     run_dir = ctx.fixture_host_home / "sdlc-runs" / DEFAULT_PROJECT_ID / DEFAULT_RUN_ID
-    sys.path.insert(0, str(ctx.skills_root / 'worktree/scripts'))
-    from test_workflow_fixture import seed
-    seed(run_dir, ctx.selected_project, DEFAULT_PROJECT_ID, 'verification-session', status='running')
+    # The verifier may be installed while --skills-root selects source. Keep
+    # that catalog's fixture imports out of this process's trusted runtime.
+    code = (
+        "import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+        "from test_workflow_fixture import seed; "
+        "seed(Path(sys.argv[2]),Path(sys.argv[3]),sys.argv[4],"
+        "'verification-session',status='running')"
+    )
+    env = runtime_environment(ctx.agent, home=ctx.fixture_host_home, fresh_session=True)
+    try:
+        env = owned_git_origin.environment(ctx.selected_project, env=env)
+    except owned_git_origin.OriginError as error:
+        raise FixtureSetupError("Hook fixture Git environment is unavailable.") from error
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = run(
+        [sys.executable, "-c", code, str(ctx.skills_root / "worktree/scripts"),
+         str(run_dir), str(ctx.selected_project), DEFAULT_PROJECT_ID],
+        cwd=ctx.selected_project, env=env, timeout=30,
+    )
+    if result.returncode != 0:
+        raise FixtureSetupError(f"Hook fixture seed failed (exit {result.returncode}).")
     write_json(
         run_dir / "current-state.json",
         {
             "project_id": DEFAULT_PROJECT_ID,
             "run_id": DEFAULT_RUN_ID,
             "status": "running",
-            "current_feature": "FEAT-001",
+            "current_execution": "FEAT-001",
             "current_phase": "implementation",
             "next_recommended_skill": "sdlc-validate-codes",
             "retry_counts": {"implementation": 0},
@@ -2591,16 +2648,7 @@ def check_capability_regressions(ctx: Context) -> None:
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHON_COLORS"] = "0"
     suites = {
-        "project-specs": (
-            [
-                sys.executable, "-m", "unittest", "discover", "-v",
-                "-s", str(ctx.skills_root / "maintain-project-specs" / "scripts"),
-                "-p", "test_project_specs*.py",
-            ],
-            ctx.skills_root,
-        ),
-        "objective": ([sys.executable, '-m', 'unittest', 'discover', '-v', '-s', str(ctx.skills_root / 'sdlc-start/scripts'), '-p', 'test_*.py'], ctx.skills_root),
-        "execution": (
+        "protected-merge": (
             [
                 sys.executable,
                 "-m",
@@ -2608,13 +2656,70 @@ def check_capability_regressions(ctx: Context) -> None:
                 "discover",
                 "-v",
                 "-s",
-                str(ctx.skills_root / "worktree" / "scripts"),
+                str(ctx.skills_root / "merge-pr/scripts"),
+                "-p",
+                "test_merge*.py",
+            ],
+            ctx.skills_root,
+        ),
+        "project-specs": (
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                str(ctx.skills_root / "maintain-project-specs" / "scripts"),
+                "-p",
+                "test_project_specs*.py",
+            ],
+            ctx.skills_root,
+        ),
+        "objective": (
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                str(ctx.skills_root / "sdlc-start/scripts"),
                 "-p",
                 "test_*.py",
             ],
             ctx.skills_root,
         ),
-        "dispatch": ([sys.executable, 'worktree/scripts/test_workflow_dispatch.py', '-v'], ctx.skills_root),
+        "execution": (
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "-v",
+                # Dispatch and task-wave contracts have their own suites below.
+                # Do not run those expensive real-Git suites twice.
+                *(
+                    str(ctx.skills_root / "worktree/scripts" / name)
+                    for name in (
+                        "test_workflow_execution.py",
+                        "test_workflow_design_revision.py",
+                        "test_workflow_objectives.py",
+                        "test_workflow_spec_bootstrap.py",
+                        "test_workflow_program.py",
+                        "test_workflow_qualification.py",
+                        "test_workflow_delivery.py",
+                        "test_workflow_handoffs.py",
+                        "test_workflow_security.py",
+                        "test_workflow_fixture.py",
+                    )
+                ),
+            ],
+            ctx.skills_root,
+        ),
+        "dispatch": (
+            [sys.executable, "worktree/scripts/test_workflow_dispatch.py", "-v"],
+            ctx.skills_root,
+        ),
         "worktree": (
             [sys.executable, "scripts/test-worktree-manager.py", "-v"],
             ctx.skills_root / "worktree",
@@ -2623,8 +2728,14 @@ def check_capability_regressions(ctx: Context) -> None:
             [sys.executable, "scripts/test-git-promotion.py", "-v"],
             ctx.skills_root / "worktree",
         ),
-        "implement": ([sys.executable, 'implement/scripts/test_implement_contract.py', '-v'], ctx.skills_root),
-        "task-waves": ([sys.executable, 'worktree/scripts/test_workflow_contracts.py', '-v'], ctx.skills_root),
+        "implement": (
+            [sys.executable, "implement/scripts/test_implement_contract.py", "-v"],
+            ctx.skills_root,
+        ),
+        "task-waves": (
+            [sys.executable, "worktree/scripts/test_workflow_contracts.py", "-v"],
+            ctx.skills_root,
+        ),
         "hooks": (
             [
                 sys.executable,
@@ -2735,7 +2846,10 @@ def check_capability_regressions(ctx: Context) -> None:
                 "sdlc-workflow-test/scripts/test_three_tier_objective.py",
                 "sdlc-workflow-test/scripts/test_three_tier_browser.py",
                 "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
+                "sdlc-workflow-test/scripts/test_three_tier_runtime.py",
+                "sdlc-workflow-test/scripts/test_three_tier_recovery.py",
                 "sdlc-workflow-test/scripts/test_owned_git_origin.py",
+                "sdlc-workflow-test/scripts/test_git_environment.py",
                 "sdlc-workflow-test/scripts/test_three_tier_target.py",
             ],
             ctx.skills_root,
@@ -2751,6 +2865,56 @@ def check_capability_regressions(ctx: Context) -> None:
         results[suite] = (result, passed, skipped)
 
     capabilities: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+        "source.obligations": (
+            "Complete document-package obligation coverage",
+            tuple(("execution", test) for test in (
+                "test_large_package_has_complete_canonical_coverage",
+                "test_missing_catalog_id_is_not_compressed_away",
+                "test_cannot_opt_out_of_catalog_extraction",
+                "test_source_drift_conflicts_and_missing_references_fail",
+                "test_malformed_and_unmapped_dispositions_fail",
+            )),
+        ),
+        "program.phase-slices": (
+            "Phase barriers and cross-feature delivery slices",
+            tuple(("execution", test) for test in (
+                "test_external_phase_and_full_obligation_plan",
+                "test_future_slice_and_phase_dependencies_rejected",
+                "test_all_source_obligations_remain_scheduled",
+                "test_phase_only_exit_without_a_runner_route_is_rejected",
+            )),
+        ),
+        "program.source-admission": (
+            "Exact portable source and canonical pair admission",
+            tuple(("execution", test) for test in (
+                "test_fresh_input_admission_stages_exact_snapshot_and_pair",
+                "test_initial_pair_is_committed_once_before_execution",
+                "test_document_program_contract_includes_exact_admitted_bundle",
+                "test_contract_recovers_commit_before_state_write",
+                "test_managed_commit_recovery_records_head_before_reconciliation",
+                "test_managed_intake_owns_source_before_authoring",
+                "test_publication_race_cannot_commit_unpublished_bytes",
+                "test_clean_unjournaled_contract_commit_is_rejected",
+            )),
+        ),
+        "program.completion-freshness": (
+            "Immutable delivered slices and current obligation evidence",
+            tuple(("execution", test) for test in (
+                "test_completed_slice_cannot_acquire_new_obligations_or_move",
+                "test_full_completion_requires_current_evidence_beyond_phase_exit_subset",
+                "test_transitive_phase_barrier_and_changed_source_invalidate_exit",
+            )),
+        ),
+        "execution.bounded-scale": (
+            "Large task graphs and bounded cross-feature batches",
+            tuple(("execution", test) for test in (
+                "test_more_than_two_thousand_tasks_in_both_chain_orders",
+                "test_fanout_fanin_bounded_batches_and_cross_feature_mapping",
+                "test_cycles_and_conflicting_claims",
+                "test_four_retained_worktrees_then_next_batch_uses_validated_tip",
+                "test_large_fan_in_is_indexed_and_tampering_is_not_repaired",
+            )),
+        ),
         "three-tier.harness": (
             "Three-tier objective and lifecycle harness",
             (
@@ -2772,9 +2936,25 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("three-tier", "test_completed_execution_targets_exact_promoted_checkout"),
                 ("three-tier", "test_owned_origin_is_idempotent_and_remains_frozen_after_project_commit"),
                 ("three-tier", "test_remote_and_hook_configuration_tampering_is_rejected"),
-                ("three-tier", "test_inherited_filter_is_rejected_before_baseline_or_origin_mutation"),
-                ("three-tier", "test_inherited_transport_command_and_environment_are_rejected"),
+                ("three-tier", "test_inherited_filter_is_isolated_before_baseline_and_origin_mutation"),
+                ("three-tier", "test_inherited_transport_is_isolated_and_environment_overrides_are_rejected"),
                 ("three-tier", "test_interrupted_receipt_publication_is_not_adopted"),
+                ("three-tier", "test_preparation_isolates_inherited_git_filters"),
+                ("three-tier", "test_profile_tampering_and_missing_files_fail_closed"),
+                ("three-tier", "test_caller_overrides_are_not_masked_by_a_valid_profile"),
+                ("three-tier", "test_local_executable_and_inactive_include_configuration_is_rejected"),
+                ("three-tier", "test_workflow_worker_scope_and_runtime_propagation"),
+                ("three-tier", "test_commit_owner_and_hook_admit_only_the_owned_scope"),
+                ("three-tier", "test_native_launcher_validates_and_passes_profile_to_fresh_process"),
+                ("three-tier", "test_tampering_blocks_cleanup_before_resource_operations"),
+                ("three-tier", "test_nested_foreign_bare_repository_is_not_owned_scope"),
+                ("three-tier", "test_disabled_origin_guard_blocks_project_worker_and_origin_commands"),
+                ("three-tier", "test_removed_origin_blocks_sealed_profile_admission"),
+                ("three-tier", "test_common_directory_redirects_and_borrowed_storage_are_rejected"),
+                ("three-tier", "test_nested_common_directory_without_objects_is_not_owned_scope"),
+                ("three-tier", "test_global_attributes_do_not_enter_owned_checkout"),
+                ("three-tier", "test_promotion_owner_revalidates_profile_before_git"),
+                ("three-tier", "test_sdlc_hook_git_reads_reject_tampered_profile"),
                 (
                     "three-tier",
                     "test_rendered_objective_has_no_managed_frontmatter",
@@ -2786,8 +2966,14 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "three-tier",
-                    "test_record_runtime_rejects_swapped_container_roles",
+                    "test_named_product_failures",
                 ),
+                ("three-tier", "test_inspection_failures_are_distinct_and_bounded"),
+                ("three-tier", "test_unexpected_observer_exception_never_leaks_exception_text"),
+                ("three-tier", "test_worker_observations_are_development_only_and_unknown_failure_stays_blocked"),
+                ("three-tier", "test_failed_receipt_orphan_is_reconciled_before_retry_and_cleanup"),
+                ("three-tier", "test_cleanup_resumes_after_raw_observation_was_deleted"),
+                ("three-tier", "test_tampered_observation_blocks_admission_and_cleanup"),
                 (
                     "three-tier",
                     "test_phase_record_cannot_overwrite_browser_failure",
@@ -3063,6 +3249,7 @@ def check_capability_regressions(ctx: Context) -> None:
             "Objective-bound steering continuation",
             (
                 ("hooks", "test_stop_continues_running_next_skill"),
+                ("hooks", "test_completed_features_do_not_override_coordinator_slice_route"),
                 ("hooks", "test_stop_continues_for_pause_steering"),
                 ("hooks", "test_stop_reconstructs_explicit_project_continuation"),
             ),
@@ -3097,19 +3284,31 @@ def check_capability_regressions(ctx: Context) -> None:
             ),
         ),
         "merge.authorization": (
-            "Exact Agentic SDLC merge authorization",
+            "Protected SDLC qualification, admission and merge recovery",
             (
+                ("execution", "test_labels_skips_wrong_artifacts_and_intervention_cannot_pass"),
+                ("execution", "test_forged_receipt_recomputed_hash_is_not_producer_admitted"),
+                ("execution", "test_revoked_authority_prevents_runner_launch"),
+                ("execution", "test_locked_plan_drift_and_missing_criteria_block"),
+                ("execution", "test_failed_trial_cannot_be_reused_as_clean_evidence"),
+                ("execution", "test_revoked_authority_blocks_final_effect"),
+                ("execution", "test_two_slices_and_all_supported_merge_methods"),
+                ("execution", "test_ambiguous_submission_reconciles_without_second_effect"),
+                ("execution", "test_failed_result_verification_does_not_repeat_merge"),
+                ("execution", "test_queue_and_base_drift_block_before_dispatch"),
+                ("protected-merge", "test_intent_uses_the_review_validated_by_its_snapshot"),
+                ("protected-merge", "test_sdlc_evidence_change_after_approval_blocks_merge"),
                 ("hooks", "test_pretool_denies_gh_pr_merge_without_authorization"),
-                ("hooks", "test_pretool_allows_exact_authorized_gh_pr_merge"),
+                ("hooks", "test_pretool_denies_label_authorized_gh_pr_merge"),
                 (
                     "hooks",
                     "test_pretool_denies_merge_when_remote_default_head_advanced",
                 ),
                 (
                     "hooks",
-                    "test_pretool_allows_exact_authorized_merge_queue_command",
+                    "test_pretool_denies_label_authorized_merge_queue_command",
                 ),
-                ("hooks", "test_pretool_allows_exact_authorized_pr_url_merge"),
+                ("hooks", "test_pretool_denies_label_authorized_pr_url_merge"),
                 ("hooks", "test_pretool_denies_merge_without_exact_head_guard"),
                 (
                     "hooks",
@@ -3136,6 +3335,9 @@ def check_capability_regressions(ctx: Context) -> None:
             "Verifier contract self-tests",
             (
                 ("verifier", "test_live_evidence_is_the_only_public_evidence_option"),
+                ("verifier", "test_prompt_routing_check_ignores_only_the_owned_home_prefix"),
+                ("verifier", "test_hook_fixture_seed_isolates_a_distinct_source_catalog"),
+                ("verifier", "test_failed_hook_fixture_seed_becomes_sanitized_report_failure"),
                 ("verifier", "test_public_live_action_is_renamed_without_a_legacy_alias"),
                 ("verifier", "test_any_deterministic_failure_forces_fail"),
                 ("verifier", "test_source_phase_contract_rejects_bad_source_prefix"),
@@ -3212,6 +3414,9 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("verifier", "test_vertical_slice_contract_normalizes_whitespace"),
                 ("verifier", "test_vertical_slice_contract_rejects_missing_operational_clauses"),
                 ("verifier", "test_readiness_matrix_reports_canonical_owner_receipt_result"),
+                ("verifier", "test_shared_owner_drift_and_missing_installation_fail_parity"),
+                ("verifier", "test_document_program_tests_are_required_and_cannot_be_skipped"),
+                ("verifier", "test_merge_checklist_uses_protected_delivery_authority"),
             ),
         ),
     }
@@ -3271,6 +3476,10 @@ def run_hook(
     host_home: Path | None = None,
 ) -> dict[str, Any]:
     env = runtime_environment(ctx.agent, home=host_home or ctx.fixture_host_home, fresh_session=True)
+    try:
+        env = owned_git_origin.environment(ctx.selected_project, env=env)
+    except owned_git_origin.OriginError as error:
+        return {"_error": str(error)}
     command = ["python3", str(script)]
     if ctx.agent == "claude":
         env["CLAUDE_PLUGIN_DATA"] = str(ctx.verification_root / "fixture-plugin-data")
@@ -3327,6 +3536,14 @@ def denied(result: dict[str, Any]) -> str | None:
 
 
 def check_hooks_with_fixtures(ctx: Context) -> None:
+    try:
+        _check_hooks_with_fixtures(ctx)
+    except FixtureSetupError as error:
+        for section in ("PreToolUse safety test results", "Stop continuation test results"):
+            ctx.add(section, "Hook fixture setup", "FAIL", str(error))
+
+
+def _check_hooks_with_fixtures(ctx: Context) -> None:
     # Hook fixtures use a separate native home and explicit synthetic binding;
     # they must never resolve an operator's live run.
     ctx = replace(
@@ -3367,7 +3584,7 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
             "project_id": DEFAULT_PROJECT_ID,
             "run_id": DEFAULT_RUN_ID,
             "status": status,
-            "current_feature": "FEAT-001",
+            "current_execution": "FEAT-001",
             "current_phase": current_phase,
             "next_recommended_skill": next_skill,
             "retry_counts": retry_counts or {current_phase: 0},
@@ -3544,11 +3761,26 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
         next_skill="",
         feature_queue={"features": [{"id": "FEAT-001", "status": "committed"}]},
     )
+    no_route = run_hook(stop_hook, stop_payload(ctx), ctx)
+    ctx.add(
+        "Stop continuation test results",
+        "Committed features do not invent a UAT route",
+        "PASS" if no_route == {"continue": True} else "FAIL",
+        json.dumps(no_route, sort_keys=True),
+    )
+
+    reset_stop_state(
+        next_skill="sdlc-uat-tests",
+        feature_queue={"features": [
+            {"id": "FEAT-001", "status": "committed"},
+            {"id": "FEAT-002", "status": "planned"},
+        ]},
+    )
     uat = run_hook(stop_hook, stop_payload(ctx), ctx)
     uat_prompt = str(uat.get("reason") or "")
     ctx.add(
         "Stop continuation test results",
-        "Continue to UAT",
+        "Continue to coordinator-selected slice UAT",
         "PASS"
         if uat.get("decision") == "block" and "sdlc-uat-tests" in uat_prompt
         else "FAIL",
@@ -4177,7 +4409,7 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
             ]
             if not merge_guard or merge_guard[-1].status != "PASS":
                 reject(
-                    "Merge safety evidence is not backed by the explicit-authorization hook test."
+                    "Merge safety evidence lacks protected qualification, admission and recovery regressions."
                 )
                 return None
         ctx.add(
@@ -4282,6 +4514,11 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ),
         ("Installed worktree dependency", "runtime.worktree-dependency"),
         ("Source-installed parity", "runtime.skill-parity"),
+        ("Document obligation coverage", "source.obligations"),
+        ("Phase and slice planning", "program.phase-slices"),
+        ("Portable source admission", "program.source-admission"),
+        ("Current completion evidence", "program.completion-freshness"),
+        ("Bounded task scaling", "execution.bounded-scale"),
         ("Public direct entry points", "public.interface"),
         ("Direct objective intake", "objective.intake"),
         ("Objective revisions", "objective.revisions"),
@@ -4364,6 +4601,7 @@ def report(ctx: Context) -> str:
         f"- Selected nested project: `{ctx.selected_project}`",
         f"- Live evidence manifest: `{ctx.live_evidence_path}`",
         "- Mode: deterministic preflight plus optional, machine-validated private live evidence.",
+        "- Coverage boundary: document packages, phased delivery, large task graphs and protected merge recovery have deterministic regression evidence. Current live profiles do not qualify native multi-slice document delivery or a real remote merge.",
         "",
         "## Readiness Matrix",
         "",

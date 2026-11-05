@@ -153,9 +153,7 @@ def test_production_nebius_list_calls_use_the_shared_paginator() -> None:
     for path in package_root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         parents = {
-            child: parent
-            for parent in ast.walk(tree)
-            for child in ast.iter_child_nodes(parent)
+            child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
         }
         for node in ast.walk(tree):
             if not (
@@ -202,6 +200,7 @@ def test_pagination_audit_covers_the_complete_public_command_tree() -> None:
     collect(get_command(app))
 
     assert leaves == {
+        ("access", "add-operator"),
         ("add-routes-local",),
         ("apply",),
         ("create-config",),

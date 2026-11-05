@@ -31,7 +31,7 @@ read OAuth payloads or contact Tailscale. Reports say `INFRASTRUCTURE_READY` wit
 
 `onboarding request` is pure and works before deployment without cloud or tailnet
 credentials. The completed infrastructure report adds exact resource/container
-IDs. It prints proposed tags, routes, separate source/destination/protocol/port
+IDs. It prints proposed tags, routes, scoped VPN-style or detailed service
 rules, scopes, route auto-approvers, ownership, conditional prerequisites and an
 intent fingerprint. Export outside Git. Incomplete requests are marked `DRAFT`.
 
@@ -84,7 +84,8 @@ or access to Nebius cloud does not grant these permissions.
 
 1. **Approve the gateway identity and access.** Register or approve the exact
    gateway tag, who may own it, the advertised private prefixes, and the users or
-   groups and destination ports allowed to use them. Follow your organization's
+   groups allowed to use them, with either all traffic or specific protocols and
+   destination ports. Follow your organization's
    existing policy approval process.
 2. **Issue the delegated credential.** Create an OAuth client restricted to the
    approved gateway tags and the operations in the scope table below. Provide its
@@ -170,6 +171,53 @@ Device or Tailnet Lock approval can leave deployment **PENDING**. Resolve the
 reported prerequisite and run ordinary deploy again. For fully automated device
 retirement, configure the OAuth device scopes before ordinary destroy.
 
+## Wizard field guide
+
+The initial wizard and `tailscale onboarding configure` explain the fields before
+asking for values, using concise dim text without automatic highlighting.
+The `owner` and `purpose` fields remain required.
+
+| Field or choice | Meaning |
+| --- | --- |
+| `inputs.name` | Gateway resource-name prefix; the initial wizard shows `tailscale-gw` as the default. Saved custom names are retained. |
+| `inputs.management_cidrs` | Source IPv4 ranges allowed to SSH to both public router addresses on TCP port 22. Use your workstation, office or automation egress addresses; `/32` means one address. This path also supports deployment and recovery. |
+| `tailscale.tags` | Shared router identities, e.g. `tag:dev-router`. Include `tag:`; start the name with a letter and use only letters, digits or hyphens. List each tag once. Both wizards retry invalid entries; validation distinguishes syntax and duplicates. Use an authorized tag or request administrator approval before activation. Name availability is not checked. |
+| `policy.tag_owners` | Identities allowed to assign router tags. The displayed default `[]` leaves ownership managed by the tailnet administrator; it does not add tag-owner policy. Saved owner lists are retained. |
+| New linked SecretStash | Add an empty secret container to the deployment and link the gateway to it. Infrastructure deployment creates the container; the OAuth client ID/secret pair is supplied later. No Kubernetes or ESO dependency. |
+| Existing SecretStash | Reference a secret holding `client_id` and `client_secret`; the executing identity needs payload-read permission. |
+| Environment/file reference | During onboarding, supply `env:NAME` or `file:PATH` for runtime retrieval. Files must be owner-only; secret values never belong in config. |
+| `onboarding.owner` | Prefer the responsible person's work email or a monitored team email, such as `owner@example.com`. Contact metadata only; it grants no permissions. Existing text values remain valid. |
+| `onboarding.purpose` | Why access is needed, such as access to private Kubernetes clusters. |
+| Rule `sources` | Explicit Tailscale users, groups or device identities allowed to connect. Example groups must already be defined in the tailnet policy. |
+| Rule `destinations` | Selected private CIDRs within the advertised routes, optionally narrowed to individual hosts. |
+| Rule `protocol` / `ports` | Either all traffic or specific TCP/UDP ports/ranges; ICMP has no ports. |
+
+Tags need not be unique per router. Ask the tailnet administrator to check
+`tagOwners` and devices already using a proposed name; reuse a tag only when
+sharing its policy permissions is intentional. See [Tailscale tags](https://tailscale.com/docs/features/tags).
+
+New rules offer **VPN-style access — all protocols and ports** by default. Choose
+sources and destinations, review the summary, and accept it. Clearing every
+destination in the checkbox menu retries the selection; it does not restore and
+accept the previous scope. **Specific services**
+offers TCP, UDP or ICMP and prompts for ports when needed. Existing detailed or
+mixed rules retain their exact source/destination pairings, even when advertised
+routes grow. All-traffic access uses `protocol: all` and `ports: []`; detailed TCP/UDP
+rules require explicit decimal ports or ranges. Wildcard sources/destinations are
+rejected. Tailscale receives a grant with `ip: ["*"]` only for an all-traffic rule.
+[Tailscale grant examples](https://tailscale.com/docs/reference/examples/grants)
+
+An established connection and approved routes still need a matching access policy.
+Existing service firewalls, credentials and Kubernetes RBAC continue to apply.
+Changing requested access invalidates prior administrator acceptance. Policy
+proposals add grants; narrowing config does not revoke an earlier broader grant.
+Ask the tailnet administrator to review and remove it when restricting access.
+
+Text list prompts accept comma-separated values, including a single numeric-looking
+string such as `443`, or explicit YAML/JSON lists of strings such as `["443"]`.
+Invalid YAML or terminal control sequences produce a same-field retry. Arrow keys
+select menu choices; at text prompts, type the value and use `q`/`qq` for back/quit.
+
 ## Configuration example
 
 Add this component to an existing cxcli config, using your project, network, subnet,
@@ -195,7 +243,7 @@ infra:
       tailscale:
         stage: infrastructure
         onboarding:
-          owner: network-team
+          owner: owner@example.com
           purpose: Private service access
           environment: development
         tailnet: YOUR_TAILNET_NAME
@@ -209,8 +257,8 @@ infra:
           rules:
             - sources: [group:developers]
               destinations: [10.20.0.0/24]
-              protocol: tcp
-              ports: ["443"]
+              protocol: all
+              ports: []
           auto_approve: true
         verification:
           required: false

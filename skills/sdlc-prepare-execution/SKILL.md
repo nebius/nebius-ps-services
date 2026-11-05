@@ -43,7 +43,7 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
-Prepare one locked feature for isolated TDD and dependency-wave implementation.
+Prepare one locked delivery slice for isolated TDD and bounded dependency-wave implementation.
 
 ## When To Use
 
@@ -73,6 +73,9 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md`; bind this phase's inputs,
   assignment/ownership and evidence to the current immutable execution basis.
   Before preparation, bind evidence to the accepted objective and applicable
@@ -89,34 +92,35 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   `<agent-home>/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
 - A persistent feature integration branch/worktree under the private run root.
 - A scoped contract commit on the named project branch only when requirements
-  and design are the complete repo-root staged diff.
+  and design plus the exact admitted contract snapshot are the complete
+  repo-root staged diff.
 - State transition to `execution_prepared` and checkpoint evidence.
 
 ## Process
 
-1. Require a clean named checkout. In unmanaged mode, resolve and verify the
-   actual `origin` default; if on it, create and switch to the deterministic run
-   promotion branch, otherwise reuse the current non-default branch. In a
-   managed child, keep the exact local branch and `HEAD` without fetching or
-   resolving a remote default. Reject unrelated dirt or private state inside
-   the repository.
-2. If current requirements/design changes are the only tracked changes, stage
-   from the repository root with `git add -A`, create one authorized contract
-   commit, then require a clean checkout. Read the already-effective
-   instruction chain, but never create, refresh, retire, or reload project
-   instructions here. Historical lifecycle or project-instruction status is
-   advisory and cannot prevent preparation; the canonical v2 spec pair itself
-   must validate before a spec-dependent plan proceeds. Never make a partial
-   mixed commit.
-3. Invoke the private execution helper `prepare`. It parses stable `TASK-*`
-   records, validates dependencies/claims/domains, builds deterministic logical
-   waves, records intent, and creates the integration branch/worktree from the
-   exact contract `HEAD`. Git operations use the repository root, but every
-   claim and worker `scope_cwd` must remain inside the initialized folder.
-   Acquire the Agentic SDLC owner lease first when the checkout is managed by
-   `worktree`; require lease schema v4 and register integration and worker
-   resource intent before creation. Persist a canonical full-definition digest
-   with every task record.
+1. Require the accepted named source checkout or an exact completed workflow
+   checkpoint. Only the selected canonical pair and, for document programs,
+   the validated portable manifest/snapshot may be dirty. Reject unrelated
+   repository changes and private state inside the repository.
+2. Invoke the private execution helper `prepare`. Before freezing the base it
+   validates current objective impact, the locked plan, paired-publication
+   provenance and every admitted path. It stages from the repository root with
+   `git add -A` and journals one contract commit bound to the exact parent,
+   branch, common directory, objective, plan, published file hashes and tree.
+   Never make a partial mixed commit or perform a separate raw Git commit.
+   Recovery accepts only the exact clean direct child of that journal. An
+   already-clean source must match an accepted or completed workflow checkpoint.
+   Read the effective instruction chain; do not create or refresh project
+   instructions here. Historical instruction status remains advisory.
+3. The same helper requires the resulting clean checkout, verifies the unmanaged
+   remote default or exact managed-local identity, parses stable `TASK-*`
+   records, validates dependencies/claims/domains, builds logical waves and
+   creates integration from the exact contract `HEAD`. Claims and worker cwd
+   remain inside the initialized folder. Managed SDLC intake acquires its v4
+   lease while clean, before canonical authoring; preparation verifies that
+   existing lease, records the contract head, and reuses ownership. A dirty
+   unleased child cannot acquire ownership. Register integration/worker resource
+   intent before creation and retain each full task-definition digest.
 4. Re-observe branch, `HEAD`, Git common directory, worktree registration,
    cleanliness, plan digest, and private state before recording completion.
 5. Return the integration cwd and route the next phase to `sdlc-tdd` there.
@@ -130,8 +134,10 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 - `replan-future` holds the execution transition lock, compares every active or
   completed task's full canonical definition and recorded definition digest,
-  and changes only resource-free planned future waves. Exact repeat replans are
-  no-ops.
+  preserves started waves as a frozen prefix, and changes only resource-free
+  future waves. Exact repeat replans are no-ops. A pending admitted design
+  revision must be sealed through the execution-plane recovery sequence before
+  replanning; ordinary preparation and TDD sealing cannot perform that commit.
 
 ## Failure Handling
 
@@ -157,11 +163,12 @@ Prepare one locked feature for isolated TDD and dependency-wave implementation.
 - Use private `task-recover --confirmed-stopped --expected-attempt <n>` only
   with a fresh worker session and an exactly re-observed clean or claimed-dirty
   worktree. Reject worker-created commits; coordinator `task-finish` with native termination evidence is the
-  sole task-commit owner. The expected attempt makes ownership transfer
+  sole task-commit owner. Ingest the complete native result through `task-result`
+  and supply its implemented receipt to `task-finish --receipt`. The expected attempt makes ownership transfer
   compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
-- `task-finish` persists a digest-protected `task-finish-intent-v1` before the
+- `task-finish` persists a digest-protected `workflow/task-finish-intent-v3` before the
   Git commit. Retry may adopt only the exact clean direct-child commit whose
-  parent, tree, message, assignment, and structured evidence match that intent;
+  parent, tree, message, assignment, result-receipt digest and structured evidence match that intent;
   it also validates and reuses an exact result written before a task-state
   crash. Any unjournaled or mismatched moved `HEAD` is a scope violation.
 - Reject corrective replan when any active/completed task definition or digest

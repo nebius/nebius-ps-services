@@ -38,3 +38,5 @@ adaptive-network,true,"The application namespace cannot resolve a service that w
 known-mechanical,false,"The cause is already proven: change this misspelled constant and run its existing test."
 feature-only,false,"Add a new storage selector to this configuration form."
 review-only,false,"Review this patch for regressions without diagnosing a current incident."
+troubleshoot-diagnosis-v3-positive,true,The active SDLC classifier requires diagnosis after a failed first validation repair before execution preparation; inspect its candidate evidence and return the causal handoff.
+troubleshoot-diagnosis-v3-negative,false,A first-time candidate formatting error already has a proven mechanical owner; apply its direct counted repair without another investigation.

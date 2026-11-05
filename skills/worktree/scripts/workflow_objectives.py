@@ -13,18 +13,19 @@ import re
 import subprocess
 import uuid
 
-from workflow_state import WorkflowError, digest, directory, lock, read, stable, write
+from workflow_state import git_environment, WorkflowError, digest, directory, lock, read, stable, write
 from workflow_security import contains_sensitive
 
 
-OBJECTIVE_SCHEMA = "workflow/accepted-objective-v1"
-RUN_SCHEMA = "workflow/run-v1"
+OBJECTIVE_SCHEMA = "workflow/accepted-objective-v2"
+RUN_SCHEMA = "workflow/run-v2"
 BINDING_SCHEMA = "workflow/session-binding-v1"
 ROOTS = {"implement": "implement", "agentic-sdlc": "sdlc-runs"}
 TERMINAL = {"done", "cancelled"}
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
-FIELDS = {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications", "provenance"}
+TEXT_FIELDS = {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications"}
+FIELDS = TEXT_FIELDS | {"provenance", "inputs", "completion", "issue_resolution"}
 
 
 def now():
@@ -38,10 +39,10 @@ def session_hash(session: str) -> str:
 
 
 def normalize(value: object) -> dict:
-    if not isinstance(value, dict) or set(value) != FIELDS:
+    if not isinstance(value, dict) or not (TEXT_FIELDS | {"provenance"}) <= set(value) or set(value) - FIELDS:
         raise WorkflowError("OBJECTIVE_INVALID", "supply only normalized outcome, scope, constraints, acceptance criteria, clarifications and provenance")
     result = {}
-    for key in FIELDS - {"provenance"}:
+    for key in TEXT_FIELDS:
         items = [value[key]] if key == "outcome" else value[key]
         if not isinstance(items, list) or len(items) > 256:
             raise WorkflowError("OBJECTIVE_INVALID", "objective fields must be bounded lists")
@@ -62,13 +63,47 @@ def normalize(value: object) -> dict:
             or not SHA.fullmatch(str(provenance["source_sha256"]))):
         raise WorkflowError("OBJECTIVE_INVALID", "provenance requires a source kind and digest, never raw turns")
     result["provenance"] = dict(provenance)
+    inputs = value.get("inputs")
+    if inputs is not None:
+        if (not isinstance(inputs, dict) or set(inputs) != {"manifest", "manifest_sha256", "program_sha256"}
+                or not isinstance(inputs["manifest"], str)
+                or not inputs["manifest"].startswith("docs/")
+                or ".." in Path(inputs["manifest"]).parts or "\\" in inputs["manifest"]
+                or any(SHA.fullmatch(str(inputs[key])) is None for key in ("manifest_sha256", "program_sha256"))):
+            raise WorkflowError("OBJECTIVE_INVALID", "document input must bind portable manifest and program digests")
+    result["inputs"] = inputs
+    completion = value.get("completion", {"boundary": "reviewed-pr"})
+    if completion == {"boundary": "reviewed-pr"}:
+        completion = {"boundary": "reviewed-pr", "live_operations": [], "allow_nonruntime_na": True}
+    if (isinstance(completion, dict) and set(completion) == {"boundary", "live_operations", "allow_nonruntime_na"}
+            and completion["boundary"] == "reviewed-pr" and type(completion["allow_nonruntime_na"]) is bool
+            and isinstance(completion["live_operations"], list)
+            and all(isinstance(v, str) and v.strip() for v in completion["live_operations"])):
+        result["completion"] = completion
+    elif (isinstance(completion, dict) and set(completion) == {"boundary", "repository", "base", "method", "delivery_scope", "live_operations", "merge_effects", "allow_nonruntime_na"}
+          and completion["boundary"] == "merge-verified"
+          and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", str(completion["repository"]))
+          and isinstance(completion["base"], str) and completion["base"]
+          and completion["method"] in {"merge", "squash", "rebase"}
+          and type(completion["allow_nonruntime_na"]) is bool
+          and all(isinstance(completion[k], list) and all(isinstance(v, str) and v.strip() for v in completion[k]) for k in ("delivery_scope", "live_operations", "merge_effects"))
+          and completion["delivery_scope"] and completion["merge_effects"]
+          and all(re.fullmatch(r"SLICE-[0-9]{3,}", v) for v in completion["delivery_scope"])):
+        result["completion"] = completion
+    else:
+        raise WorkflowError("OBJECTIVE_INVALID", "completion policy must declare bounded merge authority")
+    if "issue_resolution" in value:
+        from workflow_issue_resolution import metadata
+        result["issue_resolution"] = metadata(value["issue_resolution"])
+    if contains_sensitive(str(result)):
+        raise WorkflowError("SENSITIVE_INPUT", "objective policy must not contain sensitive values")
     if len(stable(result)) > 128 * 1024:
         raise WorkflowError("OBJECTIVE_INVALID", "normalized objective is too large")
     return result
 
 
 def _git(project: Path, *args):
-    result = subprocess.run(["git", "-C", str(project), *args], text=True, capture_output=True, timeout=30)
+    result = subprocess.run(["git", "-C", str(project), *args], text=True, capture_output=True, timeout=30, env=git_environment(project))
     if result.returncode:
         raise WorkflowError("UNSUPPORTED_GIT_STATE", "a named branch with committed history is required")
     return result.stdout.strip()
@@ -123,9 +158,11 @@ def validate_run(run_dir: Path, *, owner: str | None = None) -> tuple[dict, dict
                 or revision.get("snapshot") != f"objectives/{name}.json"):
             raise WorkflowError("OBJECTIVE_INVALID", "objective revision ancestry is invalid")
         snapshot = read(run_dir / revision["snapshot"])
+        if "issue_resolution" in snapshot and run["owner"] != "implement":
+            raise WorkflowError("OBJECTIVE_INVALID", "issue resolution is owned by Implement")
         if digest(snapshot) != revision.get("sha256") or normalize(snapshot) != snapshot:
             raise WorkflowError("OBJECTIVE_INVALID", "accepted objective bytes changed")
-        if digest({key: snapshot[key] for key in FIELDS - {"provenance"}}) != revision.get("intent_sha256"):
+        if digest({key: snapshot[key] for key in snapshot if key != "provenance"}) != revision.get("intent_sha256"):
             raise WorkflowError("OBJECTIVE_INVALID", "accepted objective semantic identity changed")
         parent = revision["sha256"]
     return run, binding
@@ -168,6 +205,7 @@ def _bind(home, owner, session, run_dir, run, objective):
 
 
 def _revision(run_dir, objective, value):
+    value = normalize(value)
     revisions = objective["revisions"]
     name = f"r{len(revisions) + 1:04d}"
     path = run_dir / "objectives" / (name + ".json")
@@ -177,14 +215,33 @@ def _revision(run_dir, objective, value):
     else:
         write(path, value, exclusive=True)
     revisions.append({"revision": name, "sha256": digest(value),
-                      "intent_sha256": digest({key: value[key] for key in FIELDS - {"provenance"}}),
+                      "intent_sha256": digest({key: value[key] for key in value if key != "provenance"}),
                       "snapshot": f"objectives/{name}.json", "accepted_at": now(),
                       "parent_sha256": revisions[-1]["sha256"] if revisions else None})
     write(run_dir / "objective.json", objective)
 
 
+def _acquire_intake_lease(run_dir, run):
+    """Reserve a managed SDLC source while it is still clean, before authoring."""
+    if run["owner"] != "agentic-sdlc" or run["status"] in TERMINAL:
+        return
+    from workflow_interop import acquire, inspect_anchor, load, ExecutionInteropError
+    project = Path(run["project_root"])
+    try:
+        existing = load(run_dir)
+        if existing is not None:
+            return  # Preparation reconciles contract commits before the clean gate.
+        if inspect_anchor(project).get("status") == "managed":
+            acquire(run_dir, project, project.relative_to(Path(run["git_root"])).as_posix(),
+                    run["source_head"])
+    except ExecutionInteropError as error:
+        raise WorkflowError("OWNERSHIP_INVALID", str(error)) from error
+
+
 def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, revise: bool = False):
     value = normalize(value)
+    if "issue_resolution" in value and owner != "implement":
+        raise WorkflowError("OBJECTIVE_INVALID", "issue resolution is owned by Implement")
     root, context, branch, head = project_context(project, home, owner)
     with lock(root):
         if (root / "workspace.json").exists():
@@ -196,8 +253,9 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
         if bound:
             run_dir, run, objective = bound
             read(run_dir / objective["revisions"][-1]["snapshot"])
-            intent = {key: value[key] for key in FIELDS - {"provenance"}}
+            intent = {key: value[key] for key in value if key != "provenance"}
             if digest(intent) == objective["revisions"][-1]["intent_sha256"]:
+                _acquire_intake_lease(run_dir, run)
                 return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
             if run["status"] not in TERMINAL:
                 if not revise:
@@ -244,6 +302,7 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
         write(run_dir / "run.json", run)
         write(active, {"schema": "workflow/active-run-v1", "run_id": run_dir.name})
         _bind(home, owner, session, run_dir, run, objective)
+        _acquire_intake_lease(run_dir, run)
         return result(run_dir, run, objective, "ACCEPTED")
 
 
@@ -277,7 +336,17 @@ def continue_run(project: Path, home: Path, owner: str, session: str, *, takeove
                     'session_sha256': run['coordinator_session_sha256'], 'takeover_sha256': proof})
             run["coordinator_session_sha256"] = session_hash(session)
             write(run_dir / "run.json", run)
+        checkpoint = run_dir / "current-state.json"
+        if owner == "agentic-sdlc" and run["status"] not in TERMINAL and checkpoint.exists():
+            current = read(checkpoint)
+            iteration = int(current.get("iteration_count", current.get("iteration", 0)))
+            limit = int(current.get("max_iterations", 200))
+            if limit > 0 and iteration - int(run.get("continuation_window_start", 0)) >= limit:
+                run["continuation_window_start"] = iteration
+                run["continuation_windows"] = int(run.get("continuation_windows", 1)) + 1
+                write(run_dir / "run.json", run)
         _bind(home, owner, session, run_dir, run, objective)
+        _acquire_intake_lease(run_dir, run)
         return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
 
 
@@ -326,12 +395,16 @@ def complete_run(run_dir: Path, session: str):
         records = [read(path) for path in (run_dir / "execution").glob("*/coordinator.json")]
         if run.get("fence") or not records or any(row.get("status") != "done" for row in records):
             raise WorkflowError("COMPLETION_BLOCKED", "every accepted execution must be delivered before completion")
+        from workflow_program import require_complete
+        require_complete(run_dir)
         from workflow_interop import load, _reconcile
         outer = load(run_dir)
         if outer is not None and outer.get("mode") == "managed":
             observed = _reconcile(run_dir, Path(run["project_root"]), outer)
             if observed.get("state") != "released":
                 raise WorkflowError("COMPLETION_BLOCKED", "release the managed outer lease after final evidence before completion")
+        from workflow_issue_resolution import write_completion
+        write_completion(run_dir, records)
         run.update(status="done", updated_at=now())
         write(run_dir / "run.json", run)
         home = run_dir.parent.parent.parent

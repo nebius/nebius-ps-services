@@ -7,6 +7,15 @@ owns every semantic classification and repository write.
 post-routing process cases. Contract tests remain required for advisory status
 and output assertions; canonical CSV validation does not replace them.
 
+## Default Markdown validation
+
+Bootstrap a pair from the owner templates with the default 80-character line
+limit. Preserve next-line MD013 exceptions only for indivisible metadata and
+leave marker tokens unchanged. A long ordinary paragraph or comment must still
+fail its configured line-length check. Repeated rendering preserves the
+human-owned envelope and LF/CRLF style. Publication validates exact candidate
+bytes; it does not silently format an existing envelope.
+
 ## Requirements only
 
 The user accepts a new observable constraint while the implementation continues

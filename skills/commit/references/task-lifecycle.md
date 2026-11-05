@@ -7,6 +7,12 @@ receipt or write private authority records. Explicit root-user intent supplies
 authority; the receipt proves its origin. Delegated Worktree and Implement
 callers retain their existing interfaces and schemas.
 
+This root-task lifecycle applies only to standalone commit, commit-push and
+create-pr requests. Agentic SDLC admission and its eventual commit phase belong
+to the SDLC coordinator and `sdlc-commit`; a workflow objective mentioning commit
+does not require root `begin` before `sdlc-start` or its branch preparation.
+Do not substitute a root grant for SDLC or delegated owner evidence.
+
 ## Intake and attempts
 
 Call `begin --repo-root <root> --session-id <session> --requested-action

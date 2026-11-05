@@ -17763,7 +17763,8 @@ def test_help_text_maps_commands_to_target_types() -> None:
     )
     assert "discover uses a deployment-scope directory" in output
     assert (
-        "grafana install persists target observability settings and installs Grafana and its backends"
+        "grafana install provides focused Grafana setup, saves target observability settings, "
+        "then renders and deploys the whole project, including other pending changes"
     ) in output
     assert (
         "validate, quota-check, quota-request, render, "

@@ -22,16 +22,18 @@ def seed(run_dir: Path, project: Path, project_id: str, session: str, *, status=
     objective = {'outcome':'Verify deterministic hook policy','scope':['fixture project'], 'constraints':[],
                  'acceptance_criteria':['hook policy observes the bound run'], 'clarifications':[],
                  'provenance':{'kind':'current_plan','source_sha256':'a'*64}}
+    from workflow_objectives import normalize
+    objective = normalize(objective)
     context = {'schema':'workflow/project-v1','owner':owner,'project_id':project_id,'project_root':str(project),
                'git_root':git('rev-parse','--show-toplevel'),
                'git_common_dir':git('rev-parse','--path-format=absolute','--git-common-dir')}
     write(run_dir.parent/'project.json',context)
-    write(run_dir/'run.json',{**context,'schema':'workflow/run-v1','run_id':run_dir.name,
+    write(run_dir/'run.json',{**context,'schema':'workflow/run-v2','run_id':run_dir.name,
           'coordinator_session_sha256':session_sha,'status':status,'fence':None,
           'source_branch':git('symbolic-ref','--short','HEAD'),'source_head':git('rev-parse','HEAD'),
           'created_at':'2026-10-19T00:00:00+00:00','updated_at':'2026-10-19T00:00:00+00:00'})
     write(run_dir/'objectives/r0001.json',objective)
-    write(run_dir/'objective.json',{'schema':'workflow/accepted-objective-v1','owner':owner,'run_id':run_dir.name,
+    write(run_dir/'objective.json',{'schema':'workflow/accepted-objective-v2','owner':owner,'run_id':run_dir.name,
           'objective_id':objective_id,'revisions':[{'revision':'r0001','parent_sha256':None,
           'snapshot':'objectives/r0001.json','sha256':digest(objective),
           'intent_sha256':digest({k:v for k,v in objective.items() if k!='provenance'})}]})

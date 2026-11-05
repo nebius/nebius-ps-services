@@ -8926,7 +8926,7 @@ and live deployment qualification were not rerun in this alignment.
 
 <!-- /FEATURE: FEAT-046 -->
 
-<!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=13 -->
+<!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=14 -->
 ### FEAT-047: Shared Grafana installation and telemetry routing
 
 FEAT-055 specializes new ordinary MK8s creation defaults to remote-only collection. Explicit Grafana installation retains the local defaults described here.
@@ -9212,6 +9212,8 @@ Version 3 implements the guided wizard revision with source, offline regression,
 and isolated installed-wheel qualification. Live deployment and telemetry
 qualification remain separate from this wizard revision.
 
+Clarify the focused grafana install entry point in root/group/install help and operator documentation: it uses the shared Apps configuration routine, requires --config and --target, saves selected-target observability settings, then renders and deploys the current project, including other pending changes. Contrast component add as configuration-only. Keep execution order, interactive confirmation, automation defaults and normal deployment approvals unchanged.
+
 #### Selected Option
 
 One canonical routing resolver and existing catalog/render/deploy ownership;
@@ -9240,6 +9242,8 @@ collector reuse and missing-capability selection, remote URL/read URL separation
 no implicit credential forwarding, and unchanged course bytes.
 
 #### Validation Plan
+
+Validate the CLI clarity revision with command registration/rejection and rendered-help assertions, existing Grafana save/render/deploy tests, parsed operator examples, regenerated CLI contract and isolated installed-wheel help verification.
 
 Run focused configuration, catalog, wizard, rendering, lifecycle and datasource
 tests; render pinned charts and native source fixtures; align cxcli surfaces.
@@ -9298,89 +9302,19 @@ focused checks pass and source/live evidence limitations are explicit.
 
 #### Implementation Evidence
 
-Version 8 extends the existing native defaults scope through grafana_install.install
-and the directly callable observability_installation owner. Selected-target setup
-limits remain explicit; post-confirmation normalization is still project-wide.
-Both source/candidate comparison and config preimage checks retain their ordering.
-No resolver, package-admission, generation, retry or timeout implementation changes
-were needed. The scope resets on every exit, and frozen-source lookup remains
-higher priority than cached raw defaults. README, observability guide and Unreleased
-notes describe the verification timing.
+The CLI clarity revision updates root/group/install help, README and the observability guide to explain shared focused setup, required config/target, saving, render and whole-project deployment. Existing wizard and deployment behavior is unchanged.
 
-Version 7 moves the conflicting-controls guard ahead of accepted-generation reads
-and source normalization. Private command projection preserves ordinary deploy
-controls or the exact supported Grafana owner; the error confirms settings were
-not saved and explains the resume-then-install sequence. README, observability
-guide and Unreleased notes now distinguish persisted checkpoints from live locks.
+Shared Grafana/Apps setup implements target-scoped configuration, backend dependencies, typed datasources and private defaults. The version 3 wizard shares copied candidates, storage/destination selection, datasource preview and optional customization. It preserves explicit options, stable names/UIDs, credentials and atomic cancellation, and resolves required custom reads, changed writes and stale defaults without changing headless/schema contracts.
 
-The render-publication repair binds execution ownership to the resolved project
-lock path and backend identity. Publication verifies and retains that held lease;
-standalone rendering and another project acquire their own local lock. Remove the
-unbound shared-deployment boolean. Unchanged Grafana intent is recognized through
-the accepted semantic source-config digest, since rendered runtime configuration
-contains generated chart values. Reject absent or malformed accepted source
-bindings before saving; retain exact local generation checks and convergence.
+Versions 4, 5 and 8 qualify native preview defaults without acquiring the chart graph, verify official source identity, report progress and reuse raw defaults through loading, preview, save and render. Each target is merged independently; frozen sources remain authoritative. Selected-target setup avoids unrelated native lookups, while post-confirmation normalization and validation remain project-wide. Config preimage checks, source/candidate ordering and full package/generation admission remain separate. Scope resets on every exit; resolver, retry and timeout behavior are unchanged.
 
-Version 6 updates named datasource mappings in place and retains authentication
-for identical repeats. Authenticated endpoint/type changes through datasource
-options fail with configuration guidance. The installation owner reuses intact
-accepted bundles only after canonical input, bundle identity and source-config
-binding checks; no configuration or render write occurs on that path. Protected
-deployment convergence checks still run, active retries retain their controls
-and exact generation, and unaccepted saved changes retain normal render/retry.
-README, observability guide and Unreleased notes document these boundaries.
-Earlier implementation evidence below belongs to prior versions.
+Historical versions 6 and 7 retained accepted bundles and exact execution controls, rejected conflicting controls before source work, and preserved named datasource authentication. Authenticated endpoint/type changes required configuration review. Publication bound the held lease to the resolved project lock/backend, removed the unbound shared-deployment boolean, and required valid semantic source bindings; unrelated projects acquired their own locks. FEAT-048 supersedes the historical shared-generation admission model; current installations render current inputs and invoke normal deployment.
 
-Version 5 implements explicit target scope through the config loader and
-observability materializers, keeping full project cardinality and global
-validation. Plain MK8s setup in mixed projects does not acquire unrelated native
-sources. Policy reads resolve partial peer routing without persisting it.
-Configured ownership is explained before native acquisition and the final prompt
-names the project-wide qualification boundary. After confirmation, the protected
-owner canonicalizes a private candidate alongside source loading before unchanged
-strict admission and retry checks. README, help contract, observability guide and
-Unreleased notes match these boundaries. Earlier revision evidence below remains
-historical.
-
-Version 4 repairs native datasource preview at the source-resolution boundary.
-It acquires verified observability defaults without Helm/chart graph acquisition,
-retains official tag/tree and identity-ledger checks, and reports phase progress.
-An operation-local context reuses raw verified defaults from saved-routing config
-loading through previews and final configuration, while merging each target
-independently. Nested wizard scopes reuse that context and active frozen sources
-remain authoritative. Shared defaults parsing preserves authored-value and DCGM
-ownership validation. Installation still performs its full snapshot qualification.
-
-The version 3 wizard lives in grafana_install_wizard.py and uses the same copied
-candidate materializer as final configuration. CLI and Apps callers share the
-storage/destination flow, effective datasource preview and optional customization.
-Required custom read setup, changed-write review, stale-default repair, explicit
-option precedence, stable edit names/UIDs, credential preservation and atomic
-cancellation are implemented. Help, the CLI contract fixture, README, observability
-guide and Unreleased notes describe the guided flow without changing the schema
-or headless routing path.
-
-Implemented shared grafana install/Apps wizard configuration, target schema and
-catalog backend dependencies, typed datasource provisioning and private defaults.
-Native routing uses frozen service identities and exact child value patches;
-standalone VMAgent and conditional OpenTelemetry roles share the same resolver.
-Protected generation admission rejects unrelated changes and infrastructure plans.
-Dedicated read/write Secret references isolate destination credentials. Runtime
-checks verify actual VMAgent arguments, datasource identity/health, recent metrics,
-and native Pod-bound logs through Grafana's authenticated proxy. Datasource
-verification captures the outer operation callback before entering the nested
-Grafana client scope. Nested endpoint and API checks invoke that captured fence,
-propagate authority loss and restore the outer scope; they never install the
-authority dispatcher as its own callback. VictoriaLogs
-NDJSON readback preserves empty-result polling and bounded requests. README,
-CLI help/contract, observability guide and Unreleased notes match the implementation.
-Pushgateway scrape/publication addresses honor chart service overrides. Local node
-log configuration replaces stale external exporter/pipeline maps while retaining
-receiver and processor customizations. Reconciliation derives runtime target
-references from authored app instance identifiers before matching existing rows,
-so configuring another cluster cannot append duplicate existing app identities.
+Native routing used frozen service identities and exact child patches; standalone VMAgent and conditional OpenTelemetry shared the resolver. Separate read/write Secret references isolated credentials. Runtime verification checked VMAgent arguments, datasource identity/health, recent metrics and native Pod-bound logs through authenticated Grafana queries. Nested endpoint checks used the captured outer fence, propagated authority loss and restored scope without recursive dispatch. VictoriaLogs readback retained bounded empty-result polling. Pushgateway honored service overrides; node-log updates retained receiver/processor customization. Reconciliation derived target references from authored instances to avoid duplicate app identities. Help, CLI contract, README and operator guidance were aligned with those revisions.
 
 #### Verification Evidence
+
+CLI clarity: 176 focused NAT, CLI, installation and documentation tests pass. The reconciliation-help regression failed before repair and passed afterward; coverage includes old-command rejection and retained-state recovery. Eight Python files pass Ruff and formatting; seven Markdown files pass lint. Independent review confirms the recovery wording repair. The final isolated wheel verifies all 74 public and one hidden CLI surfaces. Earlier evidence and live limitations below remain separate.
 
 The nonproduction existing-target trial recovered the interrupted native graph
 transition through the supported deployment workflow, then completed Grafana
@@ -9958,7 +9892,7 @@ The focused report-contract, installation, progress, profiling and architecture 
 
 <!-- /FEATURE: FEAT-049 -->
 
-<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-050 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-050: Custom NAT component and staged routing
 
 #### Requirements Covered
@@ -9991,6 +9925,8 @@ Require positive dedicated-pool evidence before excluding host or implicit workl
 
 The assessment is a fresh read-only feasibility snapshot, not an allocator reservation. Concurrent writers and provider placement of automatic requests relative to planned exact subnets can still cause apply failure. Keep Terraform allocation, default /28, config and journal schemas unchanged; pool expansion and allocation ordering remain separate operations.
 
+Rename only the public nat command group to nat-gateway, preserving status, refresh-routes, unlock and reconcile callbacks and arguments. Status and route refresh select enabled infra:nat-gateway components; recovery also handles retained state for disabled or removed components and the shared lock. Initial configuration uses component add; provisioning uses validate/render/deploy. Replace stale invocations in help, recovery diagnostics and operator docs. Reject nat without compatibility support. Keep internal Python identifiers, guest nebius-nat commands, configuration and recovery-state schemas unchanged.
+
 #### Selected Option
 
 Python SDK discovery and controlled external attachment updates with Terraform provisioning, following the existing architecture. Deterministic implementation; no application or AI stack change.
@@ -10009,6 +9945,8 @@ cxcli catalog/wizard, reusable discovery/quota normalization, isolated NAT plann
 - TDD-002: No workload route activates before guest readiness; interrupted routing restores only its own proven attachments.
 
 #### Validation Plan
+
+Validate the CLI clarity revision with command registration/rejection and rendered-help assertions, existing Grafana save/render/deploy tests, parsed operator examples, regenerated CLI contract and isolated installed-wheel help verification.
 
 Add capacity tests for fragmentation, scoped inventory failures, disabled blocks, mask restrictions, aggregate demand, symbolic new networks, retained/replaced subnets, partial apply, route restoration and realized CIDR validation. Cross-check small synthetic fit cases against an exhaustive oracle. Run targeted pytest, isolated Terraform fmt/init/schema/validate/mock-provider tests, catalog/packaging checks, scoped lint/type checks and align.
 
@@ -10046,6 +9984,8 @@ Delivery order: canonical specs; wizard and create/reuse slice; graph-safe per-s
 
 #### Implementation Evidence
 
+The CLI clarity revision registers only nat-gateway, preserves all four callbacks/options and updates recovery messages and examples. Help distinguishes enabled-component status/refresh from retained-state recovery. Internal identifiers, guest commands and schemas are unchanged.
+
 The gateway picker now presents eligible existing/planned subnets, dedicated creation and refresh immediately after VPC selection. It derives the existing mode/ID/binding contract, keeps creation as the new default, and resolves saved literal IDs to canonical managed bindings only through unique exact live identity. A visited-step history skips creation-only CIDR prompts during reuse in both directions. Suitability explanations, local discovery retries, dependent-selection invalidation and transactional cancellation remain enforced. Exact network-ID reconciliation preserves gateway/workload selections and network-scoped route preimages across token-only changes. NAT VPC selectors require complete discovery even when no provider error is reported. Workload choices exclude the selected gateway by both token and proven live identity across refreshes.
 
 Implemented the accepted refactor in the NAT wizard, shared exact-identity VPC selection/refresh, mode-aware Terraform module, routing validator/renderer, SDK checks, activation/recovery owner and probe modules. New disks default to 40 GiB. Reuse omits the create-only catalog CIDR default. Re-editing an existing target preserves its original source policy. Each target has an independent route table. Complete concrete override maps remove the VPC/NAT cycle. Resource moves preserve existing singleton Terraform identities; the module minimum is provider 0.6.74 and the minimal example lock resolves 0.6.75.
@@ -10055,6 +9995,8 @@ Temporary probes use explicit SDK creation intents/idempotency keys and exact-re
 A fresh alignment pass repairs shared-prompt empty multiselect defaults, excludes planned private-only gateway placement and retains network-scoped source snapshots independently of temporary target selection. A shared unfinished-activation predicate includes pending probe cleanup and gates preparation, deletion planning and retirement even after component removal. That earlier serial transport ran in an isolated subprocess with a shared token/transport deadline, bounded output and termination before cleanup; credentials travel only on stdin. Local network tests explicitly use the integration lane.
 
 #### Verification Evidence
+
+CLI clarity: 176 focused NAT, CLI, installation and documentation tests pass. The reconciliation-help regression failed before repair and passed afterward; coverage includes old-command rejection and retained-state recovery. Eight Python files pass Ruff and formatting; seven Markdown files pass lint. Independent review confirms the recovery wording repair. The final isolated wheel verifies all 74 public and one hidden CLI surfaces. Earlier evidence and live limitations below remain separate.
 
 The aligned gateway-picker revision passes 185 focused wizard, NAT, VPC identity, provider-choice, documentation and CLI contract/architecture tests. Coverage includes both prompt adapters, create/reuse switching, saved literals and bindings, planned private-only exclusion, stale/unlisted selections, empty/incomplete inventory, refresh, backtracking and cancellation. The saved managed-literal regression and five additional alignment cases failed before their repairs and passed afterward. The additional cases prove network-alias selection/preimage preservation, incomplete network/subnet discovery without provider errors, and gateway workload exclusion through both directions of identity representation changes. Independent read-only review reran the five regressions and confirmed all three alignment findings fixed with no remaining blocker. Scoped Ruff, formatting, mypy, diff checks and top-level/component-add CLI help smoke checks pass. User-facing Markdown passes; two pre-existing canonical-document blank-line findings are outside this revision. This is local fixture/source proof; live cloud inventory and deployment were not exercised.
 
@@ -10863,7 +10805,7 @@ Guest MTU/MSS, immutable bootstrap and client verification implemented. Empty pe
 
 <!-- /FEATURE: FEAT-060 -->
 
-<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=7 -->
+<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=10 -->
 ### FEAT-061: Tailscale HA gateways
 
 #### Requirements Covered
@@ -10872,63 +10814,64 @@ Guest MTU/MSS, immutable bootstrap and client verification implemented. Empty pe
 
 #### Context Evidence
 
-Accepted plan, source and vendor docs.
+Source, intent, vendor docs.
 
 #### Design Details
 
-Journal v3 requires infrastructure|active. Stage one verifies cloud/SSH/package readiness without tailnet API/payload reads. Wizard/request binds intent; configure selects active. Deploy, enrollment recovery and route approval require current accepted intent. Safe cleanup remains available.
+Journal v3 stages infrastructure/active. Stage one avoids tailnet/payload reads. Deploy/recovery/route approval require accepted intent; safe cleanup remains. Credential-free cleanup requires never-activated proof.
 
-SecretStash stores one OAuth pair/version; Terraform owns metadata, SDK owns payloads. Pin original client/version for recovery; enrollment keys remain local. Only proven never-activated cleanup avoids credentials and permits a changed draft tailnet. No shared key recovery or implicit secret deletion.
+Terraform owns SecretStash metadata; SDK owns payloads. Recovery pins client/version; enrollment keys stay local. Renewable workload identity binds IAM account/token without fallback or required Kubernetes/ESO.
 
-SDK workload identity binds exact IAM account/projected path with renewal and no fallback. Skill covers trust/grants/consumers. No required Kubernetes/ESO.
+Both wizards: dim SSH/custody guidance, shared tags (approval pending; availability unchecked), owner-email advice, name tailscale-gw, owners []. Preserve explicit values/admin-managed owners. New rules: all/ports [] renders ip ["*"] for explicit sources/private destinations; preserve pairings across route changes. Review summaries/invalidate changed approval. Admins revoke grants.
+
+Shared parsing preserves literal comma lists, validates YAML, safely retries controls/errors and navigation. One tag validator serves config/both wizards: tag: plus letter-led alphanumeric/hyphen name, unique entries. Retry without prefix guessing/raw input errors. Distinct type/empty/syntax/duplicate errors; infrastructure empty tags remain optional.
 
 #### Selected Option
 
-Two stages; admin policy; direct SecretStash; renewable SDK.
+Staged activation, scoped VPN defaults, shared validators; fixed stack.
 
 #### Alternatives Considered
 
-Reject blind issuance and implicit activation.
+Reject unscoped grants, mandatory ports, duplicate models.
 
 #### Implementation Boundaries
 
-Schema, wizard, SDK, lifecycle, reports and guides.
+Config, wizard, SDK, lifecycle, reports/guides.
 
 #### Test-First Success Criteria
 
-- TDD-001: Stage one never enrolls; stale approval blocks.
-- TDD-002: Interrupted key and credential continuity.
-- TDD-003: Token renewal without fallback/disclosure.
+- TDD-001: Stage/approval/credential continuity.
+- TDD-002: Both wizards explain custody/preserve mixed rules.
+- TDD-003: Parser/checkbox/tag retries, persistence, ports/navigation.
+- TDD-004: Preserve grants; narrowing is not revocation.
 
 #### Validation Plan
 
-Focused checks, contracts, Terraform, align.
+Focused tests, native policy, ratchets, align.
 
 #### Test Plan
 
-Stage/auth/recovery and WireGuard regressions.
+Wizard, onboarding, lifecycle, WireGuard.
 
 #### Evaluation Plan
 
-Authorized independent workload/gateway readback.
+Authorized client/gateway readback.
 
 #### Rollout And Rollback
 
-Reject old journals; no destructive recreation.
+No journal migration/recreation. Older clients reject all; revise/reapprove before rollback. Admins remove grants.
 
 #### Done Definition
 
-Separate source and live proof.
+Separate local/live proof.
 
 #### Implementation Evidence
 
-Implemented onboarding, lifecycle, credential pins, SDK SecretStash/WIF, wizard/reports and skill examples. Configure JSON emits one result. Gateway probes require TLS 1.2+.
+Shared validate_tags/prompt_tags wired to runtime/setup/onboarding.
 
 #### Verification Evidence
 
-Prior: 9591 unit pass/3 skip; Terraform 5/native 2. Align: 450 tests, 52 skill checks; wheel 74 public/1 hidden. Ruff/type/architecture/format ratchets pass. Live qualification pending.
-
-Review repair: direct apply checks retained state; policy credentials resolve without changing intent. Ten command/admission cases pass after six negative controls. Native policy tests and four-platform helper build pass.
+Tags: 358 pass/4 skip; red controls, Ruff/mypy/Markdown/ratchet/review pass. Config loads. Live unverified.
 
 <!-- /FEATURE: FEAT-061 -->
 

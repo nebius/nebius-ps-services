@@ -135,7 +135,7 @@ def require_vm_ha_current_boot_ready(
         and status.get("guard_boot_id") == boot_id
         and status.get("promotion_ready") is True
         and status.get("data_plane_mode") == "active"
-        and status.get("state") in {"active", "degraded"}
+        and status.get("state") in {"active", "degraded", "degraded-path"}
         and guard.get("guard_boot_id") == boot_id
         and guard.get("data_plane_mode") == "active"
     ):

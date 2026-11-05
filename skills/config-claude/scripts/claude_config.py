@@ -189,7 +189,7 @@ def source_bundle(root: Path) -> tuple[dict[str, bytes], dict[str, list]]:
             if name in payloads and payloads[name] != content:
                 raise ValueError("conflicting source payload")
             payloads[name] = content
-    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+    for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
         payloads[name] = safe_read(root / "global-context-management/scripts" / name)
     if len(hooks.get("Stop", [])) != 1:
         raise ValueError("source must have one Stop arbiter")

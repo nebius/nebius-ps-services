@@ -1,6 +1,28 @@
 # GitHub targets and effects
 
-## Resolve one repository
+## Validate the invocation locally
+
+Before repository discovery or any GitHub call, parse the entire invocation:
+every flag, every comma-separated entry and every repository/issue/priority
+value. Reject unknown flags, missing values, empty entries and
+positional arguments; do not execute a valid prefix of an invalid invocation.
+Trim entries and deduplicate normalized values while preserving first occurrence.
+Do not interpolate any argument into shell commands.
+
+- `--repo`: require `OWNER/REPO` names or repository URLs; reject issue/PR URLs
+  and credential-bearing URLs. Live identity/access resolution happens later.
+- `--issue`: require positive decimal integers, not URLs, ranges or expressions.
+- `--priority`: require repository-relative project paths. Reject absolute paths,
+  `..` components and empty entries before normalization. Treat `.` and `./` as
+  root ownership; otherwise remove leading `./`, trailing `/` and redundant
+  separators. Match normalized roots exactly and case-sensitively, never as
+  substrings, globs or descendant prefixes. Group existence is checked later.
+
+Read local references as needed for preflight, but help ends after SKILL.md
+without additional tools. Lexical validity does not establish repository or
+project ownership, and untrusted issue contents cannot supply new selectors.
+
+## Resolve repositories and issue identities
 
 Prefer available GitHub connector tools and discover their actual schemas.
 Use authenticated GitHub CLI when the connector lacks a required capability;
@@ -8,32 +30,56 @@ state the fallback. No tool installation, authentication repair, scope change
 or credential replacement belongs to this workflow. Do not expose credentials
 embedded in remotes, command output or error messages.
 
-1. A repository explicitly supplied with `--repo` or a GitHub issue URL binds
-   the target. Reject conflicting explicit repository selectors and ask.
-2. Otherwise inspect the current Git root, configured GitHub remotes and the
-   effective GitHub repository context. `gh repo view --json
+1. Resolve each prevalidated `--repo` entry against its returned host and
+   repository identity, deduplicate resolved identities, and preserve order.
+2. Without `--repo`, inspect the current Git root, configured GitHub remotes and
+   effective repository context. `gh repo view --json
    id,nameWithOwner,url,defaultBranchRef,isFork,parent,viewerPermission` can read
-   the effective target. Cross-check it against local remotes; environment or
-   CLI defaults alone must not silently redirect the current checkout.
-3. If no unique repository is identified, ask for `OWNER/REPO` or its GitHub
-   URL. Multiple distinct remotes, fork/upstream choices or host conflicts
-   require clarification; never change the default repository configuration.
-4. Bind bare issue numbers to that repository. Normalize positive numbers and
-   GitHub issue URLs, reject PR URLs, and verify returned objects are issues.
-   GitHub REST issue endpoints may also return PRs; inspect object type.
-5. Record host, repository identity, issue number and API identity when exposed.
-   A renamed/transferred repository or issue must be reconciled against the
-   returned identity before writes. Reject a mismatched object.
+   the effective target. Cross-check remotes; CLI/environment defaults must not
+   silently redirect the checkout or restrict discovery to the working folder.
+3. If there is no unique repository, ask for `OWNER/REPO` or its repository URL.
+   Conflicting remotes or fork/upstream choices require clarification. Never
+   change the default repository or infer the upstream from a fork.
+4. Bind the normalized `--issue` numbers to each resolved repository. Argument
+   validation must already have completed before these repository reads.
+5. Bind each issue to host, repository identity and number, plus API identity
+   when exposed. Reconcile renames/transfers against the requested identity
+   before any effect; never expand the target set silently. Check object type:
+   GitHub REST issue endpoints can also return PRs. Exclude those matches.
 
 GitHub Enterprise is eligible only when the available tools authenticate to
 the requested host. Never rewrite its URL to github.com or reuse another
 host's repository identity. Keep non-public hostnames out of public queries.
 
-Without selectors, list open issues, excluding PRs. Prove exhaustion before
-claiming there is exactly one. With multiple issues, show a bounded list of
-numbers/titles and ask for numbers or links; paginate if needed to help the
-user select. An "all issues" request still requires explicit selectors under
-this skill's interface. Deduplicate selected identities and process in order.
+## Collect the selected set
+
+Process repositories in first-occurrence `--repo` order. With no `--issue`,
+request open issues explicitly and follow every continuation page, without a
+recent-date, author, label, project or fixed-count cutoff. Deduplicate full
+issue identities. Prove exhaustion; an empty page alone is not proof when a
+continuation is present. Empty or PR-only exhausted results complete that repo
+without effects. Do not ask the user to enumerate a discovered backlog.
+
+With `--issue`, check every repository/number pair. For example,
+`--repo example-org/alpha,example-org/beta --issue 12,34` checks four pairs;
+review every returned issue, not only the first repo containing each number.
+Explicit numbers may select closed issues for assessment without reopening.
+Report confirmed missing numbers, excluded PRs and inaccessible pairs. An access
+error or ambiguous not-found response is not proof of absence. Do not silently
+ignore a repo because the current checkout belongs to a different one.
+
+Complete collection/checks per repository before count-based ordering or
+issue effects. If pagination or a requested pair remains unresolved because of
+access, truncation or transport failure, mark that repo's coverage incomplete
+and its ordered review/effects pending. Continue independent repositories.
+Do not claim partial counts represent the complete requested set.
+
+Record collection start/end and freeze the successfully collected identities
+for that repo. This is an observed interval, not an atomic GitHub snapshot.
+New issues arriving after collection wait for another invocation. State changes
+among selected issues require reassessment before effects, not an unbounded
+rediscovery loop. Never claim exact point-in-time consistency from pagination.
+Follow [grouping and batches](batching.md) to map and order the frozen set.
 
 ## Read the relevant evidence
 
@@ -48,6 +94,9 @@ code or writing a plan there. Record HEAD/reviewed revision and relevant dirty
 changes; distinguish local edits from accepted/released behavior. Never reset,
 stash, checkout, fetch-and-merge or rewrite unrelated work. Remote-only reads
 can inform assessment, but a missing local project path blocks plan saving.
+Locate an already-known matching checkout or ask for its path; do not clone
+silently or write the plan into an unrelated current repository. Keep evidence
+from each repository within its permitted disclosure boundary.
 
 ## Prepare narrowly scoped writes
 
@@ -63,9 +112,18 @@ Do not call tools that implement fixes, create issues, transfer issues, edit
 titles/bodies, change metadata, dispatch workflows or modify PRs.
 
 Immediately before publication, reread the issue and new/edited comments for
-material changes. Reassess contradictions, owner decisions, closure or identity
-drift. If accepted-plan evidence changed, revise/reverify the artifact before
-acceptance. A read-before-write check is not an atomic compare-and-set:
+material changes. Before each acceptance, also refresh the sibling issues and
+other material evidence on which that member's shared remediation depends,
+including relevant source revision and working-tree evidence. Follow the plan's
+recorded dependencies; if independence is not established, refresh all accepted
+batch members. A still-unpublished sibling can invalidate an earlier member's
+acceptance; do not wait until that sibling's own publication turn to read it.
+
+Reassess contradictions, owner decisions, closure or identity drift. Unavailable
+material evidence keeps dependent acceptance pending. If shared evidence changed,
+reassess dependent members and revise/reverify affected plan coverage before
+acceptance. Independent batches may continue. A read-before-write check is not
+an atomic compare-and-set across batch members or GitHub:
 GitHub may change concurrently. Verify afterward and report unresolved races.
 
 Inspect prior decision comments by the authenticated acting identity. If the
@@ -76,7 +134,9 @@ For a materially changed decision, publish one new concise explanation.
 
 ## Publish and verify
 
-1. Post only the decision and concise rationale/information request. Never send
+1. Follow [comment guidance](comments.md): post only the decision and concise
+   rationale/information request, with an optional repository-relative plan
+   locator explicitly described as local until published. Never send
    plan contents, raw logs, secrets, private URLs, customer data or local
    absolute paths to GitHub. Do not claim an uncommitted file is hosted online.
 2. Independently retrieve the returned comment ID/URL or locate the exact new
@@ -119,7 +179,8 @@ reopen an issue or remove comments to simulate rollback.
 
 ## Verified vendor references
 
-Reviewed 2026-10-30; current tool schemas control callable parameters:
+Discovery and current-directory documentation rechecked 2026-11-04; closure
+guidance reviewed 2026-10-30. Current tool schemas control callable parameters:
 
 - [GitHub issue REST API](https://docs.github.com/en/rest/issues/issues#update-an-issue):
   issue/PR object distinction, state reasons, duplicate identity and permissions.

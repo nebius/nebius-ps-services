@@ -22,10 +22,32 @@ def markdown_escape(value: object) -> str:
 
 
 def recommended_fix(source: object, issue: object) -> str:
-    return (
-        "Inspect the owned Playwright report and trace, repair the proven owner, "
-        "then start a new trial. Keep earlier failed evidence unchanged."
-    )
+    context = (str(source) + " " + str(issue)).lower()
+    if any(
+        word in context
+        for word in (
+            "inspection_failure",
+            "observer_exception",
+            "docker",
+            "compose",
+        )
+    ):
+        return "Investigate the Docker environment or verifier observer using the named predicate and receipt digest; classify the proven cause before recovery."
+    if (
+        "inventory" in context
+        or "admission_failure" in context
+        or "product_predicate" in context
+    ):
+        return "Investigate owned inventory, target/build identity and assignment lease using the named predicate; unknown causes remain blocked_missing_evidence."
+    if any(
+        word in context
+        for word in ("browser", "playwright", "gui", "uat", "sdlc-evaluate")
+    ):
+        return (
+            "Inspect the owned Playwright report and trace, repair the proven owner, "
+            "then start a new trial. Keep earlier failed evidence unchanged."
+        )
+    return "Inspect the named phase or validation owner's evidence and classifier route; repair only the proven cause and preserve the failed attempt."
 
 
 def report_text(state: dict[str, Any]) -> str:
@@ -132,6 +154,56 @@ def report_text(state: dict[str, Any]) -> str:
         for validation in validations
         if validation.get("status") in {"FAIL", "PARTIAL", "NOT_RUN"}
     )
+    lines.extend(
+        [
+            "",
+            "## Runtime inventory observations",
+            "",
+            "| Mode | Outcome | Category | Operation | Failed predicate | Expected | Observed | Receipt digest |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for observation in state.get("runtime_observations", []):
+        failures = [item for item in observation["predicates"] if not item["passed"]]
+        predicate = (
+            failures[-1]
+            if failures
+            else {"name": "none", "expected": True, "observed": True}
+        )
+        values = [
+            observation["mode"],
+            observation["outcome"],
+            observation["category"] or "none",
+            observation["operation"],
+            predicate["name"],
+            predicate["expected"],
+            predicate["observed"],
+            observation["sha256"],
+        ]
+        lines.append(
+            "| " + " | ".join(markdown_escape(value) for value in values) + " |"
+        )
+        if failures:
+            issue_rows.append(
+                (
+                    "inventory " + observation["operation"],
+                    "FAIL",
+                    str(observation["category"])
+                    + ": "
+                    + predicate["name"]
+                    + "; retained failure; recovery requires classifier evidence",
+                )
+            )
+    if not state.get("runtime_observations"):
+        lines.append("| pending | NOT_RUN | none | none | none | none | none | none |")
+    for recovery in state.get("runtime_recoveries", []):
+        lines.append(
+            "- Development recovery references classifier `"
+            + markdown_escape(recovery["classification_id"])
+            + "` and dispatch `"
+            + markdown_escape(recovery["dispatch_id"])
+            + "`; original failure remains retained and workflow revalidation remains required."
+        )
     lines.extend(["", "## Top issues and recommended fixes", ""])
     if issue_rows:
         lines.extend(

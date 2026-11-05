@@ -77,6 +77,13 @@ requirement must have verified delivery. The owner preserves human-owned bytes
 outside managed regions, stable record IDs, status-aware traceability, and
 marker/body agreement.
 
+Templates and newly rendered regions include a line-scoped Markdown MD013
+exception for indivisible metadata longer than 80 characters. Preserve those
+next-line directives when expanding records. Prose and unrelated comments keep
+their configured lint rules. Re-rendering preserves existing human-owned
+envelopes and line endings; publication still validates the exact candidate
+bytes and never silently reformats an existing envelope.
+
 The paired publisher validates both documents and compare-and-set checks Git
 `HEAD` plus both prior document digests before writing either file. Publication
 holds verified no-follow project/docs directory descriptors, rechecks the Git
@@ -159,6 +166,11 @@ cleanup, finalization, recovery, and Stop behavior remain workflow-owned. Root
 coordinators bind the accepted intent and exact spec receipt before dispatch.
 Workers inherit that evidence, never reclassify user intent or write canonical
 specs, and report typed `spec_gaps` to the coordinator for reconciliation.
+
+When called inside an owned SDLC verification fixture, specification Git reads
+and paired publication use the same sealed Git profile as the workflow. The
+profile changes configuration isolation only; canonical ownership, exact pair
+receipts and publication comparisons remain authoritative.
 
 ## Validation
 

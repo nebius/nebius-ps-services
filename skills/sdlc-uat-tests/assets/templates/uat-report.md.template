@@ -2,7 +2,16 @@
 
 ## Scope
 
+- Delivery slice: <SLICE ID>
 - Branch: <branch>
+- Promoted/reviewed HEAD: <full SHA>
+- Source manifest / execution basis: <digests>
+- Artifact / deployment configuration: <digests>
+- Qualification producer receipt: <private reference and digest>
+- Environment / resource lease: <public-safe identities>
+- Trial / reset / independent observation: <evidence references>
+- Intervened: <false required; otherwise trial is invalid>
+- Live applicability: <tested or reviewed prose-only N/A>
 - Requirements: <REQ IDs>
 - Features: <FEAT IDs>
 

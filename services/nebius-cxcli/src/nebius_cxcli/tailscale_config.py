@@ -90,11 +90,13 @@ def access_rules(rules: Any, routes: list[str]) -> list[dict[str, Any]]:
             net = ipaddress.IPv4Network(dst, strict=True)
             if net.version != 4 or not any(net.subnet_of(v) for v in approved):
                 raise ValueError("Access destinations must be within advertised routes")
-        if rule["protocol"] not in {"tcp", "udp", "icmp"} or not isinstance(rule["ports"], list):
-            raise ValueError("Access protocol must be tcp, udp or icmp")
-        if rule["protocol"] == "icmp":
+        if rule["protocol"] not in {"all", "tcp", "udp", "icmp"} or not isinstance(
+            rule["ports"], list
+        ):
+            raise ValueError("Access protocol must be all, tcp, udp or icmp")
+        if rule["protocol"] in {"all", "icmp"}:
             if rule["ports"]:
-                raise ValueError("ICMP rules have no ports")
+                raise ValueError("All-traffic and ICMP rules require an empty ports list")
         elif not rule["ports"]:
             raise ValueError("TCP/UDP rules require explicit ports")
         for port in rule["ports"]:
@@ -111,12 +113,31 @@ def grants(config: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "src": r["sources"],
             "dst": r["destinations"],
-            "ip": ["icmp:*"]
+            "ip": ["*"]
+            if r["protocol"] == "all"
+            else ["icmp:*"]
             if r["protocol"] == "icmp"
             else [r["protocol"] + ":" + p for p in r["ports"]],
         }
         for r in access_rules(config.get("policy", {}).get("rules", []), networks(config["routes"]))
     ]
+
+
+def validate_tags(value: Any, *, required: bool = True) -> list[str]:
+    """Validate router tags without guessing or rewriting policy identities."""
+    if not isinstance(value, list):
+        raise ValueError("tailscale.tags must be a list of tags, e.g. [tag:router]")
+    if required and not value:
+        raise ValueError("tailscale.tags requires at least one tag, e.g. tag:router")
+    for index, tag in enumerate(value):
+        if not isinstance(tag, str) or not re.fullmatch(r"tag:[A-Za-z][A-Za-z0-9-]*", tag):
+            raise ValueError(
+                f"tailscale.tags[{index}] must use tag:<name>, e.g. tag:router; "
+                "the name must start with a letter and contain only letters, digits or hyphens"
+            )
+    if len(value) != len(set(value)):
+        raise ValueError("tailscale.tags contains duplicate entries; list each tag only once")
+    return value
 
 
 def validate(row: Mapping[str, Any], *, complete: bool = True) -> dict[str, Any]:
@@ -134,17 +155,7 @@ def validate(row: Mapping[str, Any], *, complete: bool = True) -> dict[str, Any]
         or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.@_-]{0,252}", value["tailnet"])
     ):
         raise ValueError("tailscale.tailnet must be the exact expected tailnet name")
-    tags = value.get("tags", [])
-    if (
-        not isinstance(tags, list)
-        or (active and not tags)
-        or any(
-            not isinstance(t, str) or not re.fullmatch(r"tag:[A-Za-z][A-Za-z0-9-]*", t)
-            for t in tags
-        )
-        or len(tags) != len(set(tags))
-    ):
-        raise ValueError("tailscale.tags requires distinct server tags")
+    tags = validate_tags(value.get("tags", []), required=active)
     networks(value.get("routes"))
     auth = value.get("auth", {})
     if not isinstance(auth, dict) or set(auth) - {
