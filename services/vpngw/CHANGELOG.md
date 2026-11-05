@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.3] - 2026-11-04
+
 - Keep HA safety CI selectors aligned with the retained-identity regression and
   verify that every explicitly selected safety test exists.
 
