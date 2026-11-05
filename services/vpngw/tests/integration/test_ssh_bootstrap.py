@@ -53,7 +53,7 @@ def test_missing_runtime_directory_does_not_abort_ssh_bootstrap(stopped_ssh, uni
     assert not Path("/run/sshd").exists()
     cloud = yaml.safe_load(
         VMManager(project_id="test", region="eu-west1")._build_cloud_init(
-            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, ssh_key="test"
+            ingress={"peer_ips": []}, ssh_key="test"
         )
     )
     commands = cloud["runcmd"]

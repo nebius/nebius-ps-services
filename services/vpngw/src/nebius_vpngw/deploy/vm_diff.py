@@ -23,9 +23,10 @@ class VMSpec:
     memory_gb: int | None
     disk_boot_image: str
     disk_type: str
-    disk_gb: int
+    disk_gb: int | float
     disk_block_bytes: int
     num_nics: int
+    source_image_id: str | None = None
 
     @classmethod
     def from_config(cls, vm_spec: dict) -> VMSpec:
@@ -42,10 +43,11 @@ class VMSpec:
             disk_gb=vm_spec.get("disk_gb", 200),
             disk_block_bytes=vm_spec.get("disk_block_bytes", 4096),
             num_nics=int(vm_spec.get("num_nics", 1)),
+            source_image_id=vm_spec.get("image_id"),
         )
 
     @classmethod
-    def from_live_vm(cls, vm_obj: t.Any, disk_obj: t.Any) -> VMSpec:
+    def from_live_vm(cls, vm_obj: t.Any, disk_obj: t.Any, *, image_family: str) -> VMSpec:
         """Extract VMSpec from live Nebius VM and disk objects.
 
         Args:
@@ -55,27 +57,39 @@ class VMSpec:
         Returns:
             VMSpec normalized from live resources
         """
-        # Extract platform and preset from VM resources
         resources = getattr(getattr(vm_obj, "spec", None), "resources", None)
-        platform = getattr(resources, "platform", "cpu-d3")
+        platform = str(getattr(resources, "platform", "") or "")
         preset = getattr(resources, "preset", None)
         cores = getattr(resources, "cores", None)
         memory_gb = getattr(resources, "memory_gb", None)
-
-        # Extract disk specs
         disk_spec = getattr(disk_obj, "spec", None)
-        disk_type = getattr(disk_spec, "type", "NETWORK_SSD")
-        disk_gb = getattr(disk_spec, "size_gibibytes", 200)
-        disk_block_bytes = getattr(disk_spec, "block_size_bytes", 4096)
-
-        # Extract source image (if available in disk metadata)
-        # Note: This may not always be available after disk creation
-        source_image_id = getattr(disk_spec, "source_image_id", None)
-        disk_boot_image = source_image_id or "ubuntu24.04-driverless"
-
-        # Count NICs
-        network_interfaces = getattr(getattr(vm_obj, "spec", None), "network_interfaces", [])
-        num_nics = len(network_interfaces) if network_interfaces else 1
+        status = getattr(disk_obj, "status", None)
+        disk_type = getattr(disk_spec, "type", None)
+        size_bytes = getattr(status, "size_bytes", None)
+        disk_block_bytes = getattr(status, "block_size_bytes", None)
+        source_image_id = str(getattr(status, "source_image_id", "") or "")
+        network_interfaces = list(
+            getattr(getattr(vm_obj, "spec", None), "network_interfaces", []) or []
+        )
+        if (
+            not platform
+            or disk_type is None
+            or not isinstance(size_bytes, int)
+            or size_bytes <= 0
+            or not isinstance(disk_block_bytes, int)
+            or disk_block_bytes <= 0
+            or not source_image_id
+            or not image_family
+            or not network_interfaces
+        ):
+            raise RuntimeError("Authoritative VM, disk, or source-image metadata is incomplete")
+        # Preserve a fractional GiB value so non-GiB disks never compare equal
+        # through truncation. Candidate sizes remain configured whole GiB.
+        disk_gb = size_bytes / (1 << 30)
+        if disk_gb.is_integer():
+            disk_gb = int(disk_gb)
+        num_nics = len(network_interfaces)
+        disk_boot_image = image_family
 
         return cls(
             platform=platform,
@@ -87,6 +101,7 @@ class VMSpec:
             disk_gb=disk_gb,
             disk_block_bytes=disk_block_bytes,
             num_nics=num_nics,
+            source_image_id=source_image_id,
         )
 
 
@@ -171,32 +186,17 @@ class VMDiffAnalyzer:
             differences.append(f"platform: {actual.platform} → {desired.platform}")
             destructive_fields.append(f"platform ({actual.platform} → {desired.platform})")
 
-        # Check preset (only if both use preset-based sizing)
-        if desired.preset and actual.preset:
-            if desired.preset != actual.preset:
-                differences.append(f"preset: {actual.preset} → {desired.preset}")
-                destructive_fields.append(f"preset ({actual.preset} → {desired.preset})")
-        elif desired.preset and not actual.preset:
-            # Switching from cores/memory to preset (safe if resources match)
-            differences.append(f"switching to preset: {desired.preset}")
-        elif not desired.preset and actual.preset:
-            # Switching from preset to cores/memory
-            differences.append(f"switching from preset {actual.preset} to explicit cores/memory")
+        if desired.preset != actual.preset:
+            differences.append(f"preset: {actual.preset} → {desired.preset}")
+            destructive_fields.append(f"preset ({actual.preset} → {desired.preset})")
 
-        # Check disk image (comparing is tricky since live disk may only have image ID)
-        # We'll flag any mismatch as potentially destructive
-        if desired.disk_boot_image != actual.disk_boot_image:
-            # Only flag if it's not an ID comparison issue
-            if not (
-                desired.disk_boot_image.startswith("computeimage-")
-                or actual.disk_boot_image.startswith("computeimage-")
-            ):
-                differences.append(
-                    f"disk_boot_image: {actual.disk_boot_image} → {desired.disk_boot_image}"
-                )
-                destructive_fields.append(
-                    f"disk_boot_image ({actual.disk_boot_image} → {desired.disk_boot_image})"
-                )
+        # Family aliases compare against the actual source image's metadata;
+        # resolving a newer image in the same family does not trigger refresh.
+        actual_image = actual.source_image_id if desired.source_image_id else actual.disk_boot_image
+        desired_image = desired.source_image_id or desired.disk_boot_image
+        if desired_image != actual_image:
+            differences.append(f"disk_boot_image: {actual_image} → {desired_image}")
+            destructive_fields.append(f"disk_boot_image ({actual_image} → {desired_image})")
 
         # Check disk type
         desired_dt = self._normalize_disk_type(desired.disk_type)
@@ -205,17 +205,11 @@ class VMDiffAnalyzer:
             differences.append(f"disk_type: {actual_dt} → {desired_dt}")
             destructive_fields.append(f"disk_type ({actual_dt} → {desired_dt})")
 
-        # Check disk size (shrinking requires recreation, expanding is safe)
+        # Both growth and shrink converge through staged replacement. Merely
+        # classifying growth as safe never resized the live disk.
         if desired.disk_gb != actual.disk_gb:
-            if desired.disk_gb < actual.disk_gb:
-                differences.append(f"disk_gb: {actual.disk_gb} → {desired.disk_gb} (SHRINKING)")
-                destructive_fields.append(
-                    f"disk_gb shrink ({actual.disk_gb}GB → {desired.disk_gb}GB)"
-                )
-            else:
-                differences.append(
-                    f"disk_gb: {actual.disk_gb} → {desired.disk_gb} (expanding - safe)"
-                )
+            differences.append(f"disk_gb: {actual.disk_gb} → {desired.disk_gb}")
+            destructive_fields.append(f"disk_gb ({actual.disk_gb}GiB → {desired.disk_gb}GiB)")
 
         # Check disk block size
         if desired.disk_block_bytes != actual.disk_block_bytes:

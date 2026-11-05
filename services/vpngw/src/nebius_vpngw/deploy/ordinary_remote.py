@@ -228,8 +228,17 @@ def inspect(
     }
     dependencies = {}
     requirements = {}
+    distributions_by_prefix: dict[tuple[str, str], str] = {}
     for item in metadata.distributions():
         name = re.sub(r"[-_.]+", "-", item.metadata["Name"] or "").lower()
+        if name:
+            key = (name, str(Path(str(item.locate_file(""))).resolve()))
+            previous = distributions_by_prefix.setdefault(key, item.version)
+            if previous != item.version:
+                # Two versions can claim the same import files after an older
+                # ignore-installed deployment. Neither enumeration order nor
+                # the first metadata record proves which code Python imports.
+                raise RuntimeError("conflicting installed package metadata")
         if name and name not in dependencies:
             dependencies[name] = item.version
             requirements[name] = item.requires or []
@@ -440,9 +449,30 @@ def publish(path: Path, raw: bytes, mode: int) -> None:
 def execute(request: dict[str, Any]) -> dict[str, Any]:
     global OPERATION
     manifest = request["manifest"]
-    ingress.require_source(
-        manifest["ingress_policy"], os.environ.get("VPNGW_DEPLOY_SSH_CONNECTION", "")
-    )
+    replacement = request.get("prepare_replacement")
+    replacement_guard = Path("/etc/nebius-vpngw/replacement-guard.json")
+    if replacement is not None:
+        if (
+            not re.fullmatch(r"[a-f0-9]{32,64}", str(replacement))
+            or not replacement_guard.is_file()
+        ):
+            return {
+                "status": "failed",
+                "stage": "predecessor",
+                "error_code": "replacement_guard_required",
+            }
+        if json.loads(replacement_guard.read_text()) != {"operation": replacement}:
+            return {
+                "status": "failed",
+                "stage": "predecessor",
+                "error_code": "replacement_guard_changed",
+            }
+    elif replacement_guard.exists():
+        return {
+            "status": "failed",
+            "stage": "predecessor",
+            "error_code": "replacement_cutover_required",
+        }
     if not request["noop"] and request.get("approval") != request["plan_digest"]:
         return {"status": "failed", "stage": "predecessor", "error_code": "approval_required"}
     fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -523,16 +553,17 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 )
                 if fresh_routes != current["route_ownership"]:
                     raise RuntimeError("route_predecessor_changed")
-                routes.RouteStore().prepare(
-                    {
-                        "id": request["request_id"],
-                        "config": manifest["config_sha256"],
-                        "artifact": manifest["package_identity"],
-                        "predecessor": request["predecessor"],
-                    },
-                    route_plan,
-                    approved=True,
-                )
+                if replacement is None:
+                    routes.RouteStore().prepare(
+                        {
+                            "id": request["request_id"],
+                            "config": manifest["config_sha256"],
+                            "artifact": manifest["package_identity"],
+                            "predecessor": request["predecessor"],
+                        },
+                        route_plan,
+                        approved=True,
+                    )
                 operations.install_startup_guard()
                 OPERATION = operations.Operation.begin(
                     request=request["request_id"],
@@ -602,6 +633,43 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 command(["systemctl", "enable", "nebius-vpngw-ingress.service"])
                 if not manager.management_admitted():
                     raise RuntimeError("ordinary_service_scope_unknown")
+            if replacement is not None:
+                # Artifact/configuration staging has no dataplane or route commit.
+                # The independently installed boot guard remains authoritative.
+                observed = inspect(manifest, verify_runtime=False, runtime_admission=False)
+                if (
+                    observed["boot_id"] != current["boot_id"]
+                    or observed["config_sha256"] != manifest["config_sha256"]
+                    or observed["files"] != manifest["files"]
+                    or observed["assets"]
+                    != {path: item["sha256"] for path, item in manifest["assets"].items()}
+                    or observed["asset_modes"]
+                    != {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
+                    or observed["dependencies"] != manifest["expected_dependencies"]
+                    or json.loads(replacement_guard.read_text()) != {"operation": replacement}
+                    or Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() != "0"
+                    or Path("/proc/sys/net/ipv6/conf/all/forwarding").read_text().strip() != "0"
+                    or not all(
+                        manager.stopped(name)
+                        for name in (
+                            *operations.MANAGEMENT,
+                            "strongswan-starter.service",
+                            "frr.service",
+                        )
+                    )
+                ):
+                    raise RuntimeError("replacement_preparation_unverified")
+                OPERATION.complete()
+                return {
+                    "status": "prepared",
+                    "receipt": {
+                        "operation": replacement,
+                        "boot_id": current["boot_id"],
+                        "config_sha256": manifest["config_sha256"],
+                        "package_identity": manifest["package_identity"],
+                        "request_id": request["request_id"],
+                    },
+                }
             stage = "reconcile"
             OPERATION.phase("reconcile")
             receipt = agent_receipt(

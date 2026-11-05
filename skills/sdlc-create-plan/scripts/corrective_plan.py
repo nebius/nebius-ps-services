@@ -116,7 +116,7 @@ def validate_corrective_plan(
     if _field(new_text, "Supersedes") != previous_plan.name:
         raise CorrectivePlanError("Supersedes must name the exact prior plan")
     if _field(new_text, "Diagnosis") != diagnosis_id:
-        raise CorrectivePlanError("Diagnosis must name the exact diagnosis-v2 record")
+        raise CorrectivePlanError("Diagnosis must name the exact diagnosis-v3 record")
     if _field(new_text, "Regression oracle") != regression_oracle:
         raise CorrectivePlanError("Regression oracle changed")
     manifest = _load_manifest(completed_manifest)

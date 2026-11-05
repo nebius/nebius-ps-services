@@ -422,6 +422,67 @@ def test_rotation_can_rollback_only_before_local_switch(tmp_path: Path) -> None:
         second.rollback_before_switch(operation_id)
 
 
+def test_rotation_crash_after_active_publication_cannot_rollback(tmp_path: Path) -> None:
+    first, second = _stores(tmp_path)
+    _bootstrap_pair(first, second)
+    operation_id = _operation("active-publication-crash")
+    _prepare_pair(
+        first, second, operation_id=operation_id, operation_kind=MTLSOperationKind.ROTATION, epoch=2
+    )
+    first.expand_peer_trust(operation_id)
+
+    def crash(point, _path):
+        if point == "local-active-written":
+            raise RuntimeError("power loss")
+
+    first.fault_hook = crash
+    with pytest.raises(RuntimeError, match="power loss"):
+        first.activate_identity(operation_id)
+    recovered = ManagedMTLSStore(first.root)
+    assert recovered.status().recovery == "roll-forward"
+    with pytest.raises(ManagedMTLSError, match="roll forward"):
+        recovered.rollback_before_switch(operation_id)
+    assert recovered.snapshot().epoch == 2
+    assert recovered.activate_identity(operation_id).epoch == 2
+
+
+def test_prune_resumes_after_old_directory_deletion(tmp_path: Path, monkeypatch) -> None:
+    first, second = _stores(tmp_path)
+    old_first, _ = _bootstrap_pair(first, second)
+    operation_id = _operation("pruning-crash")
+    local, peer = _prepare_pair(
+        first, second, operation_id=operation_id, operation_kind=MTLSOperationKind.ROTATION, epoch=2
+    )
+    first.expand_peer_trust(operation_id)
+    first.activate_identity(operation_id)
+    for index in range(3):
+        first.record_fresh_observation(
+            operation_id,
+            local_certificate_fingerprint=local.certificate_fingerprint,
+            peer_certificate_fingerprint=peer.certificate_fingerprint,
+            local_epoch=2,
+            peer_epoch=2,
+            observation_id=_operation(f"prune-{index}"),
+        )
+    first.commit_transaction(operation_id)
+    original_write = first._write_transaction
+
+    def crash(transaction, point):
+        if point == "pruned":
+            raise RuntimeError("power loss")
+        return original_write(transaction, point)
+
+    monkeypatch.setattr(first, "_write_transaction", crash)
+    with pytest.raises(RuntimeError, match="power loss"):
+        first.prune_obsolete(operation_id)
+    assert not (first.identities / old_first.certificate_fingerprint).exists()
+    recovered = ManagedMTLSStore(first.root)
+    assert (
+        recovered.prune_obsolete(operation_id).certificate_fingerprint
+        == local.certificate_fingerprint
+    )
+
+
 def test_snapshot_rejects_private_key_permission_drift(tmp_path: Path) -> None:
     first, second = _stores(tmp_path)
     _bootstrap_pair(first, second)
@@ -474,3 +535,67 @@ def test_state_files_are_owner_only(tmp_path: Path) -> None:
             assert stat.S_IMODE((Path(root) / name).stat().st_mode) == 0o700
         for name in files:
             assert stat.S_IMODE((Path(root) / name).stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing-transaction",
+        "cluster",
+        "node",
+        "compute",
+        "untrusted-peer",
+        "no-operation",
+        "rolled-back",
+        "too-early",
+    ],
+)
+def test_snapshot_rejects_unbound_current_peer_during_trust_overlap(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    first, second = _stores(tmp_path)
+    _bootstrap_pair(first, second)
+    operation_id = _operation("overlap")
+    _prepare_pair(
+        first, second, operation_id=operation_id, operation_kind=MTLSOperationKind.ROTATION, epoch=2
+    )
+    first.expand_peer_trust(operation_id)
+    path = first.transactions / (operation_id + ".json")
+    transaction = json.loads(path.read_text())
+    if corruption == "missing-transaction":
+        path.unlink()
+    elif corruption == "no-operation":
+        active = json.loads(first.active_path.read_text())
+        active["operation_id"] = None
+        first.active_path.write_text(json.dumps(active))
+    else:
+        if corruption in {"cluster", "node", "compute"}:
+            transaction[corruption + "_id"] = "foreign"
+        elif corruption == "untrusted-peer":
+            transaction["pending_peer"]["compute_id"] = "foreign"
+        elif corruption == "rolled-back":
+            transaction["phase"] = "rolled-back"
+        else:
+            transaction["phase"] = "prepared"
+        path.write_text(json.dumps(transaction))
+    with pytest.raises(ManagedMTLSError):
+        first.snapshot()
+
+
+def test_snapshot_resolves_peer_after_active_write_before_transaction_checkpoint(tmp_path: Path):
+    first, second = _stores(tmp_path)
+    _bootstrap_pair(first, second)
+    operation_id = _operation("overlap-crash")
+    _prepare_pair(
+        first, second, operation_id=operation_id, operation_kind=MTLSOperationKind.ROTATION, epoch=2
+    )
+
+    def crash(event, path):
+        if event == "trust-expanded-active-written":
+            raise RuntimeError("injected active write crash")
+
+    first.fault_hook = crash
+    with pytest.raises(RuntimeError, match="injected active write crash"):
+        first.expand_peer_trust(operation_id)
+    assert first.snapshot().current_peer.epoch == 2

@@ -30,9 +30,7 @@ from nebius_vpngw.deploy.route_manager import (
 def _plan(*, vm_ha: bool) -> ResolvedDeploymentPlan:
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
-            ingress_policies={
-                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
-            },
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="gateway",
             instance_count=1,
             region="region-a",
@@ -57,7 +55,7 @@ def _config(mode: str) -> dict:
     return {
         "project_id": "project-a",
         "defaults": {"routing": {"mode": mode}},
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {"local_prefixes": ["10.0.0.0/24"]},
         "connections": [
             {
                 "name": "connection-a",
@@ -83,6 +81,7 @@ def test_applicability_registry_covers_every_executable_leaf_and_action_mode() -
         "validate-config",
         "apply",
         "status",
+        "access add-operator",
         "vm-ha --rotate-mtls",
         "add-routes-local",
         "list-routes-local",
@@ -119,6 +118,7 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         "validate-config",
         "apply",
         "status",
+        "access add-operator",
         "list-routes-local",
         "list-routes-remote",
         "create-from-peer-config",
@@ -658,6 +658,8 @@ def test_vm_ha_tunnel_transfer_dispatches_controller_before_ordinary_effects(
     monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _path: config)
     monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_args: plan)
 
+    monkeypatch.setattr("nebius_vpngw.cli._require_idle_gateway_bindings", lambda *_args: None)
+
     def unexpected_effect(*_args, **_kwargs):
         raise AssertionError("external effect occurred before applicability rejection")
 
@@ -720,6 +722,13 @@ def test_vm_ha_only_commands_use_central_policy_before_external_effects(
 
 def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
     expected = {
+        ("access", "add-operator"): (
+            ("name",),
+            ("--local-config-file", "-c"),
+            ("--generate-ssh-key",),
+            ("--key-output",),
+            ("--public-key",),
+        ),
         ("create-config",): (
             ("config_file",),
             ("--force", "-f"),
@@ -752,6 +761,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--region",),
             ("--dry-run",),
             ("--approve-disruption",),
+            ("--resume-replacement",),
             ("--prepare-vm-ha-peer-rotation",),
             ("--approve-vm-ha-migration",),
             ("--recover-vm-ha-migration",),
@@ -777,7 +787,6 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("config_file",),
             ("--local-config-file", "-c"),
             ("--peer-config-file",),
-            ("--ssh-allowed-cidr",),
             ("--force", "-f"),
         ),
         ("destroy",): (

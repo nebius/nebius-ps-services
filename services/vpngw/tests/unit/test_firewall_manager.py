@@ -15,7 +15,6 @@ def _redirect_runtime_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(firewall_manager.ingress_policy, "install", lambda *args, **kwargs: None)
     monkeypatch.setattr(firewall_manager.ingress_policy, "verify", lambda *args, **kwargs: None)
     monkeypatch.setattr(firewall_manager, "PEER_IPS_FILE", tmp_path / "peers")
-    monkeypatch.setattr(firewall_manager, "MGMT_CIDRS_FILE", tmp_path / "management")
     monkeypatch.setattr(firewall_manager, "LOCAL_PREFIXES_FILE", tmp_path / "local")
     monkeypatch.setattr(firewall_manager, "UFW_USER_RULES", tmp_path / "user.rules")
     monkeypatch.setattr(firewall_manager, "UFW_LOCK", tmp_path / "ufw.lock")
@@ -27,7 +26,7 @@ def test_required_firewall_reload_runs_even_when_inputs_are_unchanged(
 ) -> None:
     _redirect_runtime_files(tmp_path, monkeypatch)
     config = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {"local_prefixes": ["10.0.0.0/24"]},
         "connections": [],
     }
     calls = 0
@@ -54,7 +53,7 @@ def test_required_firewall_reload_failure_is_fail_closed(
 
     with pytest.raises(RuntimeError, match="required firewall reload failed"):
         firewall_manager.update_firewall_from_config(
-            {"gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]}, "connections": []},
+            {"gateway": {}, "connections": []},
             require_reload=True,
         )
 
@@ -80,7 +79,7 @@ def test_firewall_forward_policy_update_respects_exact_file_sandbox() -> None:
 
 def _bgp_config() -> dict:
     return {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.81.1.0/24"]},
+        "gateway": {"local_prefixes": ["10.81.1.0/24"]},
         "connections": [
             {
                 "name": "home",

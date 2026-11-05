@@ -20,16 +20,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-CAPABILITY = "managed-ingress-v1"
+CAPABILITY = "managed-peer-ingress-v2"
 TABLE = "nebius_vpngw_ingress"
 POLICY_FILE = Path("/etc/nebius-vpngw/ingress-policy.json")
 LOCK_FILE = Path("/run/nebius-vpngw/ingress.lock")
 EXECUTABLE = Path("/usr/local/lib/nebius-vpngw-ingress.py")
-FIELD = "gateway.ssh_allowed_cidrs"
 
 
 class IngressPolicyError(ValueError):
-    """Safe configuration migration diagnostic; contains no input values."""
+    """Safe configuration diagnostic; contains no input values."""
 
 
 class IngressPolicyDrift(RuntimeError):
@@ -40,33 +39,7 @@ class IngressCapabilityError(RuntimeError):
     """Selected replacement artifact cannot implement mandatory ingress."""
 
 
-def normalize_cidrs(value: Any) -> list[str]:
-    """No omission/empty/unresolved fallback, including callers bypassing Pydantic."""
-    error = (
-        f"{FIELD} must be a nonempty list of IPv4/IPv6 source CIDRs. "
-        "Add administrator and deployment SSH sources to the YAML, then run "
-        "validate-config and apply from an included source. No gateway changes were made "
-        "by configuration validation. See README: SSH allowlist migration."
-    )
-    if not isinstance(value, list) or not value:
-        raise IngressPolicyError(error)
-    networks = set()
-    try:
-        for item in value:
-            if not isinstance(item, str) or "/" not in item or "%" in item:
-                raise ValueError
-            networks.add(ipaddress.ip_network(item.strip(), strict=False))
-    except ValueError:
-        raise IngressPolicyError(error) from None
-    return [
-        str(n)
-        for n in sorted(networks, key=lambda n: (n.version, int(n.network_address), n.prefixlen))
-    ]
-
-
 def from_config(config: dict[str, Any]) -> dict[str, Any]:
-    gateway = config.get("gateway") if isinstance(config, dict) else None
-    cidrs = normalize_cidrs(gateway.get("ssh_allowed_cidrs") if isinstance(gateway, dict) else None)
     peers = set()
     for connection in config.get("connections", []):
         for tunnel in connection.get("tunnels", []):
@@ -79,17 +52,16 @@ def from_config(config: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(
                     "VPN ingress requires a resolved remote_public_ip per tunnel"
                 ) from None
-    return {"ssh_allowed_cidrs": cidrs, "peer_ips": sorted(peers)}
+    return {"peer_ips": sorted(peers)}
 
 
 def validate(policy: Any) -> dict[str, Any]:
-    if not isinstance(policy, dict) or set(policy) != {"ssh_allowed_cidrs", "peer_ips"}:
+    if not isinstance(policy, dict) or set(policy) != {"peer_ips"}:
         raise ValueError("Invalid managed ingress policy")
     peers = policy["peer_ips"]
     if not isinstance(peers, list) or any(not isinstance(p, str) or "%" in p for p in peers):
         raise ValueError("Invalid managed ingress peer addresses")
     return {
-        "ssh_allowed_cidrs": normalize_cidrs(policy["ssh_allowed_cidrs"]),
         "peer_ips": sorted({str(ipaddress.ip_address(p)) for p in peers}),
     }
 
@@ -100,25 +72,6 @@ def serialized(policy: dict[str, Any]) -> str:
 
 def identity(policy: dict[str, Any]) -> str:
     return hashlib.sha256(serialized(policy).encode()).hexdigest()
-
-
-def require_source(policy: dict[str, Any], connection: str) -> str:
-    """Consume sshd's four-field SSH_CONNECTION, never an inferred public address."""
-    try:
-        source, source_port, destination, destination_port = connection.split()
-        address = ipaddress.ip_address(source)
-        ipaddress.ip_address(destination)
-        if not all(0 < int(p) < 65536 for p in (source_port, destination_port)):
-            raise ValueError
-    except (ValueError, AttributeError):
-        raise RuntimeError("Cannot verify the authenticated server-observed SSH source") from None
-    if not any(address in ipaddress.ip_network(c) for c in validate(policy)["ssh_allowed_cidrs"]):
-        raise RuntimeError(
-            f"SSH source {address} is excluded by {FIELD}; policy was not applied. "
-            "Add the current and new sources, apply, connect from the new source, "
-            "then remove the old source and apply again."
-        )
-    return str(address)
 
 
 def _match(left: dict[str, Any], right: Any, op: str = "==") -> dict[str, Any]:
@@ -150,18 +103,9 @@ def objects(policy: dict[str, Any]) -> list[dict[str, Any]]:
     def rule(matches: list[dict[str, Any]], verdict: str = "return") -> None:
         result.append({"rule": {**base, "chain": "ingress", "expr": [*matches, {verdict: None}]}})
 
-    ssh = _payload("tcp", "dport", 22)
     ike = _payload("udp", "dport", {"set": [500, 4500]})
     esp = _match({"meta": {"key": "l4proto"}}, "esp")
     rule([_match({"meta": {"key": "iifname"}}, "lo")])
-    rule([ssh, _match({"ct": {"key": "state"}}, "established", "in")])
-    for cidr in policy["ssh_allowed_cidrs"]:
-        net = ipaddress.ip_network(cidr)
-        value: Any = str(net.network_address)
-        if net.prefixlen != net.max_prefixlen:
-            value = {"prefix": {"addr": value, "len": net.prefixlen}}
-        rule([_payload("ip" if net.version == 4 else "ip6", "saddr", value), ssh])
-    rule([ssh], "drop")
     # Only outer VPN admission is bypassed by authenticated decrypted payload.
     rule([_match({"meta": {"key": "ipsec"}}, True)])
     for peer in policy["peer_ips"]:
@@ -310,7 +254,6 @@ INGRESS_SOURCES = (
     "systemd/setup-vpngw-firewall.sh",
     "systemd/nebius-vpngw-ingress.service",
     "systemd/nebius-vpngw-ingress.py",
-    "systemd/nebius-vpngw-ssh-ingress.conf",
     "systemd/nebius-vpngw-vm-ha.service",
 )
 

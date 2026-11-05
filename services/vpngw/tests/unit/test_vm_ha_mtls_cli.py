@@ -239,3 +239,57 @@ def test_apply_replacement_preserves_survivor_key_and_prunes_former_leaf(
     assert survivor_after["spki_fingerprint"] == survivor_before["spki_fingerprint"]
     assert former_before["certificate_fingerprint"] not in survivor_after["peer_fingerprints"]
     assert survivor_after["peer_fingerprints"] == [replacement_after["certificate_fingerprint"]]
+
+
+def test_repeated_replacement_resolves_current_peer_from_exact_managed_transaction(
+    tmp_path: Path,
+) -> None:
+    from test_vm_ha_runtime_ports import _runtime_config
+
+    from nebius_vpngw.agent.vm_ha.runtime import _live_peer_binding_from_mtls
+    from nebius_vpngw.schema import VMHARuntimeBinding
+
+    passive = _instance("node-b", "gateway-1", "passive")
+    active = _instance("node-a", "gateway-0", "active")
+    targets = {"gateway-0": "target-a", "gateway-1": "target-b"}
+    ssh = _LocalManagedSSH({"target-a": tmp_path / "member-a", "target-b": tmp_path / "member-b"})
+    binding = VMHARuntimeBinding.model_validate(_runtime_config(tmp_path)["runtime_binding"])
+    local, peer = binding.nodes
+    survivor = ManagedMTLSStore(ssh.roots["target-a"] / "mtls")
+    first_fingerprint = None
+    for cycle in range(3):
+        compute = "compute-b" if cycle == 0 else f"compute-b-replacement-{cycle}"
+        if cycle:
+            ssh.roots["target-b"] = tmp_path / f"replacement-{cycle}"
+        transaction = _prepare_vm_ha_managed_mtls(
+            ssh=ssh,
+            ordered_instances=[passive, active],
+            targets=targets,
+            local_cfg={},
+            runtime_binding=_binding(passive_compute=compute),
+        )
+        snapshot = survivor.snapshot()
+        if first_fingerprint is None:
+            first_fingerprint = snapshot.certificate_fingerprint
+        assert snapshot.certificate_fingerprint == first_fingerprint
+        assert (
+            _live_peer_binding_from_mtls(
+                snapshot=snapshot,
+                binding=binding,
+                local=local,
+                peer=peer,
+            ).compute_id
+            == compute
+        )
+        if cycle == 2:
+            # Credentials can overlap at the same epoch after a second
+            # replacement; their exact transaction still names one new peer.
+            assert len({p.compute_id for p in snapshot.peers}) == 2
+            assert len({p.epoch for p in snapshot.peers}) == 1
+        _finalize_vm_ha_managed_mtls(
+            ssh=ssh,
+            transaction=transaction,
+            local_cfg={},
+            agent_statuses=_agent_statuses(transaction),
+        )
+        assert len(survivor.snapshot().peers) == 1

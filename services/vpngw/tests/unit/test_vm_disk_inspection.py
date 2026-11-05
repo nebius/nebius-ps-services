@@ -14,9 +14,7 @@ from nebius_vpngw.deploy.vm_manager import VMManager
 @pytest.fixture(params=[False, True], ids=["ordinary", "ha"])
 def disk_inspection(request):
     spec = GatewayGroupSpec(
-        ingress_policies={
-            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
-        },
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="gateway",
         instance_count=1,
         region="eu-north1",
@@ -29,7 +27,9 @@ def disk_inspection(request):
     manager._get_client = Mock(return_value=object())
     vm = SimpleNamespace(
         spec=SimpleNamespace(
-            boot_disk=SimpleNamespace(existing_disk=SimpleNamespace(id="disk-attached"))
+            boot_disk=SimpleNamespace(existing_disk=SimpleNamespace(id="disk-attached")),
+            resources=SimpleNamespace(platform="cpu-d3", preset=None),
+            network_interfaces=[SimpleNamespace()],
         )
     )
     manager._get_vm_by_name = Mock(return_value=vm)
@@ -37,14 +37,25 @@ def disk_inspection(request):
         metadata=SimpleNamespace(
             id="disk-attached", parent_id="project-1", name="renamed-attached-disk"
         ),
-        spec=SimpleNamespace(),
+        spec=SimpleNamespace(type="NETWORK_SSD"),
+        status=SimpleNamespace(
+            size_bytes=200 * (1 << 30), block_size_bytes=4096, source_image_id="computeimage-test"
+        ),
+    )
+    image_service = Mock()
+    image_service.get.return_value.wait.return_value = SimpleNamespace(
+        metadata=SimpleNamespace(id="computeimage-test"),
+        spec=SimpleNamespace(image_family="ubuntu24.04-driverless"),
     )
     service = Mock()
     service.get.return_value.wait.return_value = disk
     service.get_by_name.return_value.wait.side_effect = RequestError(
         SimpleNamespace(code=StatusCode.NOT_FOUND)  # type: ignore[arg-type]
     )
-    with patch("nebius.api.nebius.compute.v1.DiskServiceClient", return_value=service):
+    with (
+        patch("nebius.api.nebius.compute.v1.DiskServiceClient", return_value=service),
+        patch("nebius.api.nebius.compute.v1.ImageServiceClient", return_value=image_service),
+    ):
         yield manager, spec, vm, disk, service
     manager.close()
 

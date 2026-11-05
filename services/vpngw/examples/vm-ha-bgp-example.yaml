@@ -39,7 +39,6 @@ gateway_group:
 
 gateway:
   # Replace with the actual administrator and apply-runner source CIDRs.
-  ssh_allowed_cidrs: ["203.0.113.4/32"]
   local_asn: 65010
   local_prefixes: ["10.10.0.0/16"]
 

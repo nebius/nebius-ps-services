@@ -157,6 +157,8 @@ class HookTestCase(unittest.TestCase):
                 "event_id": event_id,
                 "blocker_key": blocker_key,
                 "next_recommended_skill": classification_route,
+                "invalidates": [],
+                "inherited_invalidations": [],
             }
             if classification_route
             else None
@@ -225,7 +227,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 diagnosis_path,
                 {
-                    "schema": "agentic-sdlc/diagnosis-v2",
+                    "schema": "agentic-sdlc/diagnosis-v3",
                     "execution_id": "FEAT-001",
                     "event_id": event_id,
                     "diagnosis_id": diagnosis_id,
@@ -271,6 +273,7 @@ class HookTestCase(unittest.TestCase):
         run_dir: Path,
         *,
         complete: bool,
+        inherited: list[dict[str, str]] | None = None,
     ) -> None:
         control_path = run_dir / "repairs" / "FEAT-001" / "repair-control.json"
         control = json.loads(control_path.read_text(encoding="utf-8"))
@@ -283,6 +286,7 @@ class HookTestCase(unittest.TestCase):
             "event_id": control["current_event_id"],
             "blocker_key": blocker_key,
             "invalidates": [surface],
+            "inherited_invalidations": inherited or [],
         }
         classification_id = hashlib.sha256(
             json.dumps(
@@ -699,6 +703,39 @@ class HookTestCase(unittest.TestCase):
                         self.assert_denied(result, "secret")
                     else:
                         self.assertEqual(result, {})
+
+    def test_dynamic_csrf_lookup_is_allowed_through_each_write_tool(self) -> None:
+        self.active_run()
+        source = "const token = form.querySelector('[name=csrfmiddlewaretoken]').value;"
+        for tool in ("Bash", "apply_patch", "Write", "Edit"):
+            with self.subTest(tool=tool):
+                if tool == "Bash":
+                    text = "cat > src/board.html <<'HTML'\n" + source + "\nHTML"
+                else:
+                    text = "*** Begin Patch\n*** Add File: src/board.html\n+" + source + "\n*** End Patch\n"
+                payload = self.pre_payload(tool, text)
+                if tool in {"Write", "Edit"}:
+                    field = "content" if tool == "Write" else "new_string"
+                    payload["tool_input"] = {"file_path": str(self.project / "src/board.html"), field: source}
+                self.assertEqual(run_hook(PRE_TOOL, payload, self.codex_home), {})
+
+    def test_dynamic_lookup_does_not_mask_literals_or_ambiguous_payloads(self) -> None:
+        self.active_run()
+        literal = "z" * 24
+        for source in (
+            'token = "form.querySelector[csrfmiddlewaretoken]"',
+            "token = form.querySelector(",
+            "token = form.querySelector('csrf').value; token = " + literal,
+            "token = form.querySelector('csrf').value;\nsecret = " + literal,
+            "token = " + literal + " # placeholder",
+            "token = form.querySelector('csrf').value; GITHUB_TOKEN=" + literal,
+            "token = form.querySelector('csrf').value; -----BEGIN PRIVATE KEY-----",
+            "token = " + "form." * 1000 + "get('csrf');",
+        ):
+            with self.subTest(source=source[:80]):
+                payload = self.pre_payload("Write", "")
+                payload["tool_input"] = {"file_path": str(self.project / "src/board.html"), "content": source}
+                self.assert_denied(run_hook(PRE_TOOL, payload, self.codex_home), "secret")
 
     def test_internal_skill_requires_active_coordinator_context(self) -> None:
         payload = self.pre_payload("Skill", "")
@@ -2004,6 +2041,29 @@ class HookTestCase(unittest.TestCase):
         self.assertEqual(result.get("decision"), "block")
         self.assertIn("sdlc-classify-failure", result.get("reason", ""))
 
+    def test_stop_rejects_retired_active_diagnosis_schema(self) -> None:
+        for status, next_skill in (
+            ("diagnosed", "sdlc-classify-failure"),
+            ("routed", "sdlc-create-plan"),
+        ):
+            with self.subTest(status=status):
+                run_dir = self.active_run(next_skill=next_skill)
+                self.write_repair_state(
+                    run_dir, status=status, next_skill=next_skill, with_diagnosis=True,
+                    classification_route=next_skill if status == "routed" else None,
+                )
+                current = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertEqual(current.get("decision"), "block")
+                self.assertIn(next_skill, current.get("reason", ""))
+                state = json.loads((run_dir / "current-state.json").read_text())
+                path = run_dir / state["repair"]["diagnosis"]
+                diagnosis = json.loads(path.read_text())
+                diagnosis["schema"] = "agentic-sdlc/diagnosis-v2"
+                write_json(path, diagnosis)
+                result = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertFalse(result.get("continue", True))
+                self.assertIn("diagnosis identity is inconsistent", result["stopReason"])
+
     def test_stop_enforces_repair_budget_status(self) -> None:
         run_dir = self.active_run(next_skill="sdlc-classify-failure")
         self.write_repair_state(
@@ -2036,6 +2096,85 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertEqual(result.get("decision"), "block")
         self.assertIn("sdlc-implement-plan", result.get("reason", ""))
+
+    def test_final_dispatch_can_revalidate_but_cannot_exceed_ceiling(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-validate-codes")
+        self.write_repair_state(
+            run_dir, status="revalidation_required", next_skill="sdlc-validate-codes",
+        )
+        self.write_revalidation_cursor(run_dir, complete=False)
+        path = run_dir / "repairs/FEAT-001/repair-control.json"
+        control = json.loads(path.read_text())
+        control["feature_dispatches"] = control["feature_dispatch_limit"]
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-validate-codes", result.get("reason", ""))
+        control["feature_dispatches"] += 1
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("dispatch ceiling", result["stopReason"])
+
+    def test_stop_verifies_inherited_obligations_against_original_classification(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-validate-codes")
+        self.write_repair_state(
+            run_dir, status="revalidation_required", next_skill="sdlc-validate-codes",
+        )
+        source = {
+            "schema": "agentic-sdlc/failure-classification-v2",
+            "execution_id": "FEAT-001", "event_id": "c" * 64,
+            "blocker_key": "prior|implementation|failure|boundary",
+            "invalidates": ["validation"], "inherited_invalidations": [],
+        }
+        identity = hashlib.sha256(json.dumps(
+            source, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode()).hexdigest()
+        source["classification_id"] = identity
+        path = run_dir / "repairs/FEAT-001/classifications" / f"{identity}.json"
+        write_json(path, source)
+        reference = {"event_id": source["event_id"], "classification_id": identity,
+                     "surface": "validation"}
+        self.write_revalidation_cursor(run_dir, complete=False, inherited=[reference])
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("sdlc-validate-codes", result.get("reason", ""))
+        for field, value in (("event_id", "d" * 64), ("surface", "requirements"),
+                             ("classification_id", "../outside")):
+            with self.subTest(field=field):
+                self.write_revalidation_cursor(
+                    run_dir, complete=False, inherited=[{**reference, field: value}]
+                )
+                result = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertFalse(result["continue"])
+                self.assertIn("inherited invalidation", result["stopReason"])
+        self.write_revalidation_cursor(run_dir, complete=False, inherited=[reference])
+        path.unlink()
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("inherited invalidation", result["stopReason"])
+
+    def test_final_admitted_dispatch_requires_active_matching_authority(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-implement-plan")
+        self.write_repair_state(
+            run_dir, status="remediating", next_skill="sdlc-implement-plan",
+            classification_route="sdlc-implement-plan",
+        )
+        path = run_dir / "repairs/FEAT-001/repair-control.json"
+        control = json.loads(path.read_text())
+        control["feature_dispatches"] = control["feature_dispatch_limit"]
+        control["active_blocker"]["attempts"] = [{
+            "classification_id": control["current_classification_id"],
+            "event_id": control["current_event_id"], "status": "dispatched", "result": None,
+        }]
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block")
+        control["active_blocker"]["attempts"][0]["event_id"] = "foreign"
+        write_json(path, control)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result["continue"])
+        self.assertIn("no active repair authority", result["stopReason"])
 
     def test_stop_blocks_publication_until_invalidations_are_revalidated(
         self,

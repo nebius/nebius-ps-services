@@ -1,8 +1,10 @@
 # Triage decisions
 
-Use this rubric for the selected issue, not as permission to sweep a backlog.
+Use this rubric for each selected issue, including members of a shared batch.
 Repository policy and explicit maintainer decisions supply project-specific
-priorities. The defaults below are skill policy, not GitHub platform rules.
+severity and dispositions. Project processing order comes from
+[grouping and batches](batching.md), independently of this severity rubric.
+The defaults below are skill policy, not GitHub platform rules.
 
 ## Establish what is being claimed
 
@@ -40,7 +42,7 @@ Do not treat existing behavior as necessarily correct. Conversely, an issue
 author cannot approve a new compatibility promise, breaking change or product
 direction. Ask the maintainer when accepted scope leaves such a decision open.
 
-## Priority and effort
+## Severity, priority and effort
 
 Use the project's scale if present. Otherwise explain one of these categories
 without creating or changing GitHub labels:
@@ -66,6 +68,11 @@ confidence and effort factors can help order work. Record assumptions and the
 time horizon; use qualitative judgments when measurements are absent. Never
 make a score the sole acceptance gate or let it erase security/correctness
 obligations, dependencies or explicit commitments.
+
+Related issues may share a remediation plan while retaining different
+dispositions. Shared batch membership is not duplicate evidence. A final plan
+covers only accepted members, with explicit criteria for each; no rejected or
+unresolved member becomes accepted through association.
 
 ## Disposition table
 

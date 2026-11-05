@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import socket
 import tempfile
@@ -96,6 +97,7 @@ def test_render_keeps_psks_out_of_ordinary_file_writes(
     tmp_path, monkeypatch, sample_config, preview
 ) -> None:
     secret = sample_config["connections"][0]["tunnels"][0]["psk"]
+    encoded = base64.b64encode(secret.encode()).decode()
     swanctl_path = tmp_path / "swanctl.conf"
     monkeypatch.setattr(strongswan_renderer, "STRONGSWAN_CONF_DIR", tmp_path / "strongswan.d")
     monkeypatch.setattr(strongswan_renderer, "IPSEC_CONF", tmp_path / "ipsec.conf")
@@ -105,6 +107,7 @@ def test_render_keeps_psks_out_of_ordinary_file_writes(
 
     def write_public(path, content, *args, **kwargs):
         assert secret not in content
+        assert encoded not in content
         return original_write_text(path, content, *args, **kwargs)
 
     monkeypatch.setattr(Path, "write_text", write_public)
@@ -112,10 +115,10 @@ def test_render_keeps_psks_out_of_ordinary_file_writes(
     StrongSwanRenderer().render_and_apply(sample_config, activate=False, rendered_files=rendered)
 
     if rendered is not None:
-        assert secret in rendered[swanctl_path]
+        assert f"secret = 0s{encoded}" in rendered[swanctl_path]
         assert not list(tmp_path.iterdir())
     else:
-        assert secret in swanctl_path.read_text(encoding="utf-8")
+        assert f"secret = 0s{encoded}" in swanctl_path.read_text(encoding="utf-8")
         assert swanctl_path.stat().st_mode & 0o777 == 0o600
 
 

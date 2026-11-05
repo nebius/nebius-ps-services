@@ -41,8 +41,11 @@ class ConnectionPolicy:
 
 
 def covers(prefixes: frozenset[str], required: frozenset[str]) -> bool:
-    available = tuple(ipaddress.IPv4Network(p) for p in prefixes)
-    return all(any(ipaddress.IPv4Network(p).subnet_of(n) for n in available) for p in required)
+    available = tuple(ipaddress.IPv4Network(p, strict=False) for p in prefixes)
+    return all(
+        any(ipaddress.IPv4Network(p, strict=False).subnet_of(n) for n in available)
+        for p in required
+    )
 
 
 def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
@@ -77,7 +80,9 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
                     interface=f"xfrm{index}",
                     if_id=100 + index,
                     preferred=tunnel.get("ha_role", "active") == "active",
-                    destinations=frozenset(str(ipaddress.IPv4Network(p)) for p in prefixes),
+                    destinations=frozenset(
+                        str(ipaddress.IPv4Network(p, strict=False)) for p in prefixes
+                    ),
                     peer=str(
                         (tunnel.get("bgp") or {}).get("remote_ip")
                         or tunnel.get("inner_remote_ip")
@@ -88,7 +93,8 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
                         str(tunnel.get("remote_public_ip") or ""),
                     ),
                     local_selectors=frozenset(
-                        ([tunnel["inner_cidr"]] if tunnel.get("inner_cidr") else [])
+                        str(ipaddress.ip_network(p, strict=False))
+                        for p in ([tunnel["inner_cidr"]] if tunnel.get("inner_cidr") else [])
                         + (cfg.get("gateway", {}).get("local_prefixes") or [])
                         or ["0.0.0.0/0"]
                     ),
@@ -98,7 +104,8 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
         if not paths:
             continue
         required = frozenset(
-            str(ipaddress.IPv4Network(p)) for p in connection.get("remote_prefixes") or []
+            str(ipaddress.IPv4Network(p, strict=False))
+            for p in connection.get("remote_prefixes") or []
         ).union(*(p.destinations for p in paths))
         reason = None
         if modes != {mode}:

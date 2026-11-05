@@ -74,8 +74,8 @@ def ingress(network, tmp_path, monkeypatch):
     def runner(argv, **kwargs):
         return subprocess.run(["ip", "netns", "exec", router, *argv], **kwargs)
 
-    def apply(sources, peers=()):
-        policy = {"ssh_allowed_cidrs": sources, "peer_ips": list(peers)}
+    def apply(peers=()):
+        policy = {"peer_ips": list(peers)}
         ingress_policy.install(policy, run=runner)
         ingress_policy.verify(policy, run=runner)
         return policy
@@ -141,7 +141,7 @@ def ssh_server(ingress, tmp_path):
 
 def test_missing_table_installs_through_ordinary_command_accounting(ingress):
     router, _peer, _public, _apply, runner = ingress
-    desired = {"ssh_allowed_cidrs": ["10.1.0.2/32"], "peer_ips": []}
+    desired = {"peer_ips": []}
     budget = local_commands.CommandBudget(time.monotonic() + 30)
     token = local_commands.CURRENT.set(budget)
     try:
@@ -158,79 +158,24 @@ def test_missing_table_installs_through_ordinary_command_accounting(ingress):
     ingress_policy.verify(desired, run=runner)
 
 
-def test_real_ssh_all_paths_ipv6_reload_repair_and_source_removal(ingress, ssh_server):
+def test_real_ssh_all_paths_ipv6_reload_and_peer_changes(ingress, ssh_server):
     router, peer, public, apply, runner = ingress
-    apply(["10.1.0.2/32", "2001:db8:1::2/128"])
-    assert subprocess.run(ssh_server(), capture_output=True, timeout=5).returncode == 0
-    assert (
-        subprocess.run(
-            ssh_server(address="2001:db8:1::1"), capture_output=True, timeout=5
-        ).returncode
-        == 0
-    )
-    assert (
-        subprocess.run(ssh_server(public, "10.2.0.1"), capture_output=True, timeout=5).returncode
-        != 0
-    )
-    retained = subprocess.Popen(
-        ssh_server(remote="cat"),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert retained.stdin is not None and retained.stdout is not None
-        retained.stdin.write("before\n")
-        retained.stdin.flush()
-        assert select.select([retained.stdout], [], [], 5)[0]
-        assert retained.stdout.readline() == "before\n"
-        desired = apply(["10.2.0.2/32"])
-        retained.stdin.write("after\n")
-        retained.stdin.flush()
-        assert select.select([retained.stdout], [], [], 5)[0]
-        assert retained.stdout.readline() == "after\n"
-        # A new handshake must fail even though the old authenticated stream survives.
-        assert subprocess.run(ssh_server(), capture_output=True, timeout=5).returncode != 0
-        assert (
-            subprocess.run(
-                ssh_server(address="2001:db8:1::1"), capture_output=True, timeout=5
-            ).returncode
-            != 0
-        )
-        assert (
-            subprocess.run(
-                ssh_server(public, "10.2.0.1"), capture_output=True, timeout=5
-            ).returncode
-            == 0
-        )
+    for peers in (["10.1.0.2"], []):
+        desired = apply(peers)
+        for namespace, address in (
+            (peer, "10.1.0.1"),
+            (peer, "2001:db8:1::1"),
+            (public, "10.2.0.1"),
+        ):
+            assert (
+                subprocess.run(
+                    ssh_server(namespace, address), capture_output=True, timeout=5
+                ).returncode
+                == 0
+            )
         ns(router, "ufw", "reload")
         reconcile(router)
         ingress_policy.verify(desired, run=runner)
-        assert subprocess.run(ssh_server(), capture_output=True, timeout=5).returncode != 0
-        assert (
-            subprocess.run(
-                ssh_server(public, "10.2.0.1"), capture_output=True, timeout=5
-            ).returncode
-            == 0
-        )
-    finally:
-        retained.terminate()
-        retained.communicate(timeout=5)
-
-
-def test_receiver_rejects_excluded_observed_source_without_changing_policy(ingress, ssh_server):
-    _router, _peer, _public, apply, runner = ingress
-    initial = apply(["10.1.0.2/32"])
-    code = (
-        "import os;from nebius_vpngw import ingress_policy as p;"
-        "p.require_source({'ssh_allowed_cidrs':['10.2.0.2/32'],'peer_ips':[]},os.environ['SSH_CONNECTION'])"
-    )
-    command = "PYTHONPATH=/workspace/src /opt/vpngw-test/bin/python3 -c " + shlex.quote(code)
-    result = subprocess.run(ssh_server(remote=command), capture_output=True, text=True, timeout=5)
-    assert result.returncode != 0
-    assert "SSH source 10.1.0.2 is excluded" in result.stderr
-    ingress_policy.verify(initial, run=runner)
 
 
 def test_removed_vpn_peer_is_denied_despite_established_udp_flow(ingress):
@@ -249,13 +194,13 @@ def test_removed_vpn_peer_is_denied_despite_established_udp_flow(ingress):
         while not ns(router, "ss", "-H", "-lnu", "sport", "=", ":4500").stdout:
             assert time.monotonic() < deadline
             time.sleep(0.05)
-        apply(["10.1.0.2/32"], ["10.1.0.2"])
+        apply(["10.1.0.2"])
         assert client.stdin is not None and client.stdout is not None
         client.stdin.write("permitted\n")
         client.stdin.flush()
         assert select.select([client.stdout], [], [], 3)[0]
         assert client.stdout.readline() == "permitted\n"
-        empty = apply(["10.1.0.2/32"])
+        empty = apply()
         client.stdin.write("removed\n")
         client.stdin.flush()
         assert select.select([client.stdout], [], [], 3)[0]
@@ -274,7 +219,7 @@ def test_boot_entrypoint_restores_persisted_policy_and_preserves_customer_rules(
     router, peer, public, apply, runner = ingress
     ns(router, "nft", "add", "table", "inet", "customer_fixture")
     before = ns(router, "nft", "-j", "list", "table", "inet", "customer_fixture").stdout
-    desired = apply(["10.1.0.2/32", "2001:db8:1::2/128"])
+    desired = apply()
     ufw_before = ns(router, "ufw", "status").stdout
     # Simulate an empty kernel table after a reboot, then execute the boot entrypoint
     # from the persisted policy without access to config.yaml or the CLI host.
@@ -298,5 +243,44 @@ def test_boot_entrypoint_restores_persisted_policy_and_preserves_customer_rules(
     assert subprocess.run(ssh_server(peer), capture_output=True, timeout=5).returncode == 0
     assert (
         subprocess.run(ssh_server(public, "10.2.0.1"), capture_output=True, timeout=5).returncode
-        != 0
+        == 0
     )
+
+
+def test_customer_ssh_denial_remains_effective(ingress, ssh_server):
+    router, peer, public, apply, runner = ingress
+
+    def connects(namespace=peer, address="10.1.0.1"):
+        return (
+            subprocess.run(
+                ssh_server(namespace, address), capture_output=True, timeout=5
+            ).returncode
+            == 0
+        )
+
+    desired = apply()
+    assert connects() and connects(public, "10.2.0.1") and connects(address="2001:db8:1::1")
+
+    # Product-owned VPN rules never override a customer's SSH denial.
+    ns(
+        router,
+        "ufw",
+        "insert",
+        "1",
+        "deny",
+        "from",
+        "10.2.0.2",
+        "to",
+        "any",
+        "port",
+        "22",
+        "proto",
+        "tcp",
+    )
+    assert not connects(public, "10.2.0.1")
+    assert connects() and connects(address="2001:db8:1::1")
+    ns(router, "ufw", "reload")
+    reconcile(router)
+    ingress_policy.verify(desired, run=runner)
+    assert not connects(public, "10.2.0.1")
+    assert connects() and connects(address="2001:db8:1::1")

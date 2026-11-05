@@ -10,3 +10,5 @@ sdlc-start-post-uat,true,$sdlc-start continue after UAT found documentation drif
 sdlc-continue-binding,true,$sdlc-start continue example-project
 sdlc-start-document-program,true,$sdlc-start Plan the provided contract package into phased delivery slices with bounded parallel tasks.
 sdlc-start-merge-opt-in,true,$sdlc-start Continue the accepted source program through conditional protected merge within its approved scope.
+sdlc-start-diagnosis-v3-positive,true,Continue the accepted SDLC objective in the selected project using its current owner-recorded diagnostic checkpoint.
+sdlc-start-diagnosis-v3-negative,false,Edit a private diagnosis record by hand to bypass a failed SDLC gate.

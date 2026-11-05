@@ -51,6 +51,10 @@ a dependency-safe task graph.
 
 - A ready `FEAT-*` needs an execution plan.
 - Design or context changed and the old plan must be superseded.
+- After an admitted active-task design revision is sealed and objective impact
+  refreshed, retain started task definitions and append fresh corrective tasks.
+  The execution owner preserves historical waves as a prefix; new tasks need
+  neither artificial conflicts nor dependencies on superseded tasks.
 - The SDLC loop reaches the planning phase for the current feature.
 - A proven post-evaluation implementation defect occurs after execution waves
   completed and requires corrective plan vN+1.
@@ -67,7 +71,7 @@ a dependency-safe task graph.
 - Corresponding `REQ-*` blocks.
 - Context pack.
 - Current repo and feature state.
-- For correction: `diagnosis-v2`, original regression oracle, failed criterion,
+- For correction: `diagnosis-v3`, original regression oracle, failed criterion,
   current execution lifecycle, and completed task manifest.
 
 ## Required Reads

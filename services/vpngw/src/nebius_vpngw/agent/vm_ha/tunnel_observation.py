@@ -9,72 +9,8 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from ...ha_tunnel_policy import ConnectionPolicy, TunnelPath, covers
+from ...ipsec_observation import parse_sas
 from .tunnels import Health
-
-
-def parse_sas(raw: str) -> list[tuple[str, dict[str, Any]]]:
-    """Parse VICI raw events with balanced containers, preserving rekey instances."""
-    tokens = re.findall(r"[^\s{}=\[\]]+|[{}=\[\]]", raw)
-    position = 0
-
-    def block() -> dict[str, Any]:
-        nonlocal position
-        result: dict[str, Any] = {}
-        if position >= len(tokens) or tokens[position] != "{":
-            raise ValueError("missing VICI container")
-        position += 1
-        while position < len(tokens) and tokens[position] != "}":
-            key = tokens[position]
-            position += 1
-            if key in result or position >= len(tokens):
-                raise ValueError("ambiguous VICI field")
-            if tokens[position] == "{":
-                result[key] = block()
-            elif tokens[position] == "=":
-                position += 1
-                if position >= len(tokens):
-                    raise ValueError("missing VICI value")
-                if tokens[position] == "[":
-                    position += 1
-                    values = []
-                    while position < len(tokens) and tokens[position] != "]":
-                        values.append(tokens[position])
-                        position += 1
-                    if position >= len(tokens):
-                        raise ValueError("unterminated VICI list")
-                    position += 1
-                    result[key] = values
-                else:
-                    result[key] = tokens[position]
-                    position += 1
-            else:
-                raise ValueError("invalid VICI field")
-        if position >= len(tokens):
-            raise ValueError("unterminated VICI event")
-        position += 1
-        return result
-
-    sas = []
-    reply = False
-    while position < len(tokens):
-        header = tokens[position : position + 2]
-        position += 2
-        if header == ["list-sa", "event"] and not reply:
-            event = block()
-            if len(event) != 1:
-                raise ValueError("invalid VICI SA event")
-            name, value = next(iter(event.items()))
-            if not isinstance(value, dict) or not str(value.get("uniqueid", "")).isdigit():
-                raise ValueError("invalid VICI IKE identity")
-            sas.append((name, value))
-        elif header == ["list-sas", "reply"] and not reply:
-            block()
-            reply = True
-        else:
-            raise ValueError("unexpected VICI event")
-    if not reply or len({sa["uniqueid"] for _, sa in sas}) != len(sas):
-        raise ValueError("incomplete VICI SA observation")
-    return sas
 
 
 def scoped_ike_ids(raw: str, names: set[str]) -> tuple[str, ...]:

@@ -1,8 +1,8 @@
 [Unit]
-Description=Nebius VPN gateway management and VPN ingress admission
+Description=Nebius VPN gateway VPN peer ingress admission
 DefaultDependencies=no
 After=local-fs.target
-Before=network-pre.target ufw.service ssh.service ssh.socket nebius-vpngw-agent.service nebius-vpngw-vm-ha.service
+Before=network-pre.target ufw.service nebius-vpngw-agent.service nebius-vpngw-vm-ha.service
 Wants=network-pre.target
 
 [Service]

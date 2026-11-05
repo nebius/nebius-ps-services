@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from nebius_vpngw.agent.vm_ha import DigestSet, PeerHeartbeat
+from nebius_vpngw.agent.vm_ha.models import HeartbeatEvidence
 from nebius_vpngw.agent.vm_ha_controller import (
     ActionKind,
     CloudObservation,
@@ -36,6 +37,9 @@ def _peer(
 ) -> PeerHeartbeat:
     digests = DIGESTS if generation_id == DIGEST else replace(DIGESTS, configuration=generation_id)
     return PeerHeartbeat(
+        evidence=HeartbeatEvidence(state="healthy"),
+        health_valid_until=1000.0,
+        service_valid_until=1000.0,
         cluster_id="cluster",
         node_id=node_id,
         boot_id="peer-boot",
@@ -138,6 +142,7 @@ def _proven_transfer_checkpoint(
     return ControllerCheckpoint(
         state=state,
         suspect_since=90.0,
+        suspicion_boot_id="local-boot",
         ownership_incarnation=ownership_incarnation,
         transfer_continuity=TransferContinuity(
             attach_operation_id="durable-attach-operation",
@@ -485,7 +490,9 @@ def test_automatic_failover_blocks_on_every_explicit_gate(
 
 
 def test_fencing_and_transfer_order_is_strict(policy: VMHAController) -> None:
-    checkpoint = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+    checkpoint = ControllerCheckpoint(
+        state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+    )
     cases = (
         (_cloud(state=ComputeState.RUNNING), ActionKind.STOP_FORMER_OWNER),
         (
@@ -520,7 +527,9 @@ def test_ambiguous_cloud_state_blocks_without_mutation(policy: VMHAController) -
             peer_received_at=80.0,
             cloud=_cloud(state=ComputeState.UNKNOWN),
         ),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert decision.state is HAState.BLOCKED
     assert decision.action is None
@@ -532,7 +541,9 @@ def test_unexpected_or_inconsistent_allocation_truth_blocks_before_fencing(
 ) -> None:
     foreign = policy.decide(
         _snapshot(peer_received_at=80.0, cloud=_cloud(owner="foreign")),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert foreign.state is HAState.BLOCKED
     assert foreign.action is None
@@ -543,7 +554,9 @@ def test_unexpected_or_inconsistent_allocation_truth_blocks_before_fencing(
             peer_received_at=80.0,
             cloud=_cloud(owner="node-a", state=ComputeState.STOPPED, absent=True),
         ),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert inconsistent.state is HAState.BLOCKED
     assert inconsistent.action is None
@@ -554,7 +567,9 @@ def test_unexpected_or_inconsistent_allocation_truth_blocks_before_fencing(
             peer_received_at=80.0,
             cloud=replace(_cloud(), allocation_id=""),
         ),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert missing_allocation.state is HAState.BLOCKED
     assert missing_allocation.action is None
@@ -569,7 +584,9 @@ def test_unexpected_or_inconsistent_allocation_truth_blocks_before_fencing(
                 absent=True,
             ),
         ),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert inexact_candidate.state is HAState.BLOCKED
     assert inexact_candidate.action is None
@@ -733,6 +750,8 @@ def test_static_peer_grace_requires_fresh_heartbeat_and_exact_authoritative_owne
     }
     peer = replace(
         _peer(),
+        evidence=HeartbeatEvidence(state="unknown"),
+        health_valid_until=None,
         tunnel_capability=True,
         tunnel_recovery=claim,
         route_ready=False,
@@ -752,6 +771,8 @@ def test_static_peer_grace_requires_fresh_heartbeat_and_exact_authoritative_owne
         {"wall_time": 989.0},
         {"peer_heartbeat": replace(peer, tunnel_capability=False)},
         {"peer_heartbeat": replace(peer, service_healthy=False)},
+        {"peer_heartbeat": replace(peer, service_valid_until=None)},
+        {"peer_heartbeat": replace(peer, service_valid_until=snapshot.now)},
         {"cloud": replace(snapshot.cloud, observed_owner_epoch="different-revision")},
         {"cloud": replace(snapshot.cloud, authoritative=False)},
         {"cloud": replace(snapshot.cloud, allocation_id="different-allocation")},
@@ -1258,7 +1279,9 @@ def test_takeover_ownership_requires_stopped_and_detached_former_owner(
             cloud=cloud,
             data_plane_mode=DataPlaneMode.ACTIVE,
         ),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
 
     assert decision.state is HAState.BLOCKED
@@ -1378,7 +1401,9 @@ def test_configured_active_survivor_automatically_takes_over_stopped_owner_after
 
     automatic = policy.decide(
         snapshot,
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
 
     assert automatic.action is not None
@@ -1440,7 +1465,9 @@ def test_sticky_automatic_failover_intent_is_role_neutral(
             transfer_intent=TransferIntent.AUTOMATIC_FAILOVER,
             transfer_effect_started=True,
         ),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
 
     assert decision.action is not None
@@ -1451,7 +1478,9 @@ def test_sticky_automatic_failover_intent_is_role_neutral(
 def test_crash_replay_reuses_operation_id_until_postcondition(
     policy: VMHAController,
 ) -> None:
-    checkpoint = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+    checkpoint = ControllerCheckpoint(
+        state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+    )
     snapshot = _snapshot(now=110.0, peer_received_at=80.0)
     first = policy.decide(snapshot, checkpoint)
     assert first.action is not None
@@ -1474,7 +1503,9 @@ def test_automatic_suspicion_cancels_before_effect_but_is_sticky_after_effect(
 ) -> None:
     first = policy.decide(
         _snapshot(now=110.0, peer_received_at=80.0),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert first.action is not None
     assert first.action.kind is ActionKind.STOP_FORMER_OWNER
@@ -1501,7 +1532,9 @@ def test_effect_started_automatic_transfer_resumes_after_apply_fencing(
 ) -> None:
     first = policy.decide(
         _snapshot(now=110.0, peer_received_at=80.0),
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert first.action is not None
     assert first.action.kind is ActionKind.STOP_FORMER_OWNER
@@ -1712,6 +1745,7 @@ def test_malformed_pending_action_structure_is_rejected(
     checkpoint = ControllerCheckpoint(
         sequence=7,
         suspect_since=90.0,
+        suspicion_boot_id="local-boot",
         pending_action=action,
         ownership_incarnation=1,
     )
@@ -1895,7 +1929,9 @@ def test_authority_action_completion_remains_bound_to_original_context(
 
     decision = policy.decide(
         drifted,
-        ControllerCheckpoint(sequence=7, suspect_since=90.0, pending_action=action),
+        ControllerCheckpoint(
+            sequence=7, suspect_since=90.0, suspicion_boot_id="local-boot", pending_action=action
+        ),
     )
 
     assert decision.action != action
@@ -2054,7 +2090,12 @@ def test_checkpointed_fencing_is_cancelled_if_peer_recovers(
     policy: VMHAController,
 ) -> None:
     stale = _snapshot(now=110.0, peer_received_at=80.0)
-    first = policy.decide(stale, ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0))
+    first = policy.decide(
+        stale,
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
+    )
     assert first.action is not None
     assert first.action.kind is ActionKind.STOP_FORMER_OWNER
 
@@ -2070,7 +2111,9 @@ def test_checkpointed_fencing_is_cancelled_if_cloud_target_identity_changes(
     snapshot = _snapshot(now=110.0, peer_received_at=80.0)
     first = policy.decide(
         snapshot,
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert first.action is not None
     assert first.action.kind is ActionKind.STOP_FORMER_OWNER
@@ -2095,7 +2138,12 @@ def test_crash_replay_blocks_when_attachment_authority_changes(
         peer_received_at=80.0,
         cloud=_cloud(owner=None, state=ComputeState.STOPPED, absent=True),
     )
-    first = policy.decide(snapshot, ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0))
+    first = policy.decide(
+        snapshot,
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
+    )
     assert first.action is not None
     assert first.action.kind is ActionKind.ATTACH_CANDIDATE
 
@@ -2118,7 +2166,9 @@ def test_crash_replay_blocks_when_shared_allocation_identity_changes(
     )
     first = policy.decide(
         snapshot,
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert first.action is not None
     assert first.action.kind is ActionKind.ATTACH_CANDIDATE
@@ -2145,7 +2195,9 @@ def test_attach_completion_advances_to_authoritative_candidate_revision(
             ownership_epoch="41",
         ),
     )
-    transfer = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+    transfer = ControllerCheckpoint(
+        state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+    )
 
     attach = policy.decide(detached, transfer)
     assert attach.action is not None
@@ -2215,7 +2267,9 @@ def test_attach_completion_still_checkpoints_confirmation_after_exact_reread(
     )
     attach = policy.decide(
         detached,
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     observed = replace(
         detached,
@@ -2272,7 +2326,9 @@ def test_attach_completion_rejects_incomplete_or_stale_observation(
     )
     attach = policy.decide(
         detached,
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert attach.action is not None
     assert attach.action.kind is ActionKind.ATTACH_CANDIDATE
@@ -2321,7 +2377,9 @@ def test_attach_completion_rejects_changed_generation_or_policy(
     )
     attach = policy.decide(
         detached,
-        ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0),
+        ControllerCheckpoint(
+            state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+        ),
     )
     assert attach.action is not None
     observed = replace(
@@ -2696,7 +2754,9 @@ def test_runtime_disables_active_dataplane_before_pending_mutation_replay(
     policy: VMHAController,
     pending_kind: ActionKind,
 ) -> None:
-    transfer_checkpoint = ControllerCheckpoint(state=HAState.SUSPECT, suspect_since=90.0)
+    transfer_checkpoint = ControllerCheckpoint(
+        state=HAState.SUSPECT, suspect_since=90.0, suspicion_boot_id="local-boot"
+    )
     confirm_snapshot = _snapshot(
         now=110.0,
         peer_received_at=80.0,
@@ -2917,3 +2977,239 @@ def test_failed_effect_leaves_the_pre_effect_checkpoint_for_exact_replay() -> No
     assert checkpoints.value.pending_action is not None
     replay = runtime.policy.decide(Snapshots().observe(), checkpoints.value)
     assert replay.action == checkpoints.value.pending_action
+
+
+@pytest.mark.parametrize("delay", [12, 20])
+def test_independent_serving_evidence_prevents_false_failover_during_cloud_wait(delay):
+    import threading
+
+    from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
+    from nebius_vpngw.agent.vm_ha.heartbeat import HeartbeatPublisher
+
+    now = [100.0]
+    owner = PeerEvidenceTracker(
+        local_node_id="node-a", peer_node_id="node-b", generation_id=DIGEST, clock=lambda: now[0]
+    )
+    receiver = PeerEvidenceTracker(
+        local_node_id="node-b", peer_node_id="node-a", generation_id=DIGEST, clock=lambda: now[0]
+    )
+    received = []
+
+    def build(snapshot, local, evidence):
+        return owner.issue(
+            replace(
+                _peer(),
+                evidence=evidence,
+                promotion_ready=False,
+                service_healthy=local.service_healthy,
+                route_ready=local.transfer_ready,
+            )
+        )
+
+    publisher = HeartbeatPublisher(
+        sample=lambda deadline: LocalReadiness(True, True, True, True, serving_ready=True),
+        identity=lambda: "current-owner-guard-policy",
+        service_identity=lambda: "current-boot-configuration",
+        build=build,
+        send=lambda heartbeat, remaining: received.append(receiver.accept(heartbeat)),
+        clock=lambda: now[0],
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def cloud_observation():
+        publisher.progress("observing")
+        entered.set()
+        assert release.wait(5)
+        publisher.progress("idle")
+
+    cloud_worker = threading.Thread(target=cloud_observation)
+    cloud_worker.start()
+    assert entered.wait(1)
+    cloud = replace(_cloud(), former_attachment_exact=True, candidate_attachment_absent=True)
+    checkpoint = ControllerCheckpoint(state=HAState.NORMAL)
+    policy = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+    try:
+        for _second in range(delay):
+            now[0] += 1
+            # Both messages pass their transport authentication boundary before
+            # these receiver calls. This composes the production proof and policy.
+            owner.accept(receiver.issue(_peer(node_id="node-b", configured_role="passive")))
+            publisher.collect()
+            publisher.publish()
+            assert cloud_worker.is_alive()
+            peer = received[-1]
+            assert peer.evidence.serving and peer.local_health_fresh(now[0])
+            assert peer.evidence.cloud_status == "in-progress" and not peer.promotion_ready
+            decision = policy.decide(
+                _snapshot(now=now[0], peer_heartbeat=peer, peer_received_at=now[0], cloud=cloud),
+                checkpoint,
+            )
+            assert decision.state is HAState.NORMAL and decision.action is None
+            assert decision.checkpoint.suspect_since is None
+            checkpoint = decision.checkpoint
+    finally:
+        release.set()
+        cloud_worker.join(2)
+        publisher.invalidate()
+    # Genuine loss is still subject to the unchanged silence and suspicion bounds.
+    silent = _snapshot(
+        now=now[0] + 10, peer_heartbeat=received[-1], peer_received_at=now[0], cloud=cloud
+    )
+    suspicion = policy.decide(silent, checkpoint)
+    assert suspicion.state is HAState.SUSPECT
+    failure = policy.decide(replace(silent, now=silent.now + 5), suspicion.checkpoint)
+    assert failure.action.kind is ActionKind.STOP_FORMER_OWNER
+
+
+def test_fenced_owner_readiness_cannot_suppress_takeover_forever():
+    peer = replace(
+        _peer(), promotion_ready=False, evidence=HeartbeatEvidence(state="healthy", serving=False)
+    )
+    snapshot = _snapshot(
+        peer_heartbeat=peer,
+        cloud=replace(_cloud(), former_attachment_exact=True, candidate_attachment_absent=True),
+    )
+    policy = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+    first = policy.decide(snapshot, ControllerCheckpoint())
+    assert first.state is HAState.SUSPECT
+    second = policy.decide(replace(snapshot, now=106, peer_received_at=106), first.checkpoint)
+    assert second.action.kind is ActionKind.STOP_FORMER_OWNER
+
+
+def test_selection_churn_does_not_defeat_bounded_static_recovery_grace():
+    from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
+    from nebius_vpngw.agent.vm_ha.heartbeat import HeartbeatPublisher
+
+    now, path, received = [100.0], [0], []
+    proof = PeerEvidenceTracker(
+        local_node_id="node-b",
+        peer_node_id="node-a",
+        generation_id=DIGEST,
+        clock=lambda: now[0],
+    )
+    claim = {
+        "owner": {
+            "cluster": "cluster",
+            "owner": "node-a",
+            "allocation": "allocation",
+            "epoch": "owner-epoch",
+            "incarnation": 1,
+        },
+        "started": 100.0,
+        "deadline": 130.0,
+    }
+
+    def sample(deadline):
+        path[0] += 1  # A selector phase changes while healthy daemons are observed.
+        return LocalReadiness(True, False, False, False, sample_complete=False)
+
+    publisher = HeartbeatPublisher(
+        sample=sample,
+        identity=lambda: path[0],
+        service_identity=lambda: "same-boot-and-config",
+        build=lambda snapshot, local, evidence: replace(
+            _peer(),
+            service_healthy=bool(local and local.service_healthy),
+            route_ready=False,
+            promotion_ready=False,
+            evidence=replace(
+                evidence, echo=proof.issue(_peer(node_id="node-b")).evidence.challenge
+            ),
+            tunnel_recovery=claim,
+        ),
+        send=lambda heartbeat, remaining: received.append(proof.accept(heartbeat)),
+        clock=lambda: now[0],
+    )
+    cloud = replace(
+        _cloud(),
+        observed_owner_epoch="owner-epoch",
+        former_attachment_exact=True,
+        candidate_attachment_absent=True,
+    )
+    policy = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+    checkpoint = ControllerCheckpoint(state=HAState.NORMAL)
+    for second in range(1, 12):
+        now[0] = 100.0 + second
+        publisher.collect()
+        publisher.publish()
+        peer = received[-1]
+        assert peer.service_healthy and peer.evidence.state == "unknown"
+        assert not peer.evidence.serving
+        assert peer.local_service_fresh(now[0]) and not peer.local_health_fresh(now[0])
+        result = policy.decide(
+            _snapshot(
+                now=now[0],
+                wall_time=now[0],
+                cloud=cloud,
+                peer_heartbeat=peer,
+                peer_received_at=now[0],
+            ),
+            checkpoint,
+        )
+        assert result.state is HAState.NORMAL and result.action is None
+        checkpoint = result.checkpoint
+    # A fresh service sample cannot renew the original recovery deadline.
+    now[0] = 130
+    publisher.collect()
+    publisher.publish()
+    result = policy.decide(
+        _snapshot(
+            now=now[0],
+            wall_time=now[0],
+            cloud=cloud,
+            peer_heartbeat=received[-1],
+            peer_received_at=now[0],
+        ),
+        checkpoint,
+    )
+    assert result.state is HAState.SUSPECT
+
+
+def test_pending_acceptance_is_settled_before_observation_or_checkpoint_acknowledgment():
+    from unittest.mock import Mock
+
+    checkpoint = ControllerCheckpoint()
+    checkpoints = Mock()
+    checkpoints.load.return_value = checkpoint
+    snapshots = Mock()
+    effects = Mock()
+    settle = Mock(side_effect=RuntimeError("operation unconfirmed"))
+    runtime = RecoverableController(
+        policy=VMHAController(peer_timeout_seconds=10, suspicion_seconds=5),
+        snapshots=snapshots,
+        checkpoints=checkpoints,
+        effects=effects,
+        before_observe=settle,
+    )
+    with pytest.raises(RuntimeError, match="operation unconfirmed"):
+        runtime.step()
+    settle.assert_called_once_with(checkpoint)
+    snapshots.observe.assert_not_called()
+    checkpoints.save.assert_not_called()
+    effects.apply.assert_not_called()
+
+
+@pytest.mark.parametrize("new_uptime", [10.0, 100500.0])
+def test_suspicion_restarts_on_new_boot_without_reusing_prior_uptime(new_uptime):
+    policy = VMHAController(peer_timeout_seconds=3, suspicion_seconds=5)
+    first = policy.decide(_snapshot(now=100000.0, peer_received_at=0), ControllerCheckpoint())
+    assert first.state is HAState.SUSPECT
+    reboot = _snapshot(
+        now=new_uptime, boot_id="new-boot", guard_boot_id="new-boot", peer_received_at=0
+    )
+    result = policy.decide(reboot, first.checkpoint)
+    assert result.state is HAState.SUSPECT
+    assert result.action is None
+    assert result.checkpoint.suspect_since == new_uptime
+    elapsed = policy.decide(replace(reboot, now=new_uptime + 5), result.checkpoint)
+    assert elapsed.action is not None
+    assert elapsed.action.kind is ActionKind.STOP_FORMER_OWNER
+
+
+def test_suspicion_survives_same_boot_process_restart():
+    first_policy = VMHAController(peer_timeout_seconds=3, suspicion_seconds=5)
+    first = first_policy.decide(_snapshot(peer_received_at=0), ControllerCheckpoint())
+    restarted = VMHAController(peer_timeout_seconds=3, suspicion_seconds=5)
+    result = restarted.decide(_snapshot(now=105.0, peer_received_at=0), first.checkpoint)
+    assert result.action is not None
+    assert result.action.kind is ActionKind.STOP_FORMER_OWNER

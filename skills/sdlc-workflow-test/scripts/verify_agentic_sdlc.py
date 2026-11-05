@@ -1688,7 +1688,7 @@ def check_repair_loop_contract(ctx: Context) -> None:
             ctx.skills_root / "sdlc-classify-failure" / "scripts" / "repair_control.py",
             [
                 "agentic-sdlc/failure-event-v2",
-                "agentic-sdlc/diagnosis-v2",
+                "agentic-sdlc/diagnosis-v3",
                 "agentic-sdlc/design-approval-v2",
                 "agentic-sdlc/repair-control-v2",
                 "agentic-sdlc/revalidation-evidence-v2",
@@ -1707,7 +1707,7 @@ def check_repair_loop_contract(ctx: Context) -> None:
             ctx.skills_root / "troubleshoot" / "references" / "workflow-handoffs.md",
             [
                 "Agentic SDLC Diagnostic Mode",
-                "Return one `diagnosis-v2` to `sdlc-classify-failure`",
+                "Return one `diagnosis-v3` to `sdlc-classify-failure`",
                 "Do not commit product fixes",
                 "No implementation bug found",
             ],
@@ -2649,19 +2649,47 @@ def check_capability_regressions(ctx: Context) -> None:
     env["PYTHON_COLORS"] = "0"
     suites = {
         "protected-merge": (
-            [sys.executable, "-m", "unittest", "discover", "-v",
-             "-s", str(ctx.skills_root / "merge-pr/scripts"), "-p", "test_merge*.py"],
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                str(ctx.skills_root / "merge-pr/scripts"),
+                "-p",
+                "test_merge*.py",
+            ],
             ctx.skills_root,
         ),
         "project-specs": (
             [
-                sys.executable, "-m", "unittest", "discover", "-v",
-                "-s", str(ctx.skills_root / "maintain-project-specs" / "scripts"),
-                "-p", "test_project_specs*.py",
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                str(ctx.skills_root / "maintain-project-specs" / "scripts"),
+                "-p",
+                "test_project_specs*.py",
             ],
             ctx.skills_root,
         ),
-        "objective": ([sys.executable, '-m', 'unittest', 'discover', '-v', '-s', str(ctx.skills_root / 'sdlc-start/scripts'), '-p', 'test_*.py'], ctx.skills_root),
+        "objective": (
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-v",
+                "-s",
+                str(ctx.skills_root / "sdlc-start/scripts"),
+                "-p",
+                "test_*.py",
+            ],
+            ctx.skills_root,
+        ),
         "execution": (
             [
                 sys.executable,
@@ -2670,17 +2698,28 @@ def check_capability_regressions(ctx: Context) -> None:
                 "-v",
                 # Dispatch and task-wave contracts have their own suites below.
                 # Do not run those expensive real-Git suites twice.
-                *(str(ctx.skills_root / "worktree/scripts" / name) for name in (
-                    "test_workflow_execution.py", "test_workflow_objectives.py",
-                    "test_workflow_spec_bootstrap.py",
-                    "test_workflow_program.py", "test_workflow_qualification.py",
-                    "test_workflow_delivery.py", "test_workflow_handoffs.py",
-                    "test_workflow_security.py", "test_workflow_fixture.py",
-                )),
+                *(
+                    str(ctx.skills_root / "worktree/scripts" / name)
+                    for name in (
+                        "test_workflow_execution.py",
+                        "test_workflow_design_revision.py",
+                        "test_workflow_objectives.py",
+                        "test_workflow_spec_bootstrap.py",
+                        "test_workflow_program.py",
+                        "test_workflow_qualification.py",
+                        "test_workflow_delivery.py",
+                        "test_workflow_handoffs.py",
+                        "test_workflow_security.py",
+                        "test_workflow_fixture.py",
+                    )
+                ),
             ],
             ctx.skills_root,
         ),
-        "dispatch": ([sys.executable, 'worktree/scripts/test_workflow_dispatch.py', '-v'], ctx.skills_root),
+        "dispatch": (
+            [sys.executable, "worktree/scripts/test_workflow_dispatch.py", "-v"],
+            ctx.skills_root,
+        ),
         "worktree": (
             [sys.executable, "scripts/test-worktree-manager.py", "-v"],
             ctx.skills_root / "worktree",
@@ -2689,8 +2728,14 @@ def check_capability_regressions(ctx: Context) -> None:
             [sys.executable, "scripts/test-git-promotion.py", "-v"],
             ctx.skills_root / "worktree",
         ),
-        "implement": ([sys.executable, 'implement/scripts/test_implement_contract.py', '-v'], ctx.skills_root),
-        "task-waves": ([sys.executable, 'worktree/scripts/test_workflow_contracts.py', '-v'], ctx.skills_root),
+        "implement": (
+            [sys.executable, "implement/scripts/test_implement_contract.py", "-v"],
+            ctx.skills_root,
+        ),
+        "task-waves": (
+            [sys.executable, "worktree/scripts/test_workflow_contracts.py", "-v"],
+            ctx.skills_root,
+        ),
         "hooks": (
             [
                 sys.executable,
@@ -2801,6 +2846,8 @@ def check_capability_regressions(ctx: Context) -> None:
                 "sdlc-workflow-test/scripts/test_three_tier_objective.py",
                 "sdlc-workflow-test/scripts/test_three_tier_browser.py",
                 "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
+                "sdlc-workflow-test/scripts/test_three_tier_runtime.py",
+                "sdlc-workflow-test/scripts/test_three_tier_recovery.py",
                 "sdlc-workflow-test/scripts/test_owned_git_origin.py",
                 "sdlc-workflow-test/scripts/test_git_environment.py",
                 "sdlc-workflow-test/scripts/test_three_tier_target.py",
@@ -2919,8 +2966,14 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "three-tier",
-                    "test_record_runtime_rejects_swapped_container_roles",
+                    "test_named_product_failures",
                 ),
+                ("three-tier", "test_inspection_failures_are_distinct_and_bounded"),
+                ("three-tier", "test_unexpected_observer_exception_never_leaks_exception_text"),
+                ("three-tier", "test_worker_observations_are_development_only_and_unknown_failure_stays_blocked"),
+                ("three-tier", "test_failed_receipt_orphan_is_reconciled_before_retry_and_cleanup"),
+                ("three-tier", "test_cleanup_resumes_after_raw_observation_was_deleted"),
+                ("three-tier", "test_tampered_observation_blocks_admission_and_cleanup"),
                 (
                     "three-tier",
                     "test_phase_record_cannot_overwrite_browser_failure",

@@ -87,3 +87,14 @@ after final alignment, acceptance validation and documentation evidence. Then
 complete the run through intake `complete`; it independently checks the actual
 outer lease release. Return the ordinary explicit Worktree integration handoff.
 Local workflow completion never performs the outer owner's integration.
+
+## Issue plan delivery
+
+For referenced issue plans, follow the shared
+[issue-resolution contract](../../worktree/references/issue-resolution.md).
+Normalize accepted membership once; never scrape arbitrary issue mentions at
+completion. Supply exact per-member criterion evidence through the private
+seal-feature --issue-evidence option before promotion. Existing local validation
+and completion gates remain required. Completion writes a root-owned receipt
+in the run directory; comments, PR references and merge are later authorized
+owner work. Report resolved/partial/unresolved coverage and closure pending merge.

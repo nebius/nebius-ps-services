@@ -411,9 +411,12 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
 
     materialized_endpoints: list[dict[str, object]] = []
     agent = agent_main.Agent()
-    agent.xfrm = SimpleNamespace(
-        setup_interfaces=lambda endpoints: materialized_endpoints.extend(endpoints)
-    )
+
+    def setup_interfaces(endpoints, *, persist_sysctl=True):
+        assert persist_sysctl is False, "HA bootstrap must preserve persistent forwarding fencing"
+        materialized_endpoints.extend(endpoints)
+
+    agent.xfrm = SimpleNamespace(setup_interfaces=setup_interfaces)
     agent.reload()
 
     assert materialized_endpoints

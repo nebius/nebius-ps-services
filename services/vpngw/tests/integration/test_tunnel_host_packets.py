@@ -29,6 +29,46 @@ pytestmark = [
 CONFIG = {"connections": [{"routing_mode": "bgp", "tunnels": [{"remote_public_ip": "192.0.2.1"}]}]}
 
 
+def test_ufw_boot_transaction_preserves_early_firewall_ordering(tmp_path):
+    """Use the real vendor units; verifier exit status alone misses deleted jobs."""
+    from nebius_vpngw.deploy.ordinary_apply import PREVIOUS_UFW_ORDERING
+
+    assert Path("/.dockerenv").is_file()
+    assert Path("/proc/1/comm").read_text().strip() == "systemd"
+    root = tmp_path / "units"
+    override = root / "ufw.service.d/override.conf"
+    override.parent.mkdir(parents=True)
+    # A cloud guest enables networkd wait-online. Model that enablement in a
+    # private unit search path without touching the running manager or firewall.
+    wants = root / "network-online.target.wants"
+    wants.mkdir()
+    wait_online = Path("/usr/lib/systemd/system/systemd-networkd-wait-online.service")
+    assert wait_online.is_file()
+    (wants / wait_online.name).symlink_to(wait_online)
+    env = dict(os.environ, SYSTEMD_UNIT_PATH=str(root) + ":", LC_ALL="C")
+
+    def verify(payload):
+        override.write_bytes(payload)
+        result = subprocess.run(
+            ["systemd-analyze", "verify", "ufw.service", "network-online.target"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    _code, negative = verify(PREVIOUS_UFW_ORDERING)
+    assert "ordering cycle" in negative.lower(), negative
+    canonical = (
+        Path(__file__).parents[2] / "src/nebius_vpngw/systemd/nebius-vpngw-ufw-ordering.conf"
+    )
+    code, positive = verify(canonical.read_bytes())
+    assert code == 0, positive
+    assert "ordering cycle" not in positive.lower(), positive
+    assert "deleted to break" not in positive.lower(), positive
+
+
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, text=True, capture_output=True, check=check, timeout=20)
 

@@ -312,7 +312,13 @@ class TwoNodeScenario:
         digests = (
             DIGESTS if generation == GENERATION else replace(DIGESTS, configuration=generation)
         )
+        from nebius_vpngw.agent.vm_ha.models import HeartbeatEvidence
+
+        # This state-machine fixture supplies already-authenticated current peer
+        # evidence; transport/round-trip proof has its own composed coverage.
         return PeerHeartbeat(
+            evidence=HeartbeatEvidence(state="healthy"),
+            health_valid_until=self.clock.now + 20.0,
             cluster_id="cluster-a",
             node_id=peer_id,
             boot_id=peer.boot_id,

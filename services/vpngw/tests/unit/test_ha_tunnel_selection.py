@@ -426,9 +426,64 @@ def native_bgp_effects(tmp_path, peer_state="Idle"):
     return effects, policy, responses
 
 
-def test_native_bgp_release_verifies_healthy_coverage_with_down_redundant_peer(tmp_path):
+@pytest.mark.parametrize("prefix", ["10.9.0.0/16", "10.9.0.1/16"])
+def test_native_bgp_release_verifies_healthy_coverage_with_down_redundant_peer(tmp_path, prefix):
     effects, policy, _ = native_bgp_effects(tmp_path)
+    effects.cfg["gateway"]["local_prefixes"] = [prefix]
     assert effects.verify(policy, None) is Health.HEALTHY
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("host_bits", [False, True])
+def test_policy_canonicalizes_accepted_prefixes(mode, host_bits):
+    cfg = config(mode)
+    local = "10.9.0.1/16" if host_bits else "10.9.0.0/16"
+    remote = "10.1.0.1/16" if host_bits else "10.1.0.0/16"
+    cfg["gateway"]["local_prefixes"] = [local]
+    cfg["connections"][0]["remote_prefixes"] = [remote]
+    if mode == "static":
+        for tunnel in cfg["connections"][0]["tunnels"]:
+            tunnel["static_routes"] = {"remote_prefixes": [remote]}
+    policy = connection_policies(cfg)[0]
+    assert policy.eligible
+    assert policy.destinations == frozenset({"10.1.0.0/16"})
+    for index, path in enumerate(policy.paths, 1):
+        assert path.destinations == frozenset({"10.1.0.0/16"})
+        assert path.local_selectors == frozenset({"10.9.0.0/16", f"169.254.{index}.0/30"})
+    assert cfg["gateway"]["local_prefixes"] == [local]
+    assert cfg["connections"][0]["remote_prefixes"] == [remote]
+
+
+@pytest.mark.parametrize(
+    "prefixes, expected",
+    [
+        (["10.9.0.0/16"], {"10.9.0.0/16"}),
+        (["10.9.0.1/16"], {"10.9.0.0/16"}),
+        (["10.9.0.1/16", "2001:db8::1/64"], {"10.9.0.0/16", "2001:db8::/64"}),
+    ],
+)
+def test_controller_base_exports_are_canonical(tmp_path, prefixes, expected):
+    from types import SimpleNamespace
+
+    import yaml
+
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+
+    cfg = config("bgp")
+    cfg["gateway"]["local_prefixes"] = prefixes
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    ports = SimpleNamespace(routes=SimpleNamespace(), data_plane=SimpleNamespace())
+    runtime = ControllerTunnelRuntime(path, tmp_path, None, ports)
+    assert runtime.base_exports == {
+        "169.254.1.2": frozenset(expected),
+        "169.254.2.2": frozenset(expected),
+    }
+    for mode in ("static", "bgp"):
+        cfg["connections"][0]["routing_mode"] = mode
+        for index, tunnel in enumerate(connection_policies(cfg)[0].paths, 1):
+            assert tunnel.local_selectors == frozenset({*expected, f"169.254.{index}.0/30"})
+    assert runtime.watchdog is None
 
 
 @pytest.mark.parametrize("level", ["summary", "ipv4Unicast", "peers"])
@@ -893,3 +948,152 @@ def test_normal_bgp_health_follows_surviving_routes_instead_of_preferred_name(tm
     assert selector.state["health"] == {"site": "healthy"}
     assert selector.state["selected"] == {}
     assert selector.state["operation"] is None
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "pending",
+        "completed",
+        "stale-owner",
+        "invalidated",
+        "generation",
+        "ineligible",
+        "foreign-target",
+        "foreign-previous",
+    ],
+)
+def test_serving_export_alternatives_are_current_and_connection_scoped(tmp_path, case):
+    import copy
+    import json
+    from types import SimpleNamespace
+
+    import yaml
+
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
+
+    cfg = config("bgp")
+    cfg["gateway"]["local_prefixes"] = ["10.0.0.0/24"]
+    cfg["vm_ha"].update(
+        node={"node_id": AUTH.owner},
+        runtime_binding={"shared_allocation_id": AUTH.allocation},
+        generation={"generation_id": AUTH.generation},
+    )
+    other = copy.deepcopy(cfg["connections"][0])
+    other["name"] = "other"
+    other["remote_prefixes"] = ["10.2.0.0/16"]
+    for index, tunnel in enumerate(other["tunnels"], 3):
+        tunnel["name"] = "other-" + tunnel["name"]
+        tunnel["inner_remote_ip"] = f"169.254.{index}.2"
+    cfg["connections"].append(other)
+    effects = Effects()
+    effects.health.update({"other-preferred": Health.HEALTHY, "other-backup": Health.HEALTHY})
+    selector = TunnelController(cfg, tmp_path / "tunnel-selection.json", effects)
+    selector.request("failover", "backup", AUTH, 100)
+    selector.tick(AUTH, 101)
+    selector.state["selected"]["other"] = "other-backup"
+    if case == "completed":
+        selector.state["operation"]["phase"] = "succeeded"
+    if case == "foreign-target":
+        selector.state["operation"]["target"] = "other-backup"
+        selector.state["operation"]["verb"] = "release"
+    if case == "foreign-previous":
+        selector.state["operation"]["previous"] = "other-backup"
+    selector._save()
+    if case == "generation":
+        cfg["vm_ha"]["generation"]["generation_id"] = "b" * 64
+    if case == "ineligible":
+        cfg["connections"][0]["remote_prefixes"] = []
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    (tmp_path / "controller-checkpoint.json").write_text(
+        json.dumps(
+            controller_checkpoint_to_dict(
+                ControllerCheckpoint(
+                    ownership_incarnation=2 if case == "stale-owner" else 1,
+                    ownership_continuity_invalidated=case == "invalidated",
+                )
+            )
+        )
+    )
+    runtime = ControllerTunnelRuntime(
+        path,
+        tmp_path,
+        None,
+        SimpleNamespace(routes=SimpleNamespace(), data_plane=SimpleNamespace()),
+    )
+    alternatives = runtime.serving_export_alternatives()
+    if case != "pending":
+        assert alternatives == ()
+        return
+    assert len(alternatives) == 2
+    for exports in alternatives:
+        assert exports["169.254.3.2"] == frozenset()
+        assert exports["169.254.4.2"] == frozenset({"10.0.0.0/24"})
+        assert exports["169.254.1.2"] == frozenset({"10.0.0.0/24"})
+    assert alternatives[0]["169.254.2.2"] == frozenset({"10.0.0.0/24"})
+    assert alternatives[1]["169.254.2.2"] == frozenset()
+
+
+@pytest.mark.parametrize("trigger", ["deadline", "failed-verification"])
+def test_release_retains_installed_requested_policy_until_native_restore(tmp_path, trigger):
+    import json
+    from types import SimpleNamespace
+
+    import yaml
+
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
+
+    cfg = config("bgp")
+    cfg["gateway"]["local_prefixes"] = ["10.0.0.0/24"]
+    cfg["vm_ha"].update(
+        node={"node_id": AUTH.owner},
+        runtime_binding={"shared_allocation_id": AUTH.allocation},
+        generation={"generation_id": AUTH.generation},
+    )
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    (tmp_path / "controller-checkpoint.json").write_text(
+        json.dumps(controller_checkpoint_to_dict(ControllerCheckpoint(ownership_incarnation=1)))
+    )
+    runtime = ControllerTunnelRuntime(
+        path,
+        tmp_path,
+        None,
+        SimpleNamespace(routes=SimpleNamespace(), data_plane=SimpleNamespace()),
+    )
+
+    class ServingEffects(Effects):
+        installed = None
+        release_observed = False
+
+        def activate(self, policy, target, authority):
+            if target is None and self.installed == "backup":
+                state = read_state(tmp_path / "tunnel-selection.json")
+                assert state["operation"]["verb"] == "release" and not state["selected"]
+                actual = {
+                    "169.254.1.2": frozenset(),
+                    "169.254.2.2": frozenset({"10.0.0.0/24"}),
+                }
+                assert actual != runtime.current_exports()
+                assert actual in runtime.serving_export_alternatives()
+                self.release_observed = True
+            self.installed = target
+
+    effects = ServingEffects()
+    selector = TunnelController(cfg, tmp_path / "tunnel-selection.json", effects)
+    selector.request("failover", "backup", AUTH, 100)
+    selector.tick(AUTH, 101)
+    assert effects.installed == "backup"
+    if trigger == "failed-verification":
+        effects.health["backup"] = Health.DOWN
+        selector.tick(AUTH, 111)
+        assert selector.state["operation"]["verb"] == "release"
+        selector.tick(AUTH, 112)
+    else:
+        selector.tick(AUTH, selector.state["operation"]["deadline"] + 1)
+    assert effects.release_observed

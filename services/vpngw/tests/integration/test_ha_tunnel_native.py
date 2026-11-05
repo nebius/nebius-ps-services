@@ -910,3 +910,105 @@ def test_owner_bgp_sa_loss_repairs_only_failed_session(native_paths):
     after = identities(gateway)
     assert after["backup"] == before["backup"]
     assert after["unrelated"] == before["unrelated"]
+
+
+def test_recovery_guard_fences_a_never_started_controller(tmp_path):
+    """A missing ExecStopPost transition must not leave bootstrap forwarding enabled."""
+    script = r"""
+import json, tempfile
+from pathlib import Path
+from nebius_vpngw.agent.main import install_vm_ha_cold_start_guard
+root = Path(tempfile.mkdtemp(prefix='vpngw-recovery-guard-'))
+forward = Path('/proc/sys/net/ipv4/ip_forward')
+forward.write_text('1')
+assert forward.read_text().strip() == '1'
+assert not (root / 'status.json').exists()
+result = install_vm_ha_cold_start_guard(state_dir=root)
+assert forward.read_text().strip() == '0'
+assert result['data_plane_mode'] == 'blocked'
+assert result['guard_boot_id'] == Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+assert json.loads((root / 'guard.json').read_text()) == result
+print('fresh recovery host is fenced')
+"""
+    result = subprocess.run(
+        [
+            "systemd-run",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            f"--unit=vpngw-recovery-guard-{uuid.uuid4().hex[:8]}",
+            "--property=PrivateNetwork=yes",
+            "--property=PrivateTmp=yes",
+            "--setenv=PYTHONPATH=/workspace/src",
+            sys.executable,
+            "-c",
+            script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "fresh recovery host is fenced" in result.stdout
+
+
+def test_persistent_ha_policy_survives_real_sysctl_reapplication():
+    """Real sysctl and guard writers, in disposable mount/network namespaces.
+
+    This is causal writer coverage, not a continuously observed kernel boot.
+    """
+    script = r"""
+import subprocess, tempfile
+from pathlib import Path
+from nebius_vpngw.boot_policy import install_ha_policy, BootPolicyError
+from nebius_vpngw.agent.main import install_vm_ha_cold_start_guard
+from nebius_vpngw.agent.xfrm_manager import XFRMManager
+forward = Path('/proc/sys/net/ipv4/ip_forward')
+forward.write_text('0')
+Path('/etc/sysctl.d').mkdir(parents=True)
+Path('/etc/sysctl.conf').write_text('# no unmanaged forwarding writer\n')
+Path('/etc/sysctl.d/99-zzz-vpngw.conf').write_text('net.ipv4.ip_forward = 1\n')
+Path('/etc/sysctl.d/99-vpn-gateway.conf').write_text('net.ipv4.ip_forward = 1\n')
+install_ha_policy()
+for _ in range(2):
+    subprocess.run(['sysctl', '--system'], check=True, capture_output=True)
+    assert forward.read_text().strip() == '0'
+XFRMManager().setup_interfaces([], parent_dev='lo', persist_sysctl=False)
+assert forward.read_text().strip() == '0'
+guard = install_vm_ha_cold_start_guard(state_dir=Path(tempfile.mkdtemp()))
+assert guard['data_plane_mode'] == 'blocked' and forward.read_text().strip() == '0'
+conflict = Path('/etc/sysctl.d/zzzz-admin.conf')
+conflict.write_text('net.ipv4.conf.all.forwarding = 1\n')
+try:
+    install_ha_policy()
+except BootPolicyError as error:
+    assert str(error) == 'ha-boot-policy-unmanaged-forwarding-conflict'
+else:
+    raise AssertionError('late unmanaged writer was accepted')
+assert conflict.read_text() == 'net.ipv4.conf.all.forwarding = 1\n'
+assert forward.read_text().strip() == '0'
+print('persistent HA policy and runtime writers keep the candidate fenced')
+"""
+    result = subprocess.run(
+        [
+            "systemd-run",
+            "--quiet",
+            "--wait",
+            "--pipe",
+            "--collect",
+            f"--unit=vpngw-boot-policy-{uuid.uuid4().hex[:8]}",
+            "--property=PrivateNetwork=yes",
+            "--property=PrivateTmp=yes",
+            "--property=TemporaryFileSystem=/etc /run/sysctl.d /usr/lib/sysctl.d /usr/local/lib/sysctl.d",
+            "--setenv=PYTHONPATH=/workspace/src",
+            sys.executable,
+            "-c",
+            script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "runtime writers keep the candidate fenced" in result.stdout

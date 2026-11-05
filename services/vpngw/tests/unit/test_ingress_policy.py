@@ -19,54 +19,8 @@ from nebius_vpngw.schema import GatewayConfig
 
 
 @pytest.mark.parametrize(
-    "value",
-    [
-        None,
-        [],
-        "203.0.113.4/32",
-        ["203.0.113.4"],
-        ["bad/32"],
-        ["${MISSING}"],
-        [None],
-        ["fe80::1%eth0/128"],
-    ],
-)
-def test_invalid_management_sources_fail_closed(value):
-    with pytest.raises(ValueError, match="gateway.ssh_allowed_cidrs"):
-        policy.normalize_cidrs(value)
-    with pytest.raises(ValueError, match="ssh_allowed_cidrs"):
-        GatewayConfig(local_asn=65000, local_prefixes=["10.0.0.0/8"], ssh_allowed_cidrs=value)
-
-
-def test_sources_normalize_and_deduplicate():
-    assert policy.normalize_cidrs(["203.0.113.9/24", "2001:db8::1/64", "203.0.113.0/24"]) == [
-        "203.0.113.0/24",
-        "2001:db8::/64",
-    ]
-
-
-def test_management_file_uses_exact_preview_order(sample_config, monkeypatch, tmp_path):
-    from nebius_vpngw.agent import firewall_manager, ordinary
-
-    sample_config["gateway"]["ssh_allowed_cidrs"] = [
-        "2001:db8::1/64",
-        "203.0.113.4/32",
-        "10.0.0.1/32",
-        "2001:db8::/64",
-    ]
-    path = tmp_path / "management"
-    monkeypatch.setattr(firewall_manager, "MGMT_CIDRS_FILE", path)
-    expected = ordinary.managed_files(sample_config)[path]
-    assert firewall_manager.update_management_cidrs(sample_config["gateway"]["ssh_allowed_cidrs"])
-    assert path.read_text() == expected
-    assert not firewall_manager.update_management_cidrs(
-        sample_config["gateway"]["ssh_allowed_cidrs"]
-    )
-
-
-@pytest.mark.parametrize(
     "asset",
-    ["nebius-vpngw-ingress.py", "nebius-vpngw-ssh-ingress.conf", "nebius-vpngw-vm-ha.service"],
+    ["nebius-vpngw-ingress.py", "nebius-vpngw-vm-ha.service"],
 )
 def test_replacement_artifact_requires_boot_and_reconnect_assets(asset):
     root = Path(policy.__file__).parent
@@ -83,15 +37,12 @@ def test_replacement_artifact_requires_boot_and_reconnect_assets(asset):
 
 @pytest.mark.parametrize("ha", [False, True])
 @pytest.mark.parametrize("dry_run", [False, True])
-@pytest.mark.parametrize("value", ["missing", None, [], ["${INGRESS_UNRESOLVED_TEST}"], ["bad/24"]])
+@pytest.mark.parametrize("value", [None, [], ["${INGRESS_UNRESOLVED_TEST}"], ["bad/24"]])
 def test_cli_rejects_sources_before_auth_locks_or_effects(
     monkeypatch, tmp_path, sample_config, ha, dry_run, value
 ):
     sample_config["gateway_group"]["vm_ha"] = {"enabled": ha}
-    if value == "missing":
-        sample_config["gateway"].pop("ssh_allowed_cidrs")
-    else:
-        sample_config["gateway"]["ssh_allowed_cidrs"] = value
+    sample_config["gateway"]["ssh_allowed_cidrs"] = value
     monkeypatch.delenv("INGRESS_UNRESOLVED_TEST", raising=False)
     path = tmp_path / "gateway.config.yaml"
     path.write_text(yaml.safe_dump(sample_config))
@@ -105,30 +56,18 @@ def test_cli_rejects_sources_before_auth_locks_or_effects(
         cli.app, ["apply", "-c", str(path), *(["--dry-run"] if dry_run else [])]
     )
     assert result.exit_code == 1
-    assert "gateway.ssh_allowed_cidrs" in result.output
-    assert "No gateway changes" in result.output
+    assert "ssh_allowed_cidrs" in result.output
     assert "Traceback" not in result.output
 
 
 def test_partial_network_preparation_loader_cannot_bypass_source_validation(
     tmp_path, sample_config
 ):
-    sample_config["gateway"].pop("ssh_allowed_cidrs")
+    sample_config["gateway"]["ssh_allowed_cidrs"] = []
     path = tmp_path / "gateway.yaml"
     path.write_text(yaml.safe_dump(sample_config))
-    with pytest.raises(ValueError, match="gateway.ssh_allowed_cidrs"):
+    with pytest.raises(ValueError, match="ssh_allowed_cidrs"):
         load_local_config(path, validate_schema=False, allow_missing_placeholders=True)
-
-
-@pytest.mark.parametrize("gateway", ["invalid", ["invalid"], 42])
-def test_malformed_gateway_reports_ingress_validation_error(tmp_path, sample_config, gateway):
-    sample_config["gateway"] = gateway
-    path = tmp_path / "gateway.yaml"
-    path.write_text(yaml.safe_dump(sample_config))
-    with pytest.raises(policy.IngressPolicyError, match="gateway.ssh_allowed_cidrs"):
-        load_local_config(path)
-    with pytest.raises(policy.IngressPolicyError, match="gateway.ssh_allowed_cidrs"):
-        policy.from_config(sample_config)
 
 
 def test_missing_table_install_preserves_ordinary_command_budget(tmp_path, monkeypatch):
@@ -136,7 +75,7 @@ def test_missing_table_install_preserves_ordinary_command_budget(tmp_path, monke
 
     monkeypatch.setattr(policy, "LOCK_FILE", tmp_path / "lock")
     monkeypatch.setattr(policy, "POLICY_FILE", tmp_path / "policy")
-    desired = {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}
+    desired = {"peer_ips": []}
     installed = False
     calls = []
 
@@ -167,16 +106,6 @@ def test_missing_table_install_preserves_ordinary_command_budget(tmp_path, monke
     assert calls[0] == ["nft", "-j", "list", "tables", "inet"]
 
 
-def test_observed_source_accounts_for_nat_and_rejects_source_removal():
-    desired = {"ssh_allowed_cidrs": ["203.0.113.4/32", "2001:db8::/64"], "peer_ips": []}
-    assert policy.require_source(desired, "203.0.113.4 4567 10.0.0.1 22") == "203.0.113.4"
-    assert policy.require_source(desired, "2001:db8::7 4567 2001:db8:1::1 22") == "2001:db8::7"
-    with pytest.raises(RuntimeError, match="SSH source 203.0.113.9 is excluded"):
-        policy.require_source(desired, "203.0.113.9 4567 10.0.0.1 22")
-    with pytest.raises(RuntimeError, match="server-observed"):
-        policy.require_source(desired, "203.0.113.4")
-
-
 def test_bootstrap_policies_are_derived_per_instance(sample_config):
     plan = merge_with_peer_configs(sample_config, [])
     assert plan.gateway_group.ingress_policies[0] == policy.from_config(
@@ -185,7 +114,7 @@ def test_bootstrap_policies_are_derived_per_instance(sample_config):
 
 
 def test_kernel_verification_rejects_added_accept_or_missing_hook():
-    desired = {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}
+    desired = {"peer_ips": []}
     for mutate in (
         lambda objects: objects[1]["chain"].update(prio=10),
         lambda objects: objects.pop(),
@@ -223,7 +152,7 @@ def test_failed_native_validation_never_applies_or_persists(tmp_path, monkeypatc
         return SimpleNamespace(returncode=1, stdout="")
 
     with pytest.raises(RuntimeError, match="validation failed"):
-        policy.install({"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, run=run)
+        policy.install({"peer_ips": []}, run=run)
     assert len(calls) == 2 and "--check" in calls[-1]
     assert not policy.POLICY_FILE.exists()
 
@@ -231,7 +160,7 @@ def test_failed_native_validation_never_applies_or_persists(tmp_path, monkeypatc
 def test_interrupted_activation_keeps_validated_boot_intent(tmp_path, monkeypatch):
     monkeypatch.setattr(policy, "LOCK_FILE", tmp_path / "lock")
     monkeypatch.setattr(policy, "POLICY_FILE", tmp_path / "policy")
-    desired = {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}
+    desired = {"peer_ips": []}
     calls = []
 
     def run(argv, **kwargs):
@@ -268,7 +197,23 @@ def test_unreadable_inventory_never_becomes_repair_authority(tmp_path, monkeypat
         return result
 
     with pytest.raises(RuntimeError) as error:
-        policy.install({"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, run=run)
+        policy.install({"peer_ips": []}, run=run)
     assert not isinstance(error.value, policy.IngressPolicyDrift)
     assert calls == [["nft", "-j", "list", "tables", "inet"]]
     assert not policy.POLICY_FILE.exists()
+
+
+@pytest.mark.parametrize("value", [None, [], ["0.0.0.0/0"], ["203.0.113.4/32"]])
+def test_removed_ssh_field_is_rejected(value):
+    with pytest.raises(ValueError, match="ssh_allowed_cidrs"):
+        GatewayConfig(local_asn=65000, local_prefixes=["10.0.0.0/8"], ssh_allowed_cidrs=value)
+    with pytest.raises(ValueError):
+        policy.validate({"ssh_allowed_cidrs": value, "peer_ips": []})
+
+
+def test_peer_policy_contains_no_tcp_or_source_cidr_rules():
+    rules = json.dumps(policy.objects({"peer_ips": ["198.51.100.10", "2001:db8::1"]}))
+    assert '"tcp"' not in rules
+    assert '"prefix"' not in rules
+    assert '"esp"' in rules and "4500" in rules and "500" in rules
+    assert set(policy.from_config({"connections": []})) == {"peer_ips"}

@@ -261,6 +261,13 @@ remotes.
 
 ## Three-Tier Live Process
 
+For each phase observation, write its private `phase-result-v5` JSON at
+`<run-root>/evidence/phases/<phase>.json` and pass that exact file to
+`record-phase --evidence`. Read the installed helper's subcommand help before
+invocation. The recorder owns immutable attempt archives; callers never write
+them. `record-validation` is for canonical acceptance checks; recorded failures
+are immutable. Follow `references/three-tier-live.md` for development evidence.
+
 For explicit `--create-live-test`, `--create-live-test --keep`, or `--resume`, read and follow
 `references/three-tier-process.md` before any live operation. It owns all ten
 steps, including capability proof, immutable generation fencing, normal SDLC
@@ -367,6 +374,12 @@ owned environment overlay is accepted. Startup, workers, commit admission,
 evidence, resume and cleanup revalidate it without ambient fallback. Launch
 native commands through `scripts/run_with_git_environment.py` with the exact
 owned profile and checkout. It supplies environment only, never SDLC transitions.
+The native launcher removes unrelated inherited variables and parent identities,
+requires the exact private native home, and prevents user shell initialization
+from restoring credentials. Configure the disposable host using the
+[native launch settings](references/three-tier-process.md#native-launch-settings).
+Do not dump environment values or use this launcher for application runtime
+secrets; those belong to the outer lifecycle's protected runtime input.
 A missing or altered profile requires a failed report, not silent recreation.
 The root, fixture components, and report path must be real local directories
 and files, never symlink redirects.
@@ -401,6 +414,12 @@ exclusive runtime lease. The worker acquires and holds it through the full live
 sequence and teardown; the outer verifier consumes it without impersonating or
 releasing worker ownership. A per-resource use lock guards synchronous actions
 against lease release, while short state locks leave heartbeat/status available.
+Every live startup requires owned
+`up --force-recreate --detach --wait web db`; build web separately.
+The helper rejects other startup shapes without rewriting arguments.
+Recreation retains the named database volume; rediscover endpoints and
+inventory afterward. UAT persistence uses the separate owned restart action.
+
 Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
@@ -409,6 +428,18 @@ run validation on uncommitted integration work before coordinator sealing.
 Shipping and UAT always require a clean promoted checkout. After completed promotion,
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Read-only classifier observations have a separate explicit target purpose. While
+the bound root coordinator is running `sdlc-classify-failure`, it may observe
+unsealed integration files without committing them or changing phase. Exact
+worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+This purpose is never used by Compose, runtime inventory, build certification,
+browser acceptance or test execution; explicit clean-target requests still win.
+Worker selectors and dirty promoted checkouts remain rejected.
+
+For final historical TDD validation, follow the exact lineage checks in
+[the live contract](references/three-tier-live.md). Never rewrite old receipts
+or use preserved TDD evidence to admit stale application acceptance.
 
 Before dispatching the first phase, record `sdlc-start` PASS while the coordinator
 checkpoint still names `sdlc-start` and Git remains at the fixture baseline.
@@ -476,12 +507,6 @@ secrets, or screenshot contents.
 For the lightweight no-flag mode, preserve the existing readiness report and
 PASS/PARTIAL/FAIL interpretation.
 
-Return:
-
-- Final readiness status: PASS, PARTIAL, or FAIL.
-- Report path.
-- Top issues found.
-- Recommended fixes.
-- Whether it is safe to try the SDLC workflow on a low-risk real repository.
-- Validation commands run.
-- Live or external tests skipped and why.
+Include the top issues and recommended fixes, validation commands, and skipped
+live or external checks with their reasons. State whether the evidence supports
+trying the workflow on a low-risk real repository.

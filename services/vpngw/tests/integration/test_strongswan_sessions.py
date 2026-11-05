@@ -106,7 +106,6 @@ def endpoints(tmp_path, request):
             run(*prefix, "tc", "qdisc", "add", "dev", "eth0", "root", "netem", "delay", "500ms")
             config = {
                 "gateway": {
-                    "ssh_allowed_cidrs": ["203.0.113.4/32"],
                     "local_prefixes": [f"10.200.{index}.1/32"],
                 },
                 "defaults": {

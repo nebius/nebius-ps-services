@@ -200,6 +200,7 @@ def test_pagination_audit_covers_the_complete_public_command_tree() -> None:
     collect(get_command(app))
 
     assert leaves == {
+        ("access", "add-operator"),
         ("add-routes-local",),
         ("apply",),
         ("create-config",),

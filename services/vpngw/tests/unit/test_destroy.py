@@ -1130,7 +1130,10 @@ def test_resolved_predecessor_operation_binds_only_its_exact_returned_resource()
     assert compute["gateway-1"] == "compute-accepted"
 
 
-def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority() -> None:
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
+def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority(cycle) -> None:
+    from nebius_vpngw.deploy.vm_ha_lifecycle import vm_ha_passive_replacement_binding_key
+
     plan = _plan(topology="vm-ha")
     lifecycle = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
     lifecycle = replace(
@@ -1138,8 +1141,11 @@ def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority() 
         transaction=replace(
             lifecycle.transaction,
             resource_bindings=(
-                ("replacement-disk:gateway-1", "disk-current"),
-                ("retired-disk:gateway-1", "disk-retired"),
+                (vm_ha_passive_replacement_binding_key("disk", "gateway-1", cycle), "disk-current"),
+                (
+                    vm_ha_passive_replacement_binding_key("retired-disk", "gateway-1", cycle),
+                    "disk-retired",
+                ),
             ),
         ),
     )
@@ -1153,7 +1159,10 @@ def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority() 
     assert observed == {"disk-0", "disk-current", "disk-retired"}
 
 
-def test_vm_ha_destroy_plans_present_retired_compute_for_deletion() -> None:
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
+def test_vm_ha_destroy_plans_present_retired_compute_for_deletion(cycle) -> None:
+    from nebius_vpngw.deploy.vm_ha_lifecycle import vm_ha_passive_replacement_binding_key
+
     plan = _plan(topology="vm-ha")
     lifecycle = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
     lifecycle = replace(
@@ -1161,8 +1170,14 @@ def test_vm_ha_destroy_plans_present_retired_compute_for_deletion() -> None:
         transaction=replace(
             lifecycle.transaction,
             resource_bindings=(
-                ("replacement-compute:gateway-1", "compute-current"),
-                ("retired-compute:gateway-1", "compute-retired"),
+                (
+                    vm_ha_passive_replacement_binding_key("compute", "gateway-1", cycle),
+                    "compute-current",
+                ),
+                (
+                    vm_ha_passive_replacement_binding_key("retired-compute", "gateway-1", cycle),
+                    "compute-retired",
+                ),
             ),
         ),
     )

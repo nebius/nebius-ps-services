@@ -115,6 +115,8 @@ class LocalReadiness:
     cold_standby_ready: bool = False
     routing_hygiene_ready: bool = True
     passive_policy_refresh_required: bool = False
+    serving_ready: bool = False
+    sample_complete: bool = True
 
     @property
     def promotion_ready(self) -> bool:
@@ -418,6 +420,7 @@ class ControllerCheckpoint:
     sequence: int = 0
     state: HAState = HAState.BLOCKED
     suspect_since: float | None = None
+    suspicion_boot_id: str | None = None
     pending_action: ControllerAction | None = None
     established_ownership_context: OwnershipContext | None = None
     ownership_continuity_invalidated: bool = False
@@ -439,8 +442,17 @@ class ControllerCheckpoint:
                 raise ValueError(
                     "ownership continuity invalidation cannot retain established context"
                 )
-        if self.suspect_since is not None and not math.isfinite(self.suspect_since):
-            raise ValueError("suspect_since must be finite")
+        if (self.suspect_since is None) != (self.suspicion_boot_id is None):
+            raise ValueError("suspicion time and boot identity must be paired")
+        if self.suspect_since is not None and (
+            isinstance(self.suspect_since, bool)
+            or not isinstance(self.suspect_since, (int, float))
+            or not math.isfinite(self.suspect_since)
+            or self.suspect_since < 0
+            or not isinstance(self.suspicion_boot_id, str)
+            or not self.suspicion_boot_id.strip()
+        ):
+            raise ValueError("suspicion requires a valid boot and finite nonnegative time")
         continuity = self.transfer_continuity
         if (
             continuity is not None
@@ -510,6 +522,9 @@ class VMHAController:
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> ControllerResult:
         """Return one safe action, checkpointed before execution."""
+
+        if checkpoint.suspicion_boot_id != snapshot.boot_id:
+            checkpoint = replace(checkpoint, suspect_since=None, suspicion_boot_id=None)
 
         if not snapshot.route_runtime_id:
             return self._result(
@@ -646,6 +661,9 @@ class VMHAController:
                             None if retire_locked_repair else checkpoint.repair_attempt
                         ),
                         suspect_since=(None if retire_locked_repair else checkpoint.suspect_since),
+                        suspicion_boot_id=(
+                            None if retire_locked_repair else checkpoint.suspicion_boot_id
+                        ),
                     ),
                 )
                 if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
@@ -697,6 +715,7 @@ class VMHAController:
                 ownership_continuity_invalidated=False,
                 transfer_continuity=None,
                 suspect_since=None,
+                suspicion_boot_id=None,
             )
         continuity = checkpoint.transfer_continuity
         if (
@@ -750,7 +769,9 @@ class VMHAController:
                 HAState.BLOCKED,
                 ("manual-failback-invalid-for-passive-role",),
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
         if (
             snapshot.configured_role is ConfiguredRole.ACTIVE
@@ -760,7 +781,9 @@ class VMHAController:
                 HAState.BLOCKED,
                 ("manual-failover-invalid-for-active-role",),
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
 
         # A non-owner must remain passive before it can suspect or transfer.
@@ -778,35 +801,45 @@ class VMHAController:
                 HAState.BLOCKED,
                 ("mtls-rotation-active",),
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
         if snapshot.apply_locked:
             return self._result(
                 HAState.BLOCKED,
                 ("apply-lock-held",),
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
         if snapshot.emergency_active_only:
             return self._result(
                 HAState.BLOCKED,
                 ("emergency-active-only-generation",),
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
         if parity_reasons:
             return self._result(
                 HAState.BLOCKED,
                 parity_reasons,
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
         if not snapshot.readiness.transfer_ready:
             return self._result(
                 HAState.BLOCKED,
                 snapshot.readiness.transfer_blocked_reasons,
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
 
         if (
@@ -818,7 +851,9 @@ class VMHAController:
                 HAState.NORMAL,
                 ("authoritative-owner-peer-is-healthy",),
                 snapshot,
-                replace(checkpoint, state=HAState.NORMAL, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.NORMAL, suspect_since=None, suspicion_boot_id=None
+                ),
             )
 
         return self._transfer_decision(snapshot, checkpoint)
@@ -834,6 +869,7 @@ class VMHAController:
                 checkpoint,
                 repair_attempt=None,
                 suspect_since=None,
+                suspicion_boot_id=None,
             )
             if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
                 return self._action(
@@ -948,6 +984,7 @@ class VMHAController:
                     checkpoint,
                     state=state,
                     suspect_since=None,
+                    suspicion_boot_id=None,
                     established_ownership_context=snapshot.ownership_context,
                     # Receipt publication may wait for the rearm writer. Until
                     # its durable intent is retired, every active tick must
@@ -985,7 +1022,9 @@ class VMHAController:
                 HAState.BLOCKED,
                 promotion_blockers,
                 snapshot,
-                replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
 
         if snapshot.readiness.passive_policy_refresh_required:
@@ -1012,7 +1051,12 @@ class VMHAController:
                     HAState.DEGRADED,
                     reasons,
                     snapshot,
-                    replace(checkpoint, state=HAState.DEGRADED, suspect_since=None),
+                    replace(
+                        checkpoint,
+                        state=HAState.DEGRADED,
+                        suspect_since=None,
+                        suspicion_boot_id=None,
+                    ),
                 )
             return self._action(
                 HAState.PROMOTING,
@@ -1026,7 +1070,9 @@ class VMHAController:
                 HAState.DEGRADED,
                 reasons,
                 snapshot,
-                replace(checkpoint, state=HAState.DEGRADED, suspect_since=None),
+                replace(
+                    checkpoint, state=HAState.DEGRADED, suspect_since=None, suspicion_boot_id=None
+                ),
             )
         return self._action(
             HAState.PROMOTING,
@@ -1183,7 +1229,12 @@ class VMHAController:
                         else "peer-heartbeat-stale",
                     ),
                     snapshot,
-                    replace(checkpoint, state=HAState.SUSPECT, suspect_since=snapshot.now),
+                    replace(
+                        checkpoint,
+                        state=HAState.SUSPECT,
+                        suspect_since=snapshot.now,
+                        suspicion_boot_id=snapshot.boot_id,
+                    ),
                 )
             if snapshot.now - suspect_since < self.suspicion_seconds:
                 return self._result(
@@ -1264,7 +1315,20 @@ class VMHAController:
             and 0 <= snapshot.now - received_at < self.peer_timeout_seconds
             and heartbeat.service_healthy
             and (
-                (heartbeat.route_ready and heartbeat.promotion_ready)
+                (
+                    heartbeat.local_health_fresh(snapshot.now)
+                    and (
+                        (heartbeat.route_ready and heartbeat.promotion_ready)
+                        or (
+                            heartbeat.evidence.serving
+                            and snapshot.cloud.authoritative
+                            and snapshot.cloud.observed_owner_node_id == snapshot.peer_node_id
+                            and snapshot.cloud.former_owner_node_id == snapshot.peer_node_id
+                            and snapshot.cloud.former_attachment_exact
+                            and snapshot.cloud.candidate_attachment_absent
+                        )
+                    )
+                )
                 or self._peer_tunnel_recovery(snapshot)
             )
         )
@@ -1278,6 +1342,7 @@ class VMHAController:
         owner = claim["owner"]
         return bool(
             heartbeat is not None
+            and heartbeat.local_service_fresh(snapshot.now)
             and snapshot.cloud.authoritative
             and heartbeat.tunnel_capability
             and heartbeat.observed_owner_id
@@ -1381,7 +1446,7 @@ class VMHAController:
             HAState.BLOCKED,
             reasons,
             snapshot,
-            replace(checkpoint, state=HAState.BLOCKED, suspect_since=None),
+            replace(checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None),
         )
 
     def _action(
@@ -1854,6 +1919,14 @@ class VMHAController:
         )
 
 
+class AutomaticStopCancelled(RuntimeError):
+    """Admission durably retired an exact, uncommitted automatic Stop."""
+
+    def __init__(self, checkpoint: ControllerCheckpoint) -> None:
+        super().__init__("automatic Stop cancelled after fresh peer evidence")
+        self.checkpoint = checkpoint
+
+
 class RecoverableController:
     """Small orchestration shell enforcing checkpoint-before-effect ordering."""
 
@@ -1864,6 +1937,7 @@ class RecoverableController:
         snapshots: SnapshotPort,
         checkpoints: CheckpointStore,
         effects: EffectPort,
+        before_observe: Callable[[ControllerCheckpoint], None] | None = None,
         decision_observer: (
             Callable[[ControllerSnapshot, ControllerCheckpoint, ControllerResult], None] | None
         ) = None,
@@ -1871,6 +1945,7 @@ class RecoverableController:
             Callable[[ControllerSnapshot, ControllerCheckpoint, ControllerResult], bool] | None
         ) = None,
     ) -> None:
+        self.before_observe = before_observe or (lambda _checkpoint: None)
         self.policy = policy
         self.snapshots = snapshots
         self.checkpoints = checkpoints
@@ -1882,6 +1957,7 @@ class RecoverableController:
 
     def step(self) -> ControllerResult:
         checkpoint = self.checkpoints.load()
+        self.before_observe(checkpoint)
         snapshot = self.snapshots.observe()
         decision = self.policy.decide(snapshot, checkpoint)
         if self.decision_preflight is not None and self.decision_preflight(
@@ -1897,5 +1973,17 @@ class RecoverableController:
             self.checkpoints.save(decision.checkpoint)
         self.decision_observer(snapshot, checkpoint, decision)
         if decision.action is not None:
-            self.effects.apply(decision.action)
+            try:
+                self.effects.apply(decision.action)
+            except AutomaticStopCancelled as cancelled:
+                if decision.action.kind is not ActionKind.STOP_FORMER_OWNER:
+                    raise
+                return replace(
+                    decision,
+                    state=HAState.NORMAL,
+                    reasons=("automatic-stop-cancelled-peer-healthy",),
+                    action=None,
+                    checkpoint=cancelled.checkpoint,
+                    forwarding_enabled=False,
+                )
         return decision

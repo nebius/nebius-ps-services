@@ -55,7 +55,7 @@ domain and an exclusive assignment-bound lease.
 
 Shared schemas are `workflow/execution-coordinator-v2`, `workflow/execution-wave-v2`,
 `workflow/execution-task-v2`, `workflow/worker-assignment-v2`, and
-`workflow/worker-result-v2`. Each assignment binds a normalized objective and
+`workflow/worker-result-v3`. Each assignment binds a normalized objective and
 immutable execution basis; each admitted result binds exact identity, ancestry,
 changed paths, validation, review and native termination. Typed `spec_gaps` return
 to the root coordinator. Workers never publish canonical specs independently.
@@ -89,6 +89,35 @@ corrective run. See [shared contracts](../../worktree/references/workflow-contra
 
 ## Recovery
 
+An active-task `DESIGN_DEFECT` with a proven diagnosis and active counted design
+dispatch may correct the canonical contract before integration. Stop every
+allocated native writer and release its runtime leases. Use private
+`prepare-design-revision --run-dir RUN --execution FEAT --classification-id ID
+--dispatch-id ID --termination PATH` with one exact termination observation per
+allocated writer (repeat `--termination`). The owner validates the original
+canonical snapshot, basis, plan and clean integration tip, rejects partial
+merges, and preserves failed candidates and assignments with immutable retention
+proof. It enters `design_revision_pending`; dispatch and replanning remain blocked.
+
+Publish the corrected canonical pair through `maintain-project-specs`, binding
+the same objective, basis, original HEAD and document digests. Then use private
+`seal-design-revision --run-dir RUN --execution FEAT --revision-id ID
+--publication-operation-id OP --message SUBJECT`. The revision ID is the counted
+dispatch ID. Sealing reads the semantic owner's journal, admits only that exact
+pair and records the exact commit tree and parent before committing. Exact
+replay recovers interruption without a second commit or another repair charge.
+Unrelated staged/dirty content remains a blocker and is preserved.
+
+Refresh objective impact and lock a replacement plan. Preserve all started task
+definitions and historical waves, then append new tasks without dependencies on
+superseded tasks. Future tasks are scheduled after that frozen prefix, including
+independent tasks with disjoint claims. Dispatch uses the new basis and sealed
+tip; old assignments and results cannot resume. Preserve the original TDD seal,
+rerun the classifier's invalidated gates, and complete repair only with the
+required new evidence. This transition covers one admitted feature's unmerged
+active-task design correction; integrated-wave repair below keeps its separate
+authority. It never supplies a steering fence or broader design approval.
+
 An integrated wave whose combined checks fail uses classifier lifecycle
 `integrated_wave`. A proven localized diagnosis and counted active dispatch
 authorize private `wave-fail --classification ID --dispatch ID --evidence TEXT`
@@ -114,12 +143,18 @@ success from a command error; classify observed Git state first.
 
 `task-start`, `task-heartbeat`, and `task-recover` derive identity from
 the native Codex or Claude session binding; callers cannot supply arbitrary runtime session tokens.
-`task-arm` starts a 60-second prestart deadline only when capacity exists.
+`task-arm` starts a 300-second prestart deadline only when capacity exists.
+Prepare handoff details first and spawn immediately after arming; repeating arm
+does not reset the deadline. The one-hour work clock begins at `task-start`.
 Workers emit direct heartbeats at least every 30 seconds; background heartbeat
 loops are forbidden. Read-only `task-watch` gives scope violations precedence
 over prestart mutation and enforces prestart timeout, scope, read-only, stall,
 and maximum-runtime budgets. After the coordinator stops the entire process
-group for a never-started worker, `task-requeue` compares the exact dispatch
+group, preserve the actual failure. The shared maximum is 3600 wall-clock
+seconds per attempt, including runtime waits and validation; an active worker
+receives `WORKER_DEADLINE_NEAR` in the final 300 seconds. Heartbeats and progress
+never extend it. The 240-second stale-heartbeat limit remains independent.
+For a never-started worker, `task-requeue` compares the exact dispatch
 timestamp and accepts only attempt zero, no session ownership, exact branch and
 common-directory identity, clean base `HEAD`, and no changed paths.
 `task-recover` requires coordinator-issued recovery authorization and immutable native termination evidence, the
@@ -134,10 +169,14 @@ coordinator may prepare only an appended planned wave after every prior wave is
 done. Preparation retains the existing integration tip and TDD lineage; it does
 not reopen completed waves or reseal TDD.
 
+Use the shared [worker contract](../../worktree/references/workflow-contract.md)
+for native launch, strict result ingestion, dispatch fences and recovery.
+`task-result` validates the complete result and independent termination; only
+its current implemented receipt can enter `task-finish --receipt`.
 Coordinator `task-finish` writes a digest-protected
-`agentic-sdlc/task-finish-intent-v2` before invoking Git. The intent binds the
-assignment digest, base, staged tree, canonical message, and structured
-evidence. A retry may adopt only an exact clean direct-child commit matching
+`workflow/task-finish-intent-v3` before invoking Git. The intent binds the
+assignment digest, base, staged tree, canonical message, structured
+evidence and immutable worker-result receipt digest. A retry may adopt only an exact clean direct-child commit matching
 that intent, and may reuse a result file only when every result field matches
 the same finish request. A moved `HEAD` without an exact intent, or any intent,
 commit, result, or evidence drift, fails closed.

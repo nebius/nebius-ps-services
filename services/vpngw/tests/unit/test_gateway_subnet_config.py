@@ -38,9 +38,7 @@ from nebius_vpngw.schema import validate_config
 
 def _gateway_group_spec(subnet: dict | None = None) -> GatewayGroupSpec:
     return GatewayGroupSpec(
-        ingress_policies={
-            i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
-        },
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="nebius-vpn-gw",
         instance_count=1,
         region="eu-west1",
@@ -313,7 +311,7 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     manager = VMManager(project_id="project-test", region="eu-west1")
 
     rendered = manager._build_cloud_init(
-        ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []},
+        ingress={"peer_ips": []},
         ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey",
         local_prefixes=["10.0.0.0/16", "172.16.0.0/24"],
     )
@@ -357,6 +355,7 @@ def test_vm_ha_controller_checkpoint_round_trip_preserves_complete_action_identi
         sequence=9,
         state=HAState.PROMOTING,
         suspect_since=12.5,
+        suspicion_boot_id="boot-a",
         pending_action=action,
         established_ownership_context=OwnershipContext(
             owner_node_id="node-a",
@@ -464,6 +463,7 @@ def test_vm_ha_v1_late_transfer_migration_invalidates_a_new_incarnation() -> Non
             ownership_incarnation=3,
         )
     )
+    payload.pop("suspicion_boot_id")
     payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v1"
     payload.pop("transfer_continuity")
     payload.pop("repair_attempt")
@@ -472,12 +472,10 @@ def test_vm_ha_v1_late_transfer_migration_invalidates_a_new_incarnation() -> Non
     payload["pending_action"].pop("repair_deadline_at")
     payload["pending_action"].pop("repair_reasons")
 
-    migrated = controller_checkpoint_from_dict(payload)
+    from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
 
-    assert migrated.state is HAState.BLOCKED
-    assert migrated.pending_action is None
-    assert migrated.ownership_continuity_invalidated is True
-    assert migrated.ownership_incarnation == 4
+    with pytest.raises(ValueError, match="lossy recovery"):
+        inspect_checkpoint(payload)
 
 
 def test_vm_ha_v2_checkpoint_preserves_strict_legacy_takeover_fence() -> None:
@@ -502,6 +500,7 @@ def test_vm_ha_v2_checkpoint_preserves_strict_legacy_takeover_fence() -> None:
             ownership_incarnation=3,
         )
     )
+    payload.pop("suspicion_boot_id")
     payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v2"
     payload.pop("repair_attempt")
     assert isinstance(payload["pending_action"], dict)
@@ -509,7 +508,9 @@ def test_vm_ha_v2_checkpoint_preserves_strict_legacy_takeover_fence() -> None:
     payload["pending_action"].pop("repair_deadline_at")
     payload["pending_action"].pop("repair_reasons")
 
-    migrated = controller_checkpoint_from_dict(payload)
+    from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
+
+    migrated = inspect_checkpoint(payload)
 
     assert migrated.pending_action is not None
     assert migrated.pending_action.takeover_fence_required is True
@@ -536,13 +537,16 @@ def test_vm_ha_v3_checkpoint_preserves_explicit_takeover_fence() -> None:
         ownership_incarnation=3,
     )
     payload = controller_checkpoint_to_dict(expected)
+    payload.pop("suspicion_boot_id")
     payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v3"
     payload.pop("repair_attempt")
     assert isinstance(payload["pending_action"], dict)
     payload["pending_action"].pop("repair_deadline_at")
     payload["pending_action"].pop("repair_reasons")
 
-    assert controller_checkpoint_from_dict(payload) == expected
+    from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
+
+    assert inspect_checkpoint(payload) == expected
 
 
 def test_vm_ha_guard_and_default_status_are_fail_closed(tmp_path: Path, monkeypatch) -> None:
@@ -710,15 +714,17 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
 
     assert json.loads(capsys.readouterr().out) == {
         "features": [
+            "independent-heartbeat-v5",
             "connection-tunnel-selection-v1",
             "ordinary-apply-v1",
-            "managed-ingress-v1",
+            "managed-peer-ingress-v2",
             "ipsec-replay-window-v1",
             "force-reconcile-v1",
             "vm-ha-authority-bound-force-reconcile-v1",
             "vm-ha-controller-route-reconcile-v1",
             "vm-ha-mtls-rotation-quiescence-v1",
             "vm-ha-standby-auto-healing-policy-v4",
+            "vm-ha-rebound-policy-v1",
             "vm-ha-live-peer-replacement-v4",
             "vm-ha-standby-replacement-inhibition-v2",
             "vm-ha-standby-restoration-v2",
@@ -786,6 +792,6 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     assert (
         "ReadWritePaths=/etc/nebius-vpngw /var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock "
         "/proc/sys/net/ipv4/ip_forward /etc/vpngw_peer_ips "
-        "/etc/vpngw_mgmt_cidrs /etc/vpngw_local_prefixes /etc/ufw "
+        "/etc/vpngw_local_prefixes /etc/ufw "
         "/etc/default/ufw /etc/frr" in controller
     )

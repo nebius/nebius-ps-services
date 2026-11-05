@@ -6,6 +6,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import time
@@ -21,7 +23,73 @@ from nebius_vpngw import cli, ordinary_routes
 from nebius_vpngw.agent import ordinary
 from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget, run
 from nebius_vpngw.deploy import ordinary_apply, ordinary_remote, vm_ha_package
-from nebius_vpngw.deploy.ssh_push import VMHAAgentArtifact
+from nebius_vpngw.deploy.ssh_push import SSHPush, VMHAAgentArtifact
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_package_inspection_rejects_conflicting_metadata_in_one_prefix(
+    tmp_path, monkeypatch, reverse
+):
+    import importlib.metadata as metadata
+
+    for version, core in (("2.13.5", "2.46.5"), ("2.14.2", "2.50.2")):
+        info = tmp_path / f"pydantic-{version}.dist-info"
+        info.mkdir()
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.4\nName: pydantic\nVersion: {version}\n"
+            f"Requires-Dist: pydantic-core=={core}\n"
+        )
+    distributions = sorted(metadata.distributions(path=[str(tmp_path)]), key=lambda d: d.version)
+    if reverse:
+        distributions.reverse()
+    monkeypatch.setattr(ordinary_remote.metadata, "distributions", lambda: iter(distributions))
+    boot = tmp_path / "boot"
+    boot.write_text("boot-id")
+    monkeypatch.setattr(ordinary_remote, "BOOT", boot)
+    monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "absent.yaml")
+    with pytest.raises(RuntimeError, match="conflicting installed package metadata"):
+        ordinary_remote.inspect({"files": {}, "assets": {}}, runtime_admission=False)
+
+
+def test_package_inspection_preserves_distinct_prefix_shadowing(tmp_path, monkeypatch):
+    import importlib.metadata as metadata
+
+    distributions = []
+    for prefix, version in (("pip", "2.14.2"), ("apt", "2.4.0")):
+        base = tmp_path / prefix
+        info = base / f"pydantic-{version}.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.4\nName: pydantic\nVersion: {version}\n"
+        )
+        distributions.extend(metadata.distributions(path=[str(base)]))
+    monkeypatch.setattr(ordinary_remote.metadata, "distributions", lambda: iter(distributions))
+    boot = tmp_path / "boot"
+    boot.write_text("boot-id")
+    monkeypatch.setattr(ordinary_remote, "BOOT", boot)
+    monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "absent.yaml")
+    result = ordinary_remote.inspect({"files": {}, "assets": {}}, runtime_admission=False)
+    assert result["dependencies"] == {"pydantic": "2.14.2"}
+
+
+def test_package_inspection_accepts_same_version_distro_metadata_forms(tmp_path, monkeypatch):
+    import importlib.metadata as metadata
+
+    for suffix, requirements in (("dist-info", ""), ("egg-info", "Requires-Dist: cffi>=1.12\n")):
+        info = tmp_path / f"cryptography-41.0.7.{suffix}"
+        info.mkdir()
+        (info / ("METADATA" if suffix == "dist-info" else "PKG-INFO")).write_text(
+            "Metadata-Version: 2.4\nName: cryptography\nVersion: 41.0.7\n" + requirements
+        )
+    distributions = list(metadata.distributions(path=[str(tmp_path)]))
+    assert len(distributions) == 2
+    monkeypatch.setattr(ordinary_remote.metadata, "distributions", lambda: iter(distributions))
+    boot = tmp_path / "boot"
+    boot.write_text("boot-id")
+    monkeypatch.setattr(ordinary_remote, "BOOT", boot)
+    monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "absent.yaml")
+    result = ordinary_remote.inspect({"files": {}, "assets": {}}, runtime_admission=False)
+    assert result["dependencies"] == {"cryptography": "41.0.7"}
 
 
 def empty_routes():
@@ -68,8 +136,83 @@ def test_previous_release_state_is_read_without_migration(tmp_path):
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("predecessor", ["missing", "previous", "current", "foreign", "symlink"])
+def test_ha_asset_installer_checks_ufw_before_writing_any_asset(
+    release_wheel, tmp_path, predecessor
+):
+    root = tmp_path / "guest"
+    root.mkdir()
+    override = root / ordinary_apply.UFW_ORDERING_PATH.lstrip("/")
+    override.parent.mkdir(parents=True)
+    canonical = Path(ordinary.__file__).parents[1] / "systemd/nebius-vpngw-ufw-ordering.conf"
+    if predecessor == "symlink":
+        override.symlink_to(canonical)
+    elif predecessor != "missing":
+        override.write_bytes(
+            {
+                "previous": ordinary_apply.PREVIOUS_UFW_ORDERING,
+                "current": canonical.read_bytes(),
+                "foreign": b"[Unit]\nAfter=customer.service\n",
+            }[predecessor]
+        )
+    script = shlex.split(SSHPush._install_vm_ha_assets_from_artifact_command(str(release_wheel)))[3]
+    # Execute the emitted installer unchanged except for filesystem isolation.
+    script = re.sub(r"/(?:etc|usr|var)/", lambda match: str(root) + match.group(), script)
+    before = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    result = subprocess.run([sys.executable, "-c", script, str(release_wheel)], capture_output=True)
+    if predecessor in {"foreign", "symlink"}:
+        assert result.returncode != 0
+        assert b"unknown contents" in result.stderr
+        assert before == {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    else:
+        assert result.returncode == 0, result.stderr
+        assert override.read_bytes() == canonical.read_bytes()
+        assert override.stat().st_mode & 0o777 == 0o644
+
+
+@pytest.mark.parametrize("ha", [False, True])
+@pytest.mark.parametrize("predecessor", ["missing", "previous", "current", "foreign"])
+def test_ufw_ordering_upgrade_admits_only_product_owned_override(
+    release_wheel, monkeypatch, ha, predecessor
+):
+    owner = vm_ha_package if ha else ordinary_apply
+    config = "gateway: {}\nconnections: []\n"
+    manifest = owner.artifact(release_wheel, config)
+    path = ordinary_apply.UFW_ORDERING_PATH
+    asset = manifest["assets"][path]
+    prior = {
+        "missing": None,
+        "previous": ordinary_apply.sha(ordinary_apply.PREVIOUS_UFW_ORDERING),
+        "current": asset["sha256"],
+        "foreign": ordinary_apply.sha(b"[Unit]\nAfter=customer.service\n"),
+    }[predecessor]
+    observation = dict.fromkeys(vm_ha_package.PACKAGE_FIELDS)
+    observation.update(
+        files={},
+        assets={path: prior},
+        asset_modes={},
+        dependencies={},
+        requirements={},
+        markers={},
+        route_ownership=empty_routes(),
+        config_sha256=manifest["config_sha256"],
+        verified=False,
+        agent_state="active",
+    )
+    monkeypatch.setattr(ordinary_apply, "remote", Mock(return_value={"observation": observation}))
+    monkeypatch.setattr(ordinary_apply, "resolve_dependencies", lambda *args: [])
+    ssh = SimpleNamespace(_build_wheel=lambda **kw: release_wheel, _find_project_root=lambda: None)
+    args = (ssh, "203.0.113.10", SimpleNamespace(hostname="gateway", config_yaml=config), {})
+    if predecessor == "foreign":
+        with pytest.raises(RuntimeError, match="unknown contents"):
+            owner.inspect_plan(*args, target_identity="compute-0")
+    else:
+        plan = owner.inspect_plan(*args, target_identity="compute-0")
+        plan.close()
+
+
 def test_previous_capability_absence_plans_approved_upgrade(release_wheel, monkeypatch):
-    config = "gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n"
+    config = "gateway: {}\nconnections: []\n"
     manifest = ordinary_apply.artifact(release_wheel, config)
     fixture = json.loads(
         (Path(__file__).parents[1] / "fixtures/previous_release_0_6_0.json").read_text()
@@ -170,10 +313,9 @@ def transaction(release_wheel, tmp_path, monkeypatch, ordinary_operation_guest):
         ("ROUTING_LOCK", "routing.lock"),
     ):
         monkeypatch.setattr(ordinary_remote, name, root / basename)
-    monkeypatch.setenv("VPNGW_DEPLOY_SSH_CONNECTION", "203.0.113.4 4567 10.0.0.1 22")
     ordinary_remote.BOOT.write_text("12345678-1234-1234-1234-123456789012")
     ordinary_remote.CONFIG.write_text("gateway: {}\nconnections: []\n# previous release\n")
-    config = "gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n"
+    config = "gateway: {}\nconnections: []\n"
     manifest = ordinary_apply.artifact(release_wheel, config)
     manifest["assets"] = {
         str(root / Path(path).name): item for path, item in manifest["assets"].items()
@@ -496,9 +638,7 @@ def test_selected_wheel_must_implement_the_approved_route_contract(release_wheel
                 raw = b"# previous route behavior\n"
             target.writestr(name, raw)
     with pytest.raises(RuntimeError, match="route ownership|mandatory managed ingress"):
-        ordinary_apply.artifact(
-            selected, "gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n"
-        )
+        ordinary_apply.artifact(selected, "gateway: {}\nconnections: []\n")
 
 
 def test_quiescence_drift_prevents_install_and_publication(transaction, monkeypatch):
@@ -577,7 +717,7 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(
     instances = tuple(
         SimpleNamespace(
             hostname=f"gateway-{i}",
-            config_yaml="gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\nvm_ha: {}\n",
+            config_yaml="gateway: {}\nconnections: []\nvm_ha: {}\n",
         )
         for i in range(2)
     )
@@ -609,7 +749,7 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(
                 },
                 "ha_config_digest": ordinary_apply.digest(
                     {
-                        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+                        "gateway": {},
                         "connections": [],
                         "vm_ha": {},
                     }
@@ -743,7 +883,7 @@ def test_client_deadline_includes_upload_and_always_closes(monkeypatch, slow_upl
                 "203.0.113.10",
                 SimpleNamespace(
                     hostname="gateway-0",
-                    config_yaml="gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}",
+                    config_yaml="gateway: {}",
                 ),
                 {},
                 request,
@@ -756,7 +896,7 @@ def test_client_deadline_includes_upload_and_always_closes(monkeypatch, slow_upl
                 "203.0.113.10",
                 SimpleNamespace(
                     hostname="gateway-0",
-                    config_yaml="gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}",
+                    config_yaml="gateway: {}",
                 ),
                 {},
                 request,
@@ -788,7 +928,7 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
     monkeypatch.setattr(strongswan_renderer, "run", effect)
     files = ordinary.managed_files(
         {
-            "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
+            "gateway": {"local_prefixes": ["10.0.0.0/24"]},
             "connections": [],
         }
     )
@@ -820,7 +960,7 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
 )
 def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, monkeypatch, fault):
     cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.0.0.0/24"]},
+        "gateway": {"local_prefixes": ["10.0.0.0/24"]},
         "connections": [
             {
                 "tunnels": [
@@ -955,7 +1095,7 @@ def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, mon
 def guest(monkeypatch, tmp_path, ordinary_operation_guest):
     for name in ("CONFIG", "PROOF", "STATE", "BOOT"):
         monkeypatch.setattr(ordinary, name, tmp_path / name)
-    ordinary.CONFIG.write_text("gateway: {ssh_allowed_cidrs: [203.0.113.4/32]}\nconnections: []\n")
+    ordinary.CONFIG.write_text("gateway: {}\nconnections: []\n")
     ordinary.BOOT.write_text("12345678-1234-1234-1234-123456789012")
     monkeypatch.setattr(ordinary, "package_identity", lambda: "a" * 64)
     monkeypatch.setattr(
@@ -1132,12 +1272,9 @@ def test_remote_stale_predecessor_has_no_command_or_config_effects(monkeypatch, 
     monkeypatch.setattr(ordinary_remote, "inspect", lambda manifest: {"changed": True})
     command = Mock(side_effect=AssertionError("effect"))
     monkeypatch.setattr(ordinary_remote, "command", command)
-    monkeypatch.setenv("VPNGW_DEPLOY_SSH_CONNECTION", "203.0.113.4 4567 10.0.0.1 22")
     result = ordinary_remote.execute(
         {
-            "manifest": {
-                "ingress_policy": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}
-            },
+            "manifest": {"ingress_policy": {"peer_ips": []}},
             "noop": False,
             "approval": "approved",
             "plan_digest": "approved",
@@ -1192,7 +1329,6 @@ def test_real_060_nonempty_state_and_tunnel_identity_remain_compatible(tmp_path,
     assert path.read_bytes() == before
     config = tmp_path / "ordinary.yaml"
     migrated = copy.deepcopy(fixture["local_config"])
-    migrated["gateway"]["ssh_allowed_cidrs"] = ["203.0.113.4/32"]
     config.write_text(yaml.safe_dump(migrated))
     plan = merge_with_peer_configs(load_local_config(config), [])
     plan.validate()
@@ -1200,3 +1336,44 @@ def test_real_060_nonempty_state_and_tunnel_identity_remain_compatible(tmp_path,
     resolved = yaml.safe_load(plan.per_instance[0].config_yaml)
     assert resolved.get("vm_ha") is None
     assert collect_tunnel_state(resolved, log=lambda _: None)[2] == fixture["interfaces"]
+
+
+def test_replacement_preparation_never_starts_dataplane_or_commits_routes(
+    transaction, tmp_path, monkeypatch
+):
+    tx = transaction
+    guard = tmp_path / "replacement-guard.json"
+    operation = "b" * 64
+    guard.write_text(json.dumps({"operation": operation}))
+    forwarding = tmp_path / "forwarding"
+    forwarding.write_text("0\n")
+    actual_path = Path
+
+    def isolated_path(value):
+        if str(value) == "/etc/nebius-vpngw/replacement-guard.json":
+            return guard
+        if str(value) in {
+            "/proc/sys/net/ipv4/ip_forward",
+            "/proc/sys/net/ipv6/conf/all/forwarding",
+        }:
+            return forwarding
+        return actual_path(value)
+
+    monkeypatch.setattr(ordinary_remote, "Path", isolated_path)
+    monkeypatch.setattr(
+        ordinary_remote,
+        "inspect",
+        lambda manifest, **kw: tx.inspect(
+            manifest, **{key: value for key, value in kw.items() if key != "runtime_admission"}
+        ),
+    )
+    route_prepare = Mock(side_effect=AssertionError("passive preparation must not prepare routes"))
+    monkeypatch.setattr(ordinary_routes.RouteStore, "prepare", route_prepare)
+    tx.request["prepare_replacement"] = operation
+    result = ordinary_remote.execute(tx.request)
+    assert result["status"] == "prepared", result
+    assert result["receipt"]["operation"] == operation
+    assert ["reconcile"] not in tx.effects
+    assert not any(effect[:2] == ["systemctl", "start"] for effect in tx.effects)
+    route_prepare.assert_not_called()
+    assert json.loads(guard.read_text()) == {"operation": operation}

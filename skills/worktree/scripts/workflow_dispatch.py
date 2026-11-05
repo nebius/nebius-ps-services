@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import signal
 import shutil
 import subprocess
@@ -126,16 +124,22 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
 # END shared runtime bootstrap
 _load_skill_support('runtime', __file__, 'worktree/scripts/workflow_dispatch.py')
 
-from workflow_security import contains_sensitive  # noqa: E402
+import workflow_worker_contract as worker_contract  # noqa: E402
 
 
 from agent_runtime import agent_name, runtime_environment  # noqa: E402
 
 
 class DispatchError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self, code: str, message: str, *,
+        worker_result: dict[str, object] | None = None,
+        prestart_result: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.worker_result = worker_result
+        self.prestart_result = prestart_result
 
 
 TERMINAL_WORKER_STATUSES = frozenset(
@@ -148,236 +152,44 @@ TERMINAL_WORKER_STATUSES = frozenset(
         "WORKER_TIMEOUT",
     }
 )
-SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-REQUIREMENT_ID_RE = re.compile(r"REQ-[0-9]{3,}\Z")
-DESIGN_ID_RE = re.compile(r"FEAT-[0-9]{3,}\Z")
-SPEC_GAP_KINDS = {"requirement", "design", "traceability"}
+PRESTART_DIAGNOSTIC_BYTES = 65536
 
 
-def _valid_spec_gaps(value: object) -> bool:
-    if not isinstance(value, list):
-        return False
-    for gap in value:
-        if (
-            not isinstance(gap, dict)
-            or set(gap)
-            != {"kind", "summary", "evidence", "requirement_ids", "design_ids"}
-            or gap.get("kind") not in SPEC_GAP_KINDS
-            or not isinstance(gap.get("summary"), str)
-            or not str(gap["summary"]).strip()
-            or contains_sensitive(str(gap["summary"]))
-            or not isinstance(gap.get("evidence"), list)
-            or not gap["evidence"]
-            or any(
-                not isinstance(item, str)
-                or not item.strip()
-                or contains_sensitive(item)
-                for item in gap["evidence"]
-            )
-            or not isinstance(gap.get("requirement_ids"), list)
-            or any(
-                REQUIREMENT_ID_RE.fullmatch(str(item)) is None
-                for item in gap["requirement_ids"]
-            )
-            or not isinstance(gap.get("design_ids"), list)
-            or any(
-                DESIGN_ID_RE.fullmatch(str(item)) is None
-                for item in gap["design_ids"]
-            )
-        ):
-            return False
-    return True
-
-
-def stable_digest(value: dict[str, object]) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-
-
-def canonical_execution_helper() -> Path:
-    return (
-        Path(__file__).resolve().parents[2]
-        / "worktree"
-        / "scripts"
-        / "workflow_transition.py"
-    ).resolve()
-
-
-def load_assignment(path: Path) -> dict[str, object]:
+def _validated_result(
+    stdout: str, selected: str, assignment: dict[str, object]
+) -> dict[str, object]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        result = json.loads(stdout)
+    except (ValueError, RecursionError) as exc:
+        raise DispatchError("WORKER_FAILED", "sequential worker returned invalid JSON") from exc
+    if selected == "claude":
+        if (not isinstance(result, dict) or result.get("type") != "result"
+                or result.get("subtype") != "success" or result.get("is_error") is not False):
+            raise DispatchError("WORKER_FAILED", "native worker result is unsuccessful")
+        result = result.get("structured_output")
+    rejection = worker_contract.result_rejection(result, assignment)
+    if rejection is not None:
         raise DispatchError(
-            "EXECUTION_STATE_INVALID", "worker assignment is unreadable"
-        ) from exc
-    if isinstance(value, dict) and value.get("schema") in {
-        "agentic-sdlc/worker-assignment-v1",
-        "agentic-sdlc/worker-assignment-v2",
-        "agentic-sdlc/worker-assignment-v3",
-    }:
-        raise DispatchError(
-            "WORKFLOW_UPGRADE_REQUIRED", "legacy worker assignment is unsupported"
+            "WORKER_FAILED", f"sequential worker result is invalid (reason={rejection})"
         )
-    if not isinstance(value, dict) or value.get("schema") != (
-        "workflow/worker-assignment-v2"
-    ):
-        raise DispatchError(
-            "EXECUTION_STATE_INVALID", "worker assignment schema is invalid"
-        )
-    digest = value.get("assignment_digest")
-    unsigned = dict(value)
-    unsigned.pop("assignment_digest", None)
-    if not isinstance(digest, str) or stable_digest(unsigned) != digest:
-        raise DispatchError(
-            "EXECUTION_STATE_INVALID", "worker assignment digest is invalid"
-        )
-    scope_cwd = Path(str(value.get("scope_cwd") or ""))
-    if not scope_cwd.is_absolute() or scope_cwd.is_symlink() or not scope_cwd.is_dir():
-        raise DispatchError("WORKTREE_CONFLICT", "worker scope cwd is invalid")
-    helper = Path(str(value.get("execution_helper") or ""))
-    expected_helper = canonical_execution_helper()
-    run_dir = Path(str(value.get("run_dir") or ""))
-    profile = value.get("worker_profile")
-    expected_read_only = (240, 300) if profile == "standard" else (360, 420)
-    spec_receipt = value.get("project_spec_receipt")
-    if (
-        not helper.is_absolute()
-        or helper.is_symlink()
-        or not helper.is_file()
-        or helper.resolve() != expected_helper
-        or not expected_helper.is_file()
-        or not run_dir.is_absolute()
-        or run_dir.is_symlink()
-        or value.get("heartbeat_seconds") != 30
-        or value.get("start_seconds") != 60
-        or value.get("stall_seconds") != 240
-        or value.get("max_seconds") != 1800
-        or profile not in {"standard", "integration"}
-        or value.get("read_only_warning_seconds") != expected_read_only[0]
-        or value.get("read_only_seconds") != expected_read_only[1]
-        or value.get("worker_phases")
-        != ["preflight", "implementing", "validating", "reviewing", "reporting"]
-        or SHA256_RE.fullmatch(str(value.get("root_intent_sha256") or "")) is None
-        or not isinstance(spec_receipt, dict)
-        or set(spec_receipt)
-        != {"schema", "requirements_sha256", "design_sha256"}
-        or spec_receipt.get("schema")
-        != "maintain-project-specs.worker-receipt.v1"
-        or any(
-            spec_receipt.get(field) != "absent"
-            and SHA256_RE.fullmatch(str(spec_receipt.get(field) or "")) is None
-            for field in ("requirements_sha256", "design_sha256")
-        )
-    ):
-        raise DispatchError(
-            "EXECUTION_STATE_INVALID", "worker assignment liveness is invalid"
-        )
-    handoff_path = Path(str(value.get("incoming_handoff_path") or ""))
-    if (
-        not handoff_path.is_absolute()
-        or handoff_path.is_symlink()
-        or not handoff_path.is_file()
-        or (handoff_path.stat().st_mode & 0o777) != 0o600
-    ):
-        raise DispatchError(
-            "EXECUTION_STATE_INVALID", "incoming handoff path or mode is invalid"
-        )
+    return result
+
+
+def _prestart_failure(
+    stdout: str, selected: str, assignment: dict[str, object]
+) -> DispatchError:
+    message = "sequential worker exited before task-start"
+    if len(stdout.encode("utf-8")) > PRESTART_DIAGNOSTIC_BYTES:
+        return DispatchError("WORKER_FAILED", f"{message} (reason=output_size)")
     try:
-        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise DispatchError(
-            "EXECUTION_STATE_INVALID", "incoming handoff is unreadable"
-        ) from exc
-    unsigned_handoff = dict(handoff) if isinstance(handoff, dict) else {}
-    handoff_digest = unsigned_handoff.pop("handoff_digest", None)
-    if (
-        not isinstance(handoff, dict)
-        or handoff.get("schema") != "agentic-sdlc/incoming-handoff-v2"
-        or handoff.get("execution_id") != value.get("execution_id")
-        or handoff.get("wave_id") != value.get("wave_id")
-        or handoff.get("task_id") != value.get("task_id")
-        or handoff_digest != value.get("incoming_handoff_digest")
-        or handoff_digest != stable_digest(unsigned_handoff)
-    ):
-        raise DispatchError(
-            "EXECUTION_STATE_INVALID", "incoming handoff context is invalid"
-        )
-    return value
-
-
-def worker_prompt(assignment_path: Path, assignment: dict[str, object]) -> str:
-    run_dir = Path(str(assignment["run_dir"]))
-    helper = Path(str(assignment["execution_helper"]))
-    start = [
-        sys.executable,
-        str(helper),
-        "task-start",
-        "--run-dir",
-        str(run_dir),
-        "--execution",
-        str(assignment["execution_id"]),
-        "--wave",
-        str(assignment["wave_id"]),
-        "--task",
-        str(assignment["task_id"]),
-        "--assignment-digest",
-        str(assignment["assignment_digest"]),
-        "--scope-cwd",
-        str(assignment["scope_cwd"]),
-    ]
-    instructions = [
-        "Implement exactly one immutable workflow worker assignment.",
-        "Read the incoming handoff; retrieve digest-bound predecessor results only when their bounded summaries are insufficient.",
-        "Run the task-start command represented by this JSON argv before editing:",
-        json.dumps(start),
-        "Run direct task-heartbeat commands at least every "
-        f"{assignment['heartbeat_seconds']} seconds while working. Use one of "
-        "the assignment's worker_phases and this JSON argv prefix:",
-        json.dumps(
-            [
-                sys.executable,
-                str(helper),
-                "task-heartbeat",
-                "--run-dir",
-                str(run_dir),
-                "--execution",
-                str(assignment["execution_id"]),
-                "--wave",
-                str(assignment["wave_id"]),
-                "--task",
-                str(assignment["task_id"]),
-                "--assignment-digest",
-                str(assignment["assignment_digest"]),
-                "--phase",
-            ]
-        ),
-        "Invoke heartbeats directly; never create a background heartbeat loop.",
-        "Read the assignment JSON at:",
-        str(assignment_path.resolve()),
-        "Work only from its scope_cwd and write claims.",
-        "Inherit root_intent_sha256 and project_spec_receipt exactly. Do not "
-        "reclassify user intent or edit canonical project specs.",
-        "Report any requirement, design, or traceability discovery through the "
-        "typed spec_gaps result field for root-coordinator reconciliation.",
-        "Do not commit, merge, replan, edit coordinator state, or start another task.",
-    ]
-    if assignment.get("diagnosis_id") is not None:
-        instructions.extend(
-            [
-                "This is a corrective task bound to the assignment's diagnosis_id.",
-                "After the smallest bounded repair, run the assignment's original "
-                "regression_oracle first, then its affected-boundary validation.",
-                "Do not reinterpret or modify any completed task definition.",
-            ]
-        )
-    instructions.extend(
-        [
-            "Validate the change and perform a focused code review.",
-            "Return only the schema-conforming worker result.",
-        ]
-    )
-    return "\n".join(instructions)
+        result = _validated_result(stdout, selected, assignment)
+    except DispatchError as exc:
+        return DispatchError("WORKER_FAILED", f"{message}; {exc}")
+    if result["status"] == "implemented":
+        return DispatchError("WORKER_FAILED", f"{message} (reason=implemented_before_start)")
+    if len(json.dumps(result, separators=(",", ":")).encode("utf-8")) > PRESTART_DIAGNOSTIC_BYTES:
+        return DispatchError("WORKER_FAILED", f"{message} (reason=result_size)")
+    return DispatchError("WORKER_FAILED", message, prestart_result=result)
 
 
 def _transition(
@@ -479,11 +291,17 @@ def dispatch_sequential(
     agent_binary = agent_binary or selected
     results: list[dict[str, object]] = []
     for assignment_path in assignment_paths:
-        assignment = load_assignment(assignment_path)
+        assignment = worker_contract.load_assignment(assignment_path)
+        launch = worker_contract.launch_contract(assignment_path, assignment)
+        if output_schema.resolve() != Path(launch["output_schema_path"]):
+            raise DispatchError("EXECUTION_STATE_INVALID", "worker output schema must be canonical")
         if not _agent_available(agent_binary):
             raise DispatchError(
                 "ENVIRONMENT_BLOCKER", "selected agent executable is unavailable"
             )
+        admitted = _transition(assignment, "task-arm")
+        if admitted.get("launch") != launch:
+            raise DispatchError("EXECUTION_STATE_INVALID", "native launch admission differs from its assignment")
         command = [
             agent_binary,
             "exec",
@@ -491,15 +309,15 @@ def dispatch_sequential(
             str(assignment["scope_cwd"]),
             "--sandbox",
             "workspace-write",
-            "--add-dir",
-            str(assignment["run_dir"]),
+            *[argument for root in launch["support_write_roots"] for argument in ("--add-dir", root)],
             "--ephemeral",
             "--output-schema",
             str(output_schema.resolve()),
             "-",
         ]
         if selected == "claude":
-            command = [agent_binary, "--print", "--output-format", "json",
+            command = [agent_binary, "--add-dir", *launch["support_write_roots"],
+                       "--print", "--output-format", "json",
                        "--no-session-persistence", "--json-schema", output_schema.read_text()]
         try:
             process = subprocess.Popen(
@@ -517,11 +335,10 @@ def dispatch_sequential(
                 "ENVIRONMENT_BLOCKER", "selected agent executable is unavailable"
             ) from exc
         try:
-            _transition(assignment, "task-arm")
-            prompt: str | None = worker_prompt(assignment_path, assignment)
+            prompt: str | None = launch["prompt"]
             while True:
                 try:
-                    stdout, _stderr = process.communicate(
+                    stdout, stderr = process.communicate(
                         input=prompt, timeout=watch_interval
                     )
                     break
@@ -539,8 +356,12 @@ def dispatch_sequential(
                             "sequential worker liveness state is invalid",
                         )
             if process.returncode != 0:
+                # Report only fixed labels, never native stderr, prompts or paths.
+                detail = "sequential worker exited unsuccessfully"
+                if "invalid_json_schema" in stderr and "codex_output_schema" in stderr:
+                    detail = "native worker output schema was rejected"
                 raise DispatchError(
-                    "WORKER_FAILED", "sequential worker exited unsuccessfully"
+                    "WORKER_FAILED", f"{detail} (exit {process.returncode})"
                 )
             final_watch = _transition(assignment, "task-watch")
             final_status = str(final_watch.get("status") or "")
@@ -549,49 +370,17 @@ def dispatch_sequential(
                     final_status, "sequential worker exceeded its budget"
                 )
             if final_status != "ACTIVE":
+                if final_status == "PENDING_START":
+                    raise _prestart_failure(stdout, selected, assignment)
                 raise DispatchError(
                     "WORKER_FAILED", "sequential worker exited before task-start"
                 )
-            try:
-                result = json.loads(stdout)
-                if selected == "claude":
-                    if (not isinstance(result, dict) or result.get("type") != "result"
-                            or result.get("subtype") != "success" or result.get("is_error") is not False):
-                        raise DispatchError("WORKER_FAILED", "native worker result is unsuccessful")
-                    result = result.get("structured_output")
-            except json.JSONDecodeError as exc:
+            result = _validated_result(stdout, selected, assignment)
+            if result["status"] in {"blocked", "replan_required"}:
                 raise DispatchError(
-                    "WORKER_FAILED", "sequential worker returned invalid JSON"
-                ) from exc
-            if (
-                not isinstance(result, dict)
-                or set(result) != {"task_id", "assignment_digest", "status", "summary",
-                                   "decisions", "open_risks", "spec_gaps", "validation", "review"}
-                or result.get("task_id") != assignment["task_id"]
-                or result.get("assignment_digest")
-                != assignment["assignment_digest"]
-                or result.get("status") not in {"implemented", "replan_required"}
-                or not isinstance(result.get("validation"), str)
-                or not isinstance(result.get("review"), str)
-                or not isinstance(result.get("summary"), str)
-                or not isinstance(result.get("decisions"), list)
-                or not isinstance(result.get("open_risks"), list)
-                or any(not isinstance(item, str) or not item.strip() or contains_sensitive(item)
-                       for field in ("decisions", "open_risks") for item in result[field])
-                or any(not result[field].strip() or contains_sensitive(result[field])
-                       for field in ("summary", "validation", "review"))
-                or not _valid_spec_gaps(result.get("spec_gaps"))
-                or (
-                    result.get("status") == "implemented"
-                    and bool(result.get("spec_gaps"))
-                )
-                or (
-                    result.get("status") == "replan_required"
-                    and not bool(result.get("spec_gaps"))
-                )
-            ):
-                raise DispatchError(
-                    "WORKER_FAILED", "sequential worker result is invalid"
+                    "WORKER_BLOCKED" if result["status"] == "blocked" else "WORKER_REPLAN_REQUIRED",
+                    "sequential worker requires coordinator diagnosis or replanning",
+                    worker_result=result,
                 )
             results.append(result)
         except BaseException:
@@ -626,8 +415,15 @@ def main() -> int:
             watch_interval=args.watch_interval,
             terminate_grace=args.terminate_grace,
         )
-    except DispatchError as exc:
-        print(json.dumps({"status": "error", "code": exc.code, "message": str(exc)}))
+    except (DispatchError, worker_contract.WorkerContractError) as exc:
+        error: dict[str, object] = {
+            "status": "error", "code": exc.code, "message": str(exc),
+        }
+        if isinstance(exc, DispatchError) and exc.worker_result is not None:
+            error["worker_result"] = exc.worker_result
+        if isinstance(exc, DispatchError) and exc.prestart_result is not None:
+            error["prestart_result"] = exc.prestart_result
+        print(json.dumps(error))
         return 2
     print(json.dumps({"status": "ok", "results": results}, sort_keys=True))
     return 0

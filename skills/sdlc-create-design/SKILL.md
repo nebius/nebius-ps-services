@@ -52,6 +52,8 @@ and feature designs in `docs/design.md`.
 - Approved requirements or context changed and design must be updated.
 - A failure classification with a validated design-admission record routes a
   proven `DESIGN_DEFECT` here.
+- A proven unprepared `VALIDATION_DEFECT` routes a mechanical design-candidate
+  repair here with corrective mode `phase_artifact_repair`.
 
 ## When Not To Use
 
@@ -104,13 +106,39 @@ and feature designs in `docs/design.md`.
 - Reconcile the supplied design against extracted requirements; preserve accepted
   decisions. Invoke `design` in advisory mode with the frozen source manifest,
   selected REQ/FEAT scope and unresolved questions. It returns decisions/conflicts;
-  this adapter retains planning and canonical publication ownership.
+  this adapter retains SDLC planning responsibility and publishes the canonical
+  pair exclusively through `maintain-project-specs`.
 
 - Use `assets/templates/design.md.template` when creating the file.
+- Write source citations as descriptive Markdown links. A URL in ordinary
+  parentheses is still a bare URL and can fail the project's Markdown checks.
+- Before paired publication, run the project's configured Markdown check in
+  check-only mode on the complete design candidate. If none is configured, use
+  the private `scripts/check_design_markdown.py --candidate <candidate.md>
+  --project-root <selected-project>` helper. It runs available `markdownlint`
+  in the project's context and exempts only current-schema machine-marker lines
+  from MD013 in memory. It preserves the candidate bytes, prose and citation
+  checks, and reports the candidate digest plus original line/rule diagnostics.
+  Apply project settings explicitly for other checkers when the candidate is
+  private; do not discover configuration from its temporary directory. Preserve
+  existing template exceptions without adding ad hoc suppressions, automatic
+  fixes or fallback configuration. Keep the result with phase evidence.
+  A failed or unavailable check
+  returns to the coordinator for normal classification before publication or
+  readiness; it grants no uncounted retry or direct canonical-file edit.
 - A shared-owner draft-pair bootstrap may already supply inert mapped draft
   records. This adapter owns substantive architecture, alternatives, boundaries
   and validation decisions and the transition to ready; bootstrap is not
   completed design or authority to plan.
+- For `phase_artifact_repair`, verify the immutable classifier route names this
+  phase, the event is a proven unprepared validation failure, and the ordinary
+  localized dispatch is active. Correct only the evidenced candidate formatting
+  or schema defect while preserving requirements and design decisions. Rerun
+  the original owner validation/publication, retain failed evidence, and record
+  dispatch completion before advancing normally. This is not architectural
+  reconsideration and requires no invented integration checkout. If repair
+  needs semantic or architectural changes, return to classification; this mode
+  does not grant design-admission authority.
 - For failure-driven reconsideration, first verify that requirements and
   acceptance criteria are stable, the evaluator and environment are valid,
   the failure reproduces at the recorded integration commit, and the diagnosis
@@ -199,6 +227,12 @@ integration/replan owner.
   assignments, commits and resources. Never reset active execution history.
 - Replaying the same design admission and approval against the same fingerprint
   does not duplicate decision/change-log entries.
+- For a classified active-task design defect, follow the failure-driven design
+  revision sequence in `../sdlc-prepare-execution/references/execution-plane.md`.
+  Retire the terminated unmerged wave through `prepare-design-revision` before
+  paired publication, then seal its exact operation with `seal-design-revision`.
+  These transitions require the existing counted design dispatch and approval;
+  they do not reopen TDD or substitute steering for failure authority.
 
 ## Failure Handling
 
@@ -230,6 +264,9 @@ integration/replan owner.
 
 - `docs/design.md` exists and both canonical files are tracked. Newly created
   files passed the initial admission guard without an early commit.
+- The published design bytes passed the selected Markdown check before paired
+  publication; source citations use descriptive links. Shared-owner semantic
+  validation and strict pair admission remain separate required checks.
 - Every P0 requirement maps to at least one feature.
 - Every ready feature has selected and rejected options, implementation
   boundaries, vertical flow or layer map when applicable, validation, test,

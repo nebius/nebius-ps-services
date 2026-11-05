@@ -44,6 +44,7 @@ class GatewayGroupSpec:
     subnet: dict = field(default_factory=dict)
     vm_ha: VMHAProvisioningSpec | None = None
     ingress_policies: dict[int, dict[str, t.Any]] = field(default_factory=dict)
+    initial_security_group_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -399,6 +400,8 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
             )
 
     canonical_config = copy.deepcopy(local_cfg)
+    for key in ("ssh_public_key", "ssh_public_key_path", "ssh_private_key_path"):
+        canonical_config["gateway_group"].get("vm_spec", {}).pop(key, None)
     # An empty optional probe map has no operational semantics. Keep omitted
     # and explicit-empty inputs identical, including across package refreshes.
     if not canonical_config["gateway_group"]["vm_ha"].get("tunnel_probes"):
@@ -455,11 +458,15 @@ def load_local_config(
         raw["region_id"] = normalized_region_override
     missing: set[str] = set()
     expanded = _expand_env(raw, missing)
-    # Admission remains mandatory even for network preparation's partial schema path.
+    # Reject unsupported gateway fields even when unresolved environment values
+    # require the partial schema path. Never silently ignore firewall settings.
     gateway = expanded.get("gateway") if isinstance(expanded, dict) else None
-    ingress_policy.normalize_cidrs(
-        gateway.get("ssh_allowed_cidrs") if isinstance(gateway, dict) else None
-    )
+    if isinstance(gateway, dict):
+        unknown = set(gateway) - set(schema.GatewayConfig.model_fields)
+        if unknown:
+            raise ingress_policy.IngressPolicyError(
+                "Unsupported gateway configuration fields: " + ", ".join(sorted(unknown))
+            )
     vm_ha_was_provided = "vm_ha" in (expanded.get("gateway_group") or {})
     # Allow optional placeholders: if NETWORK_ID is missing and the value
     # is an unresolved placeholder, drop the field to fall back to default network.
@@ -470,9 +477,8 @@ def load_local_config(
             if isinstance(nid, str) and nid.strip() == "${NETWORK_ID}":
                 gg0.pop("network_id", None)
                 expanded["gateway_group"] = gg0
-                missing.discard("NETWORK_ID")
         # Treat unresolved placeholders in external_ips as "not provided":
-        # drop any entries that remain as ${VAR} and clear those vars from missing.
+        # drop any entries that remain as ${VAR}.
         gg1 = expanded.get("gateway_group") or {}
         ext1 = gg1.get("external_ips")
         if isinstance(ext1, list):
@@ -482,9 +488,6 @@ def load_local_config(
                     cleaned: list[str] = []
                     for ip in entry:
                         if isinstance(ip, str) and _ENV_PATTERN.fullmatch(ip or ""):
-                            m = _ENV_PATTERN.match(ip)
-                            if m:
-                                missing.discard(m.group(1))
                             continue
                         if ip:
                             cleaned.append(ip)
@@ -497,6 +500,22 @@ def load_local_config(
     except Exception:
         # Ignore and let normal missing handling report variables
         pass
+    # Optional occurrences may share a name with required fields. Reconcile against
+    # the remaining tree without expanding replacement values a second time.
+    remaining_names: set[str] = set()
+
+    def collect_placeholders(value: t.Any) -> None:
+        if isinstance(value, str):
+            remaining_names.update(_ENV_PATTERN.findall(value))
+        elif isinstance(value, list):
+            for item in value:
+                collect_placeholders(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect_placeholders(item)
+
+    collect_placeholders(expanded)
+    missing.intersection_update(remaining_names)
     unresolved_tunnel_psk_names: set[str] = set()
     if allow_missing_tunnel_psk_placeholders:
         unresolved_tunnel_psk_names = _placeholder_names_used_only_as_tunnel_psks(expanded)
@@ -512,7 +531,9 @@ def load_local_config(
         vm_spec = gg.get("vm_spec", {}) or {}
         ssh_key_path = vm_spec.get("ssh_public_key_path")
         ssh_key_inline = vm_spec.get("ssh_public_key")
-        if ssh_key_path and not ssh_key_inline:
+        from .deploy.ssh_client_auth import operator_identity
+
+        if ssh_key_path and not ssh_key_inline and operator_identity() is None:
             p = Path(str(ssh_key_path)).expanduser()
             if not p.exists():
                 raise ValueError(f"SSH public key file not found: {p}")
@@ -976,6 +997,7 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
     vm_spec["num_nics"] = num_nics
 
     gateway_group = GatewayGroupSpec(
+        initial_security_group_ids=tuple(gg.get("initial_security_group_ids") or ()),
         name=name,
         instance_count=instance_count,
         region=region,

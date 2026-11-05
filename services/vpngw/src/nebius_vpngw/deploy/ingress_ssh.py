@@ -1,4 +1,4 @@
-"""Authenticated source admission and genuinely fresh post-activation SSH proof."""
+"""Pinned boot identity and fresh post-activation SSH proof."""
 
 from __future__ import annotations
 
@@ -14,9 +14,8 @@ from .. import ingress_policy
 from .ssh_policy import configure_paramiko_host_verification
 
 PROBE = (
-    "import json,os;from pathlib import Path;"
-    "print(json.dumps({'connection':os.environ.get('SSH_CONNECTION',''),"
-    "'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}))"
+    "import json;from pathlib import Path;"
+    "print(json.dumps({'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}))"
 )
 
 
@@ -57,9 +56,8 @@ def _read(client: Any, command: str) -> dict[str, Any]:
 
 
 def preflight(client: Any, config_yaml: str) -> str:
-    policy = ingress_policy.from_config(yaml.safe_load(config_yaml))
+    ingress_policy.from_config(yaml.safe_load(config_yaml))
     observed = _read(client, "/usr/bin/python3 -c " + shlex.quote(PROBE))
-    ingress_policy.require_source(policy, observed.get("connection", ""))
     boot = observed.get("boot_id")
     if not isinstance(boot, str) or not boot:
         raise RuntimeError("Cannot verify the gateway boot identity")
@@ -126,8 +124,8 @@ def verify_fresh(
         )
         raise error_type(
             "Gateway activation may have completed, but fresh SSH verification failed; "
-            "deployment is incomplete and no rollback was performed. Check the allowed "
-            "source, customer firewall, routing and SSH credentials. "
+            "deployment is incomplete and no rollback was performed. Check "
+            "Security Groups, customer firewall, routing and SSH credentials. "
             f"Cause: {type(error).__name__}: {error}"
         ) from error
     finally:

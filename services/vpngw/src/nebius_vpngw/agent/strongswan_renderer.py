@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import socket
 import subprocess
@@ -260,7 +261,8 @@ network:
                 swanctl_lines.append(f"  ike-psk-{idx} {{")
                 swanctl_lines.append(f"    id-1 = {secret['local_id']}")
                 swanctl_lines.append(f"    id-2 = {secret['remote_id']}")
-                swanctl_lines.append(f'    secret = "{secret["secret"]}"')
+                encoded = base64.b64encode(secret["secret"].encode("utf-8")).decode("ascii")
+                swanctl_lines.append(f"    secret = 0s{encoded}")
                 swanctl_lines.append("  }")
             swanctl_lines.append("}")
 

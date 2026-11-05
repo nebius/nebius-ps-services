@@ -1,0 +1,14 @@
+id,should_trigger,prompt
+default,true,Summarize all contributors' GitHub work in this repository for my manager over the last 90 days.
+date,true,$github-report --date 2026-01-01 --repo example-org/widget
+multi,true,"Create a concise report of contributors' issues, fixes, PR reviews and PR change metrics across example-org/api and example-org/web."
+table,true,"Give me a copy-ready table of GitHub contributions grouped by user since last month, with projects/folders and issue and PR links."
+triage,false,Review these GitHub issues and close invalid requests.
+review,false,Review PR 42 for correctness and security bugs.
+ranking,false,Rank every contributor by lines changed across our organization.
+implement,false,Implement the fix described in GitHub issue 42 and open a PR.
+project,true,$github-report --project services/gateway --date 2026-01-01 --repo example-org/widget
+backlog,true,"Report all users' completed GitHub activity plus all open issues and PRs, including old unattended items, in per-user worked tables and a shared backlog."
+user-substring,true,$github-report --user reza --project services/api
+multiuser,true,Report everyone's completed GitHub activity grouped by contributor and keep one shared open backlog.
+no-match,true,$github-report --user nonexistent --repo example-org/api

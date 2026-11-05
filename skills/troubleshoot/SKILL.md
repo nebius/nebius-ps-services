@@ -159,7 +159,7 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      lifecycle, migrations, or cross-component workflows. Size alone is not a
      design change. If that owner is unavailable, report the exact handoff.
    - In Agentic SDLC diagnostic mode, stop at the causal handoff: return one
-     `diagnosis-v2` to `sdlc-classify-failure`, remove temporary instrumentation,
+     `diagnosis-v3` to `sdlc-classify-failure`, remove temporary instrumentation,
      and let classifier/coordinator select the next owner. Do not commit fixes,
      change acceptance or specs, or route directly to design or implementation.
 9. **REMEDIATED — restore the invariant.** Apply the smallest durable owner-correct

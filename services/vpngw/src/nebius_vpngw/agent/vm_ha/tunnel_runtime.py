@@ -264,6 +264,45 @@ class NativeTunnelEffects:
             if descriptor is not None:
                 os.close(descriptor)
 
+    def observe_readonly(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health:
+        """Sample native state and probe the path without updating product state."""
+        health = self.observer.observe(policy, target, selected=selected)
+        probe = self.cfg["vm_ha"].get("tunnel_probes", {}).get(target)
+        if health is not Health.HEALTHY or probe is None:
+            return health
+        try:
+            record = json.loads((self.state_dir / "tunnel-probes.json").read_text())[target]
+            # The record only gates controller-owned hysteresis. It is never
+            # relabelled as fresh health: every positive sample probes anew.
+            if record["probe"] != probe or Health(record["health"]) is not Health.HEALTHY:
+                return Health.UNKNOWN
+            path = next(p for p in policy.paths if p.name == target)
+            addresses = json.loads(self.run(("ip", "-j", "-4", "address", "show")))
+            if not any(
+                a.get("local") == probe["source_ip"]
+                for link in addresses
+                for a in link.get("addr_info", [])
+            ):
+                return Health.UNKNOWN
+            self.run(
+                (
+                    "ping",
+                    "-n",
+                    "-c",
+                    "1",
+                    "-I",
+                    path.interface,
+                    "-I",
+                    probe["source_ip"],
+                    "-W",
+                    str(probe.get("timeout_seconds", 1)),
+                    probe["target_ip"],
+                )
+            )
+            return Health.HEALTHY
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+            return Health.UNKNOWN
+
     def _effective(self, authority: Authority) -> dict[str, Any]:
         return effective_config(self.cfg, read_state(self.state_dir / STATE_NAME), authority)
 
@@ -423,7 +462,10 @@ class NativeTunnelEffects:
                     return Health.DOWN
             connection = next(c for c in self.cfg["connections"] if c["name"] == policy.name)
             permits = connection.get("bgp", {}).get("advertise_local_prefixes", True)
-            local = frozenset(self.cfg.get("gateway", {}).get("local_prefixes", []))
+            local = frozenset(
+                str(ipaddress.ip_network(prefix, strict=False))
+                for prefix in self.cfg.get("gateway", {}).get("local_prefixes", [])
+            )
             for candidate in policy.paths:
                 if candidate.peer in down:
                     continue
@@ -474,7 +516,10 @@ class ControllerTunnelRuntime:
         self.effects = NativeTunnelEffects(
             self.cfg, state_dir, self.revalidate, active_revalidate=self.active, clock=clock
         )
-        local = frozenset(self.cfg.get("gateway", {}).get("local_prefixes") or [])
+        local = frozenset(
+            str(ipaddress.ip_network(prefix, strict=False))
+            for prefix in self.cfg.get("gateway", {}).get("local_prefixes") or []
+        )
         self.base_exports = {
             p.peer: local
             if next(c for c in self.cfg["connections"] if c["name"] == policy.name)
@@ -561,6 +606,53 @@ class ControllerTunnelRuntime:
                 if peer in exports and not tunnel_exports(effective, connection, tunnel):
                     exports[peer] = frozenset()
         return exports
+
+    def serving_export_alternatives(self) -> tuple[dict[str, frozenset[str]], ...]:
+        """Known serving policies during one bound BGP operation, never authority.
+
+        Intent precedes cloud revalidation and native activation. The isolated
+        health sampler must distinguish a still-serving predecessor from missing
+        exports; completion and the controller continue to require current intent.
+        """
+        context = _selection_context(self.cfg, self.state_dir)
+        if context is None:
+            return ()
+        state, authority = context
+        operation = state["operation"]
+        if (
+            state["authority"] != asdict(authority)
+            or operation is None
+            or operation["phase"] in {"failed", "succeeded"}
+        ):
+            return ()
+        policy = next(
+            (p for p in connection_policies(self.cfg) if p.name == operation["connection"]),
+            None,
+        )
+        if (
+            policy is None
+            or not policy.eligible
+            or policy.mode != "bgp"
+            or operation["previous"] not in {p.name for p in policy.paths}
+            or operation["target"] not in {p.name for p in policy.paths}
+        ):
+            return ()
+        alternatives = []
+        targets = [None, operation["previous"]]
+        if operation["verb"] == "release":
+            # Release intent can precede restoration after the requested policy
+            # was installed. That exact policy may still serve during revalidation.
+            targets.append(operation["target"])
+        for target in dict.fromkeys(targets):
+            exports = self.current_exports()
+            for path in policy.paths:
+                exports[path.peer] = (
+                    self.base_exports[path.peer]
+                    if target is None or path.name == target
+                    else frozenset()
+                )
+            alternatives.append(exports)
+        return tuple(alternatives)
 
     def static_ready(self) -> bool:
         effective = load_effective_config(self.cfg, self.state_dir)

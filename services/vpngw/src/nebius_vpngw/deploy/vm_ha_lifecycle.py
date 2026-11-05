@@ -27,9 +27,12 @@ from typing import Any, cast
 LIFECYCLE_SCHEMA_V2 = "nebius-vpngw/vm-ha-lifecycle-v2"
 LIFECYCLE_SCHEMA_V3 = "nebius-vpngw/vm-ha-lifecycle-v3"
 LIFECYCLE_SCHEMA = "nebius-vpngw/vm-ha-lifecycle-v4"
-_APPROVAL_KINDS = frozenset({"destruction", "migration", "recovery"})
+_APPROVAL_KINDS = frozenset({"destruction", "migration", "recovery", "staged-replacement"})
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
+# The first cycle has its established unsuffixed spelling; later cycles are ASCII integers >= 2.
+REPLACEMENT_CYCLE_PATTERN = r"(?:[2-9]|[1-9][0-9]+)"
+_HEARTBEAT_ARTIFACT_KEYS = ("heartbeat-upgrade-artifact", "heartbeat-initial-artifact")
 
 _PASSIVE_REPLACEMENT_AUDIT_PREFIXES = (
     "passive-replacement-approval:",
@@ -207,7 +210,9 @@ def vm_ha_passive_replacement_cycles(
     cycles: set[int] = set()
     if vm_ha_passive_replacement_binding_key("approval", instance_name, 1) in bindings:
         cycles.add(1)
-    pattern = re.compile(rf"passive-replacement-([2-9][0-9]*)-approval:{re.escape(instance_name)}")
+    pattern = re.compile(
+        rf"passive-replacement-({REPLACEMENT_CYCLE_PATTERN})-approval:{re.escape(instance_name)}"
+    )
     for key in bindings:
         matched = pattern.fullmatch(key)
         if matched is not None:
@@ -238,16 +243,27 @@ def vm_ha_effective_resource_bindings(
 ) -> dict[str, str]:
     """Return live bindings while retaining replacement history in the record."""
 
+    artifact_keys = set(_HEARTBEAT_ARTIFACT_KEYS)
+    if artifact_keys.issubset(bindings):
+        raise ValueError("VM-HA heartbeat lifecycle artifact intent is ambiguous")
+    for key in artifact_keys:
+        if key in bindings and re.fullmatch(r"[0-9a-f]{64}", bindings[key]) is None:
+            raise ValueError("VM-HA heartbeat lifecycle artifact identity is invalid")
     effective = {
         key: value
         for key, value in bindings.items()
-        if not key.startswith((*_PASSIVE_REPLACEMENT_AUDIT_PREFIXES, "prehost-superseded-"))
+        if not key.startswith(
+            (*_PASSIVE_REPLACEMENT_AUDIT_PREFIXES, "prehost-superseded-", "staged-replacement-")
+        )
+        and key not in artifact_keys
+        and key
+        not in {"upgrade-artifact-recovery-authority", "upgrade-artifact-recovery-packages-ready"}
     }
     member_cycles: dict[str, set[int]] = {}
     for key in bindings:
         if key.startswith("retired-compute:"):
             member_cycles.setdefault(key.removeprefix("retired-compute:"), set()).add(1)
-        matched = re.fullmatch(r"retired-([2-9][0-9]*)-compute:(.+)", key)
+        matched = re.fullmatch(rf"retired-({REPLACEMENT_CYCLE_PATTERN})-compute:(.+)", key)
         if matched is not None:
             member_cycles.setdefault(matched.group(2), set()).add(int(matched.group(1)))
     for name, cycles in member_cycles.items():
@@ -454,7 +470,7 @@ class VMHAEffectObservationGuard:
                 if not isinstance(instance_name, str) or not instance_name:
                     continue
                 if self.effect == f"provision-{instance_name}-compute" or re.fullmatch(
-                    rf"replace-(?:failed|missing)-(?:[2-9][0-9]*-)?"
+                    rf"replace-(?:failed|missing)-(?:{REPLACEMENT_CYCLE_PATTERN}-)?"
                     rf"{re.escape(instance_name)}-create-compute",
                     self.effect,
                 ):
@@ -528,10 +544,13 @@ def vm_ha_activation_effect_is_host_only(effect: str | None) -> bool:
     if effect is None:
         return True
     return effect in {
+        "prepare-heartbeat-upgrade",
+        "prepare-heartbeat-initial",
         "verify-active-forwarding-and-routes",
         "verify-passive-unlocked-non-forwarding",
     } or effect.startswith(
         (
+            "stop-upgrade-writers-",
             "stage-",
             "install-apply-lock-",
             "install-owner-adoption-",
@@ -664,6 +683,106 @@ class VMHALifecycleMember:
 
 
 @dataclass(frozen=True)
+class VMHAReplacementHostRecovery:
+    """Exact, secret-free authority for one repaired-artifact replacement resume."""
+
+    approval_digest: str
+    prior_record_sha256: str
+    prior_artifact_sha256: str
+    artifact_sha256: str
+    owner_node_id: str
+    target_instance_name: str
+    cycle: int
+    owner_policy_json: str
+    ssh_trust_sha256: str
+    host_binding_sha256: str
+    phase: str = "authorized"
+
+    def __post_init__(self) -> None:
+        from ..agent.vm_ha.auto_healing import (
+            AutoHealingPolicyPhase,
+            AutoHealingPolicyRecord,
+            StandbyAutoHealing,
+            is_initialized_enabled_policy,
+        )
+
+        for digest in (
+            self.approval_digest,
+            self.prior_record_sha256,
+            self.prior_artifact_sha256,
+            self.artifact_sha256,
+            self.ssh_trust_sha256,
+            self.host_binding_sha256,
+        ):
+            if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
+                raise ValueError("replacement host recovery digest is invalid")
+        if self.prior_artifact_sha256 == self.artifact_sha256:
+            raise ValueError("replacement host recovery requires a repaired artifact")
+        if (
+            not all(
+                isinstance(value, str) and _IDENTIFIER.fullmatch(value)
+                for value in (self.owner_node_id, self.target_instance_name)
+            )
+            or type(self.cycle) is not int
+            or self.cycle < 1
+        ):
+            raise ValueError("replacement host recovery identity is invalid")
+        if not isinstance(self.phase, str) or self.phase not in {
+            "authorized",
+            "packages-ready",
+            "owner-ready",
+        }:
+            raise ValueError("replacement host recovery phase is invalid")
+        policy = AutoHealingPolicyRecord.from_mapping(json.loads(self.owner_policy_json))
+        if not (
+            (
+                (is_initialized_enabled_policy(policy) and policy.peer_ack_digest is None)
+                or (
+                    policy.desired is StandbyAutoHealing.ENABLED
+                    and policy.phase is AutoHealingPolicyPhase.COMMITTED
+                    and policy.peer_ack_digest == policy.decision_digest
+                )
+            )
+            and policy.node_id == self.owner_node_id
+            and _canonical_json(policy.to_dict()).decode() == self.owner_policy_json
+        ):
+            raise ValueError("replacement host recovery policy is not canonical")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "approval_digest": self.approval_digest,
+            "prior_record_sha256": self.prior_record_sha256,
+            "prior_artifact_sha256": self.prior_artifact_sha256,
+            "artifact_sha256": self.artifact_sha256,
+            "owner_node_id": self.owner_node_id,
+            "target_instance_name": self.target_instance_name,
+            "cycle": self.cycle,
+            "owner_policy_json": self.owner_policy_json,
+            "ssh_trust_sha256": self.ssh_trust_sha256,
+            "host_binding_sha256": self.host_binding_sha256,
+            "phase": self.phase,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Any) -> VMHAReplacementHostRecovery:
+        if not isinstance(value, dict) or set(value) != {
+            "approval_digest",
+            "prior_record_sha256",
+            "prior_artifact_sha256",
+            "artifact_sha256",
+            "owner_node_id",
+            "target_instance_name",
+            "cycle",
+            "owner_policy_json",
+            "ssh_trust_sha256",
+            "host_binding_sha256",
+            "phase",
+        }:
+            raise ValueError("replacement host recovery record is malformed")
+        return cls(**value)
+
+
+@dataclass(frozen=True)
 class VMHAMigrationTransaction:
     """Approval, replay, and compare-and-swap identity for one operation."""
 
@@ -683,8 +802,13 @@ class VMHAMigrationTransaction:
     observation_guard: VMHAEffectObservationGuard | None = None
     accepted_cloud_operation_effect: str | None = None
     accepted_cloud_operation_id: str | None = None
+    replacement_host_recovery: VMHAReplacementHostRecovery | None = None
 
     def __post_init__(self) -> None:
+        if self.replacement_host_recovery is not None and not isinstance(
+            self.replacement_host_recovery, VMHAReplacementHostRecovery
+        ):
+            raise ValueError("VM-HA replacement host recovery is malformed")
         if not _IDENTIFIER.fullmatch(self.operation_id):
             raise ValueError("VM-HA lifecycle operation identity is invalid")
         if self.approval_kind not in _APPROVAL_KINDS:
@@ -773,6 +897,8 @@ class VMHAMigrationTransaction:
                     ),
                 }
             )
+            if self.replacement_host_recovery is not None:
+                value["replacement_host_recovery"] = self.replacement_host_recovery.to_dict()
         return value
 
     @classmethod
@@ -798,6 +924,8 @@ class VMHAMigrationTransaction:
                 "observation",
                 "observation_guard",
             }
+            if isinstance(value, dict) and "replacement_host_recovery" in value:
+                expected.add("replacement_host_recovery")
         if not isinstance(value, dict) or set(value) != expected:
             raise ValueError("VM-HA lifecycle transaction is malformed")
         raw_completed = value.get("completed_effects")
@@ -878,6 +1006,11 @@ class VMHAMigrationTransaction:
             observation_guard=guard,
             accepted_cloud_operation_effect=value.get("accepted_cloud_operation_effect"),
             accepted_cloud_operation_id=value.get("accepted_cloud_operation_id"),
+            replacement_host_recovery=(
+                VMHAReplacementHostRecovery.from_dict(value["replacement_host_recovery"])
+                if "replacement_host_recovery" in value
+                else None
+            ),
         )
 
     def advance(
@@ -954,6 +1087,12 @@ class VMHALifecycleState:
     def __post_init__(self) -> None:
         if self.record_version not in {2, 3, 4}:
             raise ValueError("VM-HA lifecycle record version is invalid")
+        if (
+            self.transaction is not None
+            and self.transaction.replacement_host_recovery is not None
+            and self.record_version != 4
+        ):
+            raise ValueError("replacement host recovery requires a v4 lifecycle record")
         required = (self.project_id, self.gateway_name, self.cluster_id)
         if any(not value for value in required):
             raise ValueError("VM-HA lifecycle identity is incomplete")
@@ -1760,9 +1899,14 @@ class VMHALifecycleState:
         desired_state_digest: str,
         current_state_digest: str,
         current_observation: object,
+        artifact_sha256: str | None = None,
         ssh_identity_rotation: Mapping[str, str] | None = None,
     ) -> VMHALifecycleState:
-        """Start one creation-only replacement for the proven current non-owner."""
+        """Start one creation-only replacement for the proven current non-owner.
+
+        An omitted artifact is a provisional read-only preview. Execution supplies
+        the reviewed artifact before persisting this first replacement successor.
+        """
 
         transaction = previous.transaction
         if (
@@ -1871,6 +2015,17 @@ class VMHALifecycleState:
                 0
             ].network_interface_name,
         }
+        # Completed artifact intent belongs to the predecessor transaction. Keep
+        # its exact identity as audit history, never as this replacement's intent.
+        for key in _HEARTBEAT_ARTIFACT_KEYS:
+            if key in bindings:
+                additions[
+                    f"standby-replacement-{replacement_cycle}-prior-{key}:{target_instance_name}"
+                ] = bindings.pop(key)
+        if artifact_sha256 is not None:
+            if not _DIGEST.fullmatch(artifact_sha256):
+                raise ValueError("VM-HA replacement heartbeat artifact identity is invalid")
+            additions["heartbeat-initial-artifact"] = artifact_sha256
         if ssh_identity_rotation is not None:
             expected_rotation_fields = {
                 "action",
@@ -2039,6 +2194,10 @@ def _validate_successor(
         or successor.gateway_name != previous.gateway_name
     ):
         raise ValueError("VM-HA lifecycle project and gateway scope cannot change")
+    from .vm_ha_prepared_replacement import validate_successor as validate_prepared_replacement
+
+    if validate_prepared_replacement(previous, successor):
+        return
     if previous.transaction is None:
         if successor.transaction.revision != 1:
             raise ValueError("VM-HA lifecycle revision is not monotonic")
@@ -2111,6 +2270,22 @@ def _validate_successor(
             raise ValueError(f"VM-HA lifecycle transaction {field} cannot change")
     previous_bindings = dict(previous.transaction.resource_bindings)
     successor_bindings = dict(successor.transaction.resource_bindings)
+    from .vm_ha_upgrade_recovery import validate_successor as validate_upgrade_recovery
+
+    if validate_upgrade_recovery(previous, successor):
+        return
+    if (
+        previous.transaction.replacement_host_recovery
+        != successor.transaction.replacement_host_recovery
+    ):
+        from .vm_ha_host_recovery import validate_host_recovery_successor
+
+        validate_host_recovery_successor(previous, successor)
+        return
+    if previous.transaction.replacement_host_recovery is not None:
+        from .vm_ha_host_recovery import validate_recovery_host_effects
+
+        validate_recovery_host_effects(previous, successor)
     if any(successor_bindings.get(key) != value for key, value in previous_bindings.items()):
         raise ValueError("VM-HA lifecycle resource identity cannot be rebound")
     if not set(previous.transaction.completed_effects).issubset(
@@ -2209,7 +2384,7 @@ def _validate_destroyed_reprovision_successor(
     if before is None or after is None:
         raise ValueError("VM-HA destroyed reprovision transaction is incomplete")
     allowed_fresh_binding = re.compile(
-        r"^(?:public-allocation:.+:.+|route-targets-digest|credential-(?:service-account|authorized-key|sha256):.+)$"
+        r"^(?:public-allocation:.+:.+|route-targets-digest|heartbeat-initial-artifact|credential-(?:service-account|authorized-key|sha256):.+)$"
     )
     expected_public_bindings = vm_ha_destroyed_retained_public_bindings(previous)
     actual_public_bindings = {
@@ -2299,7 +2474,14 @@ def _validate_missing_standby_replacement_successor(
 
     before_bindings = dict(before.resource_bindings)
     after_bindings = dict(after.resource_bindings)
-    if any(after_bindings.get(key) != value for key, value in before_bindings.items()):
+    vm_ha_effective_resource_bindings(before_bindings)
+    vm_ha_effective_resource_bindings(after_bindings)
+    if "heartbeat-upgrade-artifact" in after_bindings:
+        raise ValueError("VM-HA replacement cannot inherit heartbeat upgrade intent")
+    prior_bindings = {
+        key: value for key, value in before_bindings.items() if key not in _HEARTBEAT_ARTIFACT_KEYS
+    }
+    if any(after_bindings.get(key) != value for key, value in prior_bindings.items()):
         raise ValueError("VM-HA missing standby replacement changed prior audit history")
     candidates: list[tuple[VMHALifecycleMember, int]] = []
     for member in previous.members:
@@ -2381,6 +2563,15 @@ def _validate_missing_standby_replacement_successor(
             0
         ].network_interface_name,
     }
+    for key in _HEARTBEAT_ARTIFACT_KEYS:
+        if key in before_bindings:
+            expected_additions[
+                f"standby-replacement-{cycle}-prior-{key}:{target_before.instance_name}"
+            ] = before_bindings[key]
+    if "heartbeat-initial-artifact" in after_bindings:
+        expected_additions["heartbeat-initial-artifact"] = after_bindings[
+            "heartbeat-initial-artifact"
+        ]
     rotation_kinds = (
         "old-fingerprint",
         "trust-scope",
@@ -2418,7 +2609,7 @@ def _validate_missing_standby_replacement_successor(
         expected_additions.update(
             {rotation_keys[kind]: value for kind, value in present_rotation.items()}
         )
-    additions = {key: value for key, value in after_bindings.items() if key not in before_bindings}
+    additions = {key: value for key, value in after_bindings.items() if key not in prior_bindings}
     if additions != expected_additions:
         raise ValueError("VM-HA missing standby replacement audit bindings are invalid")
     expected_intent = vm_ha_missing_standby_replacement_effect(

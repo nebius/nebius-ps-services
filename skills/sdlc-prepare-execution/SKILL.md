@@ -134,8 +134,10 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
   `WORKFLOW_UPGRADE_REQUIRED`, including completed records.
 - `replan-future` holds the execution transition lock, compares every active or
   completed task's full canonical definition and recorded definition digest,
-  and changes only resource-free planned future waves. Exact repeat replans are
-  no-ops.
+  preserves started waves as a frozen prefix, and changes only resource-free
+  future waves. Exact repeat replans are no-ops. A pending admitted design
+  revision must be sealed through the execution-plane recovery sequence before
+  replanning; ordinary preparation and TDD sealing cannot perform that commit.
 
 ## Failure Handling
 
@@ -161,11 +163,12 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 - Use private `task-recover --confirmed-stopped --expected-attempt <n>` only
   with a fresh worker session and an exactly re-observed clean or claimed-dirty
   worktree. Reject worker-created commits; coordinator `task-finish` with native termination evidence is the
-  sole task-commit owner. The expected attempt makes ownership transfer
+  sole task-commit owner. Ingest the complete native result through `task-result`
+  and supply its implemented receipt to `task-finish --receipt`. The expected attempt makes ownership transfer
   compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
-- `task-finish` persists a digest-protected `task-finish-intent-v1` before the
+- `task-finish` persists a digest-protected `workflow/task-finish-intent-v3` before the
   Git commit. Retry may adopt only the exact clean direct-child commit whose
-  parent, tree, message, assignment, and structured evidence match that intent;
+  parent, tree, message, assignment, result-receipt digest and structured evidence match that intent;
   it also validates and reuses an exact result written before a task-state
   crash. Any unjournaled or mismatched moved `HEAD` is a scope violation.
 - Reject corrective replan when any active/completed task definition or digest

@@ -226,7 +226,6 @@ def sample_config() -> dict:
             },
         },
         "gateway": {
-            "ssh_allowed_cidrs": ["203.0.113.4/32"],
             "local_asn": 65010,
             "local_prefixes": ["10.0.0.0/16"],
             "quotas": {

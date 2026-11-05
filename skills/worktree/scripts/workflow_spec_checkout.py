@@ -150,7 +150,7 @@ def _resolve(run_dir: Path, selected: Path, execution_id: str | None, strict: bo
             and value.get("integration_head") == value.get("base_head")
             and not (execution / execution_id / "assignments").exists()):
         return selected
-    if not feature_delivery and status not in {"specs_prepared", "specs_sealing", "prepared", "tdd_sealed", "waves_running", "integrated", "sealed", "blocked", "repair_required"}:
+    if not feature_delivery and status not in {"specs_prepared", "specs_sealing", "prepared", "tdd_sealed", "waves_running", "integrated", "sealed", "blocked", "repair_required", "design_revision_pending"}:
         _fail("canonical-spec execution lifecycle is invalid")
     if integration != integration.resolve() or not integration.is_dir():
         _fail("canonical-spec integration checkout is unavailable")

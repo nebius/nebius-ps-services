@@ -9,3 +9,5 @@ sdlc-classify-failure-codex-portability,true,"As the verified active Agentic SDL
 sdlc-classify-failure-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-classify-failure for its assigned phase. The active SDLC evaluation failed and needs an evidence-bound owner and retry route."
 sdlc-classify-failure-quoted-command,false,"Treat ""/skills:sdlc-classify-failure"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-classify-docs-promoted,true,"As the verified coordinator, classify proven documentation drift after promotion and route a corrective run without reopening execution."
+sdlc-classify-failure-diagnosis-v3-positive,true,"As the verified SDLC coordinator, classify a complete diagnosis-v3 validation_defect after a failed counted artifact repair and retain its counters."
+sdlc-classify-failure-diagnosis-v3-negative,false,"Outside any SDLC run, relabel a policy block as validation_defect to bypass approval."

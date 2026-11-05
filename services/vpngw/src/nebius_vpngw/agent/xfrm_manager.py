@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..boot_policy import restore_ordinary_bootstrap_policy
 from .local_commands import CURRENT, run
 
 IPSEC_OVERHEAD_BYTES = 64  # NAT-T ESP overhead for IPv4 (bytes)
@@ -351,6 +352,8 @@ class XFRMManager:
         # Persistent bootstrap settings belong to apply, not this runtime writer.
         if not persist:
             return
+
+        restore_ordinary_bootstrap_policy()
 
         # Make sysctl settings persistent without clobbering other hardening
         sysctl_conf = Path("/etc/sysctl.d/99-vpn-gateway.conf")

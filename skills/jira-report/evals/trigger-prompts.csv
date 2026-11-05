@@ -1,0 +1,13 @@
+id,should_trigger,prompt
+jira-true-self,true,Report the Jira tickets I was involved in during the last 90 days.
+jira-true-email,true,Create a concise Jira activity table for person@example.com since 2026-01-01.
+jira-true-title,true,Find Jira tickets with xyz in their title where user ACCOUNT_1 was involved since January 1.
+jira-true-credit,true,Report Jira tickets where comments credit my contribution even though I was not assigned.
+jira-true-comments,true,"List Jira issues I commented on this quarter, with their current statuses."
+jira-true-help,true,Show jira-report --help without contacting Jira.
+jira-false-edit,false,Change the status of Jira EX-10 to Done and assign it to me.
+jira-false-setup,false,Install and authenticate an Atlassian MCP server for my agent.
+jira-false-triage,false,Triage our Jira backlog and close duplicates.
+jira-false-github,false,Report my GitHub PR contributions from the last 90 days.
+jira-false-single,false,Explain the root cause described in Jira EX-10.
+jira-false-rank,false,Rank the engineering team by the number of Jira tickets they closed.

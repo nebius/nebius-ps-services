@@ -220,11 +220,23 @@ MANAGED_PLAN = """# FEAT-001 Plan v1
 
 
 class SensitiveEvidenceTests(unittest.TestCase):
+    def test_spec_gap_identity_lists_reject_duplicates_and_untyped_values(self):
+        gap = {"kind": "design", "summary": "Scoped interface is incomplete.",
+               "evidence": ["The required interface is outside the claim."],
+               "requirement_ids": ["REQ-001"], "design_ids": ["FEAT-001"]}
+        self.assertTrue(execution_core._valid_spec_gaps([gap]))
+        for field in ("requirement_ids", "design_ids"):
+            for invalid in ([gap[field][0]] * 2, [42], [{}]):
+                with self.subTest(field=field, invalid=invalid):
+                    self.assertFalse(execution_core._valid_spec_gaps([{**gap, field: invalid}]))
+
     def test_dynamic_cookie_lookup_and_secret_factory_are_not_literals(self):
         for line in (
             'token = client.cookies["csrftoken"].value',
             '+    token = client.cookies["csrftoken"].value',
             'secret = secrets.token_urlsafe(32)',
+            "const token = form.querySelector('[name=csrfmiddlewaretoken]').value;",
+            "+const token = form.querySelector('[name=csrfmiddlewaretoken]').value;",
         ):
             with self.subTest(line=line):
                 self.assertFalse(contains_sensitive(line))
@@ -240,6 +252,9 @@ class SensitiveEvidenceTests(unittest.TestCase):
             'token = client.cookies["csrf"]; secret = ' + synthetic,
             'token = client.cookies["csrf"]\nsecret = ' + synthetic,
             'secret = secrets.token_urlsafe(32); OPENAI_API_KEY = sk-' + synthetic,
+            "token = form.querySelector('csrf').value; token = " + synthetic,
+            'token = "' + synthetic + '"; # placeholder',
+            'token = form.querySelector[',
         ):
             with self.subTest(line=line):
                 self.assertTrue(contains_sensitive(line))
@@ -367,43 +382,52 @@ def seed_objective_impact(run_dir: Path, selected_project: Path) -> None:
     )
 
 
-def finish_task(run_dir, execution_id, wave_id, task_id, *args, **kwargs):
-    """Fixture helper: product finish plus clearly synthetic termination/admission."""
-    value = product_finish_task(run_dir, execution_id, wave_id, task_id, *args, **kwargs)
+def finish_task(run_dir, execution_id, wave_id, task_id, validation, review, message, *,
+                summary, decisions=(), open_risks=(),
+                coordinator_identity="deterministic-coordinator", **kwargs):
+    """Synthetic native observation/result fixture; never evidence of live execution."""
+    from workflow_worker_results import ingest_result
     assignment = json.loads(assignment_path(run_dir, execution_id, wave_id, task_id).read_text())
     task = json.loads(task_path(run_dir, execution_id, wave_id, task_id).read_text())
     run = json.loads((run_dir / "run.json").read_text())
-    termination = run_dir / "execution" / execution_id / "terminations" / (task_id + ".json")
+    termination = (run_dir / "execution" / execution_id / "terminations"
+                   / f"{task_id}-{task['attempt']}.json")
     write_private(termination, {"schema": "workflow/worker-termination-v1",
         "assignment_digest": assignment["assignment_digest"],
         "worker_session_hash": task["worker_session_hash"], "status": "terminated",
         "native_handle": "deterministic-test-stub", "observation": "synthetic fixture; not native proof",
         "observer_session_hash": run["coordinator_session_sha256"]})
+    payload = {"task_id": task_id, "assignment_digest": assignment["assignment_digest"],
+               "status": "implemented", "summary": summary, "decisions": list(decisions),
+               "open_risks": list(open_risks), "spec_gaps": [], "validation": validation, "review": review}
+    result = execution_core._impact("synthetic native result ingestion", ingest_result,
+        run_dir, execution_id, wave_id, task_id, payload, termination, coordinator_identity)
+    value = product_finish_task(run_dir, execution_id, wave_id, task_id,
+        Path(result["receipt_path"]), message, termination=termination,
+        session_identity=coordinator_identity, **kwargs)
     admit_task(run_dir, execution_id, wave_id, task_id, termination)
     return value
 
 
 def recover_task(run_dir, feature, wave, task_id, session, scope, **kwargs):
-    """Synthetic recovery authorization for deterministic Git recovery scenarios."""
+    """Use the real authorization owner with an explicitly synthetic exit observation."""
     from workflow_state import lock
+    from workflow_reconcile import authorize_recovery
     with lock(run_dir.parent):
-        assignment = json.loads(assignment_path(run_dir, feature, wave, task_id).read_text())
         task = json.loads(task_path(run_dir, feature, wave, task_id).read_text())
+        if not kwargs['confirmed_stopped'] or kwargs['expected_attempt'] != task['attempt']:
+            return product_recover_task(run_dir, feature, wave, task_id, session, scope, **kwargs)
+        assignment = json.loads(assignment_path(run_dir, feature, wave, task_id).read_text())
         run = json.loads((run_dir / 'run.json').read_text())
         observation = {'schema': 'workflow/worker-termination-v1', 'assignment_digest': assignment['assignment_digest'],
                        'worker_session_hash': task['worker_session_hash'], 'status': 'terminated',
                        'native_handle': 'deterministic-stub', 'observation': 'synthetic fixture only',
                        'observer_session_hash': run['coordinator_session_sha256']}
-        evidence = run_dir / 'execution' / feature / 'terminations' / f'{task_id}-recovery.json'
+        evidence = run_dir / 'execution' / feature / 'terminations' / f"{task_id}-{task['attempt']}-recovery.json"
         write_private(evidence, observation)
-        path = run_dir / 'execution' / feature / 'recoveries' / f"{task_id}-{kwargs['expected_attempt']}.json"
-        if not path.exists():
-            write_private(path, {'schema': 'workflow/recovery-authorization-v1',
-                'assignment_digest': assignment['assignment_digest'], 'attempt': kwargs['expected_attempt'],
-                'prior_worker_session_hash': task['worker_session_hash'],
-                'next_worker_session_hash': hashlib.sha256(session.encode()).hexdigest(),
-                'coordinator_session_hash': run['coordinator_session_sha256'],
-                'termination_path': str(evidence), 'termination_sha256': execution_core.sha256_json(observation)})
+        execution_core._impact('synthetic native recovery authorization', authorize_recovery,
+            run_dir, feature, wave, task_id, evidence, 'deterministic-coordinator',
+            hashlib.sha256(session.encode()).hexdigest())
         return product_recover_task(run_dir, feature, wave, task_id, session, scope, **kwargs)
 
 
@@ -540,7 +564,10 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "PLAN_INVALID")
 
 
-class GitLifecycleTests(unittest.TestCase):
+from test_worker_result_cases import WorkerResultContractCases  # noqa: E402
+
+
+class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
     def integrated_failure_fixture(self):
         self.complete_first_wave()
         assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
@@ -1564,7 +1591,7 @@ class GitLifecycleTests(unittest.TestCase):
                 assignment["assignment_digest"],
                 "late-session",
                 Path(assignment["scope_cwd"]),
-                clock=lambda: fixed + timedelta(seconds=60),
+                clock=lambda: fixed + timedelta(seconds=300),
             )
         self.assertEqual(caught.exception.code, "WORKER_PRESTART_TIMEOUT")
 
@@ -1588,7 +1615,7 @@ class GitLifecycleTests(unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=60),
+            clock=lambda: fixed + timedelta(seconds=300),
         )
         self.assertEqual(timed_out["status"], "WORKER_PRESTART_TIMEOUT")
         with self.assertRaises(ExecutionError) as unconfirmed:
@@ -1728,7 +1755,10 @@ class GitLifecycleTests(unittest.TestCase):
         worker = Path(assignment["worktree"])
         (worker / "src").mkdir()
         (worker / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
-        for seconds in range(200, 1800, 200):
+        self.assertEqual(assignment["max_seconds"], 3600)
+        # Runtime waits still count; an otherwise healthy attempt now has an
+        # hour for implementation, tests, review and handoff.
+        for seconds in range(200, 3300, 200):
             heartbeat_task(
                 self.run_dir,
                 "FEAT-001",
@@ -1738,15 +1768,35 @@ class GitLifecycleTests(unittest.TestCase):
                 "implementing",
                 "long-session",
                 Path(assignment["scope_cwd"]),
-                clock=lambda seconds=seconds: fixed + timedelta(seconds=seconds),
+                clock=lambda seconds=seconds: fixed + timedelta(seconds=seconds + 1),
             )
+        warning = heartbeat_task(
+            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+            assignment["assignment_digest"], "validating", "long-session",
+            Path(assignment["scope_cwd"]),
+            clock=lambda: fixed + timedelta(seconds=3301),
+        )
+        self.assertEqual(warning["warning"], "WORKER_DEADLINE_NEAR")
+        heartbeat_task(
+            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+            assignment["assignment_digest"], "reporting", "long-session",
+            Path(assignment["scope_cwd"]),
+            clock=lambda: fixed + timedelta(seconds=3501),
+        )
+        before_deadline = watch_task(
+            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+            assignment["assignment_digest"],
+            clock=lambda: fixed + timedelta(seconds=3600),
+        )
+        self.assertEqual(before_deadline["status"], "ACTIVE")
+        self.assertEqual(before_deadline["warning"], "WORKER_DEADLINE_NEAR")
         watched = watch_task(
             self.run_dir,
             "FEAT-001",
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=1801),
+            clock=lambda: fixed + timedelta(seconds=3601),
         )
         self.assertEqual(watched["status"], "WORKER_TIMEOUT")
 

@@ -147,6 +147,40 @@
         "Keeps original receipt/grant and exact review/base evidence.",
         "Does not copy credentials or execute contributor helpers."
       ]
+    },
+    {
+      "id": "issue-closure-subset",
+      "prompt": "Offline contract simulation: use synthetic tools only, no real GitHub or checkout writes. Verified Implement handoff with closure intent contains issue 12 in two repositories; only one fully passes current-head criteria.",
+      "expected_output": "Configure a native closing reference only for the fully resolved member; leave both issues open until merge.",
+      "files": [],
+      "assertions": [
+        "Checks full identities and current-head evidence.",
+        "Verifies concise comment before one fully qualified closing reference.",
+        "Partial member stays open; no merge without explicit intent.",
+        "Does not call issue-write closure; GitHub performs closure only after the authorized merge."
+      ]
+    },
+    {
+      "id": "issue-closure-retry",
+      "prompt": "Offline contract simulation: use synthetic tools only, no real GitHub or checkout writes. Comment creation timed out; complete readback finds the equivalent comment by the acting identity. PR update is missing.",
+      "expected_output": "Reuse comment; retry only missing PR update.",
+      "files": [],
+      "assertions": [
+        "No duplicate comment.",
+        "Preserves human body and independently verifies closing section.",
+        "Ambiguous readback stops effects."
+      ]
+    },
+    {
+      "id": "issue-closure-drift",
+      "prompt": "Offline contract simulation: use synthetic tools only, no real GitHub or checkout writes. Publication repair changes a head with existing managed closing references; one member scope also changes.",
+      "expected_output": "Remove stale references before push and reassess.",
+      "files": [],
+      "assertions": [
+        "Verifies removal before new push; failed removal blocks publication.",
+        "Refreshes current criteria and discussion; ancestry is insufficient.",
+        "Changed-scope member stays pending."
+      ]
     }
   ]
 }

@@ -53,7 +53,7 @@ def _connection(ssh: Any, target: str, instance: Any, local: dict) -> Iterator[A
 
 def _start(client: Any, request: dict) -> tuple[Any, Any]:
     stdin, stdout, _stderr = client.exec_command(
-        'sudo -n env VPNGW_DEPLOY_SSH_CONNECTION="$SSH_CONNECTION" /usr/bin/python3 -B -c '
+        "sudo -n /usr/bin/python3 -B -c "
         + shlex.quote(
             "import base64,sys; raw=sys.stdin.readline(4194305); "
             "assert len(raw)<=4194304 and raw.endswith('\\n'); "
@@ -165,7 +165,10 @@ class Handoff:
         if self.peer_observer is None:
             return {}
         current = self.peer_observer()
-        if current != self.peer:
+        from ..ha_repair import peer_checkpoint_transition
+
+        artifact = self.package.manifest["wheel_sha256"] if self.package is not None else ""
+        if not peer_checkpoint_transition(self.peer, current, artifact):
             raise RuntimeError("HA repair peer admission changed after approval")
         return {"peer": current, "expected_peer": self.peer}
 

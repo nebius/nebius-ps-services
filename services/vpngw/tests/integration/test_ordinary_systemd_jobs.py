@@ -176,7 +176,7 @@ def test_shared_static_prefix_real_kernel_verification(
     from nebius_vpngw.tunnel_state import collect_tunnel_state
 
     cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+        "gateway": {},
         "connections": [
             {
                 "routing_mode": "static",
@@ -602,7 +602,6 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
             text=True,
             env={
                 **os.environ,
-                "VPNGW_DEPLOY_SSH_CONNECTION": "192.0.2.10 12345 192.0.2.20 22",
             },
         )
         processes.append(child)
@@ -616,7 +615,7 @@ def test_streamed_handoff_recovers_a_stop_accepted_before_holder_died(manager, t
                     artifact="3" * 64,
                     approval="4" * 64,
                     ha=ha,
-                    ingress_policy={"ssh_allowed_cidrs": ["192.0.2.0/24"], "peer_ips": []},
+                    ingress_policy={"peer_ips": []},
                 )
             )
             + "\n"
@@ -835,7 +834,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         return run(list(args), check=True, capture_output=True, text=True)
 
     old = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+        "gateway": {},
         "connections": [
             {
                 "routing_mode": "static",
@@ -855,7 +854,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         ],
     }
     desired = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+        "gateway": {},
         "connections": [
             {
                 "routing_mode": "static",

@@ -159,7 +159,7 @@ from agent_runtime import agent_home, agent_name  # noqa: E402
 
 ROOT_MARKER = ".sdlc-workflow-test-root.json"
 ROOT_SCHEMA = "agentic-sdlc/verification-root-v1"
-LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v5"
+LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v7"
 RUN_MARKER = ".agentic-sdlc-three-tier-run.json"
 PROJECT_MARKER = ".sdlc-workflow-test-project.json"
 OWNERSHIP_LABEL = "sdlc-workflow-test.verification-id"
@@ -182,6 +182,7 @@ EXECUTION_PHASES = {
     "sdlc-uat-tests", "post-uat-documents", "sdlc-gui-test",
 }
 RESOURCE_KINDS = ("containers", "networks", "volumes", "images")
+TASK_API_PATH = "/api/v1/tasks"
 GENERATION_GUARDED_COMMANDS = {
     "record-phase",
     "record-validation",
@@ -227,6 +228,51 @@ class LifecycleError(RuntimeError):
 
 def contains_secret_material(value: str) -> bool:
     return any(re.search(pattern, value) for pattern in SECRET_MATERIAL_PATTERNS)
+
+
+def compose_failure_diagnostic(result: subprocess.CompletedProcess[str]) -> str:
+    """Keep bounded causal output without exposing private runtime inputs."""
+    parts = [part for part in (result.stdout, result.stderr) if isinstance(part, str)]
+    if sum(map(len, parts)) > 262144:
+        return "Failure output withheld because it exceeds the diagnostic size limit."
+    output = "\n".join(parts)
+    private_values = set()
+    for key in ("POSTGRES_PASSWORD", "DJANGO_SECRET_KEY"):
+        value = os.environ.get(key)
+        if value:
+            private_values.update((value, json.dumps(value)[1:-1], repr(value)[1:-1]))
+
+    def redact(text: str) -> str:
+        for value in sorted(private_values, key=len, reverse=True):
+            text = text.replace(value, "[REDACTED]")
+        return text
+
+    output = redact(output)
+    # Escaped representations can hide credential field names or delimiters.
+    # Do not recursively decode arbitrary logs or claim such output is safe.
+    if "\\" in output or re.search(r"%[0-9a-fA-F]{2}", output):
+        return "Failure output withheld because it contains encoded diagnostic text."
+    output = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", output)
+    output = "".join(char for char in output if char in "\n\t" or char.isprintable())
+    output = redact(output)
+    # Screen the complete output before taking a tail: truncation must not
+    # discard the sensitive field name while retaining its value.
+    if (contains_secret_material(output)
+            or re.search(
+                r"(?i)(?:password|passwd|secret|token|api[_-]?key|"
+                r"access[_-]?key|authorization|credential|signature|cookie)"
+                r"[a-z0-9_-]{0,128}[\"']?\s*[:=]", output
+            )
+            or re.search(r"(?i)(?:[?&]|\b)(?:sig|key|code)=[^\s&]+", output)
+            or re.search(r"(?i)\b(?:bearer|basic)\s+[a-z0-9+/_=-]{8,}", output)
+            or "-----BEGIN " in output
+            or re.search(r"\b(?:gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})\b", output)
+            or re.search(r"(?i)https?://[^\s/]+\.(?:internal|corp|local)(?::[0-9]+)?(?:/|\b)", output)):
+        return "Failure output withheld because it may contain sensitive material."
+    if not output.strip():
+        return "No diagnostic output was returned."
+    prefix = "[Earlier output omitted]\n" if len(output) > 8192 else ""
+    return prefix + output[-8192:].strip()
 
 
 def valid_git_sha(value: object) -> bool:
@@ -406,7 +452,14 @@ def load_active(root: Path) -> tuple[Path, dict[str, Any]]:
     if active_path.is_symlink():
         raise LifecycleError("Active lifecycle pointer is symlinked.")
     state = read_json(active_path)
+    if state.get("filesystem_cleanup") is not None:
+        validate_filesystem_cleanup(root, state)
+        return active_path, state
     validate_state(root, state)
+    try:
+        three_tier_runtime.validate_observations(state, require_complete=False)
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
     return active_path, state
 
 
@@ -414,6 +467,8 @@ def assert_active_generation(root: Path, expected_verification_id: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{32}", expected_verification_id):
         raise LifecycleError("Expected verification ID is invalid.")
     _, state = load_active(root)
+    if state.get("filesystem_cleanup") is not None:
+        raise LifecycleError("Filesystem cleanup has begun; only status/destroy are permitted.")
     if state["verification_id"] != expected_verification_id:
         raise LifecycleError(
             "STALE_THREE_TIER_GENERATION: this workflow was superseded by a "
@@ -625,6 +680,8 @@ def prepare(root_value: Path) -> dict[str, Any]:
             },
             "git": {"baseline_sha": baseline, "promoted_sha": None},
             "endpoints": {},
+            "runtime_observations": [],
+            "runtime_inventory": None,
             "resources": {kind: [] for kind in RESOURCE_KINDS},
             "browser_instance": three_tier_browser.initial_state(verification_id),
             "phases": [],
@@ -652,8 +709,38 @@ def update_state(root: Path, state: dict[str, Any]) -> None:
 
 def phase_identity(state: dict[str, Any], phase: str):
     objective = three_tier_target.current_objective(state, agent=agent_name())
-    basis = (execution_target(state, require_clean=False)["basis_sha256"]
-             if phase in EXECUTION_PHASES else None)
+    execution_phase = phase in EXECUTION_PHASES
+    if phase == "sdlc-classify-failure":
+        # A selected feature and locked plan precede preparation. Only actual
+        # preparation state requires an execution target; any partial or invalid
+        # target must still fail validation rather than fall back to a null basis.
+        registration = three_tier_target._registration(state, agent_name())
+        run_dir, current = registration[4:6]
+        feature = current.get("current_execution")
+        execution_phase = False
+        if feature is not None:
+            if not isinstance(feature, str) or re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", feature) is None:
+                raise LifecycleError("Classifier execution selection is invalid.")
+            for path in (
+                run_dir / "execution" / feature,
+                run_dir / "objective-impact" / "execution" / f"{feature}.json",
+                run_dir / "worktrees" / feature,
+            ):
+                reject_symlinks(path, stop_at=run_dir)
+                for parent in path.parents:
+                    if parent == run_dir:
+                        break
+                    if parent.exists() and not parent.is_dir():
+                        raise LifecycleError("Classifier preparation path is invalid.")
+                execution_phase = path.exists() or execution_phase
+        if not execution_phase and any(
+            entry.get("phase") in EXECUTION_PHASES and entry.get("status") == "PASS"
+            for entry in state.get("phases", [])
+        ):
+            raise LifecycleError("Previously observed execution state is missing.")
+    observation = {"classifier_observation": True} if phase == "sdlc-classify-failure" else {}
+    basis = (execution_target(state, require_clean=False, **observation)["basis_sha256"]
+             if execution_phase else None)
     return objective, basis
 
 
@@ -667,7 +754,7 @@ def validate_phase_pass_artifact(
         rf"evidence/phases/attempts/{re.escape(phase)}/[0-9a-f]{{64}}\.json", evidence[0]))
     if evidence != [expected] and not archived:
         raise LifecycleError(
-            f"Passing phase {phase} requires its one canonical JSON result."
+            f"Passing phase {phase} requires its one canonical JSON result at {expected}."
         )
     artifact = run_root / evidence[0]
     reject_symlinks(artifact, stop_at=run_root)
@@ -719,14 +806,27 @@ def validate_phase_pass_artifact(
     if result.get("objective_sha256") != objective:
         raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
     if result.get("basis_sha256") != expected_basis:
-        if not historical or phase not in EXECUTION_PHASES:
+        if not historical or expected_basis is None:
             raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
-        try:
-            three_tier_target.validate_historical_basis(
-                state, result.get("basis_sha256"), agent=agent_name(),
-            )
-        except three_tier_target.TargetError as error:
-            raise LifecycleError(str(error)) from error
+        history = state["phases"]
+        first_execution = next((index for index, entry in enumerate(history)
+                                if entry.get("phase") in EXECUTION_PHASES
+                                and entry.get("status") == "PASS"), len(history))
+        # Initial admission already validated this immutable receipt without an
+        # execution. A later preparation must not retroactively invent its basis.
+        preexecution_classifier = (
+            phase == "sdlc-classify-failure"
+            and result.get("basis_sha256") is None
+            and history.index(historical_entry) < first_execution < len(history)
+        )
+        if not preexecution_classifier:
+            try:
+                three_tier_target.validate_historical_basis(
+                    state, result.get("basis_sha256"), agent=agent_name(),
+                    phase=phase, recorded_head=result.get("recorded_head"),
+                )
+            except three_tier_target.TargetError as error:
+                raise LifecycleError(str(error)) from error
     if archived and artifact.stem != hashlib.sha256(artifact.read_bytes()).hexdigest():
         raise LifecycleError(f"Immutable phase attempt changed: {phase}")
     baseline_sha = result.get("baseline_sha")
@@ -737,11 +837,13 @@ def validate_phase_pass_artifact(
     promoted_sha = state["git"].get("promoted_sha")
     ancestry_checks = [(baseline_sha, recorded_head, "baseline")]
     if promoted_sha is None:
-        if phase in EXECUTION_PHASES:
+        if expected_basis is not None:
+            observation = ({"classifier_observation": True}
+                           if phase == "sdlc-classify-failure" else {})
             current_head = execution_target(
                 state, require_clean=not historical and phase not in {
-                    "sdlc-tdd", "sdlc-update-documents", "align",
-                }
+                    "sdlc-tdd", "sdlc-update-documents", "align", "sdlc-classify-failure",
+                }, **observation,
             )["head"]
         else:
             current_head = require_command(
@@ -872,10 +974,19 @@ def record_validation(
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
     normalized_command = command_text[:500]
+    normalized_summary = summary[:500]
+    for validation in state.get("validations", []):
+        if (
+            validation.get("command") == normalized_command
+            and validation.get("status") == "FAIL"
+        ):
+            if status == "FAIL" and validation.get("summary") == normalized_summary:
+                return state
+            raise LifecycleError("Failed validation is immutable; use a fresh trial.")
     entry = {
         "command": normalized_command,
         "status": status,
-        "summary": summary[:500],
+        "summary": normalized_summary,
         "recorded_at": utc_now(),
     }
     state["validations"] = [
@@ -893,105 +1004,225 @@ def resource_identifier_valid(value: str) -> bool:
 
 
 def validate_loopback_url(value: str, label: str) -> None:
-    parsed = urlsplit(value)
+    if not isinstance(value, str):
+        raise LifecycleError(f"{label} must be an HTTP loopback URL.")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise LifecycleError(f"{label} must be a valid HTTP loopback URL.") from error
     if (
         parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
     ):
         raise LifecycleError(f"{label} must be an HTTP loopback URL.")
-    if parsed.port is None:
+    if port is None:
         raise LifecycleError(f"{label} must include the resolved dynamic host port.")
+
+
+def validate_runtime_endpoints(endpoints: dict[str, str]) -> None:
+    """Bind independent checks to the frozen API contract and owned web origin."""
+    for label in ("web", "api", "health"):
+        validate_loopback_url(endpoints.get(label), f"{label} URL")
+    parsed = {label: urlsplit(endpoints[label]) for label in ("web", "api", "health")}
+    api = parsed["api"]
+    if api.path != TASK_API_PATH or api.query:
+        raise LifecycleError(
+            f"API URL must use the frozen {TASK_API_PATH} path without a query."
+        )
+    origins = {(url.scheme, url.hostname, url.port) for url in parsed.values()}
+    if len(origins) != 1:
+        raise LifecycleError("Web, API and health URLs must use the same owned loopback origin.")
+
+
+def reconcile_runtime_observations(root, state):
+    """Recover exact-generation receipt writes interrupted before ledger publication."""
+    try:
+        ledger = {entry["path"] for entry in state["runtime_observations"]}
+        for artifact in three_tier_runtime.observation_paths(state):
+            relative = str(artifact.relative_to(Path(state["run_root"])))
+            if relative in ledger:
+                continue
+            # Read through the same bounded private-file guard as normal receipts.
+            binding = {
+                "path": relative,
+                "sha256": three_tier_runtime.observation_file_digest(state, relative),
+            }
+            value = three_tier_runtime.read_observation_file(state, binding)
+            summary = three_tier_runtime.observation_summary(value, binding)
+            three_tier_runtime.read_observation(state, summary)
+            three_tier_runtime.require_observation_capacity(state, summary)
+            state["runtime_observations"].append(summary)
+        three_tier_runtime.validate_observations(state)
+    except (
+        three_tier_runtime.RuntimeEvidenceError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise LifecycleError("Runtime observation reconciliation failed.") from error
+    update_state(root, state)
+
+
+def validate_inventory_recovery(state):
+    """Require owner-linked recovery without clearing historical failures or gates."""
+    try:
+        observations = three_tier_runtime.validate_observations(state)
+        failed = [
+            (summary, value)
+            for summary, value in zip(state["runtime_observations"], observations)
+            if value["mode"] == "development" and value["outcome"] == "FAIL"
+        ]
+        evidence = three_tier_target.inventory_recovery_evidence(
+            state,
+            failed,
+            skills_root=Path(__file__).resolve().parents[2],
+            agent=agent_name(),
+        )
+        # A separate reference ledger does not edit or relabel the failed receipt.
+        state["runtime_recoveries"] = evidence
+    except Exception as error:
+        raise LifecycleError(
+            "blocked_missing_evidence: inventory recovery authority is unavailable."
+        ) from error
 
 
 def record_runtime(
     root_value: Path,
     *,
-    web_url: str,
-    api_url: str,
-    health_url: str,
-    database_endpoint: str,
-    web_container: str,
-    database_container: str,
-    networks: list[str],
-    volumes: list[str],
-    images: list[str],
+    web_path: str,
+    health_path: str,
+    worker_task: str | None = None,
+    assignment_digest: str | None = None,
 ) -> dict[str, Any]:
-    for label, value in (
-        ("web URL", web_url),
-        ("API URL", api_url),
-        ("health URL", health_url),
-    ):
-        validate_loopback_url(value, label)
-    if (
-        not database_endpoint.startswith("db:")
-        or any(
-            value in database_endpoint
-            for value in ("localhost", "127.0.0.1", "0.0.0.0", "@", "?", "#")
+    """Observe under the generation lock, retaining failures before returning."""
+    try:
+        three_tier_runtime.validate_route_path(web_path)
+        three_tier_runtime.validate_route_path(health_path)
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
+    if (worker_task is None) != (assignment_digest is None) or (
+        worker_task is not None
+        and (
+            re.fullmatch(r"TASK-[0-9]{3,}", worker_task) is None
+            or re.fullmatch(r"[0-9a-f]{64}", assignment_digest or "") is None
         )
-        or any(character.isspace() for character in database_endpoint)
     ):
-        raise LifecycleError(
-            "Database endpoint must be Compose-internal and not host-published."
-        )
-    containers = [web_container, database_container]
-    supplied = {
-        "containers": containers,
-        "networks": networks,
-        "volumes": volumes,
-        "images": images,
-    }
-    if (
-        len(containers) != 2
-        or len(networks) != 1
-        or len(volumes) != 1
-        or len(images) != 1
-    ):
-        raise LifecycleError(
-            "Runtime inventory must contain exactly two containers, one network, "
-            "one database volume, and one built web image."
-        )
+        raise LifecycleError("Runtime access requires paired worker selectors.")
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
-    inspected: dict[str, list[dict[str, Any]]] = {}
-    for kind, identifiers in supplied.items():
-        if len(set(identifiers)) != len(identifiers) or any(
-            not resource_identifier_valid(identifier) for identifier in identifiers
-        ):
-            raise LifecycleError(f"Invalid {kind} resource identifier.")
-        inspected[kind] = [
-            assert_resource_owned(kind, identifier, state)
-            for identifier in identifiers
-        ]
-        canonical_ids = [item["canonical_id"] for item in inspected[kind]]
-        if len(set(canonical_ids)) != len(canonical_ids):
-            raise LifecycleError(
-                f"Runtime {kind} aliases resolve to a duplicate canonical identity."
-            )
-    web_labels = inspected["containers"][0]["labels"]
-    database_labels = inspected["containers"][1]["labels"]
-    if web_labels is None or web_labels.get("com.docker.compose.service") != "web":
-        raise LifecycleError("Web container must be the Compose web service.")
-    if (
-        database_labels is None
-        or database_labels.get("com.docker.compose.service") != "db"
+    reconcile_runtime_observations(root, state)
+    try:
+        previous = three_tier_runtime.validate_observations(state)
+        three_tier_runtime.require_observation_capacity(state)
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
+    mode = "development" if worker_task is not None else "acceptance"
+    if any(
+        item["mode"] == "acceptance" and item["outcome"] == "FAIL" for item in previous
     ):
-        raise LifecycleError("Database container must be the Compose db service.")
-    assert_port_isolation(web_container, database_container, urlsplit(web_url).port)
-    state["endpoints"] = {
-        "web": web_url,
-        "api": api_url,
-        "health": health_url,
-        "database": database_endpoint,
+        raise LifecycleError("An earlier acceptance inventory failure ends this trial.")
+    target = None
+    try:
+        with runtime_access(
+            state, worker_task=worker_task, assignment_digest=assignment_digest
+        ):
+            target = execution_target(
+                state,
+                require_clean=worker_task is None,
+                worker_task=worker_task,
+                assignment_digest=assignment_digest,
+            )
+            result = three_tier_runtime.observe_inventory(
+                state,
+                target,
+                command,
+                web_path=web_path,
+                health_path=health_path,
+                mode=mode,
+            )
+            if result["outcome"] == "PASS":
+                after = execution_target(
+                    state,
+                    require_clean=worker_task is None,
+                    worker_task=worker_task,
+                    assignment_digest=assignment_digest,
+                )
+                if after != target:
+                    raise LifecycleError("Runtime target changed during observation.")
+    except LifecycleError:
+        result = {
+            "outcome": "FAIL",
+            "category": "admission_failure",
+            "operation": "select_target",
+            "predicates": [
+                {
+                    "name": "target.admitted",
+                    "expected": True,
+                    "observed": False,
+                    "passed": False,
+                }
+            ],
+        }
+    except Exception:
+        result = {
+            "outcome": "FAIL",
+            "category": "observer_exception",
+            "operation": "select_target",
+            "predicates": [
+                {
+                    "name": "observer.completed",
+                    "expected": True,
+                    "observed": False,
+                    "passed": False,
+                }
+            ],
+        }
+    observation = {
+        "schema": three_tier_runtime.OBSERVATION_SCHEMA,
+        "verification_id": state["verification_id"],
+        "mode": mode,
+        "target": target,
+        "worker_task": worker_task,
+        "assignment_digest": assignment_digest,
+        "observed_at": utc_now(),
+        "source_operation": "record-runtime",
+        **result,
     }
-    state["resources"] = {
-        kind: [resource["canonical_id"] for resource in inspected[kind]]
-        for kind in RESOURCE_KINDS
+    relative = "evidence/runtime/observation-" + uuid.uuid4().hex + ".json"
+    artifact = Path(state["run_root"]) / relative
+    reject_symlinks(artifact, stop_at=Path(state["run_root"]))
+    artifact.parent.mkdir(mode=0o700, exist_ok=True)
+    if artifact.exists() or artifact.is_symlink():
+        raise LifecycleError("Runtime observation identity already exists.")
+    private_json(artifact, observation)
+    binding = {
+        "path": relative,
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
     }
-    state["status"] = "RUNNING"
+    state["runtime_observations"].append(
+        three_tier_runtime.observation_summary(observation, binding)
+    )
     update_state(root, state)
+    if result["outcome"] != "PASS":
+        raise LifecycleError(
+            "Runtime observation failed: "
+            + result["category"]
+            + "; "
+            + result["predicates"][-1]["name"]
+            + "; receipt "
+            + binding["sha256"]
+        )
+    if mode == "acceptance":
+        validate_inventory_recovery(state)
+        state["endpoints"] = result["endpoints"]
+        state["resources"] = result["resources"]
+        state["runtime_inventory"] = binding
+        state["status"] = "RUNNING"
+        update_state(root, state)
     return state
 
 
@@ -1107,20 +1338,26 @@ def discover_owned_resources(state: dict[str, Any]) -> dict[str, list[str]]:
 def execution_target(
     state: dict[str, Any], *, require_clean: bool = True,
     worker_task: str | None = None, assignment_digest: str | None = None,
+    classifier_observation: bool = False,
 ) -> dict[str, str]:
     try:
         return three_tier_target.resolve_target(
             state, skills_root=Path(__file__).resolve().parents[2], agent=agent_name(),
             require_clean=require_clean,
             worker_task=worker_task, assignment_digest=assignment_digest,
+            classifier_observation=classifier_observation,
         )
     except three_tier_target.TargetError as error:
         raise LifecycleError(str(error)) from error
 
 
-def run_owned_compose(state, compose_args, *, worker_task=None, assignment_digest=None):
+@contextmanager
+def runtime_access(state, *, worker_task=None, assignment_digest=None):
     if worker_task is None:
-        return _run_owned_compose(state, compose_args, worker_task=worker_task, assignment_digest=assignment_digest)
+        if assignment_digest is not None:
+            raise LifecycleError("Runtime access requires paired worker selectors.")
+        yield
+        return
     if not assignment_digest:
         raise LifecycleError('Runtime access requires an exact assignment digest.')
     try:
@@ -1134,21 +1371,30 @@ def run_owned_compose(state, compose_args, *, worker_task=None, assignment_diges
         record = three_tier_target._private_json(assignment, Path(state['run_root']))
         if record.get('assignment_digest') != assignment_digest:
             raise LifecycleError('Runtime assignment digest changed.')
-        scripts = Path(__file__).resolve().parents[2] / 'worktree/scripts'
-        sys.path.insert(0, str(scripts))
-        try:
+        with three_tier_target.workflow_imports(Path(__file__).resolve().parents[2]):
             from workflow_resources import consume
             from workflow_state import WorkflowError
-        finally:
-            sys.path.pop(0)
-        try:
-            with consume(run_dir.parents[2], assignment, 'sdlc-three-tier-' + state['verification_id']):
-                return _run_owned_compose(state, compose_args, worker_task=worker_task,
-                                          assignment_digest=assignment_digest)
-        except WorkflowError as error:
-            raise LifecycleError('Runtime access requires the exact active worker lease.') from error
+            try:
+                with consume(run_dir.parents[2], assignment, 'sdlc-three-tier-' + state['verification_id']):
+                    yield
+            except WorkflowError as error:
+                raise LifecycleError(
+                    "Runtime access requires the exact active worker lease."
+                ) from error
     except three_tier_target.TargetError as error:
         raise LifecycleError(str(error)) from error
+
+
+def run_owned_compose(state, compose_args, *, worker_task=None, assignment_digest=None):
+    with runtime_access(
+        state, worker_task=worker_task, assignment_digest=assignment_digest
+    ):
+        return _run_owned_compose(
+            state,
+            compose_args,
+            worker_task=worker_task,
+            assignment_digest=assignment_digest,
+        )
 
 
 def _run_owned_compose(
@@ -1160,7 +1406,11 @@ def _run_owned_compose(
     if arguments and arguments[0] == "--":
         arguments.pop(0)
     if not arguments or arguments[0] not in COMPOSE_ACTIONS:
-        raise LifecycleError("Owned Compose action is missing or unsupported.")
+        raise LifecycleError(
+            "Owned Compose action is missing or unsupported. Allowed actions: "
+            + ", ".join(sorted(COMPOSE_ACTIONS))
+            + ". Worker teardown uses stop web db; final deletion belongs to destroy."
+        )
     reserved = {
         "-f",
         "-p",
@@ -1181,11 +1431,19 @@ def _run_owned_compose(
         raise LifecycleError(
             "Owned Compose action cannot override project identity, files, or scale."
         )
+    if arguments[0] == "up" and (
+        len(arguments) != 6
+        or set(arguments[1:]) != {"--force-recreate", "--detach", "--wait", "web", "db"}
+    ):
+        raise LifecycleError(
+            "Owned Compose startup requires: up --force-recreate --detach --wait web db. "
+            "Build web separately; preserve the database volume."
+        )
     target = execution_target(
         state, require_clean=False, worker_task=worker_task,
         assignment_digest=assignment_digest,
     )
-    builds = arguments[0] == "build" or (arguments[0] == "up" and "--build" in arguments)
+    builds = arguments[0] == "build"
     restart_before = None
     if arguments in (["restart"], ["restart", "web", "db"]):
         receipts = three_tier_browser.validate_receipts(state, require_complete=False)
@@ -1198,9 +1456,7 @@ def _run_owned_compose(
         state["runtime_build"] = None
         update_state(Path(state["verification_root"]), state)
         clean = command(["git", "-C", target["path"], "status", "--porcelain", "--untracked-files=all"])
-        canonical_build = arguments in (["build"], ["build", "web"]) or (
-            arguments[0] == "up" and "--build" in arguments and "db" not in arguments
-        )
+        canonical_build = arguments in (["build"], ["build", "web"])
         if canonical_build and clean.returncode == 0 and not clean.stdout.strip():
             try:
                 build_model = three_tier_runtime.compose_build_model(state, target, command)
@@ -1219,7 +1475,10 @@ def _run_owned_compose(
         timeout=1800,
     )
     if result.returncode != 0:
-        raise LifecycleError("Owned Docker Compose action failed.")
+        raise LifecycleError(
+            f"Owned Docker Compose action failed (exit {result.returncode}).\n"
+            + compose_failure_diagnostic(result)
+        )
     if build_model is not None:
         image_name, model_digest = build_model
         after = execution_target(state, require_clean=False, worker_task=worker_task,
@@ -1243,7 +1502,14 @@ def _run_owned_compose(
             raise LifecycleError(str(error)) from error
     if restart_before is not None:
         refreshed = refreshed_restart_state(state)
-        target = browser_target(refreshed)
+        target = execution_target(refreshed)
+        try:
+            deployment = three_tier_runtime.validate_deployment(
+                refreshed, target, command, assert_resource_owned
+            )
+        except three_tier_runtime.RuntimeEvidenceError as error:
+            raise LifecycleError(str(error)) from error
+        target = {**target, "deployment": deployment}
         state["endpoints"] = refreshed["endpoints"]
         state["browser_restart"] = {"after_attempt": restart_before["attempt_id"],
             "target": target, "volumes": list(state["resources"]["volumes"]), "observed_at": utc_now()}
@@ -1261,25 +1527,25 @@ def refreshed_restart_state(state: dict) -> dict:
         owner = assert_resource_owned("containers", identifier, state)
         if owner["labels"].get("com.docker.compose.service") != role:
             raise LifecycleError("Restart container service identity changed.")
-    bindings = container_ports(web).get("8000/tcp", [])
-    if (not isinstance(bindings, list) or len(bindings) != 1
-            or not isinstance(bindings[0], dict)
-            or bindings[0].get("HostIp") != "127.0.0.1"):
-        raise LifecycleError("Restart requires one IPv4 loopback web binding.")
-    raw_port = bindings[0].get("HostPort", "")
-    if not isinstance(raw_port, str) or not raw_port.isdigit() or not 1 <= int(raw_port) <= 65535:
-        raise LifecycleError("Restart web binding has an invalid port.")
+    try:
+        binding = three_tier_runtime.loopback_binding(container_ports(web))
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
+    raw_port = binding["HostPort"]
+    host = "[::1]" if binding["HostIp"] == "::1" else binding["HostIp"]
     assert_port_isolation(web, database, int(raw_port))
     endpoints = dict(state["endpoints"])
     for name in ("web", "api", "health"):
         validate_loopback_url(endpoints.get(name, ""), name)
-        endpoints[name] = urlsplit(endpoints[name])._replace(netloc=f"127.0.0.1:{raw_port}").geturl()
+        endpoints[name] = urlsplit(endpoints[name])._replace(netloc=f"{host}:{raw_port}").geturl()
     return {**state, "endpoints": endpoints}
 
 
 def browser_target(state: dict) -> dict:
     target = execution_target(state)
+    validate_inventory_recovery(state)
     try:
+        three_tier_runtime.validate_acceptance_inventory(state, target)
         deployment = three_tier_runtime.validate_deployment(state, target, command, assert_resource_owned)
     except three_tier_runtime.RuntimeEvidenceError as error:
         raise LifecycleError(str(error)) from error
@@ -1329,19 +1595,11 @@ def assert_port_isolation(
 ) -> None:
     if web_port is None:
         raise LifecycleError("Resolved web port is missing.")
-    bindings = [
-        binding
-        for value in container_ports(web_container).values()
-        if isinstance(value, list)
-        for binding in value
-        if isinstance(binding, dict)
-    ]
-    if len(bindings) != 1:
-        raise LifecycleError("Web container must expose exactly one host binding.")
-    binding = bindings[0]
-    if binding.get("HostIp") not in {"127.0.0.1", "::1"} or binding.get(
-        "HostPort"
-    ) != str(web_port):
+    try:
+        binding = three_tier_runtime.loopback_binding(container_ports(web_container))
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
+    if binding["HostPort"] != str(web_port):
         raise LifecycleError(
             "Web container binding is not the recorded dynamic loopback port."
         )
@@ -1370,8 +1628,7 @@ def run_browser_stage(root_value: Path, stage: str) -> dict[str, Any]:
         expected_phase = "sdlc-evaluate" if stage == "evaluate" else "sdlc-uat-tests"
         if target.get("phase") != expected_phase:
             raise LifecycleError("Browser stage does not match the active workflow phase.")
-        for label in ("web", "api"):
-            validate_loopback_url(state["endpoints"].get(label, ""), label)
+        validate_runtime_endpoints(state["endpoints"])
         if stage.startswith("uat-") and target["head"] != state["git"]["promoted_sha"]:
             raise LifecycleError("UAT requires the clean promoted revision.")
     if stage == "uat-after-restart":
@@ -1583,6 +1840,11 @@ def validate_phase_history(state: dict[str, Any]) -> None:
 
 
 def validate_runtime_ready(state: dict[str, Any], *, keep: bool) -> None:
+    try:
+        three_tier_runtime.validate_acceptance_inventory(state)
+        validate_inventory_recovery(state)
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
     resources = state["resources"]
     expected_counts = {
         "containers": 2,
@@ -1600,8 +1862,7 @@ def validate_runtime_ready(state: dict[str, Any], *, keep: bool) -> None:
         "database",
     }:
         raise LifecycleError("PASS requires every runtime endpoint.")
-    for label in ("web", "api", "health"):
-        validate_loopback_url(endpoints[label], f"{label} URL")
+    validate_runtime_endpoints(endpoints)
     database_endpoint = endpoints["database"]
     if (
         not isinstance(database_endpoint, str)
@@ -1718,6 +1979,99 @@ def assert_project_safe_for_destroy(state: dict[str, Any]) -> None:
         raise LifecycleError(str(error)) from error
 
 
+def cleanup_snapshot(state):
+    return {
+        key: value
+        for key, value in state.items()
+        if key
+        not in {"filesystem_cleanup", "status", "updated_at", "destroyed_at", "cleanup"}
+    } | {
+        "cleanup": {
+            key: value for key, value in state["cleanup"].items() if key != "status"
+        }
+    }
+
+
+def validate_filesystem_cleanup(root, state):
+    """Admit only the immutable post-runtime-cleanup checkpoint, never missing evidence alone."""
+    identity = state.get("verification_id", "")
+    if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{32}", identity) is None:
+        raise LifecycleError("Filesystem cleanup identity is invalid.")
+    expected_run = paths(root)["runs"] / identity
+    checkpoint = paths(root)["archive"] / (identity + ".cleanup.json")
+    binding = state.get("filesystem_cleanup")
+    if (
+        state.get("schema") != LIFECYCLE_SCHEMA
+        or state.get("scenario") != SCENARIO
+        or state.get("verification_root") != str(root)
+        or state.get("run_root") != str(expected_run)
+        or state.get("project_root") != str(expected_run / "project")
+        or state.get("compose_project") != "sdlc-workflow-test-" + identity[:12]
+        or state.get("report_path")
+        != str(paths(root)["reports"] / identity / "report.md")
+        or not isinstance(binding, dict)
+        or set(binding) != {"path", "sha256"}
+        or binding["path"] != str(checkpoint.relative_to(root))
+    ):
+        raise LifecycleError("Filesystem cleanup checkpoint identity changed.")
+    reject_symlinks(expected_run, stop_at=root)
+    try:
+        value = three_tier_target._private_json(checkpoint, root)
+        root_identity = value.get("root_identity")
+        if (
+            not isinstance(root_identity, dict)
+            or set(root_identity) != {"device", "inode"}
+            or any(type(item) is not int or item < 0 for item in root_identity.values())
+        ):
+            raise LifecycleError("Filesystem cleanup directory identity is invalid.")
+        if expected_run.exists():
+            metadata = expected_run.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077
+                or root_identity
+                != {"device": metadata.st_dev, "inode": metadata.st_ino}
+            ):
+                raise LifecycleError("Filesystem cleanup directory was replaced.")
+        if (
+            hashlib.sha256(checkpoint.read_bytes()).hexdigest() != binding["sha256"]
+            or value
+            != {
+                "schema": "agentic-sdlc/filesystem-cleanup-v1",
+                "agent": agent_name(),
+                "root_identity": root_identity,
+                "snapshot": cleanup_snapshot(state),
+            }
+            or state["cleanup"]["remaining"]
+        ):
+            raise LifecycleError("Filesystem cleanup checkpoint changed.")
+    except (three_tier_target.TargetError, OSError, ValueError) as error:
+        raise LifecycleError(
+            "Filesystem cleanup checkpoint is unavailable or invalid."
+        ) from error
+
+
+def finish_filesystem_cleanup(root, state, *, recheck_runtime=True):
+    """Resume only exact deletion after raw-evidence-independent proof was saved."""
+    validate_filesystem_cleanup(root, state)
+    if recheck_runtime and any(discover_owned_resources(state).values()):
+        raise LifecycleError(
+            "Owned runtime reappeared after filesystem cleanup checkpoint."
+        )
+    run_root = Path(state["run_root"])
+    if run_root.exists():
+        shutil.rmtree(run_root)
+    state["cleanup"]["status"] = "PASS"
+    state["status"] = "DESTROYED"
+    state["destroyed_at"] = utc_now()
+    state["updated_at"] = utc_now()
+    write_report(root, state)
+    private_json(paths(root)["archive"] / f"{state['verification_id']}.json", state)
+    paths(root)["active"].unlink()
+    return "DESTROYED", state
+
+
 def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
     """Destroy the active owned lifecycle while the caller holds its lock."""
     active_path = paths(root)["active"]
@@ -1728,7 +2082,22 @@ def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
     if not active_path.exists():
         return "ALREADY_DESTROYED", None
     _, state = load_active(root)
+    if state.get("filesystem_cleanup") is not None:
+        try:
+            return finish_filesystem_cleanup(root, state)
+        except (LifecycleError, OSError) as error:
+            state["status"] = "CLEANUP_FAILED"
+            state["cleanup"]["status"] = "FAIL"
+            update_state(root, state)
+            raise LifecycleError(
+                "Owned filesystem cleanup remains incomplete."
+            ) from error
     assert_project_safe_for_destroy(state)
+    reconcile_runtime_observations(root, state)
+    try:
+        three_tier_runtime.validate_observations(state)
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
     try:
         three_tier_browser.recover_interrupted_stage(state)
     except three_tier_browser.BrowserOwnershipError as error:
@@ -1804,17 +2173,29 @@ def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
         if remaining:
             state["cleanup"]["remaining"] = remaining
             raise LifecycleError("Owned Docker resources remain after cleanup.")
-        run_root = Path(state["run_root"])
         validate_state(root, state)
-        shutil.rmtree(run_root)
-        state["cleanup"]["status"] = "PASS"
-        state["status"] = "DESTROYED"
-        state["destroyed_at"] = utc_now()
-        state["updated_at"] = utc_now()
-        write_report(root, state)
-        private_json(paths(root)["archive"] / f"{state['verification_id']}.json", state)
-        active_path.unlink()
-        return "DESTROYED", state
+        three_tier_runtime.validate_observations(state)
+        checkpoint = paths(root)["archive"] / (
+            state["verification_id"] + ".cleanup.json"
+        )
+        metadata = Path(state["run_root"]).lstat()
+        snapshot = {
+            "schema": "agentic-sdlc/filesystem-cleanup-v1",
+            "agent": agent_name(),
+            "root_identity": {"device": metadata.st_dev, "inode": metadata.st_ino},
+            "snapshot": cleanup_snapshot(state),
+        }
+        if checkpoint.exists() or checkpoint.is_symlink():
+            if three_tier_target._private_json(checkpoint, root) != snapshot:
+                raise LifecycleError("Unbound filesystem cleanup checkpoint changed.")
+        else:
+            private_json(checkpoint, snapshot)
+        state["filesystem_cleanup"] = {
+            "path": str(checkpoint.relative_to(root)),
+            "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        }
+        update_state(root, state)
+        return finish_filesystem_cleanup(root, state, recheck_runtime=False)
     except (LifecycleError, OSError) as error:
         state["cleanup"]["status"] = "FAIL"
         state["status"] = "CLEANUP_FAILED"
@@ -1917,22 +2298,27 @@ def parser() -> argparse.ArgumentParser:
     phase_parser.add_argument("--phase", required=True)
     phase_parser.add_argument("--status", choices=sorted(PHASE_STATUSES), required=True)
     phase_parser.add_argument("--summary", required=True)
-    phase_parser.add_argument("--evidence", action="append", default=[])
-    validation_parser = commands.add_parser("record-validation")
+    phase_parser.add_argument(
+        "--evidence", action="append", default=[],
+        help="PASS requires exactly evidence/phases/<phase>.json relative to the owned run root.",
+    )
+    validation_parser = commands.add_parser(
+        "record-validation",
+        description=(
+            "Record canonical acceptance validation. Failed records are immutable; "
+            "preserve repairable authoring and development checks in phase history."
+        ),
+    )
     validation_parser.add_argument("--validation-command", required=True)
     validation_parser.add_argument(
         "--status", choices=sorted(PHASE_STATUSES), required=True
     )
     validation_parser.add_argument("--summary", required=True)
     runtime_parser = commands.add_parser("record-runtime")
-    runtime_parser.add_argument("--web-url", required=True)
-    runtime_parser.add_argument("--api-url", required=True)
-    runtime_parser.add_argument("--health-url", required=True)
-    runtime_parser.add_argument("--database-endpoint", required=True)
-    runtime_parser.add_argument("--web-container", required=True)
-    runtime_parser.add_argument("--database-container", required=True)
-    for singular in ("network", "volume", "image"):
-        runtime_parser.add_argument(f"--{singular}", action="append", required=True)
+    runtime_parser.add_argument("--web-path", required=True)
+    runtime_parser.add_argument("--health-path", required=True)
+    runtime_parser.add_argument("--worker-task")
+    runtime_parser.add_argument("--assignment-digest")
     commands.add_parser("prepare-images")
     stage_parser = commands.add_parser("run-browser-stage")
     stage_parser.add_argument("--stage", choices=three_tier_browser.STAGES, required=True)
@@ -1940,7 +2326,18 @@ def parser() -> argparse.ArgumentParser:
     test_parser.add_argument("--test-class", choices=three_tier_tests.TEST_CLASSES, required=True)
     test_parser.add_argument("--label", required=True)
     commands.add_parser("close-browser")
-    compose_parser = commands.add_parser("run-compose")
+    compose_parser = commands.add_parser(
+        "run-compose",
+        description=(
+            "Run one owned Compose action. Allowed actions: "
+            + ", ".join(sorted(COMPOSE_ACTIONS))
+            + ". Startup requires: "
+            "up --force-recreate --detach --wait web db. "
+            "Build web separately. Worker teardown uses stop web db before lease "
+            "release, retaining the database volume. Final resource deletion belongs "
+            "to destroy. down and logs are unsupported."
+        ),
+    )
     compose_parser.add_argument("--worker-task")
     compose_parser.add_argument("--assignment-digest")
     compose_parser.add_argument("compose_args", nargs=argparse.REMAINDER)
@@ -2002,15 +2399,10 @@ def main(argv: list[str]) -> int:
             elif arguments.command == "record-runtime":
                 record_runtime(
                     arguments.verification_root,
-                    web_url=arguments.web_url,
-                    api_url=arguments.api_url,
-                    health_url=arguments.health_url,
-                    database_endpoint=arguments.database_endpoint,
-                    web_container=arguments.web_container,
-                    database_container=arguments.database_container,
-                    networks=arguments.network,
-                    volumes=arguments.volume,
-                    images=arguments.image,
+                    web_path=arguments.web_path,
+                    health_path=arguments.health_path,
+                    worker_task=arguments.worker_task,
+                    assignment_digest=arguments.assignment_digest,
                 )
             elif arguments.command == "prepare-images":
                 state = prepare_public_images(arguments.verification_root)

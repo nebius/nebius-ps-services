@@ -339,7 +339,7 @@ def test_cloud_adapter_allows_missing_former_only_with_exact_candidate_ownership
         allow_missing_former=True,
     )
 
-    assert observed.former.state is InstanceCloudState.STOPPED
+    assert observed.former.state is InstanceCloudState.UNKNOWN
     assert observed.former_attachment_absent is True
     assert observed.candidate_attachment_exact is True
 
@@ -364,6 +364,85 @@ def test_cloud_adapter_allows_missing_former_only_with_exact_candidate_ownership
             former_owner=former_owner,
             candidate=candidate_owner,
         )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "changed-owner",
+        "unowned",
+        "foreign-owner",
+        "missing-alias",
+        "missing-local",
+        "local-unknown",
+        "permission",
+        "unavailable",
+    ],
+)
+def test_missing_peer_cannot_hide_uncertain_or_incomplete_ownership(failure: str) -> None:
+    former = AllocationOwner("former", "eth0")
+    local = AllocationOwner("local", "eth0")
+    reads = 0
+
+    def allocation_reader(_allocation_id: str) -> SimpleNamespace:
+        nonlocal reads
+        reads += 1
+        owner = local
+        if failure == "foreign-owner" or (failure == "changed-owner" and reads == 2):
+            owner = former
+        return SimpleNamespace(
+            status=SimpleNamespace(
+                state="ALLOCATED" if failure == "unowned" else "ASSIGNED",
+                assignment=None
+                if failure == "unowned"
+                else SimpleNamespace(
+                    network_interface=SimpleNamespace(instance_id=owner.instance_id, name="eth0")
+                ),
+            )
+        )
+
+    def instance_reader(instance_id: str) -> SimpleNamespace:
+        if instance_id == former.instance_id:
+            code = {
+                "permission": StatusCode.PERMISSION_DENIED,
+                "unavailable": StatusCode.UNAVAILABLE,
+            }.get(failure, StatusCode.NOT_FOUND)
+            raise _request_error(code)
+        if failure == "missing-local":
+            raise _request_error(StatusCode.NOT_FOUND)
+        return SimpleNamespace(
+            metadata=SimpleNamespace(resource_version=7),
+            status=SimpleNamespace(state="UNKNOWN" if failure == "local-unknown" else "RUNNING"),
+            spec=SimpleNamespace(
+                network_interfaces=[
+                    SimpleNamespace(
+                        name="eth0",
+                        ip_address=SimpleNamespace(allocation_id="primary"),
+                        aliases=[]
+                        if failure == "missing-alias"
+                        else [SimpleNamespace(allocation_id="shared")],
+                    )
+                ]
+            ),
+        )
+
+    mutations = MagicMock()
+    adapter = VMHACloudAdapter(
+        instance_reader=instance_reader,
+        allocation_reader=allocation_reader,
+        instance_stopper=mutations,
+        alias_allocation_setter=mutations,
+    )
+    from nebius_vpngw.deploy.vm_ha_cloud import HACloudError
+
+    with pytest.raises(HACloudError):
+        adapter.observe_cluster(
+            allocation_id="shared",
+            former_owner=former,
+            candidate=local,
+            allow_missing_former=True,
+        )
+    mutations.assert_not_called()
 
 
 def test_cloud_mutation_replay_reuses_encoded_provider_key(
@@ -672,3 +751,65 @@ def test_finalize_accepted_operation_retains_unavailable_or_failed_operation(
     ):
         client.finalize_accepted_operation(accepted)
     assert journal.load() == accepted
+
+
+def test_observation_budget_is_cumulative_nested_and_resets_after_failure():
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_budget, vm_ha_request_kwargs
+
+    now = [100.0]
+    with pytest.raises(TimeoutError), vm_ha_observation_budget(clock=lambda: now[0]):
+        assert vm_ha_request_kwargs()["timeout"] == 30
+        now[0] += 12
+        assert vm_ha_request_kwargs()["timeout"] == 18
+        with vm_ha_observation_budget(clock=lambda: now[0]):
+            now[0] += 10
+            kwargs = vm_ha_request_kwargs()
+            assert kwargs["timeout"] == kwargs["auth_timeout"] == kwargs["per_retry_timeout"] == 8
+        now[0] += 8
+        vm_ha_request_kwargs()
+    assert vm_ha_request_kwargs()["timeout"] == 30
+
+
+def test_observation_budget_rejects_overdue_success():
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_budget
+
+    now = [0.0]
+    with pytest.raises(TimeoutError), vm_ha_observation_budget(clock=lambda: now[0]):
+        now[0] = 30.0
+
+
+@pytest.mark.parametrize("kind", ["stop-instance", "set-alias-absent", "set-alias-present"])
+def test_pending_postcondition_settlement_preserves_exact_receipt(tmp_path, kind):
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    original = _accepted_operation()
+    accepted = AcceptedCloudOperation(
+        original.action_operation_id, kind, original.cloud_operation_id
+    )
+    journal.save(accepted)
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    with patch.object(client, "_resume_operation") as resume:
+        for action_id, action_kind in (
+            (None, None),
+            ("different-action", kind),
+            (accepted.action_operation_id, "start-instance"),
+        ):
+            with pytest.raises(PermanentHACloudError, match="pending controller action"):
+                client.settle_pending_action(action_id, action_kind)
+            assert journal.load() == accepted
+        resume.assert_not_called()
+    with (
+        patch.object(client, "_resume_operation", side_effect=RuntimeError("not yet confirmed")),
+        pytest.raises(RuntimeError, match="not yet confirmed"),
+    ):
+        client.settle_pending_action(accepted.action_operation_id, kind)
+    assert journal.load() == accepted
+    with (
+        patch.object(
+            client, "_resume_operation", return_value=SimpleNamespace(successful=lambda: True)
+        ) as resume,
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation"),
+    ):
+        client.settle_pending_action(accepted.action_operation_id, kind)
+        client.settle_pending_action(accepted.action_operation_id, kind)
+    resume.assert_called_once_with(accepted.cloud_operation_id)
+    assert journal.load() is None

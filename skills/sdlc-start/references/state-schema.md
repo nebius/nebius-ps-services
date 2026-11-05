@@ -80,6 +80,30 @@ integration barrier. Assignments and results bind immutable basis and plan
 identities. Termination permits slot reuse only after independent coordinator
 observation and result admission; a result file alone is insufficient.
 
+## Initial Phase State
+
+Objective intake registers `run.json`, objective revisions, the active pointer
+and the native ownership binding. It does not create SDLC phase state. The bound
+coordinator distinguishes first initialization from resume before reading a
+checkpoint or dispatching any phase:
+
+- For a fresh accepted run, verify its current project/session ownership and
+  absence of prior phase checkpoints or downstream phase, plan and execution
+  evidence. Initialize `current_phase: sdlc-start`, `status: running`, zero retry
+  counters and no completed-phase evidence. Preserve accepted objective provenance.
+  Use the actual registered project/run identities and the normal state schema.
+  Follow the checkpoint write order below before observation or first dispatch.
+- An active pointer is registration, not proof of initialized phase state.
+  During live verification, the coordinator exposes this initial state for the
+  independent startup receipt before routing to requirements.
+- If phase history exists, reconcile the newest complete checkpoint and current
+  state. Missing or inconsistent state is recovery evidence, never permission to
+  reset counters or recreate a fresh run. Complete interrupted first initialization
+  only after rechecking ownership and absence of later work; preserve partial
+  artifacts and select a new checkpoint rather than overwriting earlier evidence.
+
+Intake helpers, hooks and verifier observers do not initialize or advance phases.
+
 ## Minimum current-state.json
 
 ```json
@@ -160,7 +184,7 @@ second mutable budget:
 ```
 
 `diagnosis` is `null` until causal diagnosis exists. The immutable
-`failure-event-v2`, optional immutable `diagnosis-v2`, optional immutable
+`failure-event-v2`, optional immutable `diagnosis-v3`, optional immutable
 `design-approval-v1`, deterministic classification, append-only repair
 journal, and process-locked atomic `repair-control-v2` projection are
 authoritative. A broader-design approval also binds the digest and exact
@@ -382,7 +406,7 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 golden-path phase. A proven cause routes directly from
 `sdlc-classify-failure` to its owning phase. An ambiguous, persistent,
 intermittent, or cross-boundary failure routes once to `troubleshoot`, whose
-`diagnosis-v2` must return to `sdlc-classify-failure` before any repair owner is
+`diagnosis-v3` must return to `sdlc-classify-failure` before any repair owner is
 selected. Missing decisive evidence, competing hypotheses, policy, permission,
 human decisions, and exhausted budgets stop the run.
 

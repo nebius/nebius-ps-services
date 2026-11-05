@@ -16,7 +16,7 @@ from rich import print
 from ..config_loader import ResolvedDeploymentPlan, connection_static_remote_prefixes
 from ..nebius_pagination import collect_nebius_pages, nebius_resource_id
 from ..schema import VMHAMigrationRouteBinding, VMHARouteTarget
-from .ssh_client_auth import SSHClientAuth, resolve_ssh_client_auth
+from .ssh_client_auth import SSHClientAuth, operator_identity, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, build_openssh_base_command
 from .vm_ha_cloud import (
     nebius_request_error_code_is,
@@ -1468,8 +1468,11 @@ class RouteManager:
 
         from nebius.api.nebius.common.v1 import metadata_pb2  # type: ignore[attr-defined]
         from nebius.api.nebius.compute.v1 import (  # type: ignore[attr-defined]
+            instance_service_pb2,
             instance_service_pb2_grpc,
         )
+
+        from .replacement_binding import admit
 
         host_to_index = {
             inst.hostname: inst.instance_index for inst in plan.iter_instance_configs()
@@ -1487,6 +1490,22 @@ class RouteManager:
                 )
             except Exception as error:
                 if nebius_request_error_code_is(error, "NOT_FOUND"):
+                    inventory: t.Any = collect_nebius_pages(
+                        lambda token: istub.List(
+                            instance_service_pb2.ListInstancesRequest(
+                                parent_id=self.project_id or "", page_token=token, page_size=100
+                            )
+                        ),
+                        context="Replacement logical member",
+                        item_identity=nebius_resource_id,
+                    )
+                    if any(
+                        item.metadata.labels.get("nebius-vpngw-member") == hostname
+                        for item in inventory
+                    ):
+                        raise RouteManagementError(
+                            "Gateway replacement is pending; use apply --resume-replacement PATH"
+                        )
                     continue
                 raise RouteManagementError(
                     "Configured gateway instance inventory is unavailable."
@@ -1500,6 +1519,7 @@ class RouteManager:
                 raise RouteManagementError(
                     "Configured gateway instance returned an inexact identity."
                 )
+            admit(inst, hostname)
             for ni in inst.status.network_interfaces:
                 # Check if this network interface has a private IP with a static allocation
                 if ni.ip_address and ni.ip_address.allocation_id:
@@ -1742,7 +1762,7 @@ class RouteManager:
         ssh_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
         key_path = Path(str(ssh_key)).expanduser() if ssh_key else None
         public_key = str(vm_spec.get("ssh_public_key") or "").strip()
-        if public_key:
+        if public_key or operator_identity() is not None:
             auth_input = (public_key, str(ssh_key) if ssh_key else None)
             if self._ssh_client_auth is None or self._ssh_client_auth_input != auth_input:
                 self._ssh_client_auth = resolve_ssh_client_auth(
@@ -2937,9 +2957,17 @@ class RouteManager:
         subnet_obj,
         route_table_id: str,
     ) -> None:
+        revision = getattr(subnet_obj.metadata, "resource_version", 0)
+        if not isinstance(revision, int) or revision <= 0:
+            raise RouteManagementError(
+                "Subnet attachment requires a positive observed resource revision"
+            )
         sstub.Update(
             subnet_service_pb2.UpdateSubnetRequest(
-                metadata=metadata_pb2.ResourceMetadata(id=self._metadata_id(subnet_obj)),
+                metadata=metadata_pb2.ResourceMetadata(
+                    id=self._metadata_id(subnet_obj),
+                    resource_version=revision,
+                ),
                 spec=self._subnet_update_spec(
                     subnet_pb2,
                     subnet_obj,
@@ -3093,67 +3121,11 @@ class RouteManager:
                             f"{existing_next_hops}; expected allocation {alloc_id}. "
                             "Leaving the existing route unchanged.[/yellow]"
                         )
-                elif summarize and ("max-route-count" in err_str or "quota exceeded" in err_str):
-                    redundant_routes = self._find_redundant_managed_routes(
-                        existing_routes,
-                        {pfx: alloc_id},
-                    )
-                    if not redundant_routes:
-                        print(
-                            f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]"
-                        )
-                        continue
-
-                    print(
-                        f"[yellow]Route table {route_table_id} hit its route limit while adding {pfx}. "
-                        f"Deleting {len(redundant_routes)} covered vpngw-managed route(s) and retrying.[/yellow]"
-                    )
-                    deleted = self._delete_routes(
-                        rstub,
-                        route_service_pb2,
-                        redundant_routes,
-                        route_table_id=route_table_id,
-                    )
-                    if not deleted:
-                        print(
-                            f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]"
-                        )
-                        continue
-
-                    existing_routes = [
-                        route
-                        for route in existing_routes
-                        if getattr(getattr(route, "metadata", None), "id", None)
-                        not in {
-                            getattr(getattr(dead_route, "metadata", None), "id", None)
-                            for dead_route in redundant_routes
-                        }
-                    ]
-
-                    try:
-                        rstub.Create(
-                            route_service_pb2.CreateRouteRequest(
-                                metadata=metadata_pb2.ResourceMetadata(
-                                    parent_id=route_table_id,
-                                    name=f"vpngw-{pfx.replace('/', '-')}"[:63],
-                                ),
-                                spec=route_pb2.RouteSpec(
-                                    destination=route_pb2.DestinationMatch(cidr=pfx),
-                                    next_hop=route_pb2.NextHop(
-                                        allocation=route_pb2.AllocationNextHop(id=alloc_id)
-                                    ),
-                                ),
-                            )
-                        )
-                        print(
-                            f"[green]Added summarized route {pfx} -> allocation {alloc_id} "
-                            f"on {route_table_id} after pruning redundant specifics[/green]"
-                        )
-                    except Exception as retry_err:
-                        print(
-                            f"[yellow]Failed to add summarized route {pfx} on {route_table_id} "
-                            f"after pruning redundant specifics: {retry_err}[/yellow]"
-                        )
+                elif "max-route-count" in err_str or "quota exceeded" in err_str:
+                    raise RuntimeError(
+                        f"Route table {route_table_id} cannot add {pfx} within its quota; "
+                        "existing routes were preserved. Increase route capacity and retry."
+                    ) from e
                 else:
                     print(f"[yellow]Failed to add route {pfx} on {route_table_id}: {e}[/yellow]")
 
@@ -4195,9 +4167,13 @@ class RouteManager:
                     f"in network {target_network_id}.[/yellow]"
                 )
 
-            for subnet, buffered_cidrs, route_table_id, route_table_default, routes in (
-                route_inventories
-            ):
+            for (
+                subnet,
+                buffered_cidrs,
+                route_table_id,
+                route_table_default,
+                routes,
+            ) in route_inventories:
                 subnet_name = self._metadata_name(subnet)
                 subnet_cidrs = [str(network) for network in buffered_cidrs]
 
@@ -4859,120 +4835,109 @@ class RouteManager:
                 )
                 rt_id = current_route_table_id
             else:
-                # Subnet uses default route table - need to create custom RT
+                # A reusable name does not prove a previous copy completed. Every
+                # attempt proves the full source policy before changing attachment.
+                if not current_route_table_id:
+                    raise RouteManagementError(
+                        f"Cannot identify the current default table for {subnet_name}; attachment unchanged"
+                    )
+                source_routes = tuple(preflight_routes[current_route_table_id])
+                if any(self._route_spec(route) is None for route in source_routes):
+                    raise RouteManagementError(
+                        "Default route table has an unreadable route specification"
+                    )
                 rt_name = self._route_table_name(subnet_name)
-
-                # Check if route table already exists (idempotency)
                 existing_rt = route_tables_by_name.get(rt_name)
-
-                if existing_rt:
+                if existing_rt is not None:
                     rt_id = self._metadata_id(existing_rt)
-                    print(
-                        f"[green]Using existing route table {rt_id} ({rt_name}) for subnet {subnet_name}[/green]"
-                    )
-                    # Attach to subnet if not already attached
-                    if current_route_table_id != rt_id:
-                        try:
-                            self._attach_route_table_to_subnet(
-                                sstub,
-                                subnet_service_pb2,
-                                metadata_pb2,
-                                subnet_pb2,
-                                subnet_obj=sn,
-                                route_table_id=rt_id,
-                            )
-                            print(
-                                f"[green]Attached route table {rt_id} to subnet {subnet_name}[/green]"
-                            )
-                        except Exception as e:
-                            print(
-                                f"[yellow]Failed to attach route table to subnet {subnet_name}: {e}[/yellow]"
-                            )
-                            continue
                 else:
-                    # Create new route table and copy routes from default RT
-                    print(f"[yellow]⚠ Subnet {subnet_name} uses default route table[/yellow]")
-                    print(
-                        f"[yellow]  Creating custom route table '{rt_name}' to add VPN routes[/yellow]"
+                    op = rtstub.Create(
+                        route_table_service_pb2.CreateRouteTableRequest(
+                            metadata=metadata_pb2.ResourceMetadata(
+                                name=rt_name, parent_id=self.project_id
+                            ),
+                            spec=route_table_pb2.RouteTableSpec(network_id=subnet_network_id),
+                        )
                     )
-
-                    # Get default route table ID to copy routes from
-                    default_rt_id = current_route_table_id or None
-
-                    try:
-                        op = rtstub.Create(
-                            route_table_service_pb2.CreateRouteTableRequest(
-                                metadata=metadata_pb2.ResourceMetadata(
-                                    name=rt_name,
-                                    parent_id=self.project_id,
-                                ),
-                                spec=route_table_pb2.RouteTableSpec(network_id=subnet_network_id),
-                            )
-                        )
-                        new_rt_id = op.resource_id or ""
-                        if not new_rt_id:
-                            print(
-                                f"[red]Route table create returned no resource_id for subnet {subnet_name}; skipping.[/red]"
-                            )
-                            continue
-
-                        # Copy existing routes from default route table
-                        if default_rt_id:
-                            default_routes = preflight_routes[default_rt_id]
-
-                            if default_routes:
-                                print(
-                                    f"[cyan]  Copying {len(default_routes)} route(s) from default route table...[/cyan]"
-                                )
-                                for dr in default_routes:
-                                    try:
-                                        rstub.Create(
-                                            route_service_pb2.CreateRouteRequest(
-                                                metadata=metadata_pb2.ResourceMetadata(
-                                                    parent_id=new_rt_id,
-                                                    name=f"{self._metadata_name(dr)}-copy"[:63],
-                                                ),
-                                                spec=self._route_spec(dr),
-                                            )
-                                        )
-                                    except Exception as copy_err:
-                                        # Ignore errors for copying (might be system routes that can't be copied)
-                                        route_destination = self._route_destination_network(dr)
-                                        destination_label = (
-                                            str(route_destination)
-                                            if route_destination
-                                            else "unknown"
-                                        )
-                                        print(
-                                            f"[dim]  Could not copy route {destination_label}: {copy_err}[/dim]"
-                                        )
-                            else:
-                                print("[dim]  No routes in default route table to copy[/dim]")
-
-                        # Attach to subnet - preserve IP pool configuration
-                        self._attach_route_table_to_subnet(
-                            sstub,
-                            subnet_service_pb2,
-                            metadata_pb2,
-                            subnet_pb2,
-                            subnet_obj=sn,
-                            route_table_id=new_rt_id,
-                        )
-                        rt_id = new_rt_id
-                        print(
-                            f"[green]✓ Created custom route table {rt_id} and attached to subnet {subnet_name}[/green]"
-                        )
-                        print(
-                            "[yellow]  NOTE: Future changes to the default route table will NOT apply to this subnet.[/yellow]"
-                        )
-                        print(
-                            f"[yellow]  Add any required routes manually to route table: {rt_id}[/yellow]"
-                        )
-                    except Exception as e:
-                        print(
-                            f"[yellow]Failed to create/attach route table for subnet {subnet_name}: {e}[/yellow]"
-                        )
-                        continue
+                    rt_id = op.resource_id or ""
+                if not rt_id:
+                    raise RouteManagementError(
+                        "New route table has no identity; attachment unchanged"
+                    )
+                observed = tuple(
+                    self._list_route_table_routes(rstub, route_service_pb2, route_table_id=rt_id)
+                )
+                missing = [
+                    route
+                    for route in source_routes
+                    if not any(
+                        self._route_spec(route) == self._route_spec(candidate)
+                        for candidate in observed
+                    )
+                ]
+                _, failures = self._copy_routes_to_route_table(
+                    rstub,
+                    route_service_pb2,
+                    metadata_pb2,
+                    destination_route_table_id=rt_id,
+                    routes_to_copy=missing,
+                )
+                if failures:
+                    raise RouteManagementError(
+                        f"Route table {rt_id} is incomplete; source routes and subnet attachment were preserved"
+                    )
+                observed = self._reconcile_route_table(
+                    rstub,
+                    route_service_pb2,
+                    route_pb2,
+                    metadata_pb2,
+                    route_table_id=rt_id,
+                    prefix_targets=prefix_targets,
+                    summarize=summarize,
+                )
+                if any(
+                    not any(
+                        self._route_spec(route) == self._route_spec(candidate)
+                        for candidate in observed
+                    )
+                    for route in source_routes
+                ) or set(self._installed_prefix_targets(observed, prefix_targets)) != set(
+                    prefix_targets
+                ):
+                    raise RouteManagementError(
+                        "Copied route table failed complete readback; attachment unchanged"
+                    )
+                fresh_source = self._list_route_table_routes(
+                    rstub, route_service_pb2, route_table_id=current_route_table_id
+                )
+                if {
+                    self._metadata_id(route): self._route_spec(route) for route in fresh_source
+                } != {self._metadata_id(route): self._route_spec(route) for route in source_routes}:
+                    raise RouteManagementError(
+                        "Source route table changed during copy; attachment unchanged"
+                    )
+                fresh_subnet = sstub.Get(
+                    subnet_service_pb2.GetSubnetRequest(id=self._metadata_id(sn))
+                )
+                if (
+                    fresh_subnet.spec != t.cast(t.Any, sn).spec
+                    or self._subnet_route_table(fresh_subnet) != rt_info
+                    or getattr(fresh_subnet.metadata, "resource_version", None)
+                    != getattr(t.cast(t.Any, sn).metadata, "resource_version", None)
+                ):
+                    raise RouteManagementError(
+                        "Subnet changed during route preparation; attachment unchanged"
+                    )
+                self._attach_route_table_to_subnet(
+                    sstub,
+                    subnet_service_pb2,
+                    metadata_pb2,
+                    subnet_pb2,
+                    subnet_obj=fresh_subnet,
+                    route_table_id=rt_id,
+                )
+                completed_subnets.add(subnet_name)
+                continue
 
             reconciled_routes = self._reconcile_route_table(
                 rstub,

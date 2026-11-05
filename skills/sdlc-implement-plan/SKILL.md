@@ -69,7 +69,7 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
 - Existing codebase.
 - Prepared execution coordinator, logical waves, immutable assignments, and
   integration worktree.
-- For corrective work, the exact `diagnosis-v2`, stable blocker key, original
+- For corrective work, the exact `diagnosis-v3`, stable blocker key, original
   regression oracle, affected-boundary check, and invalidation set.
 
 ## Required Reads
@@ -110,10 +110,26 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    selects one isolated worker. Every task receives a fresh native agent and
    exact assigned cwd; report observed concurrency, never declared task count.
    Use the shared `worktree/scripts/workflow_dispatch.py` for sequential native
-   CLI fallback. Arm only when a real slot exists; watch every 30 seconds and
-   interrupt on prestart mutation, stall, scope violation or timeout. After a
-   native worker terminates, persist the exact coordinator-owned termination
-   observation, create/validate its result, and use `task-admit`. Only then may
+   CLI fallback. Arm only when a real slot exists and consume its canonical
+   `launch` envelope through Worktree's `task-arm` CLI admission (or
+   `authorize-recovery` for recovery). Grant its validated `support_write_roots`
+   before spawning; unavailable native support blocks launch. Preserve sandbox
+   and approval policy. Prepare the bounded handoff before arming,
+   then spawn immediately; defer launch-observation persistence until afterward.
+   The shared startup window is 300 seconds from arming to `task-start` and is
+   not renewed by repeated arming. Set fresh assignment-only context in the
+   actual native host; use the returned prompt, cwd, command arguments and schema
+   identity rather than reconstructing them. Watch every 30 seconds and
+   interrupt on prestart mutation, stall, scope violation or timeout. On a
+   `WORKER_DEADLINE_NEAR` warning, prioritize remaining validation and handoff
+   within the unchanged deadline. Each attempt has 3600 wall-clock seconds;
+   external runtime waits, builds, tests and review count. Direct heartbeats
+   target 30 seconds; enforced stale-heartbeat detection remains 240 seconds.
+   Never extend a live assignment or use recovery just to renew its clock.
+   After a native worker terminates, persist the exact coordinator-owned termination
+   observation and ingest the complete result through `task-result --result
+   <private-json> --termination <observation>`. Only an implemented receipt may
+   enter `task-finish --receipt <receipt_path>` and then `task-admit`. Only then may
    `wave-refill` allocate the freed slot while independent peers continue.
    Every worker in this wave uses its frozen base; integration waits for the
    full wave. Path overlap, lockfiles, generated outputs, ports, databases and
@@ -127,24 +143,55 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    root-intent digest, canonical project-spec receipt, requirements,
    design/context reminders, test target, write claims, and stop conditions.
    The worker calls `task-start` before editing, emits direct bounded
-   `task-heartbeat` calls at least every 30 seconds without a background loop,
+   `task-heartbeat` calls targeting 30 seconds without a background loop,
    implements the smallest coherent change, including its part of the vertical
    end-to-end slice without widening feature scope,
-   validates it, runs a task-scoped `code-review`, fixes blocking findings, and
+   validates it, runs a task-scoped `code-review`, and
    returns an explicit summary, decisions, open risks, typed `spec_gaps`,
    validation, and review evidence; a commit subject is never substituted for
    handoff evidence. Workers never reclassify user intent or edit canonical
    specs. A non-empty gap list returns `replan_required` for root-coordinator
    reconciliation and does not enter `task-finish`; every gap text field is
-   sensitive-screened before dispatcher output. Worker path validation keeps
+   sensitive-screened before dispatcher output. For incomplete work or validation
+   caused by a non-specification failure, return `blocked` with empty gaps and
+   honest evidence. The dispatcher validates all fields, stops later assignments,
+   and returns exit 2 with `WORKER_BLOCKED` and validated `worker_result` for
+   coordinator diagnosis after observed termination. Do not invent a gap or
+   treat diagnostic-only `prestart_result` on `WORKER_FAILED` as a worker receipt,
+   completion, recovery or replanning authority. Do not
+   claim unperformed checks passed. Before repairing or rerunning any unexpected
+   failed check or blocking review finding, preserve private failure evidence,
+   stop changes, safely tear down and release owned runtime, and return blocked.
+   Only negative outcomes declared before execution in immutable assignment
+   validation are expected feedback; never relabel an observed failure. Normal
+   implementation and prescribed formatting before checks remain allowed.
+   The coordinator classifies the failure through `sdlc-classify-failure` before
+   authorizing the existing retry or replan path. Record heartbeat cadence gaps
+   honestly; use direct calls at work/wait boundaries and short yielding waits
+   where supported. ACTIVE does not certify every 30-second interval was met.
+   Blocked results never enter `task-finish`,
+   admission or integration and authorize no automatic retry. Worker path validation keeps
    rename folding disabled so both sides of a move remain enforceable. The
-   coordinator supplies the termination observation to `task-finish` with that structured evidence to recheck
+   coordinator supplies the termination observation and canonical result receipt
+   to `task-finish`, with its commit message, to recheck
    liveness, scan staged paths/content, create exactly one direct-child commit
    with normal Git hooks, and persist the result. The helper journals an exact
    tree/message/evidence finish intent before the commit so an interrupted retry
    can adopt only that commit and exact result.
-   Recovery passes the recorded current attempt with explicit stopped-worker
-   confirmation so only one fresh session can win an ownership transfer.
+   The shared core stops new dispatch/refill for current blocked or replan
+   receipts while already running peers may drain. Recovery passes the recorded
+   current attempt with explicit stopped-worker confirmation so only one fresh
+   session can win an ownership transfer. Use the shared recovery launch envelope
+   and current coordinator's immutable authorization; preserve old receipts.
+   For classified `ENVIRONMENT_DEFECT` in this active phase, require the
+   classifier's `existing_task_attempt` route and a counted localized dispatch.
+   Establish an authorized bounded environment remedy; then preserve the full
+   blocked result, independently confirm termination and runtime release, and
+   use the existing shared fresh-worker transfer. Rerun the original failed
+   operation and complete the original assignment validation and normal
+   task/wave completion before recording the remediation outcome. Success
+   still requires the classifier's downstream revalidation cursor. No retry
+   grants permissions, changes the assignment or reopens completed work.
    A corrective assignment also carries its exact diagnosis ID and original
    regression oracle. The worker must implement only the diagnosis-bounded
    repair, run that oracle first, then run the counterfactual or

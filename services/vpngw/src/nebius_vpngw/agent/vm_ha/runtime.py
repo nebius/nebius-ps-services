@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import fcntl
 import hashlib
 import ipaddress
@@ -12,6 +13,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -28,10 +30,8 @@ from nebius_vpngw.agent.vm_ha.auto_healing import (
     AutoHealingPolicyStore,
     project_local_policy,
 )
-from nebius_vpngw.agent.vm_ha.inhibition import (
-    standby_replacement_inhibition_operation_id,
-)
-from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
+from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
+from nebius_vpngw.agent.vm_ha.models import DigestSet, HeartbeatEvidence, PeerHeartbeat
 from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, MTLSSnapshot
 from nebius_vpngw.agent.vm_ha.transport import (
     MutualTLSConfig,
@@ -80,7 +80,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
 )
-from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, covers
+from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, connection_policies, covers
 from nebius_vpngw.schema import (
     VMHAMigrationRouteBinding,
     VMHARouteTarget,
@@ -591,16 +591,28 @@ class BoundCloudRuntime:
         adapter: VMHACloudAdapter,
         *,
         peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
-        standby_replacement_inhibited: Callable[[], bool] | None = None,
+        settle_cloud_operation: Callable[[str | None, str | None], None] = lambda _id, _kind: None,
     ) -> None:
+        self._settle_cloud_operation = settle_cloud_operation
         self.binding = binding
         self.local = local
         self.peer = peer
         self.adapter = adapter
         self._peer_binding_provider = peer_binding_provider
-        self._standby_replacement_inhibited = standby_replacement_inhibited or (lambda: False)
         self._attach_started_revision: str | None = None
         self._confirmed_candidate_revision: str | None = None
+
+    def settle_pending_action(self, action: ControllerAction | None) -> None:
+        kinds = {
+            ActionKind.STOP_FORMER_OWNER: "stop-instance",
+            ActionKind.DETACH_FORMER_ATTACHMENT: "set-alias-absent",
+            ActionKind.DETACH_CANDIDATE_FOR_REPROOF: "set-alias-absent",
+            ActionKind.ATTACH_CANDIDATE: "set-alias-present",
+        }
+        self._settle_cloud_operation(
+            None if action is None else action.operation_id,
+            None if action is None else kinds.get(action.kind),
+        )
 
     @property
     def allocation_id(self) -> str:
@@ -627,7 +639,11 @@ class BoundCloudRuntime:
             allocation_id=self.allocation_id,
             former_owner=self._owner(peer),
             candidate=self._owner(self.local),
-            allow_missing_former=self._standby_replacement_inhibited(),
+            # A disappeared non-owner must not crash the serving owner's
+            # observer before replacement inhibition can be installed. The
+            # adapter requires fresh exact local ownership and represents the
+            # absent peer as UNKNOWN, preserving mandatory takeover fencing.
+            allow_missing_former=True,
         )
 
     def observe(self) -> CloudObservation:
@@ -672,6 +688,7 @@ class BoundCloudRuntime:
         )
 
     def stop_former(self, action: ControllerAction) -> None:
+        self.settle_pending_action(action)
         peer = self._current_peer()
         observation = self.observe()
         if observation.former_owner_compute_state is ComputeState.STOPPED:
@@ -684,6 +701,7 @@ class BoundCloudRuntime:
         self.adapter.require_stopped(peer.compute_id, action.operation_id)
 
     def detach_former(self, action: ControllerAction) -> None:
+        self.settle_pending_action(action)
         peer = self._current_peer()
         observation = self.observe()
         if observation.former_owner_compute_state is not ComputeState.STOPPED:
@@ -709,6 +727,7 @@ class BoundCloudRuntime:
         )
 
     def attach_candidate(self, action: ControllerAction) -> None:
+        self.settle_pending_action(action)
         observation = self.observe()
         if observation.candidate_attachment_exact:
             self.adapter.require_compute_attachment(
@@ -735,6 +754,7 @@ class BoundCloudRuntime:
         )
 
     def detach_candidate_for_reproof(self, action: ControllerAction) -> None:
+        self.settle_pending_action(action)
         peer = self._current_peer()
         observation = self.observe()
         if not (
@@ -782,7 +802,6 @@ def build_cloud_runtime(
     sleeper: Callable[[float], None] = time.sleep,
     operation_journal: VMHACloudOperationJournal | None = None,
     peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
-    standby_replacement_inhibited: Callable[[], bool] | None = None,
 ) -> BoundCloudRuntime:
     nodes = {node.node_id: node for node in binding.nodes}
     if local_node_id not in nodes or len(nodes) != 2:
@@ -805,7 +824,7 @@ def build_cloud_runtime(
         peer,
         adapter,
         peer_binding_provider=peer_binding_provider,
-        standby_replacement_inhibited=standby_replacement_inhibited,
+        settle_cloud_operation=calls.settle_pending_action,
     )
 
 
@@ -1310,6 +1329,7 @@ class SystemDataPlaneRuntime:
         self.monotonic_clock = monotonic_clock
         self.confirmed_down_bgp_sessions: frozenset[str] = frozenset()
         self.effective_export_provider: Callable[[], dict[str, frozenset[str]]] | None = None
+        self.observation_deadline: float | None = None
 
     def _write_guard(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         _atomic_write_json(
@@ -1335,7 +1355,12 @@ class SystemDataPlaneRuntime:
 
     def _run(self, *argv: str) -> CommandResult:
         try:
-            return self.runner(argv, self.command_timeout)
+            remaining = self.command_timeout
+            if self.observation_deadline is not None:
+                remaining = min(remaining, self.observation_deadline - self.monotonic_clock())
+                if remaining <= 0:
+                    raise TimeoutError
+            return self.runner(argv, remaining)
         except (OSError, subprocess.SubprocessError, TimeoutError):
             raise RuntimeError("bounded local data-plane command failed") from None
 
@@ -1487,7 +1512,11 @@ class SystemDataPlaneRuntime:
             f"({_bgp_export_diagnostic(expected, evidence)})"
         )
 
-    def observe(self) -> LocalDataPlaneObservation:
+    def observe(
+        self,
+        *,
+        active_export_alternatives: tuple[Mapping[str, frozenset[str]], ...] = (),
+    ) -> LocalDataPlaneObservation:
         strongswan_healthy = any(
             self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
             for service in ("strongswan-starter", "strongswan")
@@ -1563,6 +1592,28 @@ class SystemDataPlaneRuntime:
                         and device in usable_xfrm_devices
                     ):
                         usable_xfrm.add(str(network))
+        mode = self.mode()
+        export_state = _bgp_export_state(
+            self._expected_exports_for_mode(mode),
+            advertised,
+            configured_peers=configured,
+            confirmed_down=self.confirmed_down_bgp_sessions,
+        )
+        if mode is DataPlaneMode.ACTIVE and export_state is BGPExportState.DRIFT:
+            # Only the isolated health sampler supplies these canonical policies.
+            # Compare the same fresh native evidence, never infer health from
+            # pending intent or relax passive exports and operation completion.
+            if any(
+                _bgp_export_state(
+                    expected,
+                    advertised,
+                    configured_peers=configured,
+                    confirmed_down=self.confirmed_down_bgp_sessions,
+                )
+                is BGPExportState.MATCH
+                for expected in active_export_alternatives
+            ):
+                export_state = BGPExportState.MATCH
         return LocalDataPlaneObservation(
             service_healthy=services,
             forwarding_enabled=self._forwarding(),
@@ -1575,12 +1626,7 @@ class SystemDataPlaneRuntime:
                 running_config.stdout, configured
             ),
             established_ike_sa_count=established_ike_sa_count,
-            bgp_export_state=_bgp_export_state(
-                self._expected_exports_for_mode(self.mode()),
-                advertised,
-                configured_peers=configured,
-                confirmed_down=self.confirmed_down_bgp_sessions,
-            ),
+            bgp_export_state=export_state,
             routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
         )
 
@@ -2434,10 +2480,12 @@ class BoundRouteRuntime:
             committed_import_policy_digest=self.expected_import_policy_digest,
         )
 
-    def readiness(self) -> LocalReadiness:
+    def readiness(self, *, strict: bool = False) -> LocalReadiness:
         try:
             observed = self.data_plane.observe()
         except RuntimeError:
+            if strict:
+                raise
             # A freshly guarded member intentionally starts before FRR and
             # strongSwan are materialized.  Treat unavailable local service
             # observations as not-ready so the controller can enter passive
@@ -2958,33 +3006,44 @@ class BoundPeerRuntime:
         clock: Callable[[], float],
         peer_node_id: str,
         heartbeat_store: AcceptedPeerHeartbeatStore | None = None,
+        evidence_tracker: PeerEvidenceTracker | None = None,
     ) -> None:
         self.exchange = exchange
         self.clock = clock
         self.peer_node_id = peer_node_id
         self.heartbeat_store = heartbeat_store
-        self.latest_heartbeat = (
+        self.evidence_tracker = evidence_tracker
+        self._record_lock = threading.Lock()
+        heartbeat = (
             heartbeat_store.load_accepted_peer_heartbeat(peer_node_id)
             if heartbeat_store is not None
             else None
         )
         # A cached heartbeat proves only the last authenticated peer generation.
         # It is deliberately never fresh across a controller-process restart.
-        self.received_at: float | None = None
+        self._record: tuple[PeerHeartbeat | None, float | None] = (heartbeat, None)
 
     def poll(self, *, timeout_seconds: float) -> PeerHeartbeat:
         heartbeat, _replay = self.exchange.receive(timeout_seconds=timeout_seconds)
         if self.heartbeat_store is not None:
             self.heartbeat_store.save_accepted_peer_heartbeat(self.peer_node_id, heartbeat)
-        self.latest_heartbeat = heartbeat
-        self.received_at = self.clock()
+        if self.evidence_tracker is not None:
+            heartbeat = self.evidence_tracker.accept(heartbeat)
+        with self._record_lock:
+            self._record = heartbeat, self.clock()
         return heartbeat
 
-    def send(self, heartbeat: PeerHeartbeat) -> None:
-        self.exchange.send(heartbeat)
+    def send(self, heartbeat: PeerHeartbeat, *, timeout_seconds: float = 2.0) -> None:
+        self.exchange.send(heartbeat, timeout_seconds=timeout_seconds)
 
     def observe(self) -> tuple[PeerHeartbeat | None, float | None]:
-        return self.latest_heartbeat, self.received_at
+        with self._record_lock:
+            return self._record
+
+    def prepare(self, heartbeat: PeerHeartbeat) -> PeerHeartbeat:
+        if self.evidence_tracker is None:
+            raise RuntimeError("independent heartbeat evidence tracker unavailable")
+        return self.evidence_tracker.issue(heartbeat)
 
 
 @dataclass(frozen=True)
@@ -3003,6 +3062,97 @@ class VMHARuntimePorts:
     mtls_snapshot_provider: Callable[[], MTLSSnapshot]
     auto_healing_policy_provider: Callable[[], tuple[str, str]]
     tunnel_recovery_provider: Callable[[], dict[str, Any] | None] = lambda: None
+
+    def sample_local_health(
+        self,
+        *,
+        config_path: Path,
+        state_dir: Path,
+        deadline: float,
+        clock: Callable[[], float],
+    ) -> LocalReadiness:
+        """Collect through isolated read-only adapters, never the controller's callbacks."""
+        from .tunnel_runtime import ControllerTunnelRuntime
+
+        if not isinstance(self.data_plane, SystemDataPlaneRuntime):
+            raise RuntimeError("bounded local health collector unavailable")
+        data_plane = copy.copy(self.data_plane)
+        data_plane.expected_bgp_exports = dict(self.data_plane.expected_bgp_exports)
+        data_plane.effective_export_provider = None
+        data_plane.observation_deadline = deadline
+        data_plane.monotonic_clock = clock
+        routes = copy.copy(self.routes)
+        routes.data_plane = data_plane
+        routes.bgp_policies = copy.deepcopy(self.routes.bgp_policies)
+        routes.static_readiness_provider = None
+        routes.bgp_override_readiness_provider = None
+        routes.passive_bgp_policy_provider = None
+        isolated_ports = replace(self, data_plane=data_plane, routes=routes)
+        # Construction only binds read-only collectors on the isolated copies.
+        # No step(), authority(), revalidate() or effect is admitted here.
+        local = ControllerTunnelRuntime(config_path, state_dir, None, isolated_ports, clock=clock)
+        local.effects.effect_deadline = deadline
+        local.effects.observe = local.effects.observe_readonly  # type: ignore[method-assign]
+        observed = data_plane.observe(
+            active_export_alternatives=local.serving_export_alternatives()
+        )
+
+        def completed_observation(
+            *, active_export_alternatives: tuple[Mapping[str, frozenset[str]], ...] = ()
+        ) -> LocalDataPlaneObservation:
+            if active_export_alternatives:
+                raise RuntimeError("completed health sample cannot change export policy")
+            return observed
+
+        data_plane.observe = completed_observation  # type: ignore[method-assign]
+        result = routes.readiness(strict=True)
+        intended = (
+            json.loads(data_plane.state_path.read_text()) if data_plane.state_path.exists() else {}
+        )
+        if intended.get("mode") == DataPlaneMode.ACTIVE.value and not observed.forwarding_enabled:
+            result = replace(
+                result,
+                service_healthy=False,
+                degraded_reasons=(*result.degraded_reasons, "forwarding-disabled"),
+            )
+        result = replace(
+            result,
+            serving_ready=bool(
+                intended.get("mode") == DataPlaneMode.ACTIVE.value
+                and observed.forwarding_enabled
+                and result.promotion_ready
+            ),
+        )
+        from .tunnels import STATE_NAME, read_state
+
+        if (state_dir / STATE_NAME).exists():
+            operation = read_state(state_dir / STATE_NAME)["operation"]
+            if operation is not None and operation["phase"] not in {"failed", "succeeded"}:
+                policy = next(
+                    (
+                        policy
+                        for policy in connection_policies(local.cfg)
+                        if policy.name == operation.get("connection")
+                    ),
+                    None,
+                )
+                if policy is None or not policy.eligible or policy.mode != "bgp":
+                    # Static suspension retains only its bounded service grace.
+                    # BGP keeps forwarding while selector verification completes:
+                    # its fresh native path proof, not pending intent, decides
+                    # health. Unhealthy/unknown observations remain fail-closed.
+                    result = replace(
+                        result,
+                        sample_complete=False,
+                        serving_ready=False,
+                        static_ready=False,
+                        bgp_ready=False,
+                        xfrm_ready=False,
+                        cold_standby_ready=False,
+                    )
+        if clock() >= deadline:
+            raise TimeoutError("local health collection deadline exceeded")
+        return result
 
     def providers(self) -> dict[str, Callable[..., object]]:
         return {
@@ -3146,7 +3296,14 @@ class VMHARuntimePorts:
         }
 
     def heartbeat(
-        self, *, boot_id: str, sequence: int, clock: float, snapshot: ControllerSnapshot
+        self,
+        *,
+        boot_id: str,
+        sequence: int,
+        clock: float,
+        snapshot: ControllerSnapshot | None,
+        local_readiness: LocalReadiness | None = None,
+        evidence: HeartbeatEvidence | None = None,
     ) -> PeerHeartbeat:
         """Publish one fresh controller observation without another cloud read."""
 
@@ -3155,7 +3312,7 @@ class VMHARuntimePorts:
             self.binding.static_routes_digest,
             self.binding.bgp_policy_digest,
         )
-        if not (
+        if snapshot is not None and not (
             snapshot.boot_id == boot_id
             and snapshot.cluster_id == self.binding.cluster_id
             and snapshot.local_node_id == self.local.node_id
@@ -3169,15 +3326,19 @@ class VMHARuntimePorts:
 
         mtls = self.mtls_snapshot_provider()
         auto_healing_state, auto_healing_digest = self.auto_healing_policy_provider()
-        cloud = snapshot.cloud
-        readiness = snapshot.readiness
-        data_plane_mode = snapshot.data_plane_mode
+        cloud = snapshot.cloud if snapshot is not None else None
+        readiness = local_readiness or LocalReadiness(False, False, False, False)
+        data_plane_mode = (
+            snapshot.data_plane_mode if snapshot is not None else DataPlaneMode.BLOCKED
+        )
         active_ready = bool(
-            data_plane_mode is DataPlaneMode.ACTIVE
+            cloud is not None
+            and data_plane_mode is DataPlaneMode.ACTIVE
             and cloud.local_attachment_exact(self.local.node_id)
         )
         passive_ready = bool(
-            data_plane_mode is DataPlaneMode.PASSIVE
+            cloud is not None
+            and data_plane_mode is DataPlaneMode.PASSIVE
             and cloud.authoritative
             and cloud.allocation_id
             and cloud.ownership_epoch
@@ -3193,7 +3354,7 @@ class VMHARuntimePorts:
             sequence=sequence,
             sent_at=datetime.fromtimestamp(clock, timezone.utc).isoformat().replace("+00:00", "Z"),
             configured_role=self.local.role.value,
-            observed_owner_id=cloud.observed_owner_node_id,
+            observed_owner_id=cloud.observed_owner_node_id if cloud is not None else None,
             generation_id=self.binding.generation_id,
             mtls_epoch=mtls.epoch,
             certificate_fingerprint=mtls.certificate_fingerprint,
@@ -3201,12 +3362,18 @@ class VMHARuntimePorts:
             service_healthy=readiness.service_healthy,
             route_ready=readiness.transfer_ready,
             promotion_ready=bool(
-                (readiness.promotion_ready if active_ready else readiness.transfer_ready)
+                evidence is not None
+                and evidence.cloud_status == "complete"
+                and evidence.cloud_age_seconds is not None
+                and evidence.cloud_age_seconds < 30
+                and evidence.state == "healthy"
+                and (readiness.serving_ready if active_ready else readiness.transfer_ready)
                 and (active_ready or passive_ready)
             ),
             auto_healing_policy_state=auto_healing_state,
             auto_healing_policy_digest=auto_healing_digest,
             tunnel_recovery=self.tunnel_recovery_provider(),
+            evidence=evidence or HeartbeatEvidence(),
         )
 
     def install_shutdown_guard(self, *, boot_id: str) -> None:
@@ -3305,7 +3472,7 @@ def _expected_bgp_exports(
     )
     try:
         normalized_local = frozenset(
-            str(ipaddress.ip_network(str(prefix), strict=True)) for prefix in local_prefixes
+            str(ipaddress.ip_network(str(prefix), strict=False)) for prefix in local_prefixes
         )
     except ValueError:
         raise ValueError("VM-HA local BGP export prefix is invalid") from None
@@ -3384,14 +3551,10 @@ def _live_peer_binding_from_mtls(
         or snapshot.compute_id != local.compute_id
     ):
         raise RuntimeError("managed mTLS local identity does not match the VM-HA binding")
-    candidates = [item for item in snapshot.peers if item.node_id == peer.node_id]
-    if not candidates:
-        raise RuntimeError("managed mTLS has no exact VM-HA peer identity")
-    latest_epoch = max(item.epoch for item in candidates)
-    compute_ids = {item.compute_id for item in candidates if item.epoch == latest_epoch}
-    if len(compute_ids) != 1:
-        raise RuntimeError("managed mTLS has ambiguous current VM-HA peer identity")
-    return peer.model_copy(update={"compute_id": compute_ids.pop()})
+    current_peer = snapshot.current_peer
+    if current_peer.node_id != peer.node_id or current_peer not in snapshot.peers:
+        raise RuntimeError("managed mTLS has no exact current VM-HA peer identity")
+    return peer.model_copy(update={"compute_id": current_peer.compute_id})
 
 
 def build_runtime_ports(
@@ -3522,15 +3685,6 @@ def build_runtime_ports(
                 state_dir / "accepted-cloud-operation.json"
             ),
             peer_binding_provider=live_peer_binding,
-            standby_replacement_inhibited=lambda: (
-                standby_replacement_inhibition_operation_id(
-                    state_dir,
-                    cluster_id=binding.cluster_id,
-                    node_id=local.node_id,
-                    generation_id=binding.generation_id,
-                )
-                is not None
-            ),
         )
         effective_monotonic_clock = monotonic_clock or clock
         data_plane_kwargs: dict[str, object] = {
@@ -3608,6 +3762,12 @@ def build_runtime_ports(
                 clock=effective_monotonic_clock,
                 peer_node_id=peer.node_id,
                 heartbeat_store=peer_heartbeat_store,
+                evidence_tracker=PeerEvidenceTracker(
+                    local_node_id=local.node_id,
+                    peer_node_id=peer.node_id,
+                    generation_id=binding.generation_id,
+                    clock=effective_monotonic_clock,
+                ),
             ),
             credential_bundle=credential_bundle,
             mtls_snapshot_provider=snapshot_provider,

@@ -472,7 +472,7 @@ class VerifierContractTests(unittest.TestCase):
         cases = (
             ("troubleshoot/SKILL.md", "references/workflow-handoffs.md"),
             ("troubleshoot/references/workflow-handoffs.md", "Do not commit product fixes"),
-            ("troubleshoot/references/workflow-handoffs.md", "Return one `diagnosis-v2` to `sdlc-classify-failure`"),
+            ("troubleshoot/references/workflow-handoffs.md", "Return one `diagnosis-v3` to `sdlc-classify-failure`"),
         )
         read_text = verifier.read_text
         for relative, term in cases:

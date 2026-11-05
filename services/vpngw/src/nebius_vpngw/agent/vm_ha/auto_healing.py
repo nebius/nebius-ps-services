@@ -23,6 +23,7 @@ AUTO_HEALING_POLICY_FILENAME = "standby-auto-healing-policy.json"
 AUTO_HEALING_RECOVERY_SCHEMA = "nebius-vpngw/vm-ha-auto-healing-recovery-v1"
 AUTO_HEALING_RECOVERY_FILENAME = "standby-auto-healing-recovery.json"
 AUTO_HEALING_CAPABILITY = "vm-ha-standby-auto-healing-policy-v4"
+REBOUND_POLICY_CAPABILITY = "vm-ha-rebound-policy-v1"
 AUTO_HEALING_REQUEST_SCHEMA = "nebius-vpngw/vm-ha-auto-healing-policy-request-v3"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
@@ -224,6 +225,22 @@ class AutoHealingPolicyRecord:
         )
 
 
+def is_initialized_enabled_policy(record: AutoHealingPolicyRecord) -> bool:
+    """Recognize one canonical initial or generation-rebound enabled decision."""
+
+    return bool(
+        record.desired is StandbyAutoHealing.ENABLED
+        and record.phase is AutoHealingPolicyPhase.COMMITTED
+        and record.operation_id
+        == AutoHealingPolicyStore._operation_id(
+            cluster_id=record.cluster_id,
+            generation_id=record.generation_id,
+            desired=StandbyAutoHealing.ENABLED,
+        )
+        and record.coordinator_node_id == min(record.node_id, record.peer_node_id)
+    )
+
+
 class AutoHealingPolicyStore:
     """Atomic local participant in the two-member policy transaction."""
 
@@ -362,16 +379,7 @@ class AutoHealingPolicyStore:
             and peer.phase is AutoHealingPolicyPhase.COMMITTED
             and (
                 peer.peer_ack_digest == peer.decision_digest
-                or (
-                    peer.peer_ack_digest is None
-                    and peer.operation_id
-                    == self._operation_id(
-                        cluster_id=cluster_id,
-                        generation_id=generation_id,
-                        desired=StandbyAutoHealing.ENABLED,
-                    )
-                    and peer.predecessor_digest == _BLOCKED_DIGEST
-                )
+                or (peer.peer_ack_digest is None and is_initialized_enabled_policy(peer))
             )
         )
         if not peer_bound:

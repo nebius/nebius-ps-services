@@ -33,6 +33,11 @@ from ..replay_window import (
 from . import ingress_ssh
 from .ssh_policy import configure_paramiko_host_verification
 
+UFW_ORDERING_PATH = "/etc/systemd/system/ufw.service.d/override.conf"
+PREVIOUS_UFW_ORDERING = (
+    b"[Unit]\nAfter=network-online.target cloud-init.service\nWants=network-online.target\n"
+)
+
 ASSETS = (
     (
         "nebius-vpngw-ordinary-agent.service",
@@ -56,16 +61,7 @@ ASSETS = (
         0o644,
     ),
     ("nebius-vpngw-ingress.service", "/etc/systemd/system/nebius-vpngw-ingress.service", 0o644),
-    (
-        "nebius-vpngw-ssh-ingress.conf",
-        "/etc/systemd/system/ssh.service.d/40-vpngw-ingress.conf",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-ssh-ingress.conf",
-        "/etc/systemd/system/ssh.socket.d/40-vpngw-ingress.conf",
-        0o644,
-    ),
+    ("nebius-vpngw-ufw-ordering.conf", UFW_ORDERING_PATH, 0o644),
     ("setup-vpngw-firewall.sh", "/usr/local/bin/setup-vpngw-firewall.sh", 0o755),
     ("nebius-vpngw-esp4-preflight.sh", "/usr/local/bin/nebius-vpngw-esp4-preflight.sh", 0o755),
 )
@@ -131,6 +127,14 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
                     None,
                     sha(archive.read(member)),
                     sha(archive.read("nebius_vpngw/systemd/nebius-vpngw-agent-ordering.conf")),
+                ]
+            elif name == "nebius-vpngw-ufw-ordering.conf":
+                # Upgrade only the exact product-owned override. Waiting for
+                # network-online conflicts with the distro's network-pre order.
+                assets[path]["predecessors"] = [
+                    None,
+                    sha(archive.read(member)),
+                    sha(PREVIOUS_UFW_ORDERING),
                 ]
         assets[str(ingress_policy.EXECUTABLE)] = {
             "member": "nebius_vpngw/ingress_policy.py",
@@ -508,7 +512,14 @@ def inspect_plan(
         raise
 
 
-def execute_plan(ssh: Any, plan: OrdinaryPlan, local: dict, *, approved: bool) -> dict:
+def execute_plan(
+    ssh: Any,
+    plan: OrdinaryPlan,
+    local: dict,
+    *,
+    approved: bool,
+    prepare_replacement: str | None = None,
+) -> dict:
     if not plan.noop and not approved:
         raise RuntimeError("Disruption approval is required before gateway mutation")
     if sha(plan.wheel.read_bytes()) != plan.manifest["wheel_sha256"]:
@@ -531,7 +542,20 @@ def execute_plan(ssh: Any, plan: OrdinaryPlan, local: dict, *, approved: bool) -
                 for p in plan.dependency_paths
             ],
         )
+    if prepare_replacement is not None:
+        request["prepare_replacement"] = prepare_replacement
     result = remote(ssh, plan.target, plan.instance, local, request)
+    if prepare_replacement is not None:
+        expected = {
+            "operation": prepare_replacement,
+            "boot_id": plan.observation["boot_id"],
+            "config_sha256": plan.manifest["config_sha256"],
+            "package_identity": plan.manifest["package_identity"],
+            "request_id": request["request_id"],
+        }
+        if result != {"status": "prepared", "receipt": expected}:
+            raise RuntimeError("Replacement preparation did not confirm its exact passive artifact")
+        return result
     receipt = result.get("receipt") or {}
     if (
         result.get("status") not in {"applied", "unchanged"}

@@ -54,7 +54,6 @@ def run():
     config_path = Path(sys.argv[1])
     scenario = sys.argv[2]
     cfg = yaml.safe_load(config_path.read_text())
-    cfg["gateway"]["ssh_allowed_cidrs"] = ["127.0.0.1/32"]
     cfg["connections"] = [c for c in cfg["connections"] if c["routing_mode"] == "bgp"]
     root = Path("/var/lib/nebius-vpngw/vm-ha")
     vm = _runtime_config(root)

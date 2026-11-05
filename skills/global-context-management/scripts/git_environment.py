@@ -20,6 +20,8 @@ PROFILE_ENV = "SKILLS_GIT_PROFILE"
 DIRECTORY = ".sdlc-git-environment"
 SCHEMA = "skills/owned-git-environment-v1"
 ORIGIN_RECEIPT = ".owned-git-origin.json"
+# Match the three-tier lifecycle owner's state bound, not the small profile bound.
+LIFECYCLE_STATE_LIMIT = 1024 * 1024
 FETCH = "+refs/heads/*:refs/remotes/origin/*"
 PUSH_GUARD = b"#!/bin/sh\n# This disposable baseline is read-only.\nexit 1\n"
 FORBIDDEN = {
@@ -67,9 +69,10 @@ def _read(path: Path, *, private: bool = True, limit: int = 65536) -> bytes:
         with os.fdopen(descriptor, "rb") as source:
             before = os.fstat(source.fileno())
             if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
-                    or before.st_nlink != 1 or before.st_mode & (0o077 if private else 0o022)
-                    or before.st_size > limit):
+                    or before.st_nlink != 1 or before.st_mode & (0o077 if private else 0o022)):
                 _fail("unsafe profile or repository file")
+            if before.st_size > limit:
+                _fail(f"file exceeds {limit}-byte limit")
             data = source.read(limit + 1)
             after = os.fstat(source.fileno())
         bound = path.lstat()
@@ -83,10 +86,11 @@ def _read(path: Path, *, private: bool = True, limit: int = 65536) -> bytes:
         raise GitEnvironmentError("UNSAFE_GIT_ENVIRONMENT: required profile file unavailable") from error
 
 
-def _json(path: Path, *, private: bool = True) -> dict:
+def _json(path: Path, *, private: bool = True, limit: int = 65536) -> dict:
+    data = _read(path, private=private, limit=limit)
     try:
-        value = json.loads(_read(path, private=private))
-    except (ValueError, UnicodeError) as error:
+        value = json.loads(data)
+    except (json.JSONDecodeError, UnicodeError) as error:
         raise GitEnvironmentError("UNSAFE_GIT_ENVIRONMENT: invalid profile JSON") from error
     if not isinstance(value, dict):
         _fail("profile JSON must be an object")
@@ -130,7 +134,7 @@ def _marker(value: dict, *, bootstrap: bool) -> None:
                 or project != root / "project" or root.name != value["owner_id"]
                 or root.parent.name != "runs"):
             _fail("three-tier fixture identity changed")
-        expected = {"schema": "agentic-sdlc/three-tier-lifecycle-v5", "verification_id": value["owner_id"]}
+        expected = {"schema": "agentic-sdlc/three-tier-lifecycle-v7", "verification_id": value["owner_id"]}
         if _json(root / ".agentic-sdlc-three-tier-run.json") != expected:
             _fail("three-tier generation marker changed")
         if _json(project / ".sdlc-workflow-test-project.json", private=False) != {
@@ -138,7 +142,7 @@ def _marker(value: dict, *, bootstrap: bool) -> None:
         }:
             _fail("three-tier project marker changed")
         if not bootstrap:
-            active = _json(root.parent.parent / "active.json")
+            active = _json(root.parent.parent / "active.json", limit=LIFECYCLE_STATE_LIMIT)
             if (active.get("verification_id") != value["owner_id"]
                     or active.get("run_root") != str(root)
                     or active.get("project_root") != str(project)
@@ -279,6 +283,24 @@ def _parse_configuration(data: bytes, git_binary: str) -> tuple[str, ...]:
         raise GitEnvironmentError("UNSAFE_GIT_ENVIRONMENT: local configuration unavailable") from error
 
 
+def _sealed_editor_base(value: dict) -> str:
+    """Resolve a data-only history hint from the same immutable origin receipt."""
+    data = _read(Path(value["owner_root"]) / ORIGIN_RECEIPT)
+    if hashlib.sha256(data).hexdigest() != value["origin_receipt_sha256"]:
+        _fail("sealed origin receipt changed")
+    try:
+        receipt = json.loads(data)
+    except (ValueError, UnicodeDecodeError):
+        _fail("invalid sealed origin receipt")
+    default = receipt.get("default_ref") if isinstance(receipt, dict) else None
+    prefix = "refs/heads/"
+    if (not isinstance(default, str) or not default.startswith(prefix)
+            or not default.removeprefix(prefix)
+            or any(ord(char) <= 32 or ord(char) == 127 for char in default)):
+        _fail("invalid sealed origin default ref")
+    return "origin/" + default.removeprefix(prefix)
+
+
 def _local_configuration(metadata: Path, worktree_metadata: Path, value: dict, env: dict, *, bootstrap: bool) -> None:
     project = Path(value["project_root"])
     origin = Path(value["owner_root"]) / "origin.git"
@@ -311,6 +333,7 @@ def _local_configuration(metadata: Path, worktree_metadata: Path, value: dict, e
     booleans = {"core.filemode", "core.bare", "core.logallrefupdates", "core.ignorecase",
                 "core.precomposeunicode", "core.symlinks", "extensions.worktreeconfig"}
     observed: dict[str, list[str]] = {}
+    editor_base: str | None = None
     for path in dict.fromkeys([metadata / "config", worktree_metadata / "config.worktree"]):
         if not path.exists():
             continue
@@ -342,6 +365,13 @@ def _local_configuration(metadata: Path, worktree_metadata: Path, value: dict, e
                 or re.fullmatch(r"branch\..+\.remote", key) is not None and item in {"origin", "."}
                 or re.fullmatch(r"branch\..+\.merge", key) is not None and item.startswith("refs/heads/")
             )
+            if (not safe and sealed and metadata != origin
+                    and re.fullmatch(r"branch\.[^\s\x00-\x1f\x7f]+\.vscode-merge-base", key)):
+                # This editor hint changes no Git behavior or authority. Bind its
+                # only admitted value to the frozen origin, not caller text.
+                if editor_base is None:
+                    editor_base = _sealed_editor_base(value)
+                safe = item == editor_base
             if not safe:
                 _fail("unsupported or executable repository-local configuration")
     if sealed:

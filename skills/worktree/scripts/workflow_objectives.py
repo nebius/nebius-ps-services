@@ -25,7 +25,7 @@ TERMINAL = {"done", "cancelled"}
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
 TEXT_FIELDS = {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications"}
-FIELDS = TEXT_FIELDS | {"provenance", "inputs", "completion"}
+FIELDS = TEXT_FIELDS | {"provenance", "inputs", "completion", "issue_resolution"}
 
 
 def now():
@@ -92,6 +92,9 @@ def normalize(value: object) -> dict:
         result["completion"] = completion
     else:
         raise WorkflowError("OBJECTIVE_INVALID", "completion policy must declare bounded merge authority")
+    if "issue_resolution" in value:
+        from workflow_issue_resolution import metadata
+        result["issue_resolution"] = metadata(value["issue_resolution"])
     if contains_sensitive(str(result)):
         raise WorkflowError("SENSITIVE_INPUT", "objective policy must not contain sensitive values")
     if len(stable(result)) > 128 * 1024:
@@ -155,9 +158,11 @@ def validate_run(run_dir: Path, *, owner: str | None = None) -> tuple[dict, dict
                 or revision.get("snapshot") != f"objectives/{name}.json"):
             raise WorkflowError("OBJECTIVE_INVALID", "objective revision ancestry is invalid")
         snapshot = read(run_dir / revision["snapshot"])
+        if "issue_resolution" in snapshot and run["owner"] != "implement":
+            raise WorkflowError("OBJECTIVE_INVALID", "issue resolution is owned by Implement")
         if digest(snapshot) != revision.get("sha256") or normalize(snapshot) != snapshot:
             raise WorkflowError("OBJECTIVE_INVALID", "accepted objective bytes changed")
-        if digest({key: snapshot[key] for key in FIELDS - {"provenance"}}) != revision.get("intent_sha256"):
+        if digest({key: snapshot[key] for key in snapshot if key != "provenance"}) != revision.get("intent_sha256"):
             raise WorkflowError("OBJECTIVE_INVALID", "accepted objective semantic identity changed")
         parent = revision["sha256"]
     return run, binding
@@ -210,7 +215,7 @@ def _revision(run_dir, objective, value):
     else:
         write(path, value, exclusive=True)
     revisions.append({"revision": name, "sha256": digest(value),
-                      "intent_sha256": digest({key: value[key] for key in FIELDS - {"provenance"}}),
+                      "intent_sha256": digest({key: value[key] for key in value if key != "provenance"}),
                       "snapshot": f"objectives/{name}.json", "accepted_at": now(),
                       "parent_sha256": revisions[-1]["sha256"] if revisions else None})
     write(run_dir / "objective.json", objective)
@@ -235,6 +240,8 @@ def _acquire_intake_lease(run_dir, run):
 
 def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, revise: bool = False):
     value = normalize(value)
+    if "issue_resolution" in value and owner != "implement":
+        raise WorkflowError("OBJECTIVE_INVALID", "issue resolution is owned by Implement")
     root, context, branch, head = project_context(project, home, owner)
     with lock(root):
         if (root / "workspace.json").exists():
@@ -246,7 +253,7 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
         if bound:
             run_dir, run, objective = bound
             read(run_dir / objective["revisions"][-1]["snapshot"])
-            intent = {key: value[key] for key in FIELDS - {"provenance"}}
+            intent = {key: value[key] for key in value if key != "provenance"}
             if digest(intent) == objective["revisions"][-1]["intent_sha256"]:
                 _acquire_intake_lease(run_dir, run)
                 return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
@@ -396,6 +403,8 @@ def complete_run(run_dir: Path, session: str):
             observed = _reconcile(run_dir, Path(run["project_root"]), outer)
             if observed.get("state") != "released":
                 raise WorkflowError("COMPLETION_BLOCKED", "release the managed outer lease after final evidence before completion")
+        from workflow_issue_resolution import write_completion
+        write_completion(run_dir, records)
         run.update(status="done", updated_at=now())
         write(run_dir / "run.json", run)
         home = run_dir.parent.parent.parent

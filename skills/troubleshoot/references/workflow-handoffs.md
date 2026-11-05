@@ -8,21 +8,31 @@ When `sdlc-classify-failure` routes an active Agentic SDLC failure here:
 - Preserve the failed evaluation, exact integration commit, environment
   identity, accepted criteria, fingerprints, stable blocker key, and repair
   budget.
-- Use the registered private integration worktree only. Temporary diagnostic
-  instrumentation must be explicitly scoped, reversible, uncommitted, removed
-  before handoff, and absent from the final diff.
+- For prepared execution, use the registered private integration worktree.
+  Before preparation, inspect only the event's phase-owned candidate evidence
+  and read-only accepted project context; do not fabricate an integration
+  checkout, plan or basis. Temporary diagnostic instrumentation must be
+  explicitly scoped, reversible, uncommitted, removed before handoff, and absent
+  from the final diff.
 - Do not commit product fixes, change tests or specifications, weaken
   acceptance, invoke general `design`, or call an SDLC design, plan, or
   implementation phase directly.
-- Return one `diagnosis-v2` to `sdlc-classify-failure`. The classifier remains
+- Return one `diagnosis-v3` to `sdlc-classify-failure`. The classifier remains
   authoritative for diagnosis validation, taxonomy, budget accounting,
   invalidation, and the next owner.
 - The result must be exactly one of: localized implementation defect, test
-  defect, evaluator defect, environment defect, specification gap, proven
+  defect, validation defect, evaluator defect, environment defect, specification gap, proven
   system-contract defect, missing decisive evidence, unresolved competing
   hypotheses, policy block, or human input.
 - "No implementation bug found" is missing or unresolved evidence. It never
   becomes a design defect without positive causal proof.
+
+Use `validation_defect` for a proven mechanical artifact/check failure, including
+after the first counted validation repair fails. Supply the complete causal
+handoff below, bounded repair target, affected files and original regression
+check. Return to classification without repairing the candidate here. The same
+owner route and existing counters apply. `diagnosis-v3` is the sole active
+contract; older records require a fresh supported run, not conversion.
 
 A localized implementation handoff must record expected and observed behavior,
 the stable blocker and exact regression oracle, earliest divergent component,
@@ -54,5 +64,5 @@ preserve. It defines the bug and repair boundary, not a speculative patch.
   the SDLC coordinator then routes to the recorded design, plan, or other
   owning phase.
 - In Agentic SDLC diagnostic mode, stop at the causal handoff. Emit
-  `diagnosis-v2`, remove temporary instrumentation, and return to
+  `diagnosis-v3`, remove temporary instrumentation, and return to
   classification without entering `REMEDIATED`.

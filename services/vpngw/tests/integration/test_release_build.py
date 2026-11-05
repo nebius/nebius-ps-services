@@ -204,7 +204,7 @@ def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:
         for requirement in requires_dist
     )
     assert any(
-        requirement.startswith("nebius") and ">=0.3.18" in requirement and "<0.4.0" in requirement
+        requirement.startswith("nebius") and ">=0.3.40" in requirement and "<0.4.0" in requirement
         for requirement in requires_dist
     )
     assert any(
@@ -249,7 +249,15 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.service" in archive.stdout
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.timer" in archive.stdout
     assert "nebius_vpngw/deploy/ordinary_remote.py" in archive.stdout
+    assert "nebius_vpngw/deploy/operator_guest.py" in archive.stdout
     assert "nebius_vpngw/ordinary_operations.py" in archive.stdout
+    for source in (
+        "checkpoint_upgrade.py",
+        "ipsec_observation.py",
+        "tunnel_restart.py",
+        "agent/tunnel_iterator.py",
+    ):
+        assert "nebius_vpngw/" + source in archive.stdout
     from PyInstaller.archive.readers import CArchiveReader
 
     from nebius_vpngw import ordinary_routes
@@ -261,6 +269,10 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         *replay_window.REPLAY_WINDOW_SOURCES,
         *ingress_policy.INGRESS_SOURCES,
         "packet_health.py",
+        "checkpoint_upgrade.py",
+        "ipsec_observation.py",
+        "tunnel_restart.py",
+        "agent/tunnel_iterator.py",
     ):
         assert (
             reader.extract("nebius_vpngw/" + source)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -16,6 +17,18 @@ import owned_git_origin
 
 class TargetError(RuntimeError):
     """The selected workflow checkout cannot be independently verified."""
+
+
+@contextmanager
+def workflow_imports(skills_root: Path):
+    """Keep lazy owner imports available through the complete checked action."""
+    previous = list(sys.path)
+    sys.path.insert(0, str(skills_root / "worktree/scripts"))
+    try:
+        yield
+    finally:
+        # Owner imports may insert their own paths; never pop an assumed slot.
+        sys.path[:] = previous
 
 
 def _safe_path(path: Path, boundary: Path) -> None:
@@ -39,7 +52,7 @@ def _safe_path(path: Path, boundary: Path) -> None:
         current = current.parent
 
 
-def _private_json(path: Path, boundary: Path) -> dict:
+def _private_bytes(path: Path, boundary: Path) -> bytes:
     _safe_path(path, boundary)
     metadata = path.stat()
     if (
@@ -49,7 +62,11 @@ def _private_json(path: Path, boundary: Path) -> dict:
         or metadata.st_size > 1024 * 1024
     ):
         raise TargetError("Workflow identity must be a bounded private regular file.")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    return path.read_bytes()
+
+
+def _private_json(path: Path, boundary: Path) -> dict:
+    value = json.loads(_private_bytes(path, boundary).decode("utf-8"))
     if not isinstance(value, dict):
         raise TargetError("Workflow identity is not an object.")
     return value
@@ -91,13 +108,16 @@ def _registry(project: Path, env: dict[str, str]) -> dict[str, dict[str, str]]:
 def resolve_target(
     state: dict, *, skills_root: Path, agent: str, require_clean: bool = True,
     worker_task: str | None = None, assignment_digest: str | None = None,
+    classifier_observation: bool = False,
 ) -> dict[str, str]:
     """Resolve the exact active integration or completed promotion, never a caller path."""
     try:
-        return _resolve_target(
-            state, skills_root=skills_root, agent=agent, require_clean=require_clean,
-            worker_task=worker_task, assignment_digest=assignment_digest,
-        )
+        with workflow_imports(skills_root):
+            return _resolve_target(
+                state, skills_root=skills_root, agent=agent, require_clean=require_clean,
+                worker_task=worker_task, assignment_digest=assignment_digest,
+                classifier_observation=classifier_observation,
+            )
     except TargetError:
         raise
     except (
@@ -156,12 +176,9 @@ def _registration(state: dict, agent: str):
     active = _private_json(run_dir.parent / 'active-run.json', boundary)
     lock = _private_json(run_dir.parent / 'active.lock', boundary)
     current = _private_json(run_dir / 'current-state.json', boundary)
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'worktree/scripts'))
-    try:
+    with workflow_imports(Path(__file__).resolve().parents[2]):
         from workflow_objectives import validate_run
         run, objective = validate_run(run_dir, owner='agentic-sdlc')
-    finally:
-        sys.path.pop(0)
     if startup:
         if (startup['run_id'] != run_dir.name or startup['project_id'] != workspace.get('project_id')
                 or startup['objective_sha256'] not in {item['sha256'] for item in objective['revisions']}):
@@ -190,17 +207,23 @@ def current_objective(state: dict, *, agent: str) -> str:
     return _private_json(run_dir / "objective.json", Path(state["run_root"]))["revisions"][-1]["sha256"]
 
 
-def validate_historical_basis(state: dict, recorded: str, *, agent: str) -> None:
-    """Admit only an owner-linked, no-effect settlement of the same execution."""
+def validate_historical_basis(
+    state: dict, recorded: str, *, agent: str, phase: str, recorded_head: str,
+) -> None:
+    """Validate historical settlement and the original TDD's preserved lineage."""
     try:
-        _validate_historical_basis(state, recorded, agent=agent)
+        _validate_historical_basis(
+            state, recorded, agent=agent, phase=phase, recorded_head=recorded_head,
+        )
     except TargetError:
         raise
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
         raise TargetError("Historical execution basis is unavailable or invalid.") from error
 
 
-def _validate_historical_basis(state: dict, recorded: str, *, agent: str) -> None:
+def _validate_historical_basis(
+    state: dict, recorded: str, *, agent: str, phase: str, recorded_head: str,
+) -> None:
     if not isinstance(recorded, str) or re.fullmatch(r"[0-9a-f]{64}", recorded) is None:
         raise TargetError("Historical execution basis digest is invalid.")
     current_target = resolve_target(
@@ -226,9 +249,18 @@ def _validate_historical_basis(state: dict, recorded: str, *, agent: str) -> Non
     prior = basis(recorded)
     latest = basis(current_target["basis_sha256"])
     settlement_fields = {"impact_sha256", "spec_receipt_sha256", "spec_transition_sha256", "plan_action"}
+    changed_plan = prior.get("plan_digest") != latest.get("plan_digest")
+    if changed_plan and phase == "sdlc-tdd":
+        settlement_fields |= {
+            "plan_digest", "plan_path", "assignment_plan_sha256", "validation_plan_sha256",
+        }
     if (set(prior) != set(latest)
             or any(prior[key] != latest[key] for key in prior.keys() - settlement_fields)):
         raise TargetError("Historical execution basis has a material identity change.")
+    if changed_plan:
+        _validate_original_tdd_replan(
+            state, run_dir, boundary, prior, latest, recorded, recorded_head,
+        )
 
     # Follow immutable owner receipts, never a caller assertion or arbitrary basis file.
     paths = list((run_dir / "objective-impact").glob("attempt-*.json"))
@@ -279,6 +311,106 @@ def _validate_historical_basis(state: dict, recorded: str, *, agent: str) -> Non
         expected_spec = previous_spec
     if expected_spec != prior["spec_receipt_sha256"]:
         raise TargetError("Historical specification ancestry is incomplete.")
+
+
+def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recorded, recorded_head):
+    """Observe existing execution-owner records; never create historical authority."""
+    with workflow_imports(Path(__file__).resolve().parents[2]):
+        import workflow_execution as execution
+
+        feature = latest["execution_id"]
+        coordinator = _private_json(execution.coordinator_path(run_dir, feature), boundary)
+        if (coordinator.get("status") != "done"
+                or coordinator.get("promoted_head") != state["git"].get("promoted_sha")
+                or not state["git"].get("promoted_sha")):
+            raise TargetError("Historical original TDD requires completed clean promotion.")
+        for value in (prior, latest):
+            if (value["assignment_plan_sha256"] != value["plan_digest"]
+                    or value["validation_plan_sha256"] != value["plan_digest"]):
+                raise TargetError("Historical TDD locked plan bindings changed.")
+
+        # Resolve exact hashes, never a latest-named plan or caller-selected replacement.
+        paths = list((run_dir / "plans").rglob("*.md"))
+        if len(paths) > 1024:
+            raise TargetError("Historical TDD locked plan inventory exceeds its bound.")
+        plans = {}
+        total = 0
+        for path in paths:
+            raw = _private_bytes(path, boundary)
+            total += len(raw)
+            if total > 16 * 1024 * 1024:
+                raise TargetError("Historical TDD locked plan inventory exceeds its bound.")
+            fingerprint = hashlib.sha256(raw).hexdigest()
+            if fingerprint in plans:
+                raise TargetError("Historical TDD locked plan identity is ambiguous.")
+            plans[fingerprint] = (path, raw)
+
+        def tasks(fingerprint):
+            if fingerprint not in plans:
+                raise TargetError("Historical TDD locked plan is missing or changed.")
+            path, raw = plans[fingerprint]
+            _private_bytes(path.with_suffix(path.suffix + ".lock"), boundary)
+            return {item.task_id: execution._task_json(item)
+                    for item in execution.parse_locked_plan(raw.decode("utf-8"))}
+
+        for value in (prior, latest):
+            tasks(value["plan_digest"])
+            if str(plans[value["plan_digest"]][0]) != value["plan_path"]:
+                raise TargetError("Historical TDD locked plan path changed.")
+
+        rows = [json.loads(line) for line in _private_bytes(
+            execution.journal_path(run_dir, feature, "coordinator"), boundary,
+        ).splitlines() if line]
+        if any(not isinstance(row, dict) for row in rows):
+            raise TargetError("Historical TDD replan succession is malformed.")
+        seals = [(index, row) for index, row in enumerate(rows) if row.get("event") == "tdd_sealed"]
+        if len(seals) != 1 or seals[0][1].get("head") != recorded_head:
+            raise TargetError("Historical original TDD seal is missing or changed.")
+
+        original_tasks = tasks(prior["plan_digest"])
+        cursor = prior["plan_digest"]
+        pending = None
+        seen = {cursor}
+        for row in rows[seals[0][0] + 1:]:
+            event = row.get("event")
+            if event not in {"future_replan_intent", "future_replanned"}:
+                continue
+            edge = (row.get("old_digest"), row.get("new_digest"))
+            if event == "future_replan_intent":
+                if pending is not None or edge[0] != cursor or edge[1] in seen:
+                    raise TargetError("Historical TDD replan succession is ambiguous.")
+                pending = edge
+                continue
+            if pending != edge or edge[0] != cursor:
+                raise TargetError("Historical TDD replan succession is incomplete.")
+            before, after = tasks(cursor), tasks(edge[1])
+            if not before.keys() < after.keys() or any(after[key] != value for key, value in before.items()):
+                raise TargetError("Historical TDD replan changed preserved task definitions.")
+            cursor = edge[1]
+            seen.add(cursor)
+            pending = None
+        if pending is not None or cursor != latest["plan_digest"]:
+            raise TargetError("Historical TDD replan succession is incomplete.")
+
+        for task_id, definition in original_tasks.items():
+            wave_id = coordinator["task_waves"][task_id]
+            wave = _private_json(execution.wave_path(run_dir, feature, wave_id), boundary)
+            task = _private_json(execution.task_path(run_dir, feature, wave_id, task_id), boundary)
+            assignment = _private_json(execution.assignment_path(run_dir, feature, wave_id, task_id), boundary)
+            unsigned = dict(assignment)
+            digest = unsigned.pop("assignment_digest", None)
+            if (wave.get("execution_id") != feature or wave.get("status") != "done"
+                    or task_id not in wave.get("merged_task_ids", [])
+                    or task.get("status") != "committed" or task.get("task") != definition
+                    or task.get("task_definition_digest") != execution.sha256_json(definition)
+                    or digest != execution.sha256_json(unsigned) or task.get("assignment_digest") != digest
+                    or assignment.get("schema") != execution.ASSIGNMENT_SCHEMA
+                    or assignment.get("owner") != latest["owner"]
+                    or assignment.get("basis_sha256") != recorded
+                    or assignment.get("plan_digest") != prior["plan_digest"]
+                    or assignment.get("task_id") != task_id or assignment.get("wave_id") != wave_id
+                    or assignment.get("execution_id") != feature or assignment.get("run_dir") != str(run_dir)):
+                raise TargetError("Historical TDD preserved task evidence changed.")
 
 
 def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
@@ -366,7 +498,12 @@ def validate_startup_receipt(state: dict) -> dict:
 def _resolve_target(
     state: dict, *, skills_root: Path, agent: str, require_clean: bool,
     worker_task: str | None, assignment_digest: str | None,
+    classifier_observation: bool,
 ) -> dict[str, str]:
+    if type(classifier_observation) is not bool or (
+        classifier_observation and (worker_task is not None or assignment_digest is not None)
+    ):
+        raise TargetError("Classifier observation requires a root coordinator target.")
     if (worker_task is None) != (assignment_digest is None) or (
         worker_task is not None and (
             re.fullmatch(r"TASK-[0-9]{3,}", worker_task) is None
@@ -379,11 +516,15 @@ def _resolve_target(
     project = Path(state["project_root"])
     run_id = run_dir.name
     feature = current.get("current_execution")
-    # Only the root coordinator's active authoring phase permits unsealed files.
+    # Classification must be observable after an authoring check fails, before
+    # the normal final seal. Runtime callers never opt into this read-only path.
+    # An explicit clean request still wins, and the primary checkout below is
+    # always clean, so this exception cannot qualify a dirty promoted deployment.
     require_clean = require_clean or not (
         current.get("status") == "running"
-        and current.get("current_phase")
-        in {"sdlc-tdd", "sdlc-update-documents", "align"}
+        and (current.get("current_phase") in {"sdlc-tdd", "sdlc-update-documents", "align"}
+             or (classifier_observation
+                 and current.get("current_phase") == "sdlc-classify-failure"))
     )
     if (
         current.get("run_id") != run_id
@@ -396,15 +537,11 @@ def _resolve_target(
         )
     coordinator_path = run_dir / "execution" / feature / "coordinator.json"
     coordinator = _private_json(coordinator_path, boundary)
-    sys.path.insert(0, str(skills_root / 'worktree/scripts'))
-    try:
-        from workflow_impact import verify_execution, canonical_digest
-        from workflow_execution import describe_status, watch_task
-        from workflow_resources import verify as verify_runtime
-        basis = verify_execution(run_dir, feature, coordinator['plan_digest'], project)
-        basis_sha256 = canonical_digest(basis)
-    finally:
-        sys.path.pop(0)
+    from workflow_impact import verify_execution, canonical_digest
+    from workflow_execution import describe_status, watch_task
+    from workflow_resources import verify as verify_runtime
+    basis = verify_execution(run_dir, feature, coordinator['plan_digest'], project)
+    basis_sha256 = canonical_digest(basis)
     status = describe_status(run_dir, feature)
     for key in (
         "execution_id",
@@ -559,3 +696,210 @@ def _resolve_target(
         "phase": current["current_phase"],
         "basis_sha256": basis_sha256,
     }
+
+
+def inventory_recovery_evidence(state, failed, *, skills_root, agent):
+    try:
+        return _inventory_recovery_evidence(
+            state, failed, skills_root=skills_root, agent=agent
+        )
+    except TargetError:
+        raise
+    except Exception as error:
+        raise TargetError(
+            "Inventory recovery evidence is unavailable or invalid."
+        ) from error
+
+
+def _inventory_recovery_evidence(state, failed, *, skills_root, agent):
+    """Read classifier, successful completion and cursor proof without resolving it."""
+    if not failed:
+        return []
+    with workflow_imports(skills_root):
+        sys.path.insert(0, str(skills_root / "sdlc-classify-failure/scripts"))
+        import repair_control as owner
+
+        _manifest, _project, _active, _lock, run_dir, _current, _env = _registration(
+            state, agent
+        )
+        boundary = Path(state["run_root"])
+        resolved = []
+        for summary, observation in failed:
+            failed_target = observation.get("target") or {}
+            feature = failed_target.get("execution_id")
+            if (
+                failed_target.get("run_id") != run_dir.name
+                or not isinstance(feature, str)
+                or re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", feature) is None
+            ):
+                raise TargetError("Inventory recovery failed target is unavailable.")
+            repair_root = run_dir / "repairs" / feature
+            control = _private_json(repair_root / "repair-control.json", boundary)
+            if control.get("schema") != owner.REPAIR_CONTROL_SCHEMA:
+                raise TargetError("Inventory recovery control is invalid.")
+            contexts = [control]
+            archives = sorted((repair_root / "cursor-archives").glob("*.json"))
+            if len(archives) > 64:
+                raise TargetError("Inventory recovery history exceeds its bound.")
+            for path in archives:
+                archive = _private_json(path, boundary)
+                if archive.get("schema") != "agentic-sdlc/revalidation-archive-v1":
+                    raise TargetError("Inventory recovery archive is invalid.")
+                contexts.append(
+                    {
+                        "execution_id": feature,
+                        "current_event_id": archive["event_id"],
+                        "active_blocker": archive["blocker"],
+                        "revalidation": archive["previous"],
+                    }
+                )
+            found = None
+            for context in contexts:
+                cursor = context.get("revalidation")
+                if not isinstance(cursor, dict):
+                    continue
+                classification_id, dispatch_id = (
+                    cursor.get("classification_id"),
+                    cursor.get("repair_dispatch_id"),
+                )
+                if any(
+                    not isinstance(value, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                    for value in (classification_id, dispatch_id)
+                ):
+                    raise TargetError("Inventory recovery identity is invalid.")
+                classification_path = (
+                    repair_root / "classifications" / (classification_id + ".json")
+                )
+                _private_json(classification_path, boundary)
+                classification = owner._load_classification(
+                    run_dir, feature, classification_id
+                )
+                event_id = classification.get("event_id")
+                if (
+                    not isinstance(event_id, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", event_id) is None
+                ):
+                    raise TargetError("Inventory recovery event is invalid.")
+                event_path = repair_root / "events" / (event_id + ".json")
+                _private_json(event_path, boundary)
+                event = owner._load_event(run_dir, feature, event_id)
+                digests = {
+                    value.removeprefix("sha256:")
+                    for value in event["evidence_digests"].values()
+                }
+                if summary["sha256"] not in digests:
+                    continue
+                if (
+                    classification.get("status") != "routed"
+                    or classification.get("corrective_mode") != "existing_task_attempt"
+                    or event.get("execution_lifecycle") != "active_task"
+                    or event.get("integration_commit") != failed_target.get("head")
+                ):
+                    raise TargetError(
+                        "Inventory recovery does not bind the failed target."
+                    )
+                owner._verify_revalidation_authority(
+                    run_dir,
+                    context,
+                    {"cursor_id": cursor.get("cursor_id")},
+                    require_current_gate=False,
+                )
+                attempt = next(
+                    item
+                    for item in context["active_blocker"]["attempts"]
+                    if item["dispatch_id"] == dispatch_id
+                )
+                dispatch_path = repair_root / "dispatches" / (dispatch_id + ".json")
+                dispatch = _private_json(dispatch_path, boundary)
+                identity = {
+                    key: dispatch.get(key)
+                    for key in (
+                        "blocker_key",
+                        "ordinal",
+                        "classification_id",
+                        "remedy_scale",
+                        "hypothesis",
+                        "evidence_reference",
+                    )
+                }
+                if (
+                    owner._digest(identity) != dispatch_id
+                    or dispatch.get("event_id") != event_id
+                    or dispatch.get("classification_id") != classification_id
+                    or any(dispatch.get(key) != attempt.get(key) for key in identity)
+                ):
+                    raise TargetError("Inventory recovery dispatch changed.")
+                journal = repair_root / "repair-journal.jsonl"
+                _safe_path(journal, boundary)
+                metadata = journal.stat()
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or metadata.st_mode & 0o077
+                    or metadata.st_size > 1048576
+                ):
+                    raise TargetError("Inventory recovery journal is unsafe.")
+                completion = {
+                    "schema": owner.REPAIR_JOURNAL_SCHEMA,
+                    "event": "remediation-completion-committed",
+                    "transition_id": owner._digest(
+                        {
+                            "action": "complete",
+                            "dispatch_id": dispatch_id,
+                            "result": "succeeded",
+                        }
+                    ),
+                    "dispatch_id": dispatch_id,
+                    "blocker_key": event["blocker_key"],
+                    "result": "succeeded",
+                }
+                if completion not in [
+                    json.loads(line) for line in journal.read_text().splitlines()
+                ]:
+                    raise TargetError("Inventory recovery completion is unproven.")
+                reference = attempt.get("verification_reference")
+                if (
+                    not isinstance(reference, str)
+                    or not reference.startswith("evidence/")
+                    or Path(reference).is_absolute()
+                    or ".." in Path(reference).parts
+                ):
+                    raise TargetError("Inventory recovery evidence path is invalid.")
+                evidence_path = run_dir / reference
+                _private_json(evidence_path, boundary)
+                source_paths = (
+                    classification_path,
+                    event_path,
+                    dispatch_path,
+                    evidence_path,
+                )
+                found = {
+                    "observation_sha256": summary["sha256"],
+                    "classification_id": classification_id,
+                    "dispatch_id": dispatch_id,
+                    "completion_sha256": owner._digest(completion),
+                    "evidence": [
+                        {
+                            "path": str(path.relative_to(boundary)),
+                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        }
+                        for path in source_paths
+                    ],
+                }
+                break
+            if not found:
+                raise TargetError(
+                    "blocked_missing_evidence: inventory failure lacks classifier/recovery evidence."
+                )
+            previous = [
+                item
+                for item in state.get("runtime_recoveries", [])
+                if item.get("observation_sha256") == summary["sha256"]
+            ]
+            if previous and previous != [found]:
+                raise TargetError(
+                    "Inventory recovery evidence changed after admission."
+                )
+            resolved.append(found)
+        return resolved

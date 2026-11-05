@@ -25,7 +25,6 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest):
-    monkeypatch.setenv("VPNGW_DEPLOY_SSH_CONNECTION", "203.0.113.4 1234 10.0.0.1 22")
     root = tmp_path / "guest"
     root.mkdir()
     config = root / "resolved.yaml"
@@ -263,13 +262,54 @@ def run_protocol(monkeypatch, requests):
     return [json.loads(line) for line in output.getvalue().splitlines()]
 
 
+def test_failed_system_package_install_retains_unresolved_handoff(migration_guest, monkeypatch):
+    original = ordinary_remote.command
+
+    def fail_apt(args, **kwargs):
+        if args[0] == "apt-get":
+            assert ordinary_remote.OPERATION is not None
+            assert ops.Journal().read()["phase"] == "install"
+            raise RuntimeError("injected system package failure")
+        return original(args, **kwargs)
+
+    monkeypatch.setattr(ordinary_remote, "command", fail_apt)
+    with pytest.raises(RuntimeError, match="injected system package failure"):
+        run_protocol(monkeypatch, requests(migration_guest))
+    assert ops.Journal().read()["state"] == "unresolved"
+    assert ordinary_remote.OPERATION is None
+    assert migration_guest.state["installs"] == 0
+    assert not migration_guest.marker.exists()
+
+
+def test_exact_recovery_wheel_planning_does_not_rebuild(migration_guest, monkeypatch):
+    fixture = migration_guest
+    monkeypatch.setattr(
+        fixture.ssh,
+        "_build_wheel",
+        lambda **kwargs: pytest.fail("approved recovery artifact was rebuilt"),
+    )
+    plan = vm_ha_package.inspect_plan(
+        fixture.ssh,
+        "203.0.113.10",
+        fixture.instance,
+        {},
+        target_identity="compute-a",
+        wheel=fixture.plan.wheel,
+    )
+    try:
+        assert plan.wheel == fixture.plan.wheel
+        assert plan.digest == fixture.plan.digest
+    finally:
+        plan.close()
+
+
 def requests(fixture):
     plan = fixture.plan
     staged = {"wheel": base64.b64encode(plan.wheel.read_bytes()).decode(), "dependency_wheels": {}}
     return [
         dict(
             action="reserve",
-            ingress_policy={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []},
+            ingress_policy={"peer_ips": []},
             observed=guest.inspect(fixture.ha),
             ha=fixture.ha,
             binding="2" * 64,

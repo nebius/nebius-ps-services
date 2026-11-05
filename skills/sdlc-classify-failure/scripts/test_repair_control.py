@@ -114,6 +114,29 @@ def localized_diagnosis(
     }
 
 
+def validation_diagnosis(event: dict[str, object]) -> dict[str, object]:
+    value = localized_diagnosis(event)
+    value.update({
+        "result": "validation_defect",
+        "earliest_divergence": {
+            "component": "design candidate",
+            "operation": "write candidate text",
+            "source_boundary": "terminal newline",
+        },
+        "violated_invariant": "The candidate has exactly one terminal newline.",
+        "causal_chain": ["The repair appended a second newline.", "The original Markdown check rejects it."],
+        "bounded_repair_target": "The candidate terminal newline only.",
+        "counterfactual": "One terminal newline passes the unchanged Markdown check.",
+        "alternatives_eliminated": ["The check correctly reports the candidate bytes."],
+        "affected_files": ["evidence/design-candidate.md"],
+        "regression_oracle": "Rerun the original candidate Markdown check.",
+        "required_regression_test": "Reject a candidate with two terminal newlines.",
+        "evidence_references": ["evidence/terminal-newline-proof.json"],
+        "constraints": ["Preserve design decisions, publication ownership and repair counters."],
+    })
+    return value
+
+
 def design_gate(*, broader: bool = False) -> dict[str, object]:
     return {
         "requirements_stable": True,
@@ -252,6 +275,19 @@ def revalidation_payload(
 
 
 class RepairControlTests(unittest.TestCase):
+    def test_timestamp_guidance_matches_existing_accepted_format(self) -> None:
+        canonical = "2026-11-03T10:00:00Z"
+        self.assertEqual(repair_control._now(canonical), canonical)
+        for value in (
+            "2026-11-03T10:00:00.123456+00:00",
+            "2026-11-03T10:00:00+00:00",
+            "2026-11-03T10:00:00.123456Z",
+        ):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                repair_control.RepairControlError, "YYYY-MM-DDTHH:MM:SSZ"
+            ):
+                repair_control._now(value)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.run_dir = Path(self.temporary.name) / "run"
@@ -292,6 +328,397 @@ class RepairControlTests(unittest.TestCase):
         self.assertEqual(classification["corrective_mode"], "corrective_plan_v_next")
         self.assertNotEqual(classification["next_recommended_skill"], "troubleshoot")
 
+    def test_active_environment_failure_uses_existing_task_attempt(self) -> None:
+        for confidence in ("proven", "high_confidence"):
+            with self.subTest(confidence=confidence):
+                payload = failure_payload(
+                    proposed="ENVIRONMENT_DEFECT", lifecycle="active_task",
+                    cause_status=confidence,
+                )
+                payload["phase"] = "sdlc-implement-plan"
+                classification = self.classify(self.record_event(payload))
+                self.assertEqual(classification["classification"], "ENVIRONMENT_DEFECT")
+                self.assertEqual(classification["status"], "routed")
+                self.assertEqual(classification["next_recommended_skill"], "sdlc-implement-plan")
+                self.assertEqual(classification["corrective_mode"], "existing_task_attempt")
+                self.assertEqual(classification["invalidates"], [
+                    "validation", "tests", "evaluation", "documentation", "alignment", "commit",
+                ])
+
+    def test_active_environment_dispatch_is_counted_and_requires_revalidation(self) -> None:
+        payload = failure_payload(proposed="ENVIRONMENT_DEFECT", lifecycle="active_task")
+        payload["phase"] = "sdlc-implement-plan"
+        event = self.record_event(payload)
+        classification = self.classify(event)
+        args = (
+            self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+            "Use the supported approved lookup while preserving the assignment.",
+            "evidence/environment-permission-comparison.json",
+        )
+        dispatched = repair_control.begin_remediation(*args)
+        duplicate = repair_control.begin_remediation(*args)
+        self.assertFalse(duplicate["created"])
+        self.assertEqual(duplicate["attempt"]["dispatch_id"], dispatched["attempt"]["dispatch_id"])
+        completed = repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", dispatched["attempt"]["dispatch_id"],
+            "succeeded", "evidence/original-operation-and-worker-validation.json",
+        )
+        control = completed["control"]
+        self.assertEqual(control["status"], "revalidation_required")
+        self.assertEqual(control["feature_dispatches"], 1)
+        self.assertEqual(control["active_blocker"]["total_attempts"], 1)
+        self.assertEqual([item["surface"] for item in control["revalidation"]["required"]], [
+            "validation", "tests", "evaluation", "documentation", "alignment", "commit",
+        ])
+        self.assertEqual(control["revalidation"]["cursor"], 0)
+        self.assertEqual(self.record_event(payload), event)
+        self.assertEqual(self.classify(event), classification)
+        self.assertEqual(repair_control._load_control(self.run_dir, "FEAT-001"), control)
+
+    def test_active_environment_route_does_not_expand_other_failure_authority(self) -> None:
+        cases = [
+            ("ENVIRONMENT_DEFECT", lifecycle, "sdlc-implement-plan", "proven", "blocked")
+            for lifecycle in repair_control.EXECUTION_LIFECYCLES - {"active_task"}
+        ] + [
+            ("ENVIRONMENT_DEFECT", "active_task", phase, "proven", "blocked")
+            for phase in ("implementation", "evaluation", "sdlc-unit-tests", "unknown-phase")
+        ] + [
+            (name, "active_task", "sdlc-implement-plan", "proven", "blocked")
+            for name in ("POLICY_BLOCK", "HUMAN_INPUT_REQUIRED")
+        ] + [
+            ("ENVIRONMENT_DEFECT", "active_task", "sdlc-implement-plan", confidence, "diagnosis_required")
+            for confidence in ("probable", "unknown")
+        ]
+        for proposed, lifecycle, phase, confidence, expected in cases:
+            with self.subTest(proposed=proposed, lifecycle=lifecycle, phase=phase, confidence=confidence):
+                with tempfile.TemporaryDirectory() as temporary:
+                    run = Path(temporary)
+                    payload = failure_payload(proposed=proposed, lifecycle=lifecycle, cause_status=confidence)
+                    payload["phase"] = phase
+                    event = repair_control.record_failure_event(run, payload)["event"]
+                    classification = repair_control.classify_failure(run, "FEAT-001", event["event_id"])["classification"]
+                    self.assertEqual(classification["status"], expected)
+                    self.assertNotEqual(classification["next_recommended_skill"], "sdlc-implement-plan")
+                    with self.assertRaises(repair_control.RepairControlError) as denied:
+                        repair_control.begin_remediation(
+                            run, "FEAT-001", classification["classification_id"],
+                            "localized", "Try a changed access path.", "evidence/access.json",
+                        )
+                    self.assertEqual(denied.exception.code, "REPAIR_NOT_AUTHORIZED")
+
+    def test_failed_active_environment_retry_requires_new_diagnosis(self) -> None:
+        payload = failure_payload(proposed="ENVIRONMENT_DEFECT", lifecycle="active_task")
+        payload["phase"] = "sdlc-implement-plan"
+        classification = self.classify(self.record_event(payload))
+        first = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+            "Use the authorized execution mechanism.", "evidence/access-comparison.json",
+        )
+        repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", first["attempt"]["dispatch_id"],
+            "failed_same_blocker", "The original operation still failed.",
+        )
+        with self.assertRaises(repair_control.RepairControlError) as denied:
+            repair_control.begin_remediation(
+                self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+                "A changed dependency path might restore access.", "evidence/new-access.json",
+            )
+        self.assertEqual(denied.exception.code, "TROUBLESHOOT_REQUIRED")
+
+    def test_unprepared_validation_returns_to_available_authoring_phase(self) -> None:
+        phases = (
+            "sdlc-create-requirements", "sdlc-gather-context", "sdlc-create-design",
+            "sdlc-auto-steering", "sdlc-create-plan", "sdlc-prepare-execution",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase):
+                payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle="unprepared")
+                payload["phase"] = phase
+                event = self.record_event(payload)
+                classification = self.classify(event)
+                self.assertEqual(classification["next_recommended_skill"], phase)
+                self.assertEqual(classification["corrective_mode"], "phase_artifact_repair")
+                self.assertEqual(classification["invalidates"], [])
+                self.assertEqual(classification["status"], "routed")
+
+    def test_failed_validation_repair_returns_from_diagnosis_without_reset(self) -> None:
+        payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle="unprepared")
+        payload["phase"] = "sdlc-create-design"
+        event = self.record_event(payload)
+        classification = self.classify(event)
+        first = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+            "Quote the path parameter to satisfy the original check.", "evidence/path-proof.json",
+        )
+        repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", first["attempt"]["dispatch_id"],
+            "failed_same_blocker", "evidence/original-check-still-fails.json",
+        )
+        with self.assertRaises(repair_control.RepairControlError) as denied:
+            repair_control.begin_remediation(
+                self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+                "Remove the extra terminal newline.", "evidence/terminal-newline-proof.json",
+            )
+        self.assertEqual(denied.exception.code, "TROUBLESHOOT_REQUIRED")
+        diagnosis_payload = validation_diagnosis(event)
+        diagnosis = repair_control.record_diagnosis(self.run_dir, diagnosis_payload)["diagnosis"]
+        self.assertFalse(repair_control.record_diagnosis(self.run_dir, diagnosis_payload)["created"])
+        classified = self.classify(event, diagnosis)
+        self.assertEqual(classified["classification"], "VALIDATION_DEFECT")
+        self.assertEqual(classified["next_recommended_skill"], "sdlc-create-design")
+        self.assertEqual(classified["corrective_mode"], "phase_artifact_repair")
+        self.assertEqual(classified["invalidates"], [])
+        self.assertEqual(self.classify(event, diagnosis), classified)
+        args = (
+            self.run_dir, "FEAT-001", classified["classification_id"], "localized",
+            "Exactly one terminal newline satisfies the unchanged check.",
+            "evidence/terminal-newline-proof.json",
+        )
+        second = repair_control.begin_remediation(*args)
+        self.assertEqual(second["attempt"]["ordinal"], 2)
+        self.assertFalse(repair_control.begin_remediation(*args)["created"])
+        completed = repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", second["attempt"]["dispatch_id"],
+            "succeeded", "evidence/original-check-passed.json",
+        )["control"]
+        self.assertEqual(completed["status"], "resolved")
+        self.assertEqual(completed["feature_dispatches"], 2)
+        self.assertEqual(completed["feature_dispatch_limit"], 4)
+        self.assertEqual(completed["active_blocker"]["total_attempts"], 2)
+        self.assertEqual(completed["active_blocker"]["localized_limit"], 2)
+        self.assertEqual(completed["active_blocker"]["attempts"][0]["result"], "failed_same_blocker")
+        self.assertEqual(self.record_event(payload), event)
+
+    def test_diagnosis_contract_rejects_retired_active_schema(self) -> None:
+        event = self.record_event()
+        payload = localized_diagnosis(event)
+        payload["schema"] = "agentic-sdlc/diagnosis-v2"
+        with self.assertRaisesRegex(repair_control.RepairControlError, "diagnosis schema is invalid"):
+            repair_control.record_diagnosis(self.run_dir, payload)
+
+    def test_validation_diagnosis_requires_complete_bounded_proof(self) -> None:
+        event = self.record_event()
+        for field in (
+            "earliest_divergence", "violated_invariant", "causal_chain", "counterfactual",
+            "alternatives_eliminated", "affected_files", "bounded_repair_target",
+            "regression_oracle", "required_regression_test", "evidence_references", "constraints",
+        ):
+            with self.subTest(field=field):
+                payload = validation_diagnosis(event)
+                payload.pop(field)
+                with self.assertRaises(repair_control.RepairControlError) as denied:
+                    repair_control.build_diagnosis(payload, event)
+                expected = "DIAGNOSIS_INCOMPLETE" if field == "earliest_divergence" else "RECORD_INVALID"
+                self.assertEqual(denied.exception.code, expected)
+        for confidence in ("probable", "unknown"):
+            payload = validation_diagnosis(event)
+            payload["confidence"] = confidence
+            with self.assertRaisesRegex(repair_control.RepairControlError, "cannot authorize"):
+                repair_control.build_diagnosis(payload, event)
+
+    def test_retired_active_diagnosis_cannot_authorize_or_complete_dispatch(self) -> None:
+        for dispatched in (False, True):
+            with self.subTest(dispatched=dispatched):
+                run = self.run_dir / str(dispatched)
+                with mock.patch.object(repair_control, "DIAGNOSIS_SCHEMA", "agentic-sdlc/diagnosis-v2"):
+                    event = repair_control.record_failure_event(run, failure_payload())["event"]
+                    diagnosis = repair_control.record_diagnosis(run, localized_diagnosis(event))["diagnosis"]
+                    classification = repair_control.classify_failure(
+                        run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"],
+                    )["classification"]
+                    args = (
+                        run, "FEAT-001", classification["classification_id"], "localized",
+                        "Use the proven canonical field.", "evidence/field-proof.json",
+                    )
+                    if dispatched:
+                        attempt = repair_control.begin_remediation(*args)["attempt"]
+                control_path = repair_control._control_path(run, "FEAT-001")
+                before = control_path.read_bytes()
+                with self.assertRaisesRegex(repair_control.RepairControlError, "diagnosis schema is invalid"):
+                    if dispatched:
+                        repair_control.complete_remediation(
+                            run, "FEAT-001", attempt["dispatch_id"],
+                            "succeeded", "evidence/check-passed.json",
+                        )
+                    else:
+                        repair_control.begin_remediation(*args)
+                self.assertEqual(control_path.read_bytes(), before)
+
+    def test_validation_diagnosis_retains_route_and_integrity_boundaries(self) -> None:
+        for phase, lifecycle, route in (
+            ("sdlc-create-design", "unprepared", "sdlc-create-design"),
+            ("unknown-phase", "unprepared", None),
+            ("sdlc-validate-codes", "unprepared", None),
+            ("sdlc-validate-codes", "waves_completed", "sdlc-validate-codes"),
+        ):
+            with self.subTest(phase=phase, lifecycle=lifecycle):
+                run = self.run_dir / (phase + lifecycle)
+                payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle=lifecycle)
+                payload["phase"] = phase
+                event = repair_control.record_failure_event(run, payload)["event"]
+                diagnosis = repair_control.record_diagnosis(run, validation_diagnosis(event))["diagnosis"]
+                classified = repair_control.classify_failure(
+                    run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"],
+                )["classification"]
+                self.assertEqual(classified["next_recommended_skill"], route)
+                self.assertEqual(classified["status"], "routed" if route else "blocked")
+                if route is None:
+                    with self.assertRaises(repair_control.RepairControlError):
+                        repair_control.begin_remediation(
+                            run, "FEAT-001", classified["classification_id"], "localized",
+                            "Repair the proven artifact.", "evidence/next-proof.json",
+                        )
+                path = repair_control._diagnosis_path(run, "FEAT-001", diagnosis["diagnosis_id"])
+                tampered = json.loads(path.read_text())
+                tampered["bounded_repair_target"] = "A different artifact."
+                path.write_text(json.dumps(tampered))
+                with self.assertRaisesRegex(repair_control.RepairControlError, "STATE_TAMPERED"):
+                    repair_control.classify_failure(run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"])
+        event = self.record_event()
+        for field, value, code in (
+            ("event_id", "0" * 64, "DIAGNOSIS_INVALID"),
+            ("execution_id", "FEAT-002", "DIAGNOSIS_INVALID"),
+            ("evidence_references", ["api_key=do-not-store"], "SECURITY_BLOCKER"),
+            ("result", "validation", "DIAGNOSIS_INVALID"),
+        ):
+            payload = validation_diagnosis(event)
+            payload[field] = value
+            with self.subTest(field=field), self.assertRaises(repair_control.RepairControlError) as denied:
+                repair_control.build_diagnosis(payload, event)
+            self.assertEqual(denied.exception.code, code)
+
+    def test_active_diagnosis_references_reject_invalid_ids_before_lookup(self) -> None:
+        event = self.record_event()
+        self.record_localized(event)
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        control = json.loads(path.read_text())
+        original_read = repair_control._read_json
+        allowed = {path, repair_control._event_path(self.run_dir, "FEAT-001", event["event_id"])}
+
+        def bounded_read(candidate):
+            self.assertIn(candidate, allowed, "invalid identity reached a record lookup")
+            return original_read(candidate)
+
+        for key, value in (
+            ("current_event_id", "../../outside"),
+            ("current_event_id", None),
+            ("current_diagnosis_id", "../../outside"),
+            ("current_diagnosis_id", ["not-an-identity"]),
+        ):
+            with self.subTest(key=key, value=value):
+                path.write_text(json.dumps({**control, key: value}))
+                with mock.patch.object(repair_control, "_read_json", side_effect=bounded_read):
+                    with self.assertRaises(repair_control.RepairControlError) as denied:
+                        repair_control._load_control(self.run_dir, "FEAT-001")
+                self.assertEqual(denied.exception.code, "STATE_INVALID")
+
+    def test_historical_retired_diagnosis_cannot_authorize_new_dispatch(self) -> None:
+        with mock.patch.object(repair_control, "DIAGNOSIS_SCHEMA", "agentic-sdlc/diagnosis-v2"):
+            event = self.record_event()
+            diagnosis = self.record_localized(event)
+            classification = self.classify(event, diagnosis)
+            self.record_event(failure_payload(commit="b" * 40))
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        before = path.read_bytes()
+        self.assertIsNone(json.loads(before)["current_diagnosis_id"])
+        with self.assertRaisesRegex(repair_control.RepairControlError, "diagnosis schema is invalid"):
+            repair_control.begin_remediation(
+                self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+                "Use the proven canonical field.", "evidence/field-proof.json",
+            )
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_historical_retired_diagnosis_cannot_complete_dispatch(self) -> None:
+        for result in ("succeeded", "failed_same_blocker"):
+            with self.subTest(result=result):
+                run = self.run_dir / result
+                with mock.patch.object(repair_control, "DIAGNOSIS_SCHEMA", "agentic-sdlc/diagnosis-v2"):
+                    event = repair_control.record_failure_event(run, failure_payload())["event"]
+                    diagnosis = repair_control.record_diagnosis(run, localized_diagnosis(event))["diagnosis"]
+                    classification = repair_control.classify_failure(
+                        run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"],
+                    )["classification"]
+                    attempt = repair_control.begin_remediation(
+                        run, "FEAT-001", classification["classification_id"], "localized",
+                        "Use the proven canonical field.", "evidence/field-proof.json",
+                    )["attempt"]
+                    repair_control.record_failure_event(run, failure_payload(commit="b" * 40))
+                paths = (
+                    repair_control._control_path(run, "FEAT-001"),
+                    repair_control._journal_path(run, "FEAT-001"),
+                )
+                before = [path.read_bytes() for path in paths]
+                with self.assertRaisesRegex(repair_control.RepairControlError, "diagnosis schema is invalid"):
+                    repair_control.complete_remediation(
+                        run, "FEAT-001", attempt["dispatch_id"], result, "evidence/check.json",
+                    )
+                self.assertEqual([path.read_bytes() for path in paths], before)
+
+    def test_active_diagnosis_is_bound_to_control_blocker(self) -> None:
+        event = self.record_event()
+        self.record_localized(event)
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        control = json.loads(path.read_text())
+        control["active_blocker"]["blocker_key"] = "foreign|operation|error|boundary"
+        path.write_text(json.dumps(control))
+        with self.assertRaisesRegex(repair_control.RepairControlError, "diagnosis blocker"):
+            repair_control._load_control(self.run_dir, "FEAT-001")
+
+    def test_unprepared_validation_rejects_unavailable_phase_without_dispatch(self) -> None:
+        for phase in ("unknown-phase", "design", "sdlc-validate-codes", "sdlc-start"):
+            with self.subTest(phase=phase):
+                payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle="unprepared")
+                payload["phase"] = phase
+                event = self.record_event(payload)
+                classification = self.classify(event)
+                self.assertEqual(classification["status"], "blocked")
+                self.assertIsNone(classification["next_recommended_skill"])
+                with self.assertRaises(repair_control.RepairControlError):
+                    repair_control.begin_remediation(
+                        self.run_dir, "FEAT-001", classification["classification_id"],
+                        "localized", "Repair the phase artifact.", "evidence/validation.md",
+                    )
+
+    def test_preparation_artifact_repair_preserves_identity_and_counted_completion(self) -> None:
+        payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle="unprepared")
+        payload["phase"] = "sdlc-create-design"
+        event = self.record_event(payload)
+        classification = self.classify(event)
+        self.assertEqual(classification["next_recommended_skill"], "sdlc-create-design")
+        args = (
+            self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+            "Correct the proven candidate syntax without changing its architecture.",
+            "evidence/candidate-validation.md",
+        )
+        dispatched = repair_control.begin_remediation(*args)
+        repeated = repair_control.begin_remediation(*args)
+        self.assertFalse(repeated["created"])
+        self.assertEqual(repeated["attempt"]["dispatch_id"], dispatched["attempt"]["dispatch_id"])
+        completed = repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", dispatched["attempt"]["dispatch_id"],
+            "succeeded", "evidence/original-candidate-check-passed.md",
+        )
+        self.assertEqual(completed["control"]["status"], "resolved")
+        self.assertEqual(completed["control"]["feature_dispatches"], 1)
+        self.assertEqual(completed["control"]["active_blocker"]["total_attempts"], 1)
+        self.assertEqual(self.record_event(payload), event)
+        self.assertEqual(self.classify(event), classification)
+        self.assertEqual(repair_control._load_control(self.run_dir, "FEAT-001")["status"], "resolved")
+
+    def test_validation_route_retains_prepared_and_unproven_controls(self) -> None:
+        payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle="waves_completed")
+        payload["phase"] = "sdlc-validate-codes"
+        classification = self.classify(self.record_event(payload))
+        self.assertEqual(classification["next_recommended_skill"], "sdlc-validate-codes")
+        self.assertIsNone(classification["corrective_mode"])
+        payload = failure_payload(
+            proposed="VALIDATION_DEFECT", lifecycle="unprepared", cause_status="probable",
+        )
+        payload["phase"] = "sdlc-create-design"
+        classification = self.classify(self.record_event(payload))
+        self.assertEqual(classification["status"], "diagnosis_required")
+        self.assertEqual(classification["next_recommended_skill"], "troubleshoot")
+
     def test_execution_cli_classifies_recorded_failure(self) -> None:
         event = self.record_event()
         output = io.StringIO()
@@ -323,7 +750,9 @@ class RepairControlTests(unittest.TestCase):
                 self.assertEqual(repair_control.main(), 0)
                 self.assertEqual(call.call_args.args[:2], (self.run_dir, "SLICE-002"))
 
-    def environment_recovery_fixture(self, proposed="ENVIRONMENT_DEFECT"):
+    def environment_recovery_fixture(
+        self, proposed="ENVIRONMENT_DEFECT", *, phase="evaluation", surface="evaluation"
+    ):
         integration = self.run_dir / "worktrees" / "FEAT-001" / "integration"
         integration.mkdir(parents=True)
         for arguments in (
@@ -338,7 +767,9 @@ class RepairControlTests(unittest.TestCase):
         head = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=integration, text=True
         ).strip()
-        event = self.record_event(failure_payload(proposed=proposed, commit=head))
+        failure = failure_payload(proposed=proposed, commit=head)
+        failure["phase"] = phase
+        event = self.record_event(failure)
         classification = self.classify(event)
         coordinator = self.run_dir / "execution/FEAT-001/coordinator.json"
         coordinator.parent.mkdir(parents=True)
@@ -364,13 +795,80 @@ class RepairControlTests(unittest.TestCase):
                 }
             )
         )
-        payload = revalidation_payload(self.run_dir, "evaluation", 0, commit=head)
+        payload = revalidation_payload(self.run_dir, surface, 0, commit=head)
         payload.update(
             schema="agentic-sdlc/environment-recovery-v2",
             event_id=event["event_id"],
             classification_id=classification["classification_id"],
         )
         return event, classification, payload, integration
+
+    def test_environment_phase_name_can_recover_its_canonical_gate(self):
+        event, classification, payload, _ = self.environment_recovery_fixture(
+            phase="sdlc-unit-tests", surface="tests"
+        )
+        result = repair_control.record_environment_recovery(self.run_dir, payload)
+        self.assertEqual(classification["invalidates"], ["tests"])
+        self.assertEqual(result["control"]["status"], "resolved")
+        self.assertEqual(result["recovery"]["next_recommended_skill"], "sdlc-unit-tests")
+        self.assertEqual(
+            repair_control._load_event(self.run_dir, "FEAT-001", event["event_id"]),
+            event,
+        )
+        self.assertEqual(event["phase"], "sdlc-unit-tests")
+
+    def test_environment_phase_name_preserves_gate_on_independent_failure(self):
+        failure = failure_payload(proposed="ENVIRONMENT_DEFECT")
+        failure["phase"] = "sdlc-unit-tests"
+        event = self.record_event(failure)
+        original = self.classify(event)
+        payload = failure_payload(
+            proposed="VALIDATION_DEFECT", component="checker",
+            operation="parse checker options", error_class="invalid boolean",
+            source_boundary="checker invocation",
+            independent="The checker rejects its options before reading product code.",
+        )
+        payload["phase"] = "sdlc-validate-codes"
+        classification = self.classify(self.record_event(payload))
+        self.assertEqual(classification["invalidates"], ["tests"])
+        self.assertEqual(classification["inherited_invalidations"], [{
+            "event_id": event["event_id"],
+            "classification_id": original["classification_id"],
+            "surface": "tests",
+        }])
+        self.assertEqual(
+            repair_control._load_classification(
+                self.run_dir, "FEAT-001", original["classification_id"]
+            ), original,
+        )
+
+    def test_unsupported_environment_phase_retains_prior_obligations(self):
+        for phase in ("sdlc-tdd", "sdlc-gui-test", "sdlc-uat-tests", "unknown-phase"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                run = Path(temporary)
+                first = repair_control.record_failure_event(run, failure_payload())["event"]
+                original = repair_control.classify_failure(run, "FEAT-001", first["event_id"])["classification"]
+                prior = repair_control._load_control(run, "FEAT-001")["invalidations"]
+                payload = failure_payload(
+                    proposed="ENVIRONMENT_DEFECT", component="environment",
+                    operation="open fixture", error_class="fixture unavailable",
+                    source_boundary="fixture host",
+                    independent="The fixture is independently unavailable.",
+                )
+                payload["phase"] = phase
+                event = repair_control.record_failure_event(run, payload)["event"]
+                blocked = repair_control.classify_failure(run, "FEAT-001", event["event_id"])["classification"]
+                self.assertEqual(blocked["status"], "blocked")
+                self.assertIsNone(blocked["corrective_mode"])
+                self.assertEqual(blocked["invalidates"], [])
+                self.assertEqual(blocked["inherited_invalidations"], prior)
+                self.assertEqual(repair_control._load_control(run, "FEAT-001")["invalidations"], prior)
+                diagnosis = repair_control.record_diagnosis(run, localized_diagnosis(event))["diagnosis"]
+                resumed = repair_control.classify_failure(
+                    run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"]
+                )["classification"]
+                self.assertEqual(resumed["invalidates"], original["invalidates"])
+                self.assertEqual(resumed["inherited_invalidations"], prior)
 
     def test_environment_gate_recovery_preserves_failure_and_budget(self):
         event, classification, payload, _ = self.environment_recovery_fixture()
@@ -784,6 +1282,156 @@ class RepairControlTests(unittest.TestCase):
 
     def test_success_requires_ordered_commit_bound_revalidation(self) -> None:
         self._exercise_ordered_revalidation()
+
+    def test_independent_checker_repair_retains_prior_gate_obligations(self) -> None:
+        original = self.classify(self.record_event())
+        dispatched = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", original["classification_id"], "localized",
+            "Repair the response mapping.", "evidence/mapping-proof.json",
+        )
+        first = repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", dispatched["attempt"]["dispatch_id"],
+            "succeeded", "evidence/mapping-oracle.json",
+        )["control"]
+        old_cursor = first["revalidation"]
+        payload = failure_payload(
+            proposed="VALIDATION_DEFECT", component="checker",
+            operation="parse checker options", error_class="invalid boolean",
+            source_boundary="checker invocation",
+            independent="The checker rejects its options before reading product code.",
+        )
+        payload["phase"] = "sdlc-validate-codes"
+        event = self.record_event(payload)
+        second = self.classify(event)
+        self.assertEqual(second["classification"], "VALIDATION_DEFECT")
+        self.assertEqual(second["invalidates"], original["invalidates"])
+        self.assertTrue(second["inherited_invalidations"])
+        dispatched = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", second["classification_id"], "localized",
+            "Correct the checker boolean option.", "evidence/checker-options.json",
+        )
+        result = repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", dispatched["attempt"]["dispatch_id"],
+            "succeeded", "evidence/original-checker-oracle.json",
+        )
+        control = result["control"]
+        self.assertEqual(control["status"], "revalidation_required")
+        self.assertEqual(control["revalidation"]["required"], old_cursor["required"])
+        self.assertNotEqual(control["revalidation"]["cursor_id"], old_cursor["cursor_id"])
+        self.assertEqual(control["revalidation"]["completed_revalidation_ids"], [])
+        self.assertIsNone(control["revalidation"]["integration_commit"])
+        self.assertEqual(control["feature_dispatches"], 2)
+        self.assertEqual(control["active_blocker"]["total_attempts"], 1)
+        archives = list((self.run_dir / "repairs/FEAT-001/cursor-archives").glob("*.json"))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(json.loads(archives[0].read_text())["previous"], old_cursor)
+        self.assertEqual(self.classify(event), second)
+        self.assertEqual(repair_control._load_control(self.run_dir, "FEAT-001"), control)
+
+    def _complete_localized(self, classification, label, result="succeeded"):
+        dispatched = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+            f"Repair the independently established {label} cause.", f"evidence/{label}.json",
+        )
+        return repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", dispatched["attempt"]["dispatch_id"],
+            result, f"evidence/{label}-verification.json",
+        )
+
+    def test_prior_partial_and_complete_receipts_remain_historical(self) -> None:
+        for count in (1, 6):
+            with self.subTest(completed_gates=count), tempfile.TemporaryDirectory() as temporary:
+                self.run_dir = Path(temporary) / "run"
+                payload = failure_payload()
+                original = self.classify(self.record_event(payload))
+                first = self._complete_localized(original, "mapping")["control"]
+                with mock.patch.object(repair_control, "_current_revalidation_commit", return_value="a" * 40), mock.patch.object(
+                    repair_control, "_current_fingerprints", return_value=payload["fingerprints"]
+                ):
+                    for index, required in enumerate(first["revalidation"]["required"][:count]):
+                        first = repair_control.record_revalidation(self.run_dir, revalidation_payload(
+                            self.run_dir, required["surface"], index,
+                            commit="a" * 40, fingerprints=payload["fingerprints"],
+                        ))["control"]
+                    old_cursor = first["revalidation"]
+                    old_bytes = {identity: repair_control._revalidation_path(
+                        self.run_dir, "FEAT-001", identity
+                    ).read_bytes() for identity in old_cursor["completed_revalidation_ids"]}
+                    # The same causal blocker recurs with a new event. Its budget is retained.
+                    payload["observed"] = "A distinct response branch violates the same mapping invariant."
+                    event = self.record_event(payload)
+                    new = self.classify(event)
+                    result = self._complete_localized(new, "second-mapping")
+                    control = result["control"]
+                    self.assertEqual(control["active_blocker"]["total_attempts"], 2)
+                    self.assertEqual(control["revalidation"]["cursor"], 0)
+                    self.assertIsNone(control["revalidation"]["integration_commit"])
+                    self.assertEqual(control["revalidation"]["completed_revalidation_ids"], [])
+                    current = repair_control.record_revalidation(self.run_dir, revalidation_payload(
+                        self.run_dir, "validation", 7, commit="a" * 40,
+                        fingerprints=payload["fingerprints"],
+                    ))["control"]
+                    self.assertEqual(self.record_event(payload), event)
+                    self.assertEqual(self.classify(event), new)
+                    replay = self._complete_localized(new, "second-mapping")
+                    self.assertFalse(replay["updated"])
+                    self.assertEqual(replay["control"], current)
+                archives = list((self.run_dir / "repairs/FEAT-001/cursor-archives").glob("*.json"))
+                self.assertEqual(len(archives), 1)
+                self.assertEqual(json.loads(archives[0].read_text())["previous"], old_cursor)
+                for identity, data in old_bytes.items():
+                    self.assertEqual(repair_control._revalidation_path(
+                        self.run_dir, "FEAT-001", identity
+                    ).read_bytes(), data)
+
+    def test_new_earlier_gates_are_ordered_and_failed_repair_keeps_obligations(self) -> None:
+        original = self.classify(self.record_event())
+        self._complete_localized(original, "mapping")
+        payload = failure_payload(
+            proposed="PLAN_DEFECT", component="plan",
+            independent="A missing plan dependency is independent of the response mapper.",
+        )
+        new = self.classify(self.record_event(payload))
+        self.assertEqual(new["invalidates"], [
+            "execution_preparation", "implementation", "validation", "tests",
+            "evaluation", "documentation", "alignment", "commit",
+        ])
+        result = self._complete_localized(new, "plan-dependency", "failed_same_blocker")
+        self.assertEqual(result["control"]["status"], "diagnosis_required")
+        self.assertTrue(result["control"]["invalidations"])
+        self.assertEqual(len(list((self.run_dir / "repairs/FEAT-001/cursor-archives").glob("*.json"))), 1)
+
+    def test_tampered_inherited_reference_is_rejected_before_classification(self) -> None:
+        original = self.classify(self.record_event())
+        self._complete_localized(original, "mapping")
+        event = self.record_event(failure_payload(
+            proposed="VALIDATION_DEFECT", component="checker",
+            independent="Checker parsing fails independently before reading source.",
+        ))
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        baseline = path.read_bytes()
+        for field, value in (("surface", "requirements"), ("event_id", "f" * 64),
+                             ("classification_id", "../outside")):
+            with self.subTest(field=field):
+                control = json.loads(baseline)
+                control["invalidations"][0][field] = value
+                path.write_text(json.dumps(control))
+                with self.assertRaises(repair_control.RepairControlError) as denied:
+                    self.classify(event)
+                self.assertEqual(denied.exception.code, "STATE_TAMPERED")
+                self.assertEqual(json.loads(path.read_text()), control)
+        path.write_bytes(baseline)
+
+    def test_new_diagnosis_archives_cursor_before_reclassification(self) -> None:
+        event = self.record_event()
+        original = self.classify(event)
+        before = self._complete_localized(original, "mapping")["control"]
+        diagnosis = self.record_localized(event)
+        new = self.classify(event, diagnosis)
+        self.assertEqual(new["invalidates"], original["invalidates"])
+        archives = list((self.run_dir / "repairs/FEAT-001/cursor-archives").glob("*.json"))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(json.loads(archives[0].read_text())["previous"], before["revalidation"])
 
     def test_route_refresh_invalidates_progress_preserves_audit_and_replays(
         self,

@@ -403,7 +403,7 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
     advanced = prompt.ask_bool(
         "Configure advanced VM and HA settings",
         default=advanced_default,
-        help_text="Choose yes to customize VM sizing, SSH paths, quotas, timers, or explicit VM-level HA.",
+        help_text="Choose yes to customize VM sizing, SSH paths, Security Groups, quotas, timers, or explicit VM-level HA.",
     )
     if advanced:
         vm_spec = t.cast(dict[str, t.Any], group["vm_spec"])
@@ -467,6 +467,17 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             maximum=600,
             help_text="Must be greater than the DPD interval.",
         )
+        group["initial_security_group_ids"] = _csv_values(
+            prompt,
+            "Initial customer Security Group IDs (comma-separated, optional)",
+            default=group.get("initial_security_group_ids", []),
+            validator=_validate_name,
+            help_text=(
+                "Use existing groups from the gateway VPC. Applied only when creating new VMs; "
+                "replacement preserves each VM's live attached groups. vpngw never manages their rules."
+            ),
+            required=False,
+        )
         _vm_ha_config(prompt, group)
     else:
         group["vm_ha"] = {"enabled": False}
@@ -523,21 +534,6 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
         help_text="Networks behind Nebius that the gateway advertises or permits through static tunnels.",
         required=True,
         validator=_validate_cidr,
-    )
-    from .ingress_policy import normalize_cidrs
-
-    existing_sources = gateway.get("ssh_allowed_cidrs") or []
-    gateway["ssh_allowed_cidrs"] = _csv_values(
-        prompt,
-        "SSH allowed source CIDRs (comma-separated, required)",
-        default=[c for c in existing_sources if "${" not in c],
-        help_text=(
-            "Include administrators AND the machine running apply; use the source seen "
-            "by the gateway after NAT or a bastion. This protects ordinary and both HA nodes. "
-            "At least one IPv4/IPv6 CIDR is required; there is no allow-all fallback."
-        ),
-        required=True,
-        validator=lambda value: normalize_cidrs([value])[0],
     )
     try:
         GatewayGroup.model_validate(group)

@@ -4,11 +4,8 @@ Site-to-site IPsec/BGP VPN gateway for Nebius AI Cloud. Supports GCP HA VPN, AWS
 
 This project is an open source, self-service, VM-based Nebius VPN gateway. It is not a managed Nebius VPN service.
 
-**Upgrade requirement:** ordinary and HA configurations now require
-`gateway.ssh_allowed_cidrs`, including the source used by `apply`. Existing customers
-must update their YAML before applying. Installing the CLI alone does not change
-gateway SSH access. Read the [SSH allowlist migration](#ssh-allowlist-migration)
-before upgrading a deployed gateway.
+SSH uses key authentication. Manage SSH source restrictions through customer-owned
+Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access).
 
 ## Table of Contents
 
@@ -26,7 +23,7 @@ before upgrading a deployed gateway.
 - [VM Management](#vm-management)
 - [System Monitoring](#system-monitoring)
 - [Security](#security)
-- [SSH allowlist migration](#ssh-allowlist-migration)
+- [SSH access](#ssh-access)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Release & Versioning](#release--versioning)
@@ -114,6 +111,8 @@ Workflow:
    `project_id` must be set to a real value (or resolved via `${PROJECT_ID}` env var) before `prep-network`.
    Set `gateway_group.network_id` if you want a custom Nebius VPC instead of the auto-resolved `default-network`.
    Omitting it is supported; `apply` reports the selected network once while retaining its internal VM-HA safety rereads.
+   Optional unresolved network or public-IP placeholders do not excuse a missing
+   variable reused in a required field, such as `project_id` or a tunnel PSK.
 2. Run network preparation:
 
    ```bash
@@ -233,6 +232,12 @@ that recovery requires fresh disruption approval. A dead process, empty job list
 or reboot alone does not clear the guard. Preserve
 `/var/lib/nebius-vpngw/ordinary/operation.json` when diagnosing an unresolved update.
 Do not delete it or run another deployment tool to bypass admission.
+
+Deployment readiness uses authenticated SSH with the configured management user,
+credentials and host-key policy. Public ICMP replies are not required for an
+upgrade. SSH identity failures stop immediately; cloud-init, ESP4 and the remaining
+bootstrap checks still run before configuration changes, within their existing
+deadlines.
 
 If a newly activated maintenance timer starts its guarded job during final
 verification, apply waits for that job within the existing deadline, keeping the
@@ -565,10 +570,132 @@ can still complete safely when restoration is unavailable; fixed reason codes
 in the controller journal distinguish cleanup, arming and commit rejection.
 No operator record editing or heartbeat-timeout change is needed.
 
-During an agent-schema upgrade, activation invalidates only the
-cached advisory peer heartbeat through an exact generation-bound reset consumed
-after the old controller stops, while retaining the anti-replay boundary. The
-restarted controller must authenticate fresh peer evidence before using it.
+VM-HA publishes strict heartbeat v5 independently of cloud reads and effects.
+The one-second publisher and bounded local sampler distinguish transport liveness,
+serving-path health, standby readiness and cloud authority. Authenticated challenge
+round trips bound sample age without assuming synchronized clocks. Cloud delay
+alone does not trigger takeover when current cloud ownership and fresh peer
+forwarding health agree. Unknown health and missing cloud authority retain the
+existing fail-closed behavior; peer silence, suspicion and repair timers are unchanged.
+Normal cloud observation has one cumulative 30-second budget. Journalled cloud
+effects retain their separate 300-second limit.
+Tunnel-selection changes invalidate path readiness without erasing independently
+sampled service liveness. The sender admits service samples only below five
+seconds old; the receiver requires its own challenge/echo freshness proof before
+using them for the existing bounded Static recovery grace. Repeated samples
+cannot renew that proof or the recovery deadline, and service liveness establishes
+neither forwarding nor ownership.
+A pending BGP tunnel operation retains only independently verified native
+forwarding evidence while selector verification completes. Pending intent itself
+grants no readiness or additional recovery grace; incomplete BGP or XFRM evidence
+continues to fail closed. During an eligible active BGP switch, fresh exports may
+still exactly match the normal policy or the previous selected tunnel while the
+new policy is being applied. That complete serving path remains healthy; the
+command still requires the requested policy to converge. Extra or missing
+advertisements and incomplete route or XFRM coverage remain unready. This adds no
+failover grace and changes neither standby admission nor cloud fencing.
+If a failed or timed-out request releases its override, the exact requested
+policy may still serve while normal policy is being restored. The same bounded
+operation and native health checks apply throughout that restoration.
+Owner redundancy status combines fresh standby path evidence with the owner's
+exact cloud observation and current promotion-bound restoration receipt. A
+standby's ordinary cloud read does not erase otherwise proven redundancy;
+promotion still requires the acting controller's own current cloud authority.
+An exhausted observation fences the local data plane and terminates that controller
+runtime. The existing systemd restart policy recreates its publisher and challenge
+proofs; a runtime with stopped heartbeat workers never resumes ownership decisions.
+
+An existing-pair upgrade stages both artifacts, inhibits the non-owner then owner,
+proves both writers quiescent, and stops both under verified forwarding guards
+before installing either package. Shutdown includes the periodic route timer,
+route and health maintenance, dependent agent, FRR and strongSwan services in one
+transaction that rejects conflicting starts while it runs. Package replacement
+requires every selected service to be inactive or failed with no
+main process, control process or pending systemd job, and a successful current-boot
+forwarding guard. A historical failed service result does not override that
+fresh guard proof; current stop or guard failures still reject the upgrade.
+HA passive materialization and active reloads update runtime XFRM settings only,
+preserving the persistent forwarding-off boot policy.
+Activation invalidates only the advisory peer
+heartbeat cache while preserving anti-replay, sequence and operation journals.
+Both controllers must prove fresh reciprocal v5 traffic while still fenced;
+the exact owner is released and verified before the standby. Interrupted upgrades
+retain the exact artifact binding and guards for supported apply recovery.
+If final lifecycle persistence fails after a failover, recovery verifies and
+relocks the current non-owner and owner using observed ownership, independent
+of their configured initial roles. System-package installation participates in
+the same operation journal and runs after writer and predecessor checks.
+A later upgrade after a completed standby replacement follows the normal retained-pair
+path. Replacement policy adoption belongs only to the current replacement transaction;
+the later upgrade preserves the existing policy and cannot reuse historical replacement authority.
+If a retained pair is already stopped and locked at a host-only upgrade step,
+`apply --dry-run` can propose an exact repaired-artifact recovery. Approve its
+disruption digest with `apply --approve-disruption DIGEST`. Both current-boot
+fences, cloud identities, package postconditions and reciprocal credential trust
+must verify before the repaired build resumes normal activation. The lifecycle
+retains the previous artifact and interrupted step; no VM, disk, IP or credential
+is replaced by this recovery. SSH trust checks follow the same recovery journal
+and continue to reject unrelated lifecycle changes. Prepared recovery re-verifies
+both stopped writers, current-boot fences and exact packages before activation;
+it does not wait for an acknowledgement from a stopped controller. A resumed
+activation permits controller progress while retaining exact configuration and
+credential identity, then stops and re-verifies every writer. Once owner release
+has started, resume uses the normal controller acknowledgement gate. Unknown cloud
+operations or an already released member reject this path. Normal customer
+upgrades have a release qualification gate of at most two minutes of independently
+measured traffic interruption; recovery from an already failed upgrade is reported
+separately. The tested artifact met that normal-upgrade gate on both HA pairs.
+Overall release acceptance remains unresolved because a separate Static steady
+window exceeded the temporary loss exception. The
+[qualification report](docs/github-issues/238-vpngw-slow-cloud-api-responses-causes-unnecessary-failovers-and-broken-states.md#ssh-readiness-candidate-qualification-2026-11-04-acceptance-unresolved)
+records the exact artifact and distinguishes subsequent source changes.
+One-member replacement or artifact recovery rejects a heartbeat wire change.
+Restore a compatible pair before a coordinated upgrade; no mixed-version fallback
+or one-member downgrade is supported. This upgrade can interrupt forwarding.
+Apply waits up to 60 seconds for the exact inhibition acknowledgement before
+stopping either controller; unrelated verification errors fail immediately.
+The first durable apply intent pins the artifact and whether the pair is fresh or
+being upgraded. An interrupted retained pair without that intent must establish
+the full inhibition and stopped-writer barrier before any package replacement.
+A newly approved missing-standby replacement pins its own reviewed artifact
+before the first durable write. Ordinary replacement resume must reuse that
+artifact; completed predecessor artifact identities remain in audit history.
+An interrupted replacement that has created both its disk and Compute instance,
+but has not completed peer verification/publication or released its guards, can
+propose `replacement-artifact-recovery` when its pinned runtime cannot adopt a
+canonical policy or resolve the managed replacement peer. The exact standby may
+already be activated; an already fenced owner requires current-boot guard and
+kernel forwarding-off evidence before the normal stopped-writer barrier.
+An acknowledged policy must exactly match the replacement's existing journal
+binding. A historical failed service state is retained for diagnosis; recovery
+still requires a successful current stop and guard, zero service PIDs, no pending
+jobs, and a current-boot forwarding-off fence before installing either package.
+Review the normal `vm-ha --dry-run` plan with the repaired wheel selected and
+approve its exact digest. This recovery interrupts traffic: it retains the owner
+inhibition and standby lock, fences and stops both hosts, installs the exact wheel
+non-owner-first, and verifies installed source before resuming the original
+transaction. It preserves VM, disk, IP and credential identities. A durable audit
+retains the original artifact and policy history; interrupted recovery accepts
+only the approved successor artifact. Earlier clients reject this extended record.
+No manual journal or artifact-pin edits are supported.
+A missing standby does not restart a serving owner when fresh allocation and local
+NIC reads still prove its ownership. Absence is reported as unknown and cannot
+replace the stopped-former-owner proof required for a takeover. During mTLS trust
+overlap, the exact replacement transaction identifies the current peer; repeated
+replacements do not infer Compute identity from certificate epoch ordering.
+Replacement cycle numbers count successive replacements of the same member,
+independently of automatic traffic failovers. Lifecycle state, cloud effects and
+cleanup inventory use the same counter grammar across boundaries such as 9→10→11
+and 99→100, preserving exact resource identity and prior replacement history.
+Missing-standby planning waits at most 30 seconds for an otherwise exact, guarded
+owner to finish its explicit runtime identity preflight after a controller restart.
+Pending, unavailable or failed identity proof never authorizes replacement;
+ownership, route-receipt and writer checks remain mandatory.
+Gateway bootstrap compresses bundled scripts using cloud-init's native encoding
+and validates the final enrolled user data against the 32 KiB limit before
+provisioning. Oversized SSH or ingress input fails locally before replacement
+disk creation; pinned SSH identity and file permissions are preserved.
+
 For planned maintenance, change the durable two-member policy with the same
 role-neutral command:
 
@@ -1557,7 +1684,7 @@ until fresh exact parity arrives.
 and the closed rearm phase/failure plus a supported action. Internal preparation,
 detection or repair, common-cutover, and redundancy-restoration durations remain
 available to the controller without exposing raw identity records. The clean-slate
-heartbeat-v4 envelope binds the managed-mTLS epoch and fingerprint actually
+heartbeat-v5 envelope binds the managed-mTLS epoch and fingerprint actually
 authenticated on each fresh connection; mixed or older wire versions fail
 closed. Its `promotion_ready` flag also represents a fresh exact alias-free
 passive standby. The earlier
@@ -1628,6 +1755,24 @@ that local safety transition before retiring old generation records. Runtime
 identity checks stay strict; forwarding stays disabled and apply fencing stays in place.
 Retry through a fresh `apply --dry-run` and its exact approval digest; do not
 delete checkpoints, receipts or apply locks manually.
+
+Controller checkpoints use schema v5, binding suspicion timers to the observing
+boot. A process restart on the same boot preserves elapsed suspicion; a new boot
+starts a fresh suspicion window without discarding pending recovery. Coordinated
+`apply` converts supported v1-v4 checkpoints only after exact package verification,
+under the existing apply lock, with forwarding disabled and writers stopped.
+Lossy predecessors and missing state on started hosts are rejected. During an
+interrupted conversion, resume the same approved artifact and operation; do not
+downgrade or edit the receipt. The first authorized v5 controller write completes
+the conversion, allowing subsequent applies and boots. Package repair paths that
+lack this coordinated lock require conversion through `apply` first.
+Fresh and replacement VMs receive their initial checkpoint before HA startup,
+using the current transaction's exact Compute creation evidence. A missing
+checkpoint on a previously activated member is never treated as a fresh VM.
+If a reboot starts ordinary management services during an interrupted first
+activation, the same authorized retry stops those writers before taking their
+locks and initializing the guarded checkpoint. Active HA controllers still
+block first-start admission.
 
 Every normal `status` includes a fresh three-second receive observation after
 the main tunnel table:
@@ -1807,7 +1952,6 @@ gateway_group:
     ssh_private_key_path: "~/.ssh/id_ed25519"
 
 gateway:
-  ssh_allowed_cidrs: ["203.0.113.4/32"]  # Replace with actual admin/apply source CIDRs
   local_asn: 65010
   local_prefixes:
     - "10.0.0.0/16"
@@ -2115,6 +2259,7 @@ Safe to rerun. This public command remains available independently of the
 - If an explicit CIDR is outside the current network pool, the CLI extends the network pool automatically when the target network has exactly one private pool
 
 - If `gateway_group.external_ips` is empty or partial, it selects or reserves missing public IPs, prints the complete matrix, and conditionally writes it into the YAML.
+- YAML updates accept indented and indentless address sequences, preserve adjacent fields, and validate the resulting matrix before publication.
 - Existing allocations are eligible only when they are stable, public, in the exact project/subnet, and unassigned or already assigned to the intended gateway VM/NIC. Multiple candidates are selected independently for VM 0 and VM 1; HA prompts label their initial active/passive roles.
 - A matching allocation attached to another resource fails closed instead of being adopted.
 - If the matching allocation is in a different subnet, the command fails immediately. Nebius marks public allocation subnet binding fields such as `subnet_id` and `cidr` as immutable, so `vpngw` does not attempt a cross-subnet move.
@@ -2125,7 +2270,6 @@ Safe to rerun. This public command remains available independently of the
 
 ```bash
 nebius-vpngw create-from-peer-config my-vpn.config.yaml \
-  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt \
   --peer-config-file branch-office.csv
 ```
@@ -2134,7 +2278,6 @@ Or use the output-path flag form:
 
 ```bash
 nebius-vpngw create-from-peer-config \
-  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt \
   --local-config-file my-vpn.config.yaml
 ```
@@ -2428,6 +2571,11 @@ its inner subnet or configured remote destinations. Probes are bound to that
 tunnel. The defaults shown above
 apply when timing and threshold fields are omitted.
 
+This probe configuration supports enabled Static tunnels only; BGP tunnels are
+rejected. Without end-to-end probes, healthy IPsec SAs, established BGP sessions
+and installed routes can coexist with blackholed workload traffic. Continue
+independent workload reachability checks when qualifying gateway availability.
+
 Confirmed Static coverage loss receives one persisted recovery episode of at
 most 30 seconds, reserving the final second for local fencing. Connections,
 candidates, retries, restarts and configuration changes cannot extend it or add
@@ -2445,13 +2593,21 @@ Upgrade HA through the supported non-owner-first `apply` workflow. Both members
 must run the new tunnel capability before a tunnel operation is admitted; there
 is no mixed-version failover fallback. SingleVM upgrades use ordinary in-place
 `apply`, retain existing routes, preferences, credentials and resources, and need
-no new configuration beyond the already documented `gateway.ssh_allowed_cidrs`
-migration. Healthy unchanged reapply remains non-disruptive. Measure any upgrade
+no additional source-filter configuration. Healthy unchanged reapply remains non-disruptive. Measure any upgrade
 interruption separately from steady-state loss (less than 0.2% in each tested
 direction); this feature introduces no numerical upgrade-outage limit.
 
 `restart-tunnel` remains supported only on ordinary gateways: Static restarts the
-selected IPsec tunnel, and BGP also resets its matching neighbor. For HA, inspect
+selected IPsec tunnel, and BGP also resets its matching neighbor.
+The command validates installed topology and all requested targets, then holds one
+writer lock through IPsec recovery and matching BGP resets. It confirms termination,
+submits initiation once and observes the exact installed ESP CHILD and both XFRM
+interface IDs. The remote deadline is `5 + 127*N + 31*P` seconds for `N` tunnels and
+`P` distinct BGP peers; SSH allows another 30 seconds. A lost connection, timeout or
+unconfirmed result exits nonzero and means completion is unknown. Inspect current
+state before retrying. Success confirms tunnel readiness and reset completion;
+it does not prove subsequent BGP convergence or end-to-end workload connectivity.
+ For HA, inspect
 `status` and use `apply` for configuration convergence. Ordinary Static has no
 manual tunnel or VM failover. Ordinary BGP keeps its existing operational neighbor
 shutdown override and failback behavior.
@@ -2485,10 +2641,19 @@ The gateway includes an automated health monitoring system that detects and reco
 
 **What it checks:**
 
-- IPsec state (CHILD_SA installed)
+- Exact established IKE and installed ESP CHILD with both configured XFRM IDs
 - BGP neighbor state (Established for BGP tunnels)
 - XFRM interface error counters
 - Optional ICMP ping to the BGP peer (`ping_enabled`)
+
+Health is `healthy`, `unhealthy` or `unknown`. Failed/malformed observations are
+unknown; a successfully queried missing or down BGP neighbor is unhealthy.
+Unknown-only samples preserve failure history and trigger neither reactive nor
+proactive restarts. Confirmed failures dominate other unavailable observations,
+and only confirmed health clears failure history. VM-HA monitoring remains
+observation-only; its controller owns recovery.
+An unavailable enabled ping probe is also unknown. The monitor's text output
+shows unknown counts separately and labels unavailable counters explicitly.
 
 **Configuration:**
 
@@ -2507,10 +2672,10 @@ defaults:
 
 **Monitoring Modes:**
 
-| Mode                   | Behavior                                      | Downtime                  | Use Case                    |
-|------------------------|-----------------------------------------------|---------------------------|-----------------------------|
-| **Reactive (default)** | Detect failures, restart only when broken     | ~35s during failures      | 100% uptime priority        |
-| **Proactive**          | Periodic restart every N hours (preventive)   | ~10-15s every N hours     | Prevent stale state buildup |
+| Mode                   | Behavior                              | Downtime                    | Use case                    |
+| ---------------------- | ------------------------------------- | --------------------------- | --------------------------- |
+| **Reactive (default)** | Repair confirmed failures             | Depends on peer negotiation | Failure recovery            |
+| **Proactive**          | Refresh healthy tunnels every N hours | Depends on peer negotiation | Prevent stale state buildup |
 
 **Detection Timing:**
 
@@ -2519,10 +2684,12 @@ With `max_failures_before_restart: 2` and `check_interval_seconds: 10`:
 1. **t=0s:** Normal operation
 2. **t=10s:** First failure detected → Immediate re-check in 5 seconds
 3. **t=15s:** Second failure confirmed → Tunnel restarted immediately
-4. **t=35s:** Tunnel re-established, traffic flows
+4. Restart submits once and observes exact CHILD readiness within a bounded window.
 
-**Total detection time: ~15 seconds** (not 20s)
-**Total recovery time: ~35 seconds** (detection + restart)
+Detection takes roughly 15 seconds plus query time. Native negotiation controls
+recovery time; the monitor allows up to 132 seconds for one IPsec restart.
+Readiness does not establish workload delivery, and unknown observations do not
+count as confirmed failures.
 
 **Service Management:**
 
@@ -2614,7 +2781,6 @@ defaults:
     mode: bgp
 
 gateway:
-  ssh_allowed_cidrs: ["203.0.113.4/32"]  # Replace with actual admin/apply source CIDRs
   local_asn: 64512
   local_prefixes:
     - "10.0.0.0/16"
@@ -2833,7 +2999,6 @@ Vendor detection is best-effort and currently recognizes **GCP**, **AWS**, **Azu
 
 ```bash
 nebius-vpngw create-from-peer-config nebius-vpn.config.yaml \
-  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt
 ```
 
@@ -2894,7 +3059,6 @@ gcloud compute routers describe my-router \
 
 ```bash
 nebius-vpngw create-from-peer-config gcp-ha-vpn.config.yaml \
-  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt
 ```
 
@@ -2902,7 +3066,6 @@ Equivalent flag form:
 
 ```bash
 nebius-vpngw create-from-peer-config \
-  --ssh-allowed-cidr 203.0.113.4/32 \
   --peer-config-file gcp-peer.txt \
   --local-config-file gcp-ha-vpn.config.yaml
 ```
@@ -3047,20 +3210,71 @@ as the runtime proof that the remote peer re-established the tunnels. Ordinary
 gateways using Static routing still require their documented `add-routes-local`
 workflow.
 
-### VM Recreation Workflow
+### VM replacement and recovery
+
+Inspect the exact replacement plan, then approve its printed digest:
 
 ```bash
-nebius-vpngw apply --local-config-file <file> --recreate-gw
+nebius-vpngw apply --local-config-file gateway.config.yaml --recreate-gw --dry-run
+nebius-vpngw apply --local-config-file gateway.config.yaml --recreate-gw \
+  --approve-disruption <printed-digest>
 ```
 
-**Process:**
+Replacement converges platform, preset, boot image family, disk type, block size
+and size. A newer image within the configured family alone does not force a
+replacement; an approved replacement freezes one exact image ID. Apply VPN policy
+or topology changes separately from infrastructure changes.
 
-1. Detach public IP allocations from old VM
-2. Delete old VM
-3. Create new VM with same specs
-4. Reattach public IP allocations
+1. Inspect every source VM's live Security Groups, effective SSH authorization,
+   allocations, configuration, attached boot disk and affected routes.
+2. Create one temporary candidate VM, boot disk and public management address at
+   a time. Attach the captured Security Groups in the creation request. Prepare
+   the candidate behind a persistent boot guard with VPN services, BGP, forwarding
+   and HA mutation services held inactive.
+3. Begin cutover by quiescing writers, then confirm the exact old VM is Stopped
+   before transferring its public address. HA replaces the observed nonowner
+   first and fences both current members while installing the new peer binding.
+4. Verify fresh pinned SSH, the preserved operator authorization, infrastructure,
+   Security Groups, configuration and service/route evidence. HA also verifies
+   reciprocal peer readiness and canonical promotion before replacing the former
+   owner.
+5. Retire the exact old Compute resource and its attached boot disk only when
+   product ownership of that disk is proven. Unproven or customer-owned disks are
+   retained and disclosed. Finish only after every member and cleanup are verified.
 
-**Downtime:** Tunnel re-establishment time only (IPs never change)
+Allow quota and temporary cost for the extra VM, disk and management address.
+Cutover includes service interruption and tunnel re-establishment; HA pair fencing
+also introduces a brief interruption. Public addresses and the HA shared allocation
+are retained. **Primary private addresses can change.** The plan lists exact
+product routes to rebind and customer routes that need attention. Update external
+references to old primary private addresses separately.
+
+The CLI prints an absolute path to its private, metadata-only recovery bundle:
+`~/.local/state/nebius-vpngw/replacement/<project>/<gateway>/recovery.json`.
+Keep that file and the exact approved YAML and CLI/agent artifact. An interrupted
+operation returns nonzero and retains its resources and guards. After stopping
+the earlier writer, resume with:
+
+```bash
+nebius-vpngw apply --local-config-file gateway.config.yaml \
+  --resume-replacement /absolute/path/to/recovery.json
+```
+
+Replacement and resume retain the apply coordinator's project/gateway writer lock
+through completion, alongside the replacement journal's transaction lock.
+The resume option asserts that the previous writer is quiescent. Local locks do
+not fence another laptop: run only one replacement writer. Another authorized
+operator can use the same private recovery bundle and their own SSH identity;
+the bundle contains no SSH private keys, VPN PSKs or runtime credentials. Exact
+runtime credentials needed for HA replacement are copied through pinned SSH into
+protected temporary files. Cloud transaction markers block normal management
+commands from treating a pending candidate or a rename gap as a new deployment.
+Resume the transaction to release those markers; do not delete retained resources
+or open Security Groups to bypass failed SSH checks.
+
+Preparation failure leaves the source serving. Cutover begins with writer fencing;
+a failure from that point can leave the pair fenced and requires recovery. Local
+regression coverage does not constitute qualification on a live Nebius deployment.
 
 ### Public IP Preservation
 
@@ -3133,121 +3347,93 @@ Per-VM checks:
 
 ## Security
 
-### SSH allowlist migration
+### SSH access
 
-**Breaking configuration change:** every ordinary or HA configuration must contain
-nonempty `gateway.ssh_allowed_cidrs`. Missing, null, empty, malformed and unresolved
-values fail before authentication, deployment locks or cloud operations. There is no
-implicit unrestricted mode. The interactive wizard asks for this list; the generated
-noninteractive template remains a draft until its required placeholder is replaced.
+The wizard does not configure SSH source CIDRs or discover the operator's public
+IP. The gateway permits SSH attempts from all source addresses, subject to SSH
+key authentication, fail2ban and customer firewall rules. VPN peer filtering
+remains enabled. Configure source restrictions in customer-owned
+[Nebius Security Groups](https://docs.nebius.com/vpc/security-groups/manage).
+Cloud firewall rules can be changed through Nebius independently of guest SSH.
+The product never widens those rules to repair a failed connection.
 
-Upgrading the CLI **does not change the running VM or its firewall**. Editing or
-validating YAML also has no remote effect. Plain `ssh` does not read `config.yaml`.
-An old configuration rejected by the upgraded CLI therefore does not, by itself,
-explain an OpenSSH connection failure.
+For initial creation, existing groups can be supplied in the advanced wizard or
+in YAML. Every group must be ready and belong to the gateway NIC's VPC:
 
-For an existing gateway:
+```yaml
+gateway_group:
+  initial_security_group_ids:
+    - vpcsecuritygroup-example
+  # Keep the other gateway_group settings.
+```
 
-Use the normal in-place `apply` upgrade. Adding the SSH allowlist does not require
-recreating the gateway, changing VPN peers, PSKs or routing settings, or rebuilding
-customer security groups. Keep the existing tunnel and routing settings in the YAML.
-An actual update may briefly interrupt VPN traffic; plan a maintenance window and
-review the disruption preview. The upgrade must restore the existing VPN service
-automatically. This is not a zero-downtime upgrade guarantee.
+These references are creation inputs, not desired-state ownership of the groups.
+The product does not create groups or edit their rules. Omission uses the VPC's
+default Security Group. Ensure your customer policy allows management SSH and the
+VPN traffic you intend to use before creating a gateway.
 
-1. Add the sources of administrators and the machine that runs `apply` to the YAML.
-   Use the address the gateway sees after NAT or a bastion, rather than the gateway's
-   destination address. Include the deployment source used to reach **each HA member**.
-   Use IPv4 `/32` or IPv6 `/128` for individual addresses, or deliberate network ranges.
+### Additional operators
 
-   ```yaml
-   gateway:
-     # Required: replace these documentation addresses with your actual sources.
-     ssh_allowed_cidrs:
-       - "203.0.113.4/32"
-       - "2001:db8:1234::/64"
-     # Keep your existing local_asn, local_prefixes and other gateway settings.
-   ```
+An existing operator can enroll another operator on every running gateway:
 
-2. Validate, then apply from an included source using the existing SSH key and pinned
-   host identity:
+```bash
+nebius-vpngw access add-operator alice --generate-ssh-key -c gateway.config.yaml
+# Optional explicit destination for the new private key:
+nebius-vpngw access add-operator alice --generate-ssh-key \
+  --key-output ~/.ssh/vpngw-alice/id_ed25519 -c gateway.config.yaml
+# Alternatively, install an existing public key:
+nebius-vpngw access add-operator alice --public-key alice.pub -c gateway.config.yaml
+```
 
-   ```bash
-   nebius-vpngw validate-config config.yaml
-   nebius-vpngw apply --local-config-file config.yaml --dry-run
-   nebius-vpngw apply --local-config-file config.yaml \
-     --approve-disruption DIGEST_FROM_PREVIEW
-   ```
+The command first authenticates all required members with the initiating
+operator's existing identity and pinned server trust. It does not start stopped
+HA members. Generation asks for a nonempty passphrase and creates an encrypted
+Ed25519 private key locally, with private directory and file permissions. The
+default location is
+`~/.ssh/nebius-vpngw/operators/<project>/<gateway>/<operator>/id_ed25519`.
 
-   Replace `DIGEST_FROM_PREVIEW` with the exact digest printed by the preview.
-   Run a new preview if the YAML or selected deployment artifact changes.
+Only the public key is installed on the VMs. Existing customer key entries and
+their options are preserved. A public key already present in customer-managed
+entries is rejected so enrollment cannot bypass that key's restrictions. Tabs and
+repeated spaces between key fields do not bypass this check. Custom
+SSH daemon configurations are inspected through their serving listener; unsupported
+DNS-based authorization policy fails before granting access.
 
-3. `apply` connects using current access, checks the source reported by the authenticated
-   SSH server, upgrades the selected agent, and activates the new policy. It requires a
-   **fresh authenticated SSH connection** and checks the installed config and effective
-   kernel policy before reporting completion. An excluded deployment source is rejected
-   before policy changes. The selected wheel must match the CLI's ingress implementation;
-   an old installed agent need not support the feature before it is upgraded.
+The result prints absolute private/public file paths, a public fingerprint and
+per-VM installation and login verification. Generated keys receive a fresh SSH
+login test; public-only enrollment cannot prove possession of the private key.
+Partial completion returns nonzero and retains successful grants. Retry the same
+operator name, key files and passphrase; existing files are never regenerated or
+replaced. Key distribution and Nebius IAM access are managed separately.
 
-4. Run `nebius-vpngw status --local-config-file config.yaml --packet-details` and
-   verify traffic over the existing VPN path. For HA, confirm current-boot identity,
-   ready redundancy and the expected routing mode: a static standby is deliberately
-   cold. An apply that exits nonzero or leaves the prior working VPN unavailable is
-   incomplete; retain the configuration and use the supported recovery workflow.
+For later operations, the additional operator loads the encrypted key into their
+local agent and selects its exact public identity:
 
-An unchanged HA apply performs the same fresh SSH verification. Confirmed policy
-drift follows the normal repair workflow; a timeout, authentication failure, changed
-boot/config identity or unreadable firewall state stops verification instead of
-being treated as a reason to change the gateway.
+```bash
+ssh-add ~/.ssh/vpngw-alice/id_ed25519
+nebius-vpngw --ssh-identity ~/.ssh/vpngw-alice/id_ed25519.pub \
+  status -c gateway.config.yaml
+```
 
-To change deployment sources, first add the new source while retaining the current
-source and apply. Run the next apply from the new source, then remove the old source.
-Established SSH sessions survive policy changes; new sessions from removed sources
-are blocked. Both HA nodes enforce the list even when passive or not forwarding VPN
-traffic. The rule applies to public, private/VPC and tunnel ingress, not just `eth0`.
-IPv4 and IPv6 are separate: permitting one family does not permit the other.
+`--ssh-identity` is a root option and precedes the command. An unencrypted private
+key file can also be selected directly. The override does not change the shared
+YAML or its deployment generation and does not require the original operator's
+local key-file paths.
 
-New or recreated gateways receive the same per-VM policy through Nebius SDK cloud-init
-user data **before the first SSH push**. This avoids an SSH bootstrap dependency and
-never temporarily opens ingress to discover the operator address. A wrong source can
-prevent that first connection; it must be corrected through an allowed path or the
-customer's approved out-of-band recovery procedure. Guest policy cannot protect the
-interval before cloud-init executes.
-
-`create-from-peer-config` requires repeatable `--ssh-allowed-cidr CIDR` arguments.
-Peer documents cannot choose local management access. Examples in this README use
-reserved documentation addresses; replace them before deployment.
-
-Troubleshooting:
-
-- **CLI says `gateway.ssh_allowed_cidrs` is missing/invalid:** add the required list,
-  validate, then apply. Validation made no gateway changes.
-- **CLI reports an excluded observed SSH source:** include that actual source or use
-  the add/switch/remove procedure above. No policy activation was attempted.
-- **HA status reports a generation mismatch after editing YAML:** status compares the
-  requested configuration with the installed generation. Complete the reviewed apply
-  before expecting them to match. This message alone does not mean SSH was blocked or
-  the running gateway was changed by the edit.
-- **SSH times out:** check the current egress/bastion address, the deployed allowlist,
-  customer security group/firewall, routes, VM state and SSH service. A timeout alone
-  does not identify which layer blocked access.
-- **Authentication or host-key verification fails:** correct the key, username or
-  pinned identity through the existing trust workflow; an allowlist does not fix these.
-- **Activation may have completed but fresh SSH verification failed:** treat deployment
-  as incomplete. Policy may already be installed; no automatic rollback occurred.
-  Recover from an existing allowed source/session or customer-approved out-of-band
-  infrastructure access. The product does not widen the list, execute recovery through
-  the SDK, or automatically recreate the gateway.
-- **HA activation stops during firewall reconciliation:** inspect the agent journal
-  before retrying. An interrupted upgrade can leave members guarded with apply locks;
-  preserve those guards and use a fresh artifact-bound preview and apply after fixing
-  the reported cause. Do not clear HA state or manually enable forwarding.
+Creating a genuinely absent ordinary gateway member still needs an explicit
+bootstrap public key. With `--ssh-identity`, provide
+`gateway_group.vm_spec.ssh_public_key` inline and ensure it matches the selected
+identity. The override authenticates the operator and does not choose authorization
+for a new VM. Missing or mismatched bootstrap authorization fails before VM,
+network or disk provisioning, including additions during HA removal. Existing
+updates and staged replacement use their verified live authorization. ACTIVE HA
+replacement with `--recreate-gw` does not require the original operator's local key.
+Fresh HA creation also requires the selected identity to match its bootstrap key.
 
 ### Firewall ownership and VPN sources
 
-Security groups are customer-owned external firewalls. The product does not create,
-attach, adopt, inspect or reconcile them. Customer automation must keep them aligned
-with required SSH and VPN traffic, including attachment to replacement VM NICs.
+Security groups are customer-owned external firewalls. Creation attaches the
+explicitly supplied group IDs; customers own group rules and later policy changes.
 Guest permits cannot override an external deny.
 
 The host uses a dedicated nftables `inet nebius_vpngw_ingress` INPUT table ahead of
@@ -3255,14 +3441,14 @@ UFW's broad accepts. Updates replace only that table in a validated atomic trans
 for both address families; unrelated customer tables, UFW rules and fail2ban remain.
 The validated policy is persisted before kernel activation, so a crash cannot restore
 an older policy on reboot. An interrupted activation remains incomplete; retry from
-an allowed source. The boot service loads the policy before SSH, and the independent
+an allowed source. The boot service loads the peer policy before network ingress, and the independent
 table survives UFW reload and tunnel host-rule repair. Do not flush nftables globally
 or edit product-owned policy files.
 
 Outer IKE UDP/500, NAT-T UDP/4500 and ESP are restricted to the resolved configured
 peer addresses. An empty peer set denies unsolicited VPN ingress; removed peers do
 not bypass this through existing connection tracking. Decrypted tunnel payload is
-handled separately, while SSH restrictions still apply to SSH arriving over a tunnel.
+handled separately; the managed peer table does not restrict SSH sources.
 The peer list is derived from tunnel configuration, not a second user-maintained list.
 StrongSwan peer-address/identity matching and PSK authentication remain required. Source
 filtering reduces exposure if a PSK leaks; it does not make a leaked PSK safe.
@@ -3287,7 +3473,7 @@ The agent synchronizes the managed ingress table and product-owned UFW permits:
 - Derives allowed VPN peer IPs from configured tunnels
 - Removes stale peers from effective VPN admission when tunnels are deleted
 - Keeps local prefix rules in sync with `gateway.local_prefixes`
-- Keeps XFRM BGP/payload permits subordinate to the SSH source restriction
+- Preserves customer firewall policy and HA forwarding fences
 
 Host INPUT and OUTPUT permits are installed for configured tunnel interfaces before
 the interfaces exist. Unchanged reconciliation also repairs kernel-only permit
@@ -3297,9 +3483,10 @@ edits inside those UFW-owned chains are replaced. Other chains, forwarding state
 MSS handling and HA fencing remain unchanged. Invalid or unavailable saved policy
 fails reconciliation instead of triggering a firewall reset or reload.
 
-Existing customers use the normal artifact-bound `apply` workflow after completing
-the required SSH allowlist migration above. Apply may temporarily interrupt traffic. Established IPsec and successful
-ping alone do not prove that new BGP TCP connections are admitted.
+Existing customers use the normal artifact-bound `apply` workflow from a currently
+accessible source.
+Apply may temporarily interrupt traffic. Established IPsec and successful ping
+alone do not prove that new BGP TCP connections are admitted.
 
 ### IPsec Session Recovery
 
@@ -3324,8 +3511,8 @@ Use complete receiver evidence and the full declared interval; do not combine
 opposite directions, round a result into a pass or retry until a clean sample appears.
 
 [REQ-025's temporary live qualification exception](docs/requirements.md#req-025-ha-connection-tunnel-selection-and-safe-ordinary-upgrades)
-permits strictly below 1% in each direction after three bounded loss-reduction
-attempts, only when loss is the sole remaining issue. It remains in effect until
+permits strictly below 1% in each direction for the approved final qualification,
+without three additional loss-reduction attempts. It remains in effect until
 withdrawn; exactly 1% fails, and every other acceptance requirement remains in force.
 
 The criterion also applies to operation baselines and steady-state recovery.
@@ -3681,11 +3868,10 @@ sudo journalctl | grep ufw | tail -20
 sudo ufw status verbose
 # The independent admission table constrains these subordinate UFW permits:
 sudo nft list table inet nebius_vpngw_ingress
-# - New SSH connections require gateway.ssh_allowed_cidrs on every nonloopback path
+# - SSH sources are controlled by customer Security Groups and firewall rules
 # - ICMP allowed from anywhere on eth0
 # - Outer IPsec (UDP 500/4500, ESP) allowed only from resolved peers; no peers denies all
 # - TCP 179 not exposed on eth0 (BGP runs over xfrm*)
-# - XFRM payload remains subject to the same SSH source restriction
 # - Default deny inbound on eth0 for other ports
 ```
 
@@ -3817,6 +4003,12 @@ CI also runs the composed controller regressions in
 `tests/integration/test_ha_tunnel_repair_order.py`, covering late Static loss,
 authority changes and recovery exhaustion without extending the episode.
 
+The chronology below retains evidence from earlier candidates. Final-artifact
+upgrade, replacement, failover, API-delay and reboot results, cleanup, and the
+unresolved 1.25% Static loss are recorded in the
+[issue 238 qualification report](docs/github-issues/238-vpngw-slow-cloud-api-responses-causes-unnecessary-failovers-and-broken-states.md#ssh-readiness-candidate-qualification-2026-11-04-acceptance-unresolved).
+Later source-only repairs retain their own verification limits.
+
 An earlier live-qualified candidate passed 3,087 unit tests, all 28 native tunnel
 tests and all six genuine 0.6.0–0.6.2 SingleVM Static/BGP host upgrades. Unchanged
 reapply, interrupted apply, older-peer interoperability and automatic reboot
@@ -3893,17 +4085,61 @@ additional Static redundancy remains.
 
 Earlier failures and one incomplete SSH traffic observation retain their original
 verdicts. The affected observation step passed a bounded replay; no packet-loss
-root-cause fix is claimed. A fresh complete live replay of the earlier pre-host
-apply-recovery sequence remains unverified. See the design's verification evidence
-for the exact scope and artifact lineage.
+root-cause fix is claimed. At that checkpoint, a fresh complete live replay of the
+earlier pre-host apply-recovery sequence remained unverified. Later qualification
+has its own declared scope and artifact lineage in the issue report and design;
+it does not retroactively qualify this historical trial.
 
 The normal steady-state packet-loss target is below 0.2% in each direction.
-REQ-025 records a temporary live qualification exception: after three bounded
-attempts to reduce loss, strictly below 1% may be accepted until further notice
-if loss is the only remaining issue. Keep original trial results and label use
-of this exception; all command, recovery, fencing and upgrade checks still apply.
+REQ-025 records a temporary live qualification exception: strictly below 1%
+in each direction may be accepted for the approved final qualification until
+further notice, without three additional loss-reduction attempts. Keep original
+trial results and label use of this exception; all command, recovery, fencing
+and upgrade checks still apply.
+
+### HA Boot Fencing and Recovery Diagnostics
+
+HA bootstrap persists IPv4 forwarding off. During existing-host activation,
+apply fences the member before reconciling the product-owned sysctl files and
+before starting the controller. Unmanaged forwarding settings that conflict
+with this policy stop activation; apply does not rewrite them. The controller
+still requires current ownership and readiness before enabling forwarding.
+Ordinary non-HA gateways retain forwarding-on boot policy, including supported
+reentry after HA deactivation.
+
+Fresh bootstrap and in-place upgrades use one product-owned UFW ordering file
+that preserves the distribution's early firewall startup. The previous override
+waited for late networking while UFW itself must precede networking, creating a
+cycle that could drop firewall startup after reboot. Upgrades replace only the
+known product override; unknown customer contents stop admission. This repair
+does not reset saved firewall rules or change forwarding policy.
+
+Interrupted apply reports identity-free phase and cause categories through the
+existing command result. Standby-replacement acknowledgement failures report
+which readiness predicates remain unsatisfied, including pending controller or
+rearm operations. These diagnostics do not grant readiness, extend timeouts,
+change durable operation identity, or permit creation before acknowledgement.
+Raw exceptions, credentials and host details are excluded from these diagnostics.
+Post-recovery package verification binds the failing member before reporting its
+safe reason, so an error in reporting cannot mask the original verification failure.
+
+Native writer tests and live boot observations establish different evidence:
+SSH observations after boot do not continuously prove the earlier kernel state.
+Final qualification of this repair is recorded in the issue report and design.
 
 ### Dependency Updates
+
+Package planning rejects conflicting versions recorded within
+one installation prefix before changing gateway state. Such stale metadata can
+describe different dependencies from the code Python actually imports. Repair
+that environment before resuming apply; normal apt/pip shadowing across separate
+installation prefixes remains supported.
+
+Fresh and recovery HA package installs use the same selected dependency plan as
+normal upgrades. Pip-owned packages are replaced through their installation
+records; only apt-owned dependencies outside pip's destination may be shadowed.
+This prevents a recovery from leaving duplicate gateway version records that
+would block the next `apply`.
 
 **Update pyproject.toml:**
 
@@ -3937,6 +4173,10 @@ python -m mypy
 
 ## Release & Versioning
 
+- Development and isolated wheel builds require `setuptools>=84.1.0` to exclude
+  [GHSA-xmj3-9gf7-h52w](https://github.com/pypa/setuptools/security/advisories/GHSA-xmj3-9gf7-h52w).
+  The development lock selects the patched release; refresh an existing development
+  environment with `uv sync --locked --extra dev` before building.
 - Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments. Source lookup loads the canonical `pyproject.toml` configuration without writing a version file. When `setuptools-scm` is not installed in a source checkout, runtime version resolution gives `git describe` five seconds before it treats that probe as unavailable and consults package metadata or the generated `_version.py` cache.
 - The repo uses the current `setuptools-scm` `semver-pep440` version scheme and nested `[tool.setuptools_scm.tag]` matching so local lint/test/build runs remain free of deprecated scheme and tag-configuration warnings.
 - Local developer builds should reuse the prepared project virtualenv (`python -m build --wheel --no-isolation` or `make build`) so the output stays stable and avoids transient isolated-build toolchain warnings.

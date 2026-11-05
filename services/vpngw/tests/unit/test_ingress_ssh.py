@@ -12,8 +12,8 @@ import pytest
 from nebius_vpngw import ingress_policy
 from nebius_vpngw.deploy import ingress_ssh
 
-CONFIG = "gateway:\n  ssh_allowed_cidrs: [203.0.113.4/32]\nconnections: []\n"
-POLICY = {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}
+CONFIG = "gateway:\nconnections: []\n"
+POLICY = {"peer_ips": []}
 PROBE = {"connection": "203.0.113.4 1234 10.0.0.1 22", "boot_id": "boot"}
 EVIDENCE = {
     "effective": True,
@@ -86,13 +86,12 @@ def test_fresh_proof_uses_new_authenticated_pinned_transport_each_time(monkeypat
 @pytest.mark.parametrize(
     "probe,evidence,diagnosis",
     [
-        ({**PROBE, "connection": "203.0.113.9 1234 10.0.0.1 22"}, EVIDENCE, "excluded"),
         ({**PROBE, "boot_id": "another-boot"}, EVIDENCE, "rebooted"),
         (PROBE, {**EVIDENCE, "config": "wrong"}, "identity differs"),
         (PROBE, {**EVIDENCE, "policy": "a" * 64}, "identity differs"),
     ],
 )
-def test_fresh_proof_rejects_identity_or_source_drift(monkeypatch, probe, evidence, diagnosis):
+def test_fresh_proof_rejects_identity_drift(monkeypatch, probe, evidence, diagnosis):
     ssh, clients, _, _ = boundary(monkeypatch, [probe, evidence])
     with pytest.raises(RuntimeError, match=f"no rollback.*{diagnosis}"):
         ingress_ssh.verify_fresh(
@@ -136,10 +135,9 @@ def test_package_repair_proves_predecessor_without_claiming_desired_policy(monke
     assert "config-resolved.yaml" in clients[0].commands[-1]
 
 
-def test_preflight_denies_excluded_actual_source_before_privileged_command():
+def test_preflight_checks_boot_without_ssh_source_restrictions():
     client = Client([{**PROBE, "connection": "203.0.113.9 1234 10.0.0.1 22"}])
-    with pytest.raises(RuntimeError, match="excluded"):
-        ingress_ssh.preflight(client, CONFIG)
+    assert ingress_ssh.preflight(client, CONFIG) == "boot"
     assert len(client.commands) == 1
     assert "sudo" not in client.commands[0]
 

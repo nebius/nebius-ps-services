@@ -23,7 +23,7 @@ local Codex home.
   recommended skill.
 - When `current-state.json` has an
   `agentic-sdlc/repair-state-pointer-v1`, the Stop hook validates that its
-  `failure-event-v2`, optional `diagnosis-v2`, and `repair-control-v2` remain
+  `failure-event-v2`, optional `diagnosis-v3`, and `repair-control-v2` remain
   inside the run and agree on feature, event, and stable blocker identity. It
   stops on exhausted budgets or semantic-cycle status, requires
   diagnosis-required work to route to `troubleshoot`, and requires a recorded
@@ -57,6 +57,11 @@ local Codex home.
   Public Nebius profile, project, and credential-file path assignments are
   metadata rather than secret material. All other long Nebius assignments,
   including token material, remain fail-closed.
+  Generic credential-assignment screening recognizes complete, bounded,
+  unquoted lookup/call expressions, including CSRF DOM lookups with one trailing
+  JavaScript semicolon. It never evaluates those expressions. Literal values,
+  ambiguous syntax and provider-specific credential patterns remain blocked;
+  placeholder text elsewhere on a line cannot exempt a credential assignment.
 - An active run also covers coordinator-registered integration and worker
   worktrees outside the original checkout. The hook verifies canonical Git
   root/common directory, branch, and recorded HEAD before sensitive Git actions.
@@ -112,8 +117,8 @@ PY
 
 ## Install To Local Runtime
 
-Use the explicit installer option so hook updates are not hidden inside the
-normal skill installation path:
+The default full-catalog installation also installs and registers reviewed
+hooks. Use the explicit options below for a hooks-only refresh:
 
 ```bash
 ./install-skills.sh --install-all-hooks --register-hooks --refresh-hook-registrations
@@ -136,3 +141,11 @@ hook files within the same hook event, and reports extra installed hook files
 or `hooks.json` entries for manual review instead of removing them by default.
 After syncing, restart Codex and review the PreToolUse and Stop hook entries in
 `/hooks`.
+
+### Repair dispatch completion
+
+The feature dispatch ceiling blocks new repair admissions. The last admitted
+repair may finish under its existing authority and complete required
+revalidation. Over-limit counts and missing dispatch or cursor authority remain
+blocked. Successive classifications retain earlier invalidations, and the
+current successful repair must rerun their ordered gates before resolution.

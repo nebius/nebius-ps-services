@@ -2,7 +2,7 @@
 
 This module manages UFW firewall rules to ensure:
 - IPsec protocols (IKE, NAT-T, ESP) are allowed from VPN peers
-- SSH is restricted to management CIDRs
+- SSH source filtering is owned by customer Security Groups
 - Local VPC prefixes are allowed for forwarding
 - XFRM interfaces are not filtered (BGP traffic flows freely)
 """
@@ -20,7 +20,6 @@ from ..tunnel_state import collect_tunnel_state
 from .local_commands import run
 
 PEER_IPS_FILE = Path("/etc/vpngw_peer_ips")
-MGMT_CIDRS_FILE = Path("/etc/vpngw_mgmt_cidrs")
 LOCAL_PREFIXES_FILE = Path("/etc/vpngw_local_prefixes")
 FIREWALL_SETUP_SCRIPT = Path("/usr/local/bin/setup-vpngw-firewall.sh")
 UFW_USER_RULES = Path("/etc/ufw/user.rules")
@@ -238,38 +237,6 @@ def update_peer_ips(cfg: dict[str, Any]) -> bool:
     return False
 
 
-def update_management_cidrs(cidrs: list[str]) -> bool:
-    """Update /etc/vpngw_mgmt_cidrs with allowed SSH source CIDRs.
-
-    Args:
-        cidrs: List of CIDR strings (e.g., ["203.0.113.4/32", "198.51.100.0/24"])
-
-    Returns:
-        True if file was updated, False if unchanged
-    """
-    # Read current content
-    current_content = ""
-    if MGMT_CIDRS_FILE.exists():
-        current_content = MGMT_CIDRS_FILE.read_text()
-
-    # Build new content
-    lines = [
-        "# Management CIDRs allowed for SSH (auto-generated)",
-        "# One CIDR per line",
-        "",
-    ]
-    lines.extend(ingress_policy.normalize_cidrs(cidrs))
-    new_content = "\n".join(lines) + "\n"
-
-    # Update if changed
-    if new_content != current_content:
-        MGMT_CIDRS_FILE.write_text(new_content)
-        print(f"[FirewallMgr] Updated {MGMT_CIDRS_FILE} with {len(cidrs)} management CIDR(s)")
-        return True
-
-    return False
-
-
 def update_local_prefixes(prefixes: list[str]) -> bool:
     """Update /etc/vpngw_local_prefixes with allowed local VPC prefixes.
 
@@ -302,7 +269,7 @@ def update_local_prefixes(prefixes: list[str]) -> bool:
 def reload_firewall() -> bool:
     """Reload UFW firewall rules by running the setup script.
 
-    This re-applies firewall rules based on current peer IPs and management CIDRs.
+    This re-applies firewall rules based on current VPN peer IPs.
     Safe to call multiple times - script is idempotent.
 
     Returns:
@@ -338,7 +305,7 @@ def update_firewall_from_config(
     This is the main entry point for firewall management. It:
     1. Extracts peer IPs from config
     2. Updates peer IPs file
-    3. Updates required management CIDRs and effective ingress policy
+    3. Updates peer-only effective ingress policy
     4. Updates local prefix rules
     5. Reloads firewall rules if anything changed
 
@@ -352,10 +319,8 @@ def update_firewall_from_config(
     local_prefixes = (cfg.get("gateway", {}) or {}).get("local_prefixes", []) or []
     local_prefixes_changed = update_local_prefixes(local_prefixes)
 
-    mgmt_cidrs_changed = update_management_cidrs(policy["ssh_allowed_cidrs"])
-
     # Reload firewall if anything changed
-    if peer_ips_changed or mgmt_cidrs_changed or local_prefixes_changed or require_reload:
+    if peer_ips_changed or local_prefixes_changed or require_reload:
         if not reload_firewall():
             raise RuntimeError("required firewall reload failed")
     else:

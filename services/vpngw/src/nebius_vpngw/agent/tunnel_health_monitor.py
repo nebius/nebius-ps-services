@@ -38,10 +38,11 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
+from ..ipsec_observation import child_ready
 from .tunnel_iterator import iter_active_tunnels
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
@@ -61,6 +62,19 @@ def _vm_ha_observer_only(config: object) -> bool:
         return False
     operator_vm_ha = gateway_group.get("vm_ha")
     return isinstance(operator_vm_ha, dict) and operator_vm_ha.get("enabled") is True
+
+
+def _installed_observer_only() -> bool:
+    """Fail closed when installed topology cannot establish ordinary ownership."""
+    try:
+        config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        raise ValueError(
+            "Cannot read installed gateway topology; tunnel repair is blocked"
+        ) from error
+    if not isinstance(config, dict):
+        raise ValueError("Invalid installed gateway topology; tunnel repair is blocked")
+    return _vm_ha_observer_only(config)
 
 
 @dataclass
@@ -88,9 +102,13 @@ class TunnelHealth:
     bgp_status: str | None  # Established, Idle, Connect, etc.
     stats: TunnelStats
     xfrm_present: bool
-    is_healthy: bool
+    assessment: Literal["healthy", "unhealthy", "unknown"]
     failure_reasons: list[str]
     last_check_time: float
+
+    @property
+    def is_healthy(self) -> bool:
+        return self.assessment == "healthy"
 
 
 class TunnelHealthMonitor:
@@ -158,11 +176,13 @@ class TunnelHealthMonitor:
             rx_bytes = rx_packets = rx_errors = 0
             tx_bytes = tx_packets = tx_dropped = tx_errors = 0
 
+            received = transmitted = False
             for i, line in enumerate(lines):
                 if "RX:" in line and i + 1 < len(lines):
                     # Next line has RX stats
                     rx_parts = lines[i + 1].split()
                     if len(rx_parts) >= 3:
+                        received = True
                         rx_bytes = int(rx_parts[0])
                         rx_packets = int(rx_parts[1])
                         rx_errors = int(rx_parts[2])
@@ -171,11 +191,14 @@ class TunnelHealthMonitor:
                     # Next line has TX stats
                     tx_parts = lines[i + 1].split()
                     if len(tx_parts) >= 4:
+                        transmitted = True
                         tx_bytes = int(tx_parts[0])
                         tx_packets = int(tx_parts[1])
                         tx_errors = int(tx_parts[2])
                         tx_dropped = int(tx_parts[3])
 
+            if not received or not transmitted:
+                return None
             return TunnelStats(
                 interface=interface,
                 rx_bytes=rx_bytes,
@@ -187,66 +210,39 @@ class TunnelHealthMonitor:
                 rx_errors=rx_errors,
             )
 
-        except (subprocess.TimeoutExpired, ValueError, IndexError) as e:
+        except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as e:
             print(f"[TunnelMonitor] Error getting stats for {interface}: {e}")
             return None
 
-    def get_ipsec_tunnel_status(self, tunnel_name: str) -> str:
-        """Get IPsec tunnel status from strongSwan.
-
-        Args:
-            tunnel_name: Tunnel connection name
-
-        Returns:
-            "ESTABLISHED", "CONNECTING", or "DOWN"
-        """
-        if shutil.which("swanctl"):
+    def get_ipsec_tunnel_status(self, tunnel_name: str, if_id: int | None = None) -> str:
+        """Use complete raw IKE/CHILD evidence; unavailable observations are unknown."""
+        if if_id is None:
+            # Direct recovery callers resolve the same installed per-VM ordering.
             try:
-                result = subprocess.run(
-                    ["swanctl", "--list-sas", "--ike", tunnel_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0 and result.stdout:
-                    # Only exact IKE headers identify this connection. A peer's
-                    # similarly named connection or an overlapping negotiation
-                    # must not trigger repair of an established session.
-                    states = set(
-                        re.findall(
-                            rf"^{re.escape(tunnel_name)}: #[1-9][0-9]*, "
-                            r"([A-Z_]+), IKEv[12](?:,|$)",
-                            result.stdout,
-                            flags=re.MULTILINE,
-                        )
-                    )
-                    for state in ("ESTABLISHED", "CONNECTING"):
-                        if state in states:
-                            return state
-                return "DOWN"
-            except subprocess.TimeoutExpired:
+                cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+                matches = [
+                    idx + 100
+                    for idx, _iface, _conn, tun in iter_active_tunnels(cfg)
+                    if tun.get("name", f"tunnel{idx}") == tunnel_name
+                ]
+                if len(matches) != 1:
+                    return "UNKNOWN"
+                if_id = matches[0]
+            except (OSError, ValueError, TypeError, yaml.YAMLError):
                 return "UNKNOWN"
-
+        if not shutil.which("swanctl"):
+            return "UNKNOWN"
         try:
             result = subprocess.run(
-                ["ipsec", "status", tunnel_name],
+                ["swanctl", "--list-sas", "--ike", tunnel_name, "--raw"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-
-            if result.returncode != 0:
-                return "DOWN"
-
-            output = result.stdout.lower()
-            if "established" in output:
-                return "ESTABLISHED"
-            elif "connecting" in output or "negotiating" in output:
-                return "CONNECTING"
-            else:
-                return "DOWN"
-
-        except subprocess.TimeoutExpired:
+            if result.returncode:
+                return "UNKNOWN"
+            return "ESTABLISHED" if child_ready(result.stdout, tunnel_name, if_id) else "DOWN"
+        except (OSError, subprocess.TimeoutExpired, ValueError):
             return "UNKNOWN"
 
     def get_bgp_peer_status(self, peer_ip: str) -> str | None:
@@ -268,10 +264,17 @@ class TunnelHealthMonitor:
 
             if result.returncode == 0 and result.stdout:
                 data = json.loads(result.stdout)
-                peer_data = data.get(peer_ip, {})
-                return peer_data.get("bgpState") or peer_data.get("state")
+                if not isinstance(data, dict):
+                    return None
+                if peer_ip not in data:
+                    return "Missing"
+                peer_data = data[peer_ip]
+                if not isinstance(peer_data, dict):
+                    return None
+                state = peer_data.get("bgpState") or peer_data.get("state")
+                return state if isinstance(state, str) and state else None
 
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
             pass
 
         return None
@@ -290,26 +293,32 @@ class TunnelHealthMonitor:
             TunnelHealth object with detailed status
         """
         stats = self.get_xfrm_interface_stats(interface)
-        ipsec_status = self.get_ipsec_tunnel_status(tunnel_name)
+        if_id = int(interface[4:]) + 100 if re.fullmatch(r"xfrm[0-9]+", interface) else None
+        ipsec_status = self.get_ipsec_tunnel_status(tunnel_name, if_id)
         bgp_status = self.get_bgp_peer_status(bgp_peer) if bgp_peer else None
 
         failure_reasons = []
-        is_healthy = True
+        down = False
+        unknown = False
 
         # Check 1: IPsec must be ESTABLISHED
         if ipsec_status != "ESTABLISHED":
-            is_healthy = False
+            unknown |= ipsec_status == "UNKNOWN"
+            down |= ipsec_status != "UNKNOWN"
             failure_reasons.append(f"IPsec status: {ipsec_status}")
 
         # Check 1b: XFRM interface should exist when tunnel is up
         if stats is None:
-            is_healthy = False
-            failure_reasons.append(f"XFRM interface missing: {interface}")
+            unknown = True
+            failure_reasons.append(f"XFRM statistics unavailable: {interface}")
 
         # Check 2: BGP session should be Established for BGP tunnels
-        if bgp_peer and bgp_status:
-            if bgp_status.lower() != "established":
-                is_healthy = False
+        if bgp_peer:
+            if bgp_status is None:
+                unknown = True
+                failure_reasons.append("BGP observation unavailable")
+            elif bgp_status.lower() != "established":
+                down = True
                 failure_reasons.append(f"BGP state: {bgp_status}")
 
         # Check 3: Ping BGP peer to verify tunnel data plane is working
@@ -329,16 +338,16 @@ class TunnelHealthMonitor:
                 )
 
                 if result.returncode != 0:
-                    is_healthy = False
+                    down = True
                     failure_reasons.append(
                         f"BGP peer {bgp_peer} unreachable (tunnel data plane broken)"
                     )
             except subprocess.TimeoutExpired:
-                is_healthy = False
-                failure_reasons.append(f"Ping to BGP peer {bgp_peer} timed out")
-            except Exception as e:
-                # Don't fail health check on ping errors, just log
-                print(f"[TunnelMonitor] ⚠ Ping check error for {bgp_peer}: {e}")
+                unknown = True
+                failure_reasons.append("Ping observation timed out")
+            except Exception:
+                unknown = True
+                failure_reasons.append("Ping observation unavailable")
 
         return TunnelHealth(
             name=tunnel_name,
@@ -348,7 +357,7 @@ class TunnelHealthMonitor:
             bgp_status=bgp_status,
             stats=stats or TunnelStats(interface, 0, 0, 0, 0, 0, 0, 0),
             xfrm_present=stats is not None,
-            is_healthy=is_healthy,
+            assessment="unhealthy" if down else "unknown" if unknown else "healthy",
             failure_reasons=failure_reasons,
             last_check_time=time.time(),
         )
@@ -360,150 +369,32 @@ class TunnelHealthMonitor:
             return False
         try:
             with mutation_lock():
+                if _installed_observer_only():
+                    print("[TunnelMonitor] VM-HA controller owns tunnel repair; skipping")
+                    return False
                 return self._restart_tunnel_locked(tunnel_name)
+        except ValueError as error:
+            print(f"[TunnelMonitor] {error}")
+            return False
         except (OperationBlocked, BlockingIOError):
             print("[TunnelMonitor] Ordinary operation pending; skipping tunnel repair")
             return False
 
     def _restart_tunnel_locked(self, tunnel_name: str) -> bool:
-        """Restart a specific IPsec tunnel connection.
-
-        Args:
-            tunnel_name: Tunnel connection name
-
-        Returns:
-            True if restart succeeded, False otherwise
-        """
-        print(f"[TunnelMonitor] 🔄 Restarting tunnel: {tunnel_name}")
+        """Use the same single-submit IPsec owner while retaining the guest lock."""
+        from ..tunnel_restart import Restart, targets
 
         try:
-            if shutil.which("swanctl"):
-
-                def _command_output(result: subprocess.CompletedProcess[str]) -> str:
-                    return (result.stderr or result.stdout or "").strip()
-
-                def _wait_for_established(timeout_seconds: int = 12) -> bool:
-                    deadline = time.monotonic() + timeout_seconds
-                    while time.monotonic() < deadline:
-                        if self.get_ipsec_tunnel_status(tunnel_name) == "ESTABLISHED":
-                            return True
-                        time.sleep(1)
-                    return self.get_ipsec_tunnel_status(tunnel_name) == "ESTABLISHED"
-
-                try:
-                    load_result = subprocess.run(
-                        ["swanctl", "--load-all"],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                    )
-                    if load_result.returncode != 0:
-                        print(
-                            f"[TunnelMonitor] ⚠ Failed to reload swanctl config for {tunnel_name}: "
-                            f"{_command_output(load_result)}"
-                        )
-                except subprocess.TimeoutExpired:
-                    print(
-                        f"[TunnelMonitor] ⚠ Timeout reloading swanctl config for {tunnel_name}; proceeding with restart"
-                    )
-
-                terminate_attempts = [
-                    (
-                        ["swanctl", "--terminate", "--child", tunnel_name, "--timeout", "5"],
-                        "CHILD_SA",
-                    ),
-                    (
-                        ["swanctl", "--terminate", "--ike", tunnel_name, "--timeout", "5"],
-                        "IKE_SA",
-                    ),
-                ]
-
-                terminated = False
-                for terminate_cmd, label in terminate_attempts:
-                    result = subprocess.run(
-                        terminate_cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    if result.returncode == 0:
-                        terminated = True
-                        break
-
-                    output = _command_output(result)
-                    if output:
-                        print(
-                            f"[TunnelMonitor] ⚠ Failed to terminate {label} for {tunnel_name}: {output}"
-                        )
-
-                if not terminated:
-                    print(
-                        "[TunnelMonitor] ⚠ Proceeding with tunnel initiate even though termination did not confirm"
-                    )
-
-                time.sleep(2)
-
-                for attempt in range(1, 4):
-                    result = subprocess.run(
-                        ["swanctl", "--initiate", "--child", tunnel_name, "--timeout", "20"],
-                        capture_output=True,
-                        text=True,
-                        timeout=25,
-                    )
-                    if result.returncode == 0 and _wait_for_established():
-                        print(f"[TunnelMonitor] ✓ Successfully restarted tunnel: {tunnel_name}")
-                        return True
-
-                    if _wait_for_established(timeout_seconds=4):
-                        print(
-                            f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered after initiate attempt {attempt}"
-                        )
-                        return True
-
-                    output = _command_output(result)
-                    if output:
-                        print(
-                            f"[TunnelMonitor] ⚠ Failed to initiate {tunnel_name} "
-                            f"(attempt {attempt}/3): {output}"
-                        )
-                    if attempt < 3:
-                        print(f"[TunnelMonitor] ⚠ Retrying tunnel initiate for {tunnel_name} in 3s")
-                        time.sleep(3)
-
+            config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+            selected = [target for target in targets(config) if target["name"] == tunnel_name]
+            if len(selected) != 1 or not shutil.which("swanctl"):
                 return False
-            else:
-                # Down the tunnel
-                result = subprocess.run(
-                    ["ipsec", "down", tunnel_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-
-                if result.returncode != 0:
-                    print(f"[TunnelMonitor] ⚠ Failed to bring down {tunnel_name}: {result.stderr}")
-                    print("[TunnelMonitor] ⚠ Proceeding with tunnel up attempt anyway")
-
-                # Wait briefly for cleanup
-                time.sleep(2)
-
-                # Up the tunnel
-                result = subprocess.run(
-                    ["ipsec", "up", tunnel_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                )
-
-                if result.returncode != 0:
-                    print(f"[TunnelMonitor] ⚠ Failed to bring up {tunnel_name}: {result.stderr}")
-                    return False
-
-            print(f"[TunnelMonitor] ✓ Successfully restarted tunnel: {tunnel_name}")
-            return True
-
-        except subprocess.TimeoutExpired:
-            print(f"[TunnelMonitor] ⚠ Timeout restarting tunnel: {tunnel_name}")
+            operation = Restart(time.monotonic() + 132)
+            operation.validate_targets(selected)
+            return operation.restart_ipsec(selected[0]) and operation.wait(
+                selected[0], operation.end(5)
+            )
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
             return False
 
     def get_configured_tunnels(self) -> list[tuple[str, str, str | None]]:
@@ -572,7 +463,7 @@ class TunnelHealthMonitor:
                 delta_rx_errors = stats.rx_errors - prev_stats.rx_errors
 
                 if delta_tx_dropped > 0 or delta_tx_errors > 0 or delta_rx_errors > 0:
-                    health.is_healthy = False
+                    health.assessment = "unhealthy"
                     health.failure_reasons.append(
                         "XFRM errors increased "
                         f"(tx_dropped +{delta_tx_dropped}, "
@@ -580,6 +471,9 @@ class TunnelHealthMonitor:
                         f"rx_errors +{delta_rx_errors})"
                     )
             results[tunnel_name] = health
+
+            if health.is_healthy:
+                self.consecutive_failures.pop(tunnel_name, None)
 
             # Proactive refresh (optional, preventive maintenance)
             if self.enable_proactive_refresh and health.is_healthy and not self.observer_only:
@@ -599,10 +493,18 @@ class TunnelHealthMonitor:
                         health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
                         results[tunnel_name] = health
 
-                    continue  # Skip failure tracking for proactive refresh
+                    if health.is_healthy:
+                        self.consecutive_failures.pop(tunnel_name, None)
+                    self.tunnel_states[tunnel_name] = health
+                    continue  # Do not immediately repair a proactive refresh again.
+
+            # Unknown evidence holds history and cannot authorize a repair.
+            if health.assessment == "unknown":
+                self.tunnel_states[tunnel_name] = health
+                continue
 
             # Track consecutive failures (reactive detection)
-            if not health.is_healthy:
+            if health.assessment == "unhealthy":
                 self.consecutive_failures[tunnel_name] = (
                     self.consecutive_failures.get(tunnel_name, 0) + 1
                 )
@@ -626,8 +528,7 @@ class TunnelHealthMonitor:
                             f"observing {tunnel_name} without restart"
                         )
                     elif self.restart_tunnel(tunnel_name):
-                        # Reset failure counter on successful restart
-                        self.consecutive_failures[tunnel_name] = 0
+                        # Only confirmed healthy observation clears history.
                         # Give tunnel time to establish
                         time.sleep(5)
                         # Re-check health after restart
@@ -635,6 +536,7 @@ class TunnelHealthMonitor:
                         results[tunnel_name] = health
 
                         if health.is_healthy:
+                            self.consecutive_failures.pop(tunnel_name, None)
                             print(f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered after restart")
                         else:
                             print(
@@ -647,7 +549,9 @@ class TunnelHealthMonitor:
                     time.sleep(5)
                     health_recheck = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
 
-                    if not health_recheck.is_healthy:
+                    health = health_recheck
+                    results[tunnel_name] = health
+                    if health_recheck.assessment == "unhealthy":
                         # Second failure confirmed immediately
                         self.consecutive_failures[tunnel_name] += 1
                         print(
@@ -671,16 +575,16 @@ class TunnelHealthMonitor:
                                     f"observing {tunnel_name} without restart"
                                 )
                             elif self.restart_tunnel(tunnel_name):
-                                self.consecutive_failures[tunnel_name] = 0
                                 time.sleep(5)
                                 health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
                                 results[tunnel_name] = health
 
                                 if health.is_healthy:
+                                    self.consecutive_failures.pop(tunnel_name, None)
                                     print(
                                         f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered after restart"
                                     )
-                    else:
+                    elif health_recheck.is_healthy:
                         # False positive - tunnel recovered on its own
                         print(
                             f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered (transient failure)"
@@ -705,19 +609,26 @@ class TunnelHealthMonitor:
         """
         total_tunnels = len(self.tunnel_states)
         healthy_tunnels = sum(1 for h in self.tunnel_states.values() if h.is_healthy)
-        unhealthy_tunnels = total_tunnels - healthy_tunnels
+        unhealthy_tunnels = sum(h.assessment == "unhealthy" for h in self.tunnel_states.values())
+        unknown_tunnels = total_tunnels - healthy_tunnels - unhealthy_tunnels
 
         return {
             "total_tunnels": total_tunnels,
             "healthy_tunnels": healthy_tunnels,
             "unhealthy_tunnels": unhealthy_tunnels,
-            "overall_health": "healthy" if unhealthy_tunnels == 0 else "degraded",
+            "unknown_tunnels": unknown_tunnels,
+            "overall_health": "degraded"
+            if unhealthy_tunnels
+            else "unknown"
+            if unknown_tunnels
+            else "healthy",
             "tunnels": {
                 name: {
                     "interface": health.interface,
                     "ipsec_status": health.ipsec_status,
                     "bgp_status": health.bgp_status,
                     "is_healthy": health.is_healthy,
+                    "assessment": health.assessment,
                     "failure_reasons": health.failure_reasons,
                     "tx_dropped": health.stats.tx_dropped,
                     "rx_packets": health.stats.rx_packets,
@@ -788,9 +699,16 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    try:
+        installed_observer_only = _installed_observer_only()
+    except ValueError as error:
+        parser.exit(1, f"{error}\n")
+
     # Handle manual tunnel restart
     if args.restart_tunnel:
-        monitor_temp = TunnelHealthMonitor(check_interval_seconds=10)
+        monitor_temp = TunnelHealthMonitor(
+            check_interval_seconds=10, observer_only=installed_observer_only
+        )
 
         if args.restart_tunnel.lower() == "all":
             print("[TunnelMonitor] 🔄 Restarting ALL tunnels...")
@@ -820,7 +738,7 @@ def main() -> None:
     config_max_failures = 2
     config_enabled = True
     config_ping_enabled = False
-    config_observer_only = False
+    config_observer_only = installed_observer_only
 
     if args.config:
         try:
@@ -837,7 +755,7 @@ def main() -> None:
                     config_data = yaml.safe_load(f)
 
                 health_config = config_data.get("defaults", {}).get("health_monitoring", {})
-                config_observer_only = _vm_ha_observer_only(config_data)
+                config_observer_only = installed_observer_only or _vm_ha_observer_only(config_data)
 
                 if health_config:
                     # Override with config file values if not explicitly set via CLI
@@ -864,7 +782,7 @@ def main() -> None:
                         print(f"[TunnelMonitor]    refresh_hours: {config_refresh_hours}h")
         except Exception as e:
             print(f"[TunnelMonitor] ⚠️  Failed to load config: {e}")
-            print("[TunnelMonitor] Using command-line defaults")
+            parser.exit(1, "[TunnelMonitor] Invalid configuration; tunnel repair is blocked\n")
 
     if args.config and not config_enabled and not args.once:
         print("[TunnelMonitor] Health monitoring disabled in config; exiting")
@@ -912,21 +830,29 @@ def main() -> None:
             print(f"Total Tunnels: {summary['total_tunnels']}")
             print(f"Healthy: {summary['healthy_tunnels']}")
             print(f"Unhealthy: {summary['unhealthy_tunnels']}")
+            print(f"Unknown: {summary['unknown_tunnels']}")
             print(f"Overall Health: {summary['overall_health'].upper()}")
             print(f"{'=' * 60}\n")
 
             for name, health in results.items():
-                status_icon = "✓" if health.is_healthy else "✗"
-                print(f"{status_icon} {name} ({health.interface})")
+                status_icon = {"healthy": "✓", "unhealthy": "✗", "unknown": "?"}[health.assessment]
+                print(f"{status_icon} {name} ({health.interface}) [{health.assessment}]")
                 print(f"  IPsec: {health.ipsec_status}")
                 if health.bgp_peer:
-                    print(f"  BGP: {health.bgp_status or 'N/A'} (peer: {health.bgp_peer})")
-                print(f"  RX: {health.stats.rx_packets} packets / {health.stats.rx_bytes} bytes")
-                print(f"  TX: {health.stats.tx_packets} packets / {health.stats.tx_bytes} bytes")
-                if health.stats.tx_dropped > 0:
-                    print(f"  ⚠ TX DROPPED: {health.stats.tx_dropped} packets")
+                    print(f"  BGP: {health.bgp_status or 'UNKNOWN'} (peer: {health.bgp_peer})")
+                if health.xfrm_present:
+                    print(
+                        f"  RX: {health.stats.rx_packets} packets / {health.stats.rx_bytes} bytes"
+                    )
+                    print(
+                        f"  TX: {health.stats.tx_packets} packets / {health.stats.tx_bytes} bytes"
+                    )
+                    if health.stats.tx_dropped > 0:
+                        print(f"  ⚠ TX DROPPED: {health.stats.tx_dropped} packets")
+                else:
+                    print("  RX/TX: unavailable")
                 if health.failure_reasons:
-                    print(f"  Failures: {', '.join(health.failure_reasons)}")
+                    print(f"  Details: {', '.join(health.failure_reasons)}")
                 print()
     else:
         # Continuous monitoring

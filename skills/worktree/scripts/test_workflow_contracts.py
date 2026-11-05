@@ -2,6 +2,9 @@
 """Real-Git direct workflow contracts; native observations are explicit test stubs."""
 
 from pathlib import Path
+import contextlib
+import io
+import json
 import os
 import shutil
 import tempfile
@@ -16,10 +19,41 @@ import workflow_reconcile as reconcile
 import workflow_resources as resources
 from workflow_refinement import refinement, settle
 from workflow_state import WorkflowError, read, write
+from workflow_worker_results import ingest_result
 from test_workflow_execution import git
 
 
-class DirectExecutionTests(unittest.TestCase):
+class TransitionErrorTests(unittest.TestCase):
+    def test_resource_errors_are_structured_at_cli_boundary(self):
+        import workflow_transition as transition
+        output = io.StringIO()
+        with mock.patch.object(transition, "parser") as parser, mock.patch.object(
+            transition, "execute",
+            side_effect=WorkflowError("RESOURCE_UNASSIGNED", "resource is not assigned"),
+        ), contextlib.redirect_stdout(output):
+            parser.return_value.parse_args.return_value = object()
+            self.assertEqual(transition.main(), 1)
+        self.assertEqual(json.loads(output.getvalue()), {
+            "status": "error", "code": "RESOURCE_UNASSIGNED",
+            "message": "resource is not assigned",
+        })
+
+    def test_unavailable_result_input_has_a_controlled_cli_error(self):
+        import workflow_transition as transition
+        output = io.StringIO()
+        with mock.patch.object(transition, "parser"), mock.patch.object(
+            transition, "execute", side_effect=FileNotFoundError("private input path"),
+        ), contextlib.redirect_stdout(output):
+            self.assertEqual(transition.main(), 1)
+        value = json.loads(output.getvalue())
+        self.assertEqual(value["code"], "ENVIRONMENT_BLOCKER")
+        self.assertNotIn("private input path", output.getvalue())
+
+
+from test_worker_result_cases import WorkerResultContractCases  # noqa: E402
+
+
+class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
@@ -46,6 +80,13 @@ class DirectExecutionTests(unittest.TestCase):
             "refs/remotes/origin/main",
         )
         self.session = "root-native-test-session"
+        self.workflow_owner = getattr(self, 'workflow_owner', 'implement')
+        if self.workflow_owner == 'agentic-sdlc':
+            origin = self.root / 'origin.git'
+            git(self.root, 'clone', '--bare', str(self.project), str(origin))
+            git(origin, 'update-ref', 'refs/heads/main', self.base)
+            git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main')
+            git(self.project, 'remote', 'add', 'origin', str(origin))
         self.objective = {
             "outcome": "Apply a bounded housekeeping change",
             "scope": ["a.txt, b.txt and c.txt"],
@@ -56,7 +97,7 @@ class DirectExecutionTests(unittest.TestCase):
         }
         self.run_dir = Path(
             objectives.accept(
-                self.project, self.home, "implement", self.session, self.objective
+                self.project, self.home, self.workflow_owner, self.session, self.objective
             )["run_dir"]
         )
         self.settle()
@@ -111,11 +152,138 @@ class DirectExecutionTests(unittest.TestCase):
         settle(self.run_dir, claim)
 
     def prepare(self):
+        if self.workflow_owner == 'agentic-sdlc':
+            result = engine.prepare_execution(self.run_dir, self.project, 'FEAT-001', self.plan, 4)
+            engine.seal_tdd_base(self.run_dir, 'FEAT-001', 'test: synthetic native admission base')
+            return result
         if not engine.coordinator_path(self.run_dir, "FEAT-001").exists():
             engine.prepare_specifications(self.run_dir, self.project, "FEAT-001")
         return engine.prepare_execution(
             self.run_dir, self.project, "FEAT-001", self.plan, 4
         )
+
+    def test_native_launch_admits_registered_support_directories_before_arm(self):
+        import workflow_transition as transition
+        self.prepare()
+        assignment = engine.prepare_wave(self.run_dir, 'FEAT-001', 'WAVE-001')[0]
+        args = transition.parser().parse_args([
+            'task-arm', '--run-dir', str(self.run_dir), '--execution', 'FEAT-001',
+            '--wave', 'WAVE-001', '--task', assignment['task_id'],
+            '--assignment-digest', assignment['assignment_digest'],
+        ])
+        with mock.patch.object(transition, 'runtime_session_identity', return_value=self.session):
+            result = transition.execute(args)
+        self.assertEqual(result['launch']['support_write_roots'], [
+            str(self.run_dir.parent), str(self.home / 'workflow-resources'),
+        ])
+        self.assertTrue((self.home / 'workflow-resources').is_dir())
+        self.assertEqual((self.home / 'workflow-resources').stat().st_mode & 0o777, 0o700)
+        self.assertNotIn(str(self.home), result['launch']['support_write_roots'])
+
+    def test_native_launch_rejects_foreign_authority_before_state_changes(self):
+        import workflow_transition as transition
+        self.prepare()
+        assignment = engine.prepare_wave(self.run_dir, 'FEAT-001', 'WAVE-001')[0]
+        args = transition.parser().parse_args([
+            'task-arm', '--run-dir', str(self.run_dir), '--execution', 'FEAT-001',
+            '--wave', 'WAVE-001', '--task', assignment['task_id'],
+            '--assignment-digest', assignment['assignment_digest'],
+        ])
+        task = engine.task_path(self.run_dir, 'FEAT-001', 'WAVE-001', assignment['task_id'])
+        original = task.read_bytes()
+        with mock.patch.object(transition, 'runtime_session_identity', return_value=self.session), \
+                mock.patch.dict(os.environ, {'CODEX_HOME': str(self.root / 'foreign-home'),
+                                             'CLAUDE_CONFIG_DIR': str(self.root / 'foreign-home')}):
+            with self.assertRaises(WorkflowError):
+                transition.execute(args)
+        self.assertEqual(task.read_bytes(), original)
+        self.assertFalse((self.root / 'foreign-home').exists())
+        self.assertFalse((self.home / 'workflow-resources').exists())
+
+    def test_native_launch_identity_rejects_unregistered_and_symlinked_support(self):
+        from workflow_worker_contract import validate_launch_identity
+        self.prepare()
+        assignment = engine.prepare_wave(self.run_dir, 'FEAT-001', 'WAVE-001')[0]
+        path = engine.assignment_path(self.run_dir, 'FEAT-001', 'WAVE-001', assignment['task_id'])
+        copied = self.run_dir / 'copied-assignment.json'
+        write(copied, assignment)
+        with self.assertRaises(WorkflowError):
+            validate_launch_identity(copied, self.home, self.session)
+        with self.assertRaises(WorkflowError):
+            validate_launch_identity(path, self.home, 'foreign-coordinator')
+        project_file = self.run_dir.parent / 'project.json'
+        manifest = read(project_file)
+        write(project_file, {**manifest, 'project_id': 'f' * 24})
+        with self.assertRaises(WorkflowError):
+            validate_launch_identity(path, self.home, self.session)
+        write(project_file, manifest)
+        foreign = self.root / 'foreign-storage'
+        foreign.mkdir(mode=0o700)
+        (self.home / 'workflow-resources').symlink_to(foreign, target_is_directory=True)
+        with self.assertRaises(WorkflowError):
+            validate_launch_identity(path, self.home, self.session)
+        self.assertEqual(list(foreign.iterdir()), [])
+
+    def test_native_launch_recovery_declares_lease_storage_without_runtime_domains(self):
+        from workflow_worker_contract import launch_contract
+        self.prepare()
+        assignment = engine.prepare_wave(self.run_dir, 'FEAT-001', 'WAVE-001')[0]
+        path = engine.assignment_path(self.run_dir, 'FEAT-001', 'WAVE-001', assignment['task_id'])
+        without_runtime = {**assignment, 'conflict_domains': []}
+        self.assertEqual(launch_contract(path, without_runtime)['support_write_roots'],
+                         [str(self.run_dir.parent)])
+        self.assertEqual(launch_contract(path, without_runtime, recovery_attempt=1)['support_write_roots'],
+                         [str(self.run_dir.parent), str(self.home / 'workflow-resources')])
+
+    def test_native_launch_admission_sdlc_arm_and_recovery(self):
+        import workflow_transition as transition
+        fixture = DirectExecutionTests('test_native_launch_admits_registered_support_directories_before_arm')
+        fixture.workflow_owner = 'agentic-sdlc'
+        fixture.setUp()
+        try:
+            fixture.test_native_launch_admits_registered_support_directories_before_arm()
+            assignment = read(engine.assignment_path(fixture.run_dir, 'FEAT-001', 'WAVE-001', 'TASK-001'))
+            common = ['--run-dir', str(fixture.run_dir), '--execution', 'FEAT-001',
+                      '--wave', 'WAVE-001', '--task', assignment['task_id']]
+            engine.start_task(fixture.run_dir, 'FEAT-001', 'WAVE-001', assignment['task_id'],
+                              assignment['assignment_digest'], 'synthetic-sdlc-worker',
+                              Path(assignment['scope_cwd']))
+            observed = fixture.result_observation(assignment)
+            args = transition.parser().parse_args([
+                'authorize-recovery', *common, '--termination', str(observed),
+                '--next-session-sha256', objectives.session_hash('synthetic-sdlc-recovery'),
+            ])
+            with mock.patch.object(transition, 'runtime_session_identity', return_value=fixture.session):
+                result = transition.execute(args)
+            self.assertEqual(result['launch']['support_write_roots'], [
+                str(fixture.run_dir.parent), str(fixture.home / 'workflow-resources'),
+            ])
+            self.assertEqual(result['launch']['recovery_attempt'], 1)
+        finally:
+            fixture.tearDown()
+            fixture.doCleanups()
+
+    def test_result_cli_ingests_complete_payload_and_finishes_only_from_receipt(self):
+        import workflow_transition as transition
+        first, _ = self.result_fixture()
+        self.result_write(first)
+        observation = self.result_observation(first)
+        incoming = self.run_dir / "native-output.json"
+        write(incoming, self.result_payload(first))
+        common = ["--run-dir", str(self.run_dir), "--execution", "FEAT-001",
+                  "--wave", "WAVE-001", "--task", first["task_id"],
+                  "--termination", str(observation)]
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": self.session}):
+            ingested = transition.execute(transition.parser().parse_args([
+                "task-result", *common, "--result", str(incoming),
+            ]))
+            args = ["task-finish", *common, "--receipt", ingested["receipt_path"],
+                    "--message", "test: result CLI"]
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                transition.parser().parse_args([*args, "--validation", "projected evidence"])
+            result = transition.execute(transition.parser().parse_args(args))
+        self.assertEqual(result["worker_result_receipt_sha256"], ingested["receipt_sha256"])
+        self.assertEqual(result["validation"], self.result_payload(first)["validation"])
 
     def test_execution_cli_prepares_and_reports_current_execution(self):
         import workflow_transition
@@ -372,15 +540,22 @@ class DirectExecutionTests(unittest.TestCase):
         worker = Path(assignment["worktree"])
         target = assignment["write_claims"][0]["path"]
         (worker / target).write_text(assignment["task_id"] + "\n")
+        termination = self.observation(assignment, wave=wave)
+        receipt = ingest_result(self.run_dir, "FEAT-001", wave, assignment["task_id"], {
+            "task_id": assignment["task_id"], "assignment_digest": assignment["assignment_digest"],
+            "status": "implemented", "summary": "housekeeping completed", "decisions": [],
+            "open_risks": [], "spec_gaps": [], "validation": "identifier verified",
+            "review": "scoped review passed",
+        }, termination, self.session)
         result = engine.finish_task(
             self.run_dir,
             "FEAT-001",
             wave,
             assignment["task_id"],
-            "identifier verified",
-            "scoped review passed",
+            Path(receipt["receipt_path"]),
             "test: " + assignment["task_id"],
-            summary="housekeeping completed",
+            termination=termination,
+            session_identity=self.session,
         )
         if admit:
             engine.admit_task(
@@ -388,11 +563,11 @@ class DirectExecutionTests(unittest.TestCase):
                 "FEAT-001",
                 wave,
                 assignment["task_id"],
-                self.observation(assignment, wave=wave),
+                termination,
             )
         return result
 
-    def deliver(self):
+    def integrate(self):
         self.prepare()
         pending = engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
         while pending:
@@ -407,6 +582,9 @@ class DirectExecutionTests(unittest.TestCase):
             "WAVE-001",
             "all identifiers independently checked",
         )
+
+    def deliver(self):
+        self.integrate()
         engine.seal_feature(
             self.run_dir,
             "FEAT-001",
@@ -416,6 +594,59 @@ class DirectExecutionTests(unittest.TestCase):
         return engine.promote_feature(
             self.run_dir, "FEAT-001", "exact delivered files checked"
         )
+
+    def test_issue_evidence_cli_seal_promote_and_completion(self):
+        import workflow_transition as transition
+        import workflow_issue_resolution as issue_owner
+
+        member = {"host": "github.com", "repository": "example/files", "number": 12}
+        criterion = "a.txt contains TASK-001"
+        self.objective["issue_resolution"] = {
+            "plan_path": "docs/github-issues/batch-12-files.md", "plan_sha256": "a" * 64,
+            "close_after_merge": True, "closure_request_sha256": "b" * 64,
+            "members": [{**member, "criteria": [criterion]}],
+        }
+        objectives.accept(self.project, self.home, "implement", self.session,
+                          self.objective, revise=True)
+        self.settle()
+        reconcile.resume_replanned(self.run_dir, self.session)
+        self.integrate()
+        coordinator = read(engine.coordinator_path(self.run_dir, "FEAT-001"))
+        self.assertIn("TASK-001", (Path(coordinator["integration_worktree"]) / "a.txt").read_text())
+        evidence = {"schema": issue_owner.EVIDENCE_SCHEMA, "issues": [{
+            **member, "summary": "Delivered required identifier", "criteria": [{
+                "criterion": criterion, "status": "passed",
+                "evidence": "Independently read a.txt and observed TASK-001",
+            }],
+        }]}
+        path = self.run_dir / "issue-checks.json"
+        write(path, evidence)
+        args = transition.parser().parse_args([
+            "seal-feature", "--run-dir", str(self.run_dir), "--execution", "FEAT-001",
+            "--evidence", "combined validation passed", "--message", "test: final",
+            "--issue-evidence", str(path),
+        ])
+        with mock.patch.object(transition, "runtime_session_identity", return_value=self.session):
+            sealed = transition.execute(args)
+            evidence["issues"][0]["summary"] = "Conflicting retry"
+            write(path, evidence)
+            with self.assertRaisesRegex(engine.ExecutionError, "sealed issue evidence changed"):
+                transition.execute(args)
+            promoted = transition.execute(transition.parser().parse_args([
+                "promote", "--run-dir", str(self.run_dir), "--execution", "FEAT-001",
+                "--evidence", "delivered files independently checked",
+            ]))
+        receipt = issue_owner.read_handoff(self.run_dir)
+        self.assertEqual(receipt["delivered_head"], git(self.project, "rev-parse", "HEAD"))
+        self.assertEqual(receipt["delivered_head"], promoted["promoted_head"])
+        self.assertEqual(receipt["delivered_head"], sealed["integration_head"])
+        self.assertTrue(receipt["issues"][0]["eligible"])
+        self.assertEqual(receipt["merge_status"], "pending")
+        receipt_path = self.run_dir / "issue-resolution.json"
+        before = receipt_path.read_bytes()
+        objectives.complete_run(self.run_dir, self.session)
+        self.assertEqual(receipt_path.read_bytes(), before)
+        self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
 
     def publication(self, checkout, *, native=None, objective=None, basis=None):
         from project_specs_lib.transaction import publish_spec_pair
@@ -820,14 +1051,15 @@ class DirectExecutionTests(unittest.TestCase):
         resources.acquire(self.home, path, "test-a", session)
         worker = Path(assignment["worktree"])
         (worker / "a.txt").write_text("TASK-001\n")
+        termination = self.observation(assignment)
         before_head, before_index = git(worker, "rev-parse", "HEAD"), git(worker, "write-tree")
         execution_root = self.run_dir / "execution"
         before = {p: p.read_bytes() for p in execution_root.rglob("*") if p.is_file()}
         with resources.consume(self.home, path, "test-a"):
             with self.assertRaisesRegex(engine.ExecutionError, "release assignment runtime leases"):
                 engine.finish_task(self.run_dir, "FEAT-001", "WAVE-001", "TASK-001",
-                                   "identifier verified", "scoped review passed", "test: task",
-                                   summary="housekeeping completed")
+                                   self.run_dir / "absent-receipt.json", "test: task",
+                                   termination=termination, session_identity=self.session)
         self.assertEqual(git(worker, "rev-parse", "HEAD"), before_head)
         self.assertEqual(git(worker, "write-tree"), before_index)
         self.assertEqual({p: p.read_bytes() for p in execution_root.rglob("*") if p.is_file()}, before)

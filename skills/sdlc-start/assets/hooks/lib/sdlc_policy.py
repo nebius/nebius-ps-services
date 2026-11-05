@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from fnmatch import fnmatchcase
 import os
@@ -114,13 +115,31 @@ def contains_secret(text: str) -> bool:
         r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
         r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
         r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)",
-        r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?[A-Za-z0-9_./+=:-]{12,}",
     ]
+    generic_assignment = re.compile(
+        r"(?i)\b(password|secret|token)\b\s*[:=]\s*"
+        r"(?P<quote>[\"']?)(?P<value>[A-Za-z0-9_./+=:-]{12,})"
+    )
     for line in text.splitlines() or [text]:
-        lowered = line.lower()
-        if any(marker in lowered for marker in placeholder_markers):
-            continue
         if any(re.search(pattern, line) for pattern in secret_patterns):
+            return True
+        for match in generic_assignment.finditer(line):
+            if match.group("value").lower() in placeholder_markers:
+                continue
+            # Recognize only a complete bounded expression, never evaluate it.
+            # One trailing JavaScript terminator is allowed; additional code,
+            # quoted literals and ambiguous expressions remain fail-closed.
+            rhs = line[match.start("value"):].strip()
+            if not match.group("quote") and len(rhs) <= 4096:
+                try:
+                    expression = ast.parse(rhs.removesuffix(";"), mode="eval").body
+                except (SyntaxError, ValueError, RecursionError):
+                    pass
+                else:
+                    while isinstance(expression, ast.Attribute):
+                        expression = expression.value
+                    if isinstance(expression, (ast.Call, ast.Subscript)):
+                        continue
             return True
     return False
 

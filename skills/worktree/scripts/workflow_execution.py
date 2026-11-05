@@ -66,23 +66,26 @@ from project_specs_lib.contracts import (  # noqa: E402
 )
 from workflow_objectives import validate_run, check_dispatch  # noqa: E402 — verified runtime support precedes imports
 from workflow_state import git_environment, WorkflowError  # noqa: E402 — verified runtime support precedes imports
+from workflow_liveness import (  # noqa: E402
+    WORKER_START_SECONDS,
+    WORKER_MAX_SECONDS,
+    WORKER_DEADLINE_WARNING_SECONDS,
+)
 
 
 COORDINATOR_SCHEMA = "workflow/execution-coordinator-v2"
 WAVE_SCHEMA = "workflow/execution-wave-v2"
 TASK_SCHEMA = "workflow/execution-task-v2"
 ASSIGNMENT_SCHEMA = "workflow/worker-assignment-v2"
-RESULT_SCHEMA = "workflow/worker-result-v2"
+RESULT_SCHEMA = "workflow/worker-result-v3"
 INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v2"
-TASK_FINISH_INTENT_SCHEMA = "agentic-sdlc/task-finish-intent-v2"
+TASK_FINISH_INTENT_SCHEMA = "workflow/task-finish-intent-v3"
 WORKER_HEARTBEAT_SECONDS = 30
-WORKER_START_SECONDS = 60
 WORKER_STANDARD_WARNING_SECONDS = 240
 WORKER_STANDARD_READ_ONLY_SECONDS = 300
 WORKER_INTEGRATION_WARNING_SECONDS = 360
 WORKER_INTEGRATION_READ_ONLY_SECONDS = 420
 WORKER_STALL_SECONDS = 240
-WORKER_MAX_SECONDS = 1800
 WORKER_PHASES = (
     "preflight",
     "implementing",
@@ -98,7 +101,6 @@ TASK_ID_RE = re.compile(r"TASK-[0-9]{3,}")
 SAFE_ID_RE = re.compile(r"[^a-z0-9._-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-SPEC_GAP_KINDS = {"requirement", "design", "traceability"}
 SINGLETON_DOMAIN_CLASSES = {
     "database",
     "external",
@@ -124,38 +126,8 @@ class ExecutionError(RuntimeError):
 
 
 def _valid_spec_gaps(value: object) -> bool:
-    if not isinstance(value, list):
-        return False
-    for gap in value:
-        if (
-            not isinstance(gap, dict)
-            or set(gap)
-            != {"kind", "summary", "evidence", "requirement_ids", "design_ids"}
-            or gap.get("kind") not in SPEC_GAP_KINDS
-            or not isinstance(gap.get("summary"), str)
-            or not str(gap["summary"]).strip()
-            or _contains_sensitive(str(gap["summary"]))
-            or not isinstance(gap.get("evidence"), list)
-            or not gap["evidence"]
-            or any(
-                not isinstance(item, str)
-                or not item.strip()
-                or _contains_sensitive(item)
-                for item in gap["evidence"]
-            )
-            or not isinstance(gap.get("requirement_ids"), list)
-            or any(
-                REQUIREMENT_ID_RE.fullmatch(str(item)) is None
-                for item in gap["requirement_ids"]
-            )
-            or not isinstance(gap.get("design_ids"), list)
-            or any(
-                FEATURE_ID_RE.fullmatch(str(item)) is None
-                for item in gap["design_ids"]
-            )
-        ):
-            return False
-    return True
+    from workflow_worker_contract import _spec_gap_rejection
+    return _spec_gap_rejection(value) is None
 
 
 def _impact(action: str, callback, *args):
@@ -869,12 +841,14 @@ def tasks_conflict(left: TaskPlan, right: TaskPlan) -> bool:
     return False
 
 
-def build_dependency_waves(tasks: list[TaskPlan]) -> list[list[TaskPlan]]:
+def build_dependency_waves(tasks: list[TaskPlan], *, prefix=()) -> list[list[TaskPlan]]:
     """Freeze batches of at most four retained worktrees, independently of slots."""
-    waves: list[list[TaskPlan]] = []
-    wave_index: dict[str, int] = {}
-    first_available = 0
+    waves: list[list[TaskPlan]] = [list(wave) for wave in prefix]
+    wave_index = {task.task_id: index for index, wave in enumerate(waves) for task in wave}
+    first_available = len(waves)
     for task in _topological_tasks(tasks):
+        if task.task_id in wave_index:
+            continue
         target = max(first_available, max((wave_index[item] for item in task.dependencies), default=-1) + 1)
         while target < len(waves) and (
             len(waves[target]) >= 4 or any(tasks_conflict(task, peer) for peer in waves[target])
@@ -1579,7 +1553,7 @@ def _replan_future_locked(
         run_dir,
         selected_project_root,
     )
-    if coordinator.get("status") in {"sealed", "promoted", "done"}:
+    if coordinator.get("status") in {"sealed", "promoted", "done", "design_revision_pending"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "sealed execution cannot replan"
         )
@@ -1624,14 +1598,19 @@ def _replan_future_locked(
                    for row in [read_json(path)] if row.get("status") == "superseded" for task in row["task_ids"]}
     if any(set(task.dependencies) & retired_ids for task in tasks if task.task_id not in retired_ids):
         raise ExecutionError("REPLAN_REQUIRED", "new tasks cannot depend on superseded work")
-    new_waves = build_dependency_waves(tasks)
     old_wave_ids = list(coordinator["wave_ids"])
     preserved = 0
+    prefix = []
+    by_id = {task.task_id: task for task in tasks}
     for wave_id in old_wave_ids:
         wave = read_json(wave_path(run_dir, execution_id, wave_id))
         if wave.get("status") == "planned":
             break
+        if any(task_id not in by_id for task_id in wave["task_ids"]):
+            raise ExecutionError("REPLAN_REQUIRED", "replacement plan removes active history")
+        prefix.append([by_id[task_id] for task_id in wave["task_ids"]])
         preserved += 1
+    new_waves = build_dependency_waves(tasks, prefix=prefix)
     if len(new_waves) < preserved:
         raise ExecutionError(
             "REPLAN_REQUIRED", "replacement plan removes active history"
@@ -2068,6 +2047,18 @@ def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) 
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "worker result digest is invalid"
         )
+    from workflow_worker_results import read_receipt
+    _, received = _impact("worker result receipt is invalid", read_receipt, assignment, {
+        "attempt": result.get("attempt"), "worker_session_hash": result.get("worker_session_hash"),
+    })
+    payload = received["worker_result"]
+    if (received["receipt_sha256"] != result.get("worker_result_receipt_sha256")
+            or payload["status"] != "implemented"
+            or any(result.get(key) != payload[key] for key in (
+                "task_id", "assignment_digest", "summary", "decisions", "open_risks",
+                "spec_gaps", "validation", "review",
+            ))):
+        raise ExecutionError("RESULT_INVALID", "committed result differs from its native receipt")
     expected_oracle = assignment.get("regression_oracle")
     evidence = result.get("regression_oracle_evidence")
     if expected_oracle:
@@ -2292,6 +2283,8 @@ def _validate_assignment_handoff(
 
 
 def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str, Any]]:
+    from workflow_worker_results import require_dispatchable
+    _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
     coordinator = _load_coordinator(run_dir, execution_id)
     _impact(
         "objective impact execution basis is stale",
@@ -2641,6 +2634,8 @@ def refill_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str
     with _execution_transition_lock(run_dir, execution_id):
         coordinator = _load_coordinator(run_dir, execution_id)
         _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+        from workflow_worker_results import require_dispatchable
+        _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
         path = wave_path(run_dir, execution_id, wave_id)
         wave = read_json(path)
         if wave["status"] != "running":
@@ -2734,6 +2729,8 @@ def arm_task(
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "assignment digest mismatch"
             )
+        from workflow_worker_results import require_dispatchable
+        _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
         task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
         task_record = read_json(task_record_path)
         _validate_task_liveness(task_record)
@@ -2768,7 +2765,10 @@ def arm_task(
                 journal_path(run_dir, execution_id, wave_id),
                 {"event": "worker_armed", "task_id": task_id},
             )
-        return task_record
+        from workflow_worker_contract import launch_contract
+        return {**task_record, "launch": launch_contract(
+            assignment_path(run_dir, execution_id, wave_id, task_id), assignment,
+        )}
 
 
 def requeue_task(
@@ -2920,6 +2920,8 @@ def _start_task_locked(
             )
         _claim_worker_session(run_dir, execution_id, wave_id, task_id, session_hash)
         return assignment
+    from workflow_worker_results import require_dispatchable
+    _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
     dispatched_at = task_record.get("dispatched_at")
     if dispatched_at is None:
         raise ExecutionError(
@@ -3051,6 +3053,7 @@ def _validate_finish_intent(value: object) -> dict[str, Any]:
         "tree",
         "message",
         "evidence_digest",
+        "worker_result_receipt_sha256",
         "intent_digest",
     }
     unsigned = dict(value)
@@ -3064,6 +3067,7 @@ def _validate_finish_intent(value: object) -> dict[str, Any]:
         is None
         or re.fullmatch(r"[0-9a-f]{64}", str(value.get("evidence_digest") or ""))
         is None
+        or SHA256_RE.fullmatch(str(value.get("worker_result_receipt_sha256") or "")) is None
         or not isinstance(value.get("message"), str)
         or not value["message"]
         or not isinstance(recorded, str)
@@ -3130,13 +3134,12 @@ def _worker_guard_status(
         status = "WORKER_STALLED"
     else:
         status = "ACTIVE"
-    warning = (
-        "READ_ONLY_DEADLINE_NEAR"
-        if status == "ACTIVE"
-        and not progress_observed
-        and elapsed >= int(assignment["read_only_warning_seconds"])
-        else None
-    )
+    warning = None
+    if status == "ACTIVE":
+        if int(assignment["max_seconds"]) - elapsed <= WORKER_DEADLINE_WARNING_SECONDS:
+            warning = "WORKER_DEADLINE_NEAR"
+        elif not progress_observed and elapsed >= int(assignment["read_only_warning_seconds"]):
+            warning = "READ_ONLY_DEADLINE_NEAR"
     return {
         "status": status,
         "warning": warning,
@@ -3359,6 +3362,7 @@ def _verify_integration_commit(
 def _finish_evidence_digest(
     assignment: dict[str, Any],
     *,
+    worker_result_receipt_sha256: str,
     validation: str,
     review: str,
     message: str,
@@ -3370,6 +3374,7 @@ def _finish_evidence_digest(
     return sha256_json(
         {
             "assignment_digest": assignment["assignment_digest"],
+            "worker_result_receipt_sha256": worker_result_receipt_sha256,
             "validation": validation,
             "review": review,
             "message": message,
@@ -3387,6 +3392,7 @@ def _finish_intent_record(
     tree: str,
     message: str,
     evidence_digest: str,
+    worker_result_receipt_sha256: str,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "schema": TASK_FINISH_INTENT_SCHEMA,
@@ -3395,6 +3401,7 @@ def _finish_intent_record(
         "tree": tree,
         "message": message,
         "evidence_digest": evidence_digest,
+        "worker_result_receipt_sha256": worker_result_receipt_sha256,
     }
     value["intent_digest"] = sha256_json(value)
     return value
@@ -3407,6 +3414,7 @@ def _adopt_finish_commit(
     *,
     message: str,
     evidence_digest: str,
+    worker_result_receipt_sha256: str,
 ) -> str:
     intent_value = task_record.get("finish_intent")
     if intent_value is None:
@@ -3437,6 +3445,7 @@ def _adopt_finish_commit(
         tree=tree,
         message=message,
         evidence_digest=evidence_digest,
+        worker_result_receipt_sha256=worker_result_receipt_sha256,
     )
     if (
         intent != expected
@@ -3514,16 +3523,24 @@ def _recover_task_locked(
         raise ExecutionError(
             "WORKSPACE_BUSY", "worker recovery attempt changed before transfer"
         )
-    approval = read_json(execution_dir(run_dir, execution_id) / 'recoveries' / f'{task_id}-{expected_attempt}.json')
+    from workflow_reconcile import recovery_path
+    from workflow_state import digest as state_digest
+    current_coordinator = validate_run(run_dir)[0]['coordinator_session_sha256']
+    approval = read_json(recovery_path(run_dir, execution_id, task_id, expected_attempt, current_coordinator))
     observed = read_json(Path(str(approval.get('termination_path', ''))))
     if (approval.get('schema') != 'workflow/recovery-authorization-v1'
             or approval.get('assignment_digest') != assignment['assignment_digest']
             or approval.get('attempt') != expected_attempt
             or approval.get('prior_worker_session_hash') != task_record['worker_session_hash']
             or approval.get('next_worker_session_hash') != _session_hash(session_identity)
-            or approval.get('coordinator_session_hash') != validate_run(run_dir)[0]['coordinator_session_sha256']
-            or approval.get('termination_sha256') != sha256_json(observed)):
+            or approval.get('coordinator_session_hash') != current_coordinator
+            or approval.get('termination_sha256') != state_digest(observed)):
         raise ExecutionError('OWNERSHIP_INVALID', 'recovery requires exact coordinator authorization and native exit evidence')
+    from workflow_worker_results import receipt_path, read_receipt
+    if receipt_path(assignment, task_record['attempt']).exists():
+        _, received = _impact('worker result receipt is invalid', read_receipt, assignment, task_record)
+        if received['worker_result']['status'] != 'blocked':
+            raise ExecutionError('REPLAN_REQUIRED', 'completed or specification-gap results cannot renew a worker attempt')
     from workflow_resources import require_released
     require_released(run_dir, assignment)
     new_hash = _session_hash(session_identity)
@@ -3638,78 +3655,31 @@ def _verify_worker_paths(
 
 
 def finish_task(
-    run_dir: Path,
-    execution_id: str,
-    wave_id: str,
-    task_id: str,
-    validation: str,
-    review: str,
-    message: str,
-    *,
-    summary: str,
-    decisions: Iterable[str] = (),
-    open_risks: Iterable[str] = (),
+    run_dir: Path, execution_id: str, wave_id: str, task_id: str,
+    receipt: Path, message: str, *, termination: Path, session_identity: str,
     regression_oracle_evidence: dict[str, Any] | None = None,
     clock: Callable[[], datetime] = _system_clock,
 ) -> dict[str, Any]:
     with _execution_transition_lock(run_dir, execution_id):
         return _finish_task_locked(
-            run_dir,
-            execution_id,
-            wave_id,
-            task_id,
-            validation,
-            review,
-            message,
-            summary=summary,
-            decisions=decisions,
-            open_risks=open_risks,
-            regression_oracle_evidence=regression_oracle_evidence,
-            clock=clock,
+            run_dir, execution_id, wave_id, task_id, receipt, message,
+            termination=termination, session_identity=session_identity,
+            regression_oracle_evidence=regression_oracle_evidence, clock=clock,
         )
 
 
 def _finish_task_locked(
-    run_dir: Path,
-    execution_id: str,
-    wave_id: str,
-    task_id: str,
-    validation: str,
-    review: str,
-    message: str,
-    *,
-    summary: str,
-    decisions: Iterable[str],
-    open_risks: Iterable[str],
+    run_dir: Path, execution_id: str, wave_id: str, task_id: str,
+    receipt: Path, message: str, *, termination: Path, session_identity: str,
     regression_oracle_evidence: dict[str, Any] | None,
     clock: Callable[[], datetime],
 ) -> dict[str, Any]:
-    if (
-        not validation.strip()
-        or not review.strip()
-        or not message.strip()
-        or message != message.strip()
-    ):
-        raise ExecutionError(
-            "INTEGRATION_VALIDATION_FAILED",
-            "worker validation, review, and canonical commit message are required",
-        )
-    summary_value = summary
-    decision_values = list(decisions)
-    risk_values = list(open_risks)
-    if (
-        not summary_value.strip()
-        or any(
-            not isinstance(item, str) or not item.strip() for item in decision_values
-        )
-        or any(not isinstance(item, str) or not item.strip() for item in risk_values)
-    ):
-        raise ExecutionError(
-            "EXECUTION_STATE_INVALID", "worker handoff evidence is invalid"
-        )
-    _reject_sensitive_evidence(
-        validation, review, message, summary_value, *decision_values, *risk_values
-    )
+    if not isinstance(message, str) or not message.strip() or message != message.strip():
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "canonical commit message is required")
+    _reject_sensitive_evidence(message)
+    from workflow_reconcile import termination as observe_termination
+    _impact("worker termination is required", observe_termination,
+            run_dir, execution_id, wave_id, task_id, termination, session_identity)
     coordinator = _load_coordinator(run_dir, execution_id)
     assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
     _validate_assignment_record(assignment)
@@ -3720,6 +3690,14 @@ def _finish_task_locked(
     task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
     task_record = read_json(task_record_path)
     _validate_task_liveness(task_record)
+    from workflow_worker_results import implemented_result
+    received = _impact("worker completion requires a validated result", implemented_result,
+                       assignment, task_record, receipt)
+    payload = received["worker_result"]
+    validation, review = payload["validation"], payload["review"]
+    summary_value = payload["summary"]
+    decision_values, risk_values = payload["decisions"], payload["open_risks"]
+    worker_result_receipt_sha256 = received["receipt_sha256"]
     _validate_assignment_handoff(
         run_dir,
         execution_id,
@@ -3743,6 +3721,7 @@ def _finish_task_locked(
     _validate_regression_oracle_claim(assignment, regression_oracle_evidence)
     evidence_digest = _finish_evidence_digest(
         assignment,
+        worker_result_receipt_sha256=worker_result_receipt_sha256,
         validation=validation,
         review=review,
         message=message,
@@ -3760,6 +3739,7 @@ def _finish_task_locked(
             task_record,
             message=message,
             evidence_digest=evidence_digest,
+            worker_result_receipt_sha256=worker_result_receipt_sha256,
         )
         expected_oracle = _build_regression_oracle_evidence(
             assignment, regression_oracle_evidence, adopted
@@ -3791,6 +3771,7 @@ def _finish_task_locked(
             task_record,
             message=message,
             evidence_digest=evidence_digest,
+            worker_result_receipt_sha256=worker_result_receipt_sha256,
         )
     else:
         guard = _worker_guard_status(assignment, task_record, clock=clock)
@@ -3849,6 +3830,7 @@ def _finish_task_locked(
                 tree=tree,
                 message=message,
                 evidence_digest=evidence_digest,
+                worker_result_receipt_sha256=worker_result_receipt_sha256,
             )
             existing_intent = task_record.get("finish_intent")
             if existing_intent is None:
@@ -3947,6 +3929,7 @@ def _finish_task_locked(
         "wave_id": wave_id,
         "task_id": task_id,
         "assignment_digest": assignment["assignment_digest"],
+        "worker_result_receipt_sha256": worker_result_receipt_sha256,
         "commit": task_head,
         "changed_paths": changed_paths,
         "summary": summary_value,
@@ -4469,16 +4452,18 @@ def _cleanup_internal_resource(
 
 
 def seal_feature(
-    run_dir: Path, execution_id: str, evidence: str, message: str
+    run_dir: Path, execution_id: str, evidence: str, message: str,
+    issue_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Seal final integration-only changes before project-branch promotion."""
 
     with _execution_transition_lock(run_dir, execution_id):
-        return _seal_feature_locked(run_dir, execution_id, evidence, message)
+        return _seal_feature_locked(run_dir, execution_id, evidence, message, issue_evidence)
 
 
 def _seal_feature_locked(
-    run_dir: Path, execution_id: str, evidence: str, message: str
+    run_dir: Path, execution_id: str, evidence: str, message: str,
+    issue_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Seal final integration-only changes before project-branch promotion."""
 
@@ -4488,7 +4473,11 @@ def _seal_feature_locked(
     coordinator = _load_coordinator(run_dir, execution_id)
     _verify_execution_objective_impact(run_dir, execution_id, coordinator)
     _require_resolved_failures(run_dir, execution_id, coordinator)
+    from workflow_issue_resolution import seal_evidence, objective_context
+    normalized_issues = seal_evidence(run_dir, issue_evidence)
     if coordinator["status"] == "sealed":
+        if coordinator.get("issue_evidence") != normalized_issues:
+            raise ExecutionError("PROMOTION_BLOCKED", "sealed issue evidence changed")
         integration = Path(coordinator["integration_worktree"])
         if head(integration) != coordinator["integration_head"] or not clean(
             integration
@@ -4552,6 +4541,10 @@ def _seal_feature_locked(
             raise
     coordinator["integration_head"] = head(integration)
     coordinator["final_evidence"] = evidence.strip()
+    if normalized_issues is not None:
+        coordinator["issue_evidence"] = normalized_issues
+        coordinator["issue_evidence_head"] = coordinator["integration_head"]
+        coordinator["issue_objective_sha256"] = objective_context(run_dir)[2]["sha256"]
     coordinator["status"] = "sealed"
     _save_coordinator(run_dir, execution_id, coordinator)
     append_journal(

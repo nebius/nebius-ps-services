@@ -52,6 +52,7 @@ def build_binary() -> None:
             *REPLAY_WINDOW_SOURCES,
             *INGRESS_SOURCES,
             "ordinary_bootstrap.py",
+            "boot_policy.py",
             "packet_health.py",
         )
     ):
@@ -65,10 +66,17 @@ def build_binary() -> None:
 
     for relative in (
         "ha_repair.py",
+        "checkpoint_upgrade.py",
+        "ipsec_observation.py",
+        "tunnel_restart.py",
+        "agent/tunnel_iterator.py",
         "deploy/handoff_remote.py",
+        "deploy/operator_guest.py",
         "agent/vm_ha_checkpoint.py",
         "agent/vm_ha_controller.py",
         "agent/vm_ha/models.py",
+        "agent/vm_ha/evidence.py",
+        "agent/vm_ha/heartbeat.py",
         "agent/vm_ha/mtls.py",
     ):
         source = Path(__file__).parent / relative

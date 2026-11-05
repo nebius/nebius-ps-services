@@ -21,6 +21,36 @@ with the old skill; the new skill does not adopt old-format roots or Docker
 resources. Renaming the action to `--create-live-test` does not change lifecycle
 ownership markers or require another migration.
 
+Runtime registration now discovers owned resources and derives loopback endpoints
+from inspection. Immutable named diagnostics survive automatic cleanup; worker
+observations remain separate from clean build-bound acceptance. See
+[runtime inventory](references/runtime-inventory.md) for the private path-only
+interface, failure categories and classifier-linked development recovery.
+Lifecycle v7 rejects incompatible active state; historical reports are preserved.
+Git and native-hook consumers admit this retained state through the lifecycle
+owner's existing 1 MiB limit. Small profile files remain bounded at 64 KiB;
+oversized or unsafe files fail without discarding earlier diagnostics.
+
+Historical original TDD evidence may survive appended corrective waves after
+clean promotion. The verifier checks exact locked plans, completed owner replan
+records, preserved completed tasks, the original TDD seal and unchanged execution
+identity. Missing, altered or ambiguous lineage fails; later acceptance and new
+phase submissions still require the current basis.
+
+Completion acceptance clicks the initially unchecked control once, then waits
+within the existing assertion deadline for its saved checked state. This supports
+asynchronous confirmation and replacement elements while retaining independent
+API/database and filter checks. The interaction helper is hash-bound in the
+frozen bundle; previous bundles without it require a fresh trial.
+
+The optional synthetic control regression uses the pinned Playwright dependency
+and installed Chrome. In an isolated copy of `assets/headless-browser`, run
+`npm ci --ignore-scripts --no-audit --no-fund`, then
+`node node_modules/@playwright/test/cli.js test --config completion-control.config.mjs`.
+It covers delayed confirmation, DOM replacement, wrong-row and never-confirmed
+state, and an already-completed precondition. This is verifier regression proof,
+separate from deterministic preflight and application acceptance.
+
 ## Invocation modes
 
 ```text
@@ -68,15 +98,50 @@ cannot be replaced by a copied source or report. Retired `--create` and
 The remote guard admits exactly one verifier-owned local bare `origin`; external,
 extra, or mismatched remotes fail before fixture mutation.
 
-When the selected checkout or dependency configuration changes, the live owner
-recreates both containers while preserving the database volume, then rediscovers
-the web endpoint. This keeps Compose file and dependency metadata aligned with
-the selected source during restart checks.
+Every live startup uses owned `up --force-recreate --detach --wait web db`.
+Build web separately with owned `build web`. The helper rejects other startup
+shapes before target resolution or Docker dispatch; it never silently adds
+flags. Both containers are recreated while preserving the named database volume,
+then the caller rediscovers the web endpoint and owned inventory. This prevents
+stale service aliases and checkout metadata after network or configuration changes.
 The restart owner refreshes the dynamic loopback endpoints before checking the
 deployment and recording its receipt. A failed restart clears prior restart
 proof; invalid ownership, publication or image identity cannot produce new proof.
+Registration, deployment and restart use the single observed loopback binding,
+including IPv4 or IPv6, independently of the application's internal port.
+Literal endpoint addresses must match the observed address family.
+Runtime registration and browser admission require the frozen `/api/v1/tasks`
+API path without a query, with web, API and health URLs on the same owned
+loopback origin. Endpoint mistakes fail before inventory changes or a browser
+attempt; the health path may follow the application's declared health route.
+
+The owned Compose actions are `build`, `exec`, `port`, `ps`, `restart`, `start`,
+`stop`, and `up`. Worker teardown uses `stop web db` before releasing its lease;
+final lifecycle cleanup deletes resources. Unsupported `down` and `logs` are
+not alternate teardown or diagnostic interfaces. Ownership-checked, read-only
+Docker observations may collect existing logs with sensitive output screened.
+Retain named failing predicates and sanitized observation values before teardown;
+an incomplete diagnostic remains an evidence gap, never a product diagnosis.
+Docker documents that [Compose stop](https://docs.docker.com/reference/cli/docker/compose/stop/)
+stops containers without removing them.
+
+Worker runtime access keeps workflow imports available for the complete lease
+check and Compose action, including deferred imports, and restores the prior
+search path on success or failure. Fresh-process regression checks exercise real
+lease validation without preloading execution modules or invoking Docker.
 
 ## What It Does
+
+Phase-result input files use the exact private path
+`<run-root>/evidence/phases/<phase>.json`. The recorder's `--evidence` help and
+path-rejection diagnostic expose this requirement. Callers supply the canonical
+file; the recorder alone creates immutable attempt archives. Use each installed
+subcommand's help, including `--validation-command` for validation text.
+`record-validation` is for canonical acceptance checks: a failed record cannot
+be replaced, and an identical replay preserves its bytes and timestamp.
+Pre-publication lint, expected TDD failures and worker development checks remain
+in ordinary phase evidence and counted repair history. An already recorded
+acceptance failure requires a fresh trial, even if it was recorded by mistake.
 
 - Reads `docs/agentic-sdlc-design.md` as the workflow contract.
 - Uses `references/verification-checklist.md` as the test plan.
@@ -161,8 +226,11 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 - Rediscovers the Docker-assigned web port after restart and refreshes recorded
   endpoints while proving the original database volume remains in use.
 - Records a digest-bound startup receipt only while the coordinator is still
-  at `sdlc-start` on the fixture baseline. Exact JSON ownership and real hook
-  discovery must agree before any other phase passes. Runtime targeting rejects
+  at `sdlc-start` on the fixture baseline. This requires the coordinator's first
+  phase checkpoint after intake;
+  accepted registration alone is insufficient. The verifier never creates it.
+  Exact JSON ownership and real hook discovery must agree before any other phase
+  passes. Runtime targeting rejects
   empty or mismatched ownership; final semantic ingestion requires the receipt.
   Late recovery cannot certify an earlier trial: start a fresh trial.
 - Aggregate collection requires all four ordered headless stage receipts,
@@ -172,6 +240,15 @@ proof; invalid ownership, publication or image identity cannot produce new proof
   to the immutable running web image. Stale images, web mounts and endpoints
   outside that container cannot certify the selected revision.
 - Newly admitted phase results require the current objective and basis.
+  Failure classification binds the source checkout before preparation and the
+  validated execution basis and integration checkout after preparation. A selected
+  feature or locked plan alone is not prepared execution. Actual execution, basis
+  or worktree intent requires strict target validation; partial or missing
+  previously observed execution cannot fall back to a receipt without a basis.
+  An immutable classifier receipt admitted before the first successful execution
+  phase retains its original null basis after preparation. Validation still
+  checks admission order, objective, artifact digest and Git ancestry; a new
+  receipt after preparation requires the current execution basis.
   Historical admitted receipts survive only owner-linked, no-effect spec
   reconciliation with unchanged objective, plan, execution identities and Git
   ancestry. Missing lineage or material changes remain failures.
@@ -210,6 +287,13 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 
 ## Workflow
 
+Shared SDLC/Implement workers have a one-hour per-attempt wall-clock deadline
+with a five-minute warning, independent of heartbeat/stall guards. Harness waits
+count, so service frozen runtime requests promptly and batch declared sequential
+operations. Failed owned Compose commands retain a nonzero outcome with bounded
+safe diagnostics; runtime credential values are redacted and sensitive output
+is withheld. These diagnostics are not acceptance receipts.
+
 1. Run safe static and hook preflight checks.
 2. Review the generated report for blocking safety or discovery failures.
 3. Use the SDLC phase skills on the nested disposable project for the seven
@@ -230,10 +314,24 @@ remain failures. Unit fixture homes are also restored after each case, including
 failed setup. Existing fixtures without a profile are not silently adopted.
 
 Use `scripts/run_with_git_environment.py --profile <owned-profile> --cwd
-<owned-checkout> -- <native-command>` to launch normal commands with the sealed
-profile. This private launcher only supplies validated environment; it does not
-advance SDLC phases. Use the lifecycle's isolated native home for workflow state
-and current runtime/hook installation. Do not edit personal Git settings, export
+<owned-checkout> -- <native-command>` to launch the native agent with the sealed
+profile and a minimal environment. It requires the exact lifecycle-owned native
+home, removes unrelated credentials and parent session identities, and redirects
+shell initialization to that home without startup files. Codex configuration must
+disable login shells and shell snapshots, enable default secret exclusions, and
+pin `project_root_markers = [".git"]`. Project configuration is rejected only
+from cwd through the validated checkout root, including linked worktree roots;
+ordinary configuration above it remains separate. Bare origins cannot launch agents;
+see [the launch settings](references/three-tier-process.md#native-launch-settings).
+Worker processes inherit this environment; the private native authentication
+store remains separate. This is environment isolation, not a separate operating
+system identity or a restriction on all readable credential files. Never dump
+environment values; inspect only necessary names or presence booleans.
+This launcher does not advance SDLC phases and is not the application-runtime
+launcher. Outer lifecycle operations use the shared validated Git environment
+and their explicitly scoped private application environment. Use the lifecycle's
+isolated native home for workflow state and current runtime/hook installation.
+Do not edit personal Git settings, export
 arbitrary overrides, allowlist filters or bypass a failed profile validation.
 
 - `SKILL.md`: runtime verification workflow and safety boundaries.
@@ -283,6 +381,14 @@ run validation on uncommitted integration work before coordinator sealing.
 Shipping and UAT always require a clean promoted checkout. After completed promotion,
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Read-only classifier observations have a separate explicit target purpose. While
+the bound root coordinator is running `sdlc-classify-failure`, it may observe
+unsealed integration files without committing them or changing phase. Exact
+worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+This purpose is never used by Compose, runtime inventory, build certification,
+browser acceptance or test execution; explicit clean-target requests still win.
+Worker selectors and dirty promoted checkouts remain rejected.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.

@@ -8,6 +8,13 @@ agent initiates review or merging; existing completion schedules recover only
 previously authorized operations.
 
 Read [checkout completion](checkout-completion.md) before intake and outer return.
+For issue-plan handoffs also read the shared
+[issue-resolution contract](../../worktree/references/issue-resolution.md).
+After final readiness and before return/merge, verify concise issue comments and
+render/read back the eligible native closing references. Any later head change
+requires removing stale owned references before push and fresh validation.
+Keep the handoff identity with the existing outer operation; no new coordinator
+or implicit implementation/publication authority is introduced.
 
 1. Use the live default branch. Reuse the current feature branch; when on the
    default, begin canonical create-pr intake before creating the frozen feature

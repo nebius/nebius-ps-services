@@ -520,6 +520,13 @@ generation and origin binding, exact Git scope and local configuration checks.
 `runtime_environment` preserves and revalidates this context for fresh workers.
 No profile means existing ordinary runtime behavior. A supplied invalid profile
 fails closed; it is never dropped to recover ambient Git settings.
+Sealed checkouts may retain the specific `branch.<name>.vscode-merge-base`
+history hint only when it exactly matches the bound origin default. Bare-origin
+and unsealed hints, other values and unsupported configuration still fail.
+The active three-tier lifecycle uses its owner's 1 MiB read limit so retained
+observations do not prevent native commands or cleanup. Profile, configuration,
+marker and origin files retain the 64 KiB bound. Oversized or unsafe files keep
+their precise rejection; only decoding errors are reported as invalid JSON.
 
 Hook installations carry `agent_runtime.py` and `hook_runtime.py` from the
 sibling `global-context-management/scripts/` directory. Native plugins render

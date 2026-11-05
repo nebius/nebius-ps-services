@@ -114,6 +114,11 @@ the registered checkout and expected revision. Workers never publish them.
    before any canonical authoring. Resume reuses that ownership; an interrupted
    contract commit is reconciled by preparation before ordinary clean-lease
    checks. Never acquire a missing lease from a dirty child.
+   Intake registers the objective, run and binding; it does not create phase
+   checkpoints. Before checkpoint reads, refinement, observation or routing,
+   follow the first-start/resume branch in `references/state-schema.md`.
+   The bound coordinator initializes a fresh accepted run at `sdlc-start`,
+   `running`; an active pointer alone does not mean phase state exists.
 3. Accept material steering with `accept --revise`, which fences dispatch and
    promotion before recording the adjacent objective revision. Stop affected
    native writers, record termination, reconcile them without admitting stale
@@ -134,12 +139,13 @@ the registered checkout and expected revision. Workers never publish them.
    a dependency/prioritization queue inside the accepted objective; unrelated
    requests are never appended to it.
 
-- Resume from `checkpoints/latest.json` first. Do not rely on conversation
+- For initialized runs, resume from `checkpoints/latest.json` first. Do not rely on conversation
   memory for current feature, phase, blocker, retry counts, or next skill.
 - Reconcile `current-state.json`, the latest checkpoint, feature queue,
   fingerprints, and evidence. If they disagree, prefer the newest complete
   checkpoint that matches existing evidence, then repair `current-state.json`.
-- Initialize local run state only when no active run or checkpoint exists.
+- Initialize only a verified fresh accepted run without prior phase or downstream
+  work. Reconcile existing or partial history; never reset counters or evidence.
 - If requirements are missing, route to `sdlc-create-requirements`.
 - If design is missing or stale and required context is missing, route only to
   `sdlc-gather-context`.

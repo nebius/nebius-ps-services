@@ -1025,6 +1025,43 @@ def validate_project(project_root: Path) -> dict[str, Any]:
     return receipt
 
 
+def _metadata_line_exceptions(text: str) -> str:
+    """Keep indivisible metadata lintable without exempting surrounding prose."""
+    markers = {*spec_markers("requirements"), *spec_markers("design")}
+    default_newline = "\r\n" if "\r\n" in text else "\n"
+    output: list[str] = []
+    for raw in text.splitlines(keepends=True):
+        line = raw.rstrip("\r\n")
+        metadata = line in markers or re.fullmatch(
+            r"<!-- /?(?:REQUIREMENT|FEATURE): [^<>\r\n]+ -->", line
+        )
+        if metadata and len(line) > 80:
+            newline = (
+                "\r\n" if raw.endswith("\r\n")
+                else "\n" if raw.endswith("\n") else default_newline
+            )
+            previous = output[-1].rstrip("\r\n") if output else ""
+            control_prefix = "<!-- markdownlint-disable-next-line"
+            arguments = previous[len(control_prefix):-3]
+            directive = (
+                previous.startswith(control_prefix) and previous.endswith("-->")
+                and (not arguments or arguments[0].isspace())
+                and "<" not in arguments and ">" not in arguments
+            )
+            if directive:
+                rules = arguments.split()
+                if rules and not {"MD013", "line-length"}.intersection(rules):
+                    rules.append("MD013")
+                    output[-1] = (
+                        "<!-- markdownlint-disable-next-line "
+                        + " ".join(rules) + " -->" + newline
+                    )
+            else:
+                output.append("<!-- markdownlint-disable-next-line MD013 -->" + newline)
+        output.append(raw)
+    return "".join(output)
+
+
 def canonical_document(kind: str, managed_body: str, *, prefix: bytes = b"") -> bytes:
     try:
         prefix.decode("utf-8")
@@ -1045,7 +1082,8 @@ def canonical_document(kind: str, managed_body: str, *, prefix: bytes = b"") -> 
     body = managed_body.strip().replace("\r\n", "\n").encode("utf-8")
     if newline == b"\r\n":
         body = body.replace(b"\n", b"\r\n")
-    return envelope + start.encode() + newline + body + newline + end.encode() + newline
+    region = start.encode() + newline + body + newline + end.encode() + newline
+    return envelope + _metadata_line_exceptions(region.decode("utf-8")).encode("utf-8")
 
 
 def render_document_bytes(kind: str, managed_body: str, *, current: bytes | None = None) -> bytes:
@@ -1076,7 +1114,8 @@ def render_document_bytes(kind: str, managed_body: str, *, current: bytes | None
         body = managed_body.strip().replace("\r\n", "\n").encode("utf-8")
         if newline == b"\r\n":
             body = body.replace(b"\n", newline)
-        return prefix + start.encode() + newline + body + newline + end.encode() + newline
+        region = start.encode() + newline + body + newline + end.encode() + newline
+        return prefix + _metadata_line_exceptions(region.decode("utf-8")).encode("utf-8")
     if text.count(start) != 1 or text.count(end) != 1:
         raise ProjectSpecError("SPEC_CONFLICT", f"{kind} markers are malformed")
     body_start = text.index(start) + len(start)
@@ -1085,4 +1124,5 @@ def render_document_bytes(kind: str, managed_body: str, *, current: bytes | None
         raise ProjectSpecError("SPEC_CONFLICT", f"{kind} markers are reversed")
     newline = "\r\n" if "\r\n" in text else "\n"
     body = managed_body.strip().replace("\r\n", "\n").replace("\n", newline)
+    body = _metadata_line_exceptions(body)
     return (text[:body_start] + newline + body + newline + text[body_end:]).encode("utf-8")

@@ -269,10 +269,8 @@ def test_template_and_vm_ha_example_match_the_schema() -> None:
     example_path = Path(__file__).parents[2] / "examples" / "vm-ha-bgp-example.yaml"
 
     draft = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE)
-    with pytest.raises(ValueError, match="ssh_allowed_cidrs"):
-        validate_config(draft)
-    draft["gateway"]["ssh_allowed_cidrs"] = ["203.0.113.4/32"]
     template = validate_config(draft)
+    assert "ssh_allowed_cidrs" not in template.gateway.model_dump()
     example = validate_config(yaml.safe_load(example_path.read_text(encoding="utf-8")))
 
     assert template.gateway_group.vm_ha is not None
@@ -291,6 +289,31 @@ def test_load_local_config_reports_missing_environment_variables(
 
     with pytest.raises(ValueError, match="Missing environment variables"):
         load_local_config(config_path)
+
+
+@pytest.mark.parametrize("optional_field", ["network_id", "external_ips"])
+@pytest.mark.parametrize("required_field", ["project_id", "psk", None])
+@pytest.mark.parametrize("status_only", [False, True])
+def test_optional_placeholder_does_not_hide_required_occurrence(
+    tmp_path, sample_config, monkeypatch, optional_field, required_field, status_only
+):
+    variable = "NETWORK_ID"
+    monkeypatch.delenv(variable, raising=False)
+    placeholder = "${NETWORK_ID}"
+    sample_config["gateway_group"][optional_field] = (
+        placeholder if optional_field == "network_id" else [[placeholder]]
+    )
+    if required_field == "project_id":
+        sample_config["project_id"] = placeholder
+    elif required_field == "psk":
+        sample_config["connections"][0]["tunnels"][0]["psk"] = placeholder
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(sample_config), encoding="utf-8")
+    if required_field == "project_id" or (required_field == "psk" and not status_only):
+        with pytest.raises(ValueError, match="Missing environment variables.*NETWORK_ID"):
+            load_local_config(path, allow_missing_tunnel_psk_placeholders=status_only)
+    else:
+        load_local_config(path, allow_missing_tunnel_psk_placeholders=status_only)
 
 
 def test_load_local_config_can_keep_missing_placeholders_for_bootstrap_commands(

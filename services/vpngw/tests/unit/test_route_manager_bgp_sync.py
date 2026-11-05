@@ -44,9 +44,7 @@ from nebius_vpngw.schema import VMHARole, VMHARouteTarget
 def _plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
-            ingress_policies={
-                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
-            },
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="nebius-vpn-gw",
             instance_count=1,
             region="us-central1",
@@ -85,7 +83,7 @@ def test_expected_advertised_prefixes_follow_gateway_local_prefixes() -> None:
     route_manager = RouteManager(project_id="project-test")
     local_cfg = {
         "defaults": {"routing": {"mode": "bgp"}},
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "name": "gcp-ha-vpn",
@@ -129,7 +127,7 @@ def test_expected_advertisements_omit_ordinary_static_only_gateway() -> None:
         iter_instance_configs=lambda: iter(instances),
     )
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",
@@ -155,7 +153,7 @@ def test_expected_advertisements_omit_ordinary_static_only_gateway() -> None:
 
 def test_disabled_only_bgp_policy_keeps_empty_peer_audit_target() -> None:
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",
@@ -194,7 +192,7 @@ def test_mixed_ordinary_modes_do_not_query_static_only_gateway(monkeypatch) -> N
         iter_instance_configs=lambda: iter(instances),
     )
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",
@@ -237,7 +235,7 @@ def test_matching_bgp_advertisements_report_only_completed_audit(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",
@@ -283,7 +281,7 @@ def test_drifted_bgp_advertisements_report_two_repair_steps(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",
@@ -657,9 +655,7 @@ def _installed_static_plan_and_state() -> tuple[ResolvedDeploymentPlan, VMHALife
     )
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
-            ingress_policies={
-                i: {"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []} for i in range(2)
-            },
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="gateway",
             instance_count=2,
             region="region-a",
@@ -1209,7 +1205,7 @@ def test_vm_ha_expected_advertisements_follow_authoritative_owner() -> None:
         iter_instance_configs=lambda: iter(instances),
     )
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "name": "site-a",
@@ -1249,7 +1245,7 @@ def test_unknown_advertisement_evidence_never_reloads(monkeypatch) -> None:
     )
     monkeypatch.setattr(route_manager, "require_agent_capabilities", lambda *_args: None)
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",
@@ -1280,7 +1276,7 @@ def test_read_only_advertisement_audit_reports_drift_without_reload(monkeypatch)
         lambda *_args: (_ for _ in ()).throw(AssertionError("audit attempted a reload")),
     )
     local_cfg = {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"], "local_prefixes": ["10.96.0.0/13"]},
+        "gateway": {"local_prefixes": ["10.96.0.0/13"]},
         "connections": [
             {
                 "routing_mode": "bgp",

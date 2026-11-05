@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -300,6 +301,51 @@ def _retry_exceeded(current_state: dict[str, Any]) -> str | None:
     return None
 
 
+def _inherited_invalidation_reason(
+    run_dir: Path, execution_id: str, classification: dict[str, Any]
+) -> str | None:
+    references = classification.get("inherited_invalidations")
+    invalidates = classification.get("invalidates")
+    if not isinstance(references, list) or not isinstance(invalidates, list):
+        return "Agentic SDLC inherited invalidation lineage is missing."
+    for reference in references:
+        if (
+            not isinstance(reference, dict)
+            or set(reference) != {"event_id", "classification_id", "surface"}
+            or any(
+                not isinstance(reference.get(key), str)
+                or re.fullmatch(r"[0-9a-f]{64}", reference[key]) is None
+                for key in ("event_id", "classification_id")
+            )
+            or not isinstance(reference["surface"], str)
+            or reference["surface"] not in REVALIDATION_ROUTES
+            or reference["surface"] not in invalidates
+        ):
+            return "Agentic SDLC inherited invalidation reference is invalid."
+        path = run_dir / "repairs" / execution_id / "classifications" / f"{reference['classification_id']}.json"
+        if not is_inside(path, run_dir) or path.is_symlink():
+            return "Agentic SDLC inherited invalidation path is unsafe."
+        try:
+            source = load_json(path) or {}
+        except (json.JSONDecodeError, OSError):
+            return "Agentic SDLC inherited invalidation source is unreadable."
+        unsigned = dict(source)
+        identity = unsigned.pop("classification_id", None)
+        calculated = hashlib.sha256(json.dumps(
+            unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")).hexdigest()
+        if (
+            source.get("schema") != "agentic-sdlc/failure-classification-v2"
+            or identity != reference["classification_id"] or calculated != identity
+            or source.get("execution_id") != execution_id
+            or source.get("event_id") != reference["event_id"]
+            or not isinstance(source.get("invalidates"), list)
+            or reference["surface"] not in source["invalidates"]
+        ):
+            return "Agentic SDLC inherited invalidation authority changed."
+    return None
+
+
 def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
     pointer = current_state.get("repair")
     if pointer is None:
@@ -349,12 +395,20 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         blocker.get("time_limit_seconds", 3600) or 3600
     ):
         return "Agentic SDLC repair loop reached its active-time ceiling."
-    if (
-        int(control.get("feature_dispatches", 0) or 0)
-        >= int(control.get("feature_dispatch_limit", 4) or 4)
-        and status != "resolved"
+    dispatched = int(control.get("feature_dispatches", 0) or 0)
+    dispatch_limit = int(control.get("feature_dispatch_limit", 4) or 4)
+    if dispatched > dispatch_limit or (
+        dispatched == dispatch_limit
+        and status not in {"resolved", "revalidation_required", "remediating"}
     ):
         return "Agentic SDLC repair loop reached its feature dispatch ceiling."
+    if dispatched == dispatch_limit and status == "remediating" and not any(
+        item.get("classification_id") == control.get("current_classification_id")
+        and item.get("event_id") == event.get("event_id")
+        and item.get("status") == "dispatched" and item.get("result") is None
+        for item in blocker.get("attempts", []) if isinstance(item, dict)
+    ):
+        return "Agentic SDLC final dispatch has no active repair authority."
     next_skill = _normalize_skill_name(
         str(current_state.get("next_recommended_skill") or "")
     )
@@ -420,6 +474,11 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             )
         ):
             return "Agentic SDLC revalidation classification is inconsistent."
+        inherited_reason = _inherited_invalidation_reason(
+            active.run_dir, str(current_state.get("current_execution")), classification
+        )
+        if inherited_reason:
+            return inherited_reason
         expected_required = [
             {
                 "surface": surface,
@@ -591,7 +650,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             return "Resolved repair still has invalidated evidence to rerun."
     if status == "diagnosis_required" and next_skill != "troubleshoot":
         return "Diagnosis-required failure must route to troubleshoot."
-    if status == "diagnosed":
+    if status == "diagnosed" or control.get("current_diagnosis_id") is not None:
         diagnosis_value = pointer.get("diagnosis")
         if not isinstance(diagnosis_value, str):
             return "Diagnosed repair state is missing its diagnosis pointer."
@@ -603,13 +662,13 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         except (json.JSONDecodeError, OSError):
             return "Agentic SDLC diagnosis is unreadable."
         if (
-            diagnosis.get("schema") != "agentic-sdlc/diagnosis-v2"
+            diagnosis.get("schema") != "agentic-sdlc/diagnosis-v3"
             or diagnosis.get("diagnosis_id") != control.get("current_diagnosis_id")
             or diagnosis.get("event_id") != event.get("event_id")
             or diagnosis.get("blocker_key") != event.get("blocker_key")
         ):
             return "Agentic SDLC diagnosis identity is inconsistent."
-        if next_skill != "sdlc-classify-failure":
+        if status == "diagnosed" and next_skill != "sdlc-classify-failure":
             return "Every Agentic SDLC diagnosis must return through sdlc-classify-failure."
     if status in {"routed", "remediating"}:
         classification_id = control.get("current_classification_id")
@@ -654,6 +713,11 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
             != classification.get("next_recommended_skill")
         ):
             return "Agentic SDLC routed classification identity is inconsistent."
+        inherited_reason = _inherited_invalidation_reason(
+            active.run_dir, str(current_state.get("current_execution")), classification
+        )
+        if inherited_reason:
+            return inherited_reason
         authoritative_skill = _normalize_skill_name(
             str(classification.get("next_recommended_skill") or "")
         )

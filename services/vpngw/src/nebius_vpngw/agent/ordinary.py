@@ -114,15 +114,6 @@ def managed_files(cfg: dict[str, Any]) -> dict[Path, str | None]:
     )
     policy = ingress_policy.from_config(cfg)
     files[ingress_policy.POLICY_FILE] = ingress_policy.serialized(policy)
-    files[firewall.MGMT_CIDRS_FILE] = "\n".join(
-        [
-            "# Management CIDRs allowed for SSH (auto-generated)",
-            "# One CIDR per line",
-            "",
-            *policy["ssh_allowed_cidrs"],
-            "",
-        ]
-    )
     return files
 
 

@@ -60,7 +60,7 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 ## Inputs
 
 - Current feature, phase, exact integration commit, and execution lifecycle.
-- A normalized `failure-event-v2` and optional `diagnosis-v2`.
+- A normalized `failure-event-v2` and optional `diagnosis-v3`.
 - Phase retry counts and `repair-control-v2`.
 - Latest validation, test, evaluation, documentation, UAT, PR, or policy
   output.
@@ -85,7 +85,7 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 
 ## Writes
 
-- Immutable `failure-event-v2`, `diagnosis-v2`, and classification records.
+- Immutable `failure-event-v2`, `diagnosis-v3`, and classification records.
 - Atomic `repair-control-v2`, append-only repair journal, and derived
   `failure-log.md`.
 - Updated failure class, diagnosis pointer, invalidation set, and next
@@ -101,10 +101,27 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 - Record one immutable `failure-event-v2`. Its `event_id` binds the exact
   criterion, commit, fingerprints, and evidence; its `blocker_key` uses only
   stable component, operation, error class, and source boundary.
+  Record `created_at` as whole-second UTC `YYYY-MM-DDTHH:MM:SSZ`; fractional
+  seconds and numeric offsets are not accepted.
 - If the event already proves a mechanical owner, route directly to that
   owner. A proven implementation defect bypasses troubleshooting.
+- For proven `VALIDATION_DEFECT` before execution preparation, the helper routes
+  to the event's exact requirements, context, design, steering, planning or
+  preparation phase. Unsupported phase identities stop. Use the ordinary counted
+  localized dispatch to repair the phase artifact and rerun its original check;
+  preserve the failed candidate and event. This does not authorize architectural
+  redesign or bypass the canonical specification publisher. Do not fabricate a
+  plan or integration checkout to enter code validation. Prepared validation
+  retains its existing route.
+- After a failed counted validation repair, accept only a complete
+  `diagnosis-v3` with result `validation_defect` and proven or high-confidence
+  causality. Require the bounded repair target, affected files and original
+  regression check as well as structured causal proof. It returns to the same
+  existing validation route through normal classification and dispatch; the
+  previous failure and all counters remain. Older active diagnoses are rejected
+  without conversion; historical reports do not become current authority.
 - If an evaluation failure is ambiguous, route exactly once to `troubleshoot`.
-  Require its `diagnosis-v2` to return here before selecting any repair,
+  Require its `diagnosis-v3` to return here before selecting any repair,
   specification, test, evaluator, environment, or design owner.
 - Treat `probable`, incomplete, stale, malformed, tampered, or secret-bearing
   diagnoses as non-authorizing. `UNKNOWN_DEFECT`, missing decisive evidence,
@@ -115,10 +132,28 @@ Classify failures and select the correct retry or stop route before any SDLC loo
   a named violated system contract, evidence that localized repair is
   insufficient, affected `FEAT-*` closure, invalidation scope, work estimate,
   rollback, and `proven` or `high_confidence` causality.
+- For an active-task design revision, bind the failure's `fingerprints` to the
+  exact `requirements`, `design`, `plan` and immutable execution `basis` digests
+  (each `sha256:` prefixed), plus its integration commit. The existing counted
+  design dispatch authorizes the Worktree revision sequence only for that
+  snapshot; unknown causes and broader changes without approval remain blocked.
 - For a localized implementation defect, route an active task through its
   existing attempt contract. After completed waves, require immutable
   corrective plan vN+1. After promotion, require a new corrective run from the
   promoted commit; never reopen sealed execution.
+- A proven or high-confidence `ENVIRONMENT_DEFECT` at lifecycle `active_task`
+  and exact phase `sdlc-implement-plan` uses `existing_task_attempt`. Establish
+  an in-scope environment remedy with new evidence and hypothesis, then use a
+  counted localized dispatch. Preserve the blocked receipt, independently
+  observe termination, confirm runtime release, and authorize the existing
+  shared fresh-worker recovery with unchanged assignment and validation.
+  Require the original failed operation and assigned checks to pass through
+  authorized mechanisms, followed by normal task/wave completion. Record the
+  actual remediation result; success enters downstream revalidation for
+  validation, tests, evaluation, documentation, alignment and commit. Neither
+  classification nor dispatch grants host permissions or revives a failed
+  verifier trial. Other active phases, policy/human blocks and completed work
+  gain no recovery authority.
 - Apply the same terminal-execution boundary to `DOCUMENTATION_DRIFT`:
   sealed, promoted or completed execution requires a new corrective run.
   Before sealing, route to documentation, alignment and commit revalidation.
@@ -145,7 +180,8 @@ Classify failures and select the correct retry or stop route before any SDLC loo
   base branch, and verified integration cleanup; mark the repair resolved only
   after that final gate.
 - Stop when human input, policy block, environment block, or retry budget requires it.
-- After a pre-promotion environment block is externally recovered, rerun its
+- After completed waves and before promotion, if an environment block is
+  externally recovered, rerun its
   exact gate on the unchanged clean integrated commit. Use private
   `record-environment-recovery --run-dir <run> --input <receipt>` only with
   schema `agentic-sdlc/environment-recovery-v2`, the active feature/event/
@@ -207,6 +243,19 @@ Classify failures and select the correct retry or stop route before any SDLC loo
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.
+
+## Successive Failure Obligations
+
+A new failure or diagnosis archives the previous revalidation cursor and its
+authorizing context before replacing the active projection. Routed
+classifications carry immutable references to prior invalidations and the
+canonical ordered union of earlier and newly required gates. A successful
+counted repair restarts that entire sequence under its own dispatch, with no
+reused gate receipts or commit binding. Earlier receipts remain historical;
+exact replay preserves current progress and counters. The new blocker keeps
+its own failure type, route and budget. Environment-only recovery still rejects
+unrelated pending invalidations. The last allowed dispatch may finish its
+revalidation; another dispatch and over-limit state remain blocked.
 
 ## Learning Loop
 

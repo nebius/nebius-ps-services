@@ -17,7 +17,7 @@ from nebius_vpngw.agent.strongswan_renderer import StrongSwanRenderer
 
 def config(*prefixes):
     return {
-        "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+        "gateway": {},
         "connections": [
             {
                 "routing_mode": "static",

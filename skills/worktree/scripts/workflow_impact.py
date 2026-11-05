@@ -497,7 +497,7 @@ def _identity_files(project_root: Path) -> dict[str, str]:
     """Freeze effective repository instructions and the execution helper closure."""
     sources = {path for path in Path(__file__).parent.glob("*.py") if not path.name.startswith("test")}
     catalog = Path(__file__).resolve().parents[2]
-    for dependency in ("maintain-project-specs", "global-context-management", "merge-pr"):
+    for dependency in ("maintain-project-specs", "global-context-management", "merge-pr", "sdlc-classify-failure"):
         sources.update(path for path in (catalog / dependency / "scripts").rglob("*.py") if not path.name.startswith("test"))
     for directory, children, filenames in os.walk(project_root):
         children[:] = [name for name in children if name not in {".git", "node_modules", ".venv", "venv", "__pycache__"}]
@@ -520,6 +520,7 @@ def _identity_files(project_root: Path) -> dict[str, str]:
         "code-review/references/quality-rubric.md",
         "align/references/quality-gate.md",
         "worktree/references/workflow-contract.md",
+        "worktree/references/issue-resolution.md",
         "worktree/references/document-delivery.md",
         "worktree/assets/worker-result.schema.json",
         "sdlc-start/references/state-schema.md",

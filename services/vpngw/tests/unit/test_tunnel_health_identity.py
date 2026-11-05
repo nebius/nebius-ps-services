@@ -6,6 +6,7 @@ import subprocess
 from unittest.mock import patch
 
 import pytest
+from tests.unit.test_ipsec_observation import sas
 
 from nebius_vpngw.agent.tunnel_health_monitor import TunnelHealthMonitor, TunnelStats
 
@@ -13,32 +14,18 @@ from nebius_vpngw.agent.tunnel_health_monitor import TunnelHealthMonitor, Tunnel
 @pytest.mark.parametrize(
     ("output", "expected"),
     [
+        (sas(), "ESTABLISHED"),
+        (sas(name="edge-backup"), "DOWN"),
+        (sas(state="INSTALLING"), "DOWN"),
+        (sas(ifid="00000065"), "DOWN"),
+        (sas().replace("state=ESTABLISHED", "state=CONNECTING"), "DOWN"),
         (
-            "edge-backup: #25, CONNECTING, IKEv2, 0000_i 0000_r\n"
-            "edge: #21, ESTABLISHED, IKEv2, 1111_i 2222_r\n",
+            sas().replace(" list-sas reply {}", "") + sas().replace("uniqueid=1", "uniqueid=2"),
             "ESTABLISHED",
         ),
-        (
-            "edge-backup: #25, ESTABLISHED, IKEv2, 0000_i 0000_r\n"
-            "edge: #21, CONNECTING, IKEv2, 1111_i 2222_r\n",
-            "CONNECTING",
-        ),
-        ("edge-backup: #25, ESTABLISHED, IKEv2, 0000_i 0000_r\n", "DOWN"),
-        (
-            "edge: #25, CONNECTING, IKEv2, 0000_i 0000_r\n"
-            "edge: #21, ESTABLISHED, IKEv2, 1111_i 2222_r\n",
-            "ESTABLISHED",
-        ),
-        (
-            "edge: #21, ESTABLISHED, IKEv2, 1111_i 2222_r\n"
-            "edge: #25, CONNECTING, IKEv2, 0000_i 0000_r\n",
-            "ESTABLISHED",
-        ),
-        ("edge: #21, ESTABLISHED, IKEv1, 1111_i 2222_r\n", "ESTABLISHED"),
-        ("  edge: #21, reqid 1, INSTALLED, TUNNEL, ESP:AES_GCM_16-128\n", "DOWN"),
-        ("  remote 'edge ESTABLISHED' @ 192.0.2.1\n", "DOWN"),
-        ("edge: #21, REKEYING, IKEv2, 1111_i 2222_r\n", "DOWN"),
-        ("", "DOWN"),
+        ("list-sa event {edge {uniqueid=1 state=ESTABLISHED}} list-sas reply {}", "DOWN"),
+        ("edge: #21, ESTABLISHED, IKEv2", "UNKNOWN"),
+        ("", "UNKNOWN"),
     ],
 )
 def test_ike_health_uses_exact_connection_and_all_overlapping_sas(
@@ -54,15 +41,12 @@ def test_ike_health_uses_exact_connection_and_all_overlapping_sas(
             return_value=subprocess.CompletedProcess([], 0, output, ""),
         ),
     ):
-        assert TunnelHealthMonitor().get_ipsec_tunnel_status("edge") == expected
+        assert TunnelHealthMonitor().get_ipsec_tunnel_status("edge", 100) == expected
 
 
 def test_neighbor_connection_failure_cannot_restart_healthy_tunnel() -> None:
     monitor = TunnelHealthMonitor(max_failures_before_restart=2)
-    output = (
-        "edge-backup: #25, CONNECTING, IKEv2, 0000_i 0000_r\n"
-        "edge: #21, ESTABLISHED, IKEv2, 1111_i 2222_r\n"
-    )
+    output = sas()
     with (
         patch.object(monitor, "get_configured_tunnels", return_value=[("edge", "xfrm0", None)]),
         patch.object(

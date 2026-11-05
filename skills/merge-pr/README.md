@@ -177,3 +177,13 @@ bounded journal scans for uncertain effects. Target-specific malformed receipts
 produce blocked matrix entries and failing run status while valid independent
 targets proceed. Global API, authentication and incomplete-listing errors stop
 all candidate effects and preserve sanitized diagnostics.
+
+## Issue resolution across delivery
+
+The [shared handoff contract](../worktree/references/issue-resolution.md) assigns
+review and saved plans to review-github-issues, local implementation and individual
+acceptance evidence to Implement, concise comments and verified closing references
+to create-pr, and merge/issue-state verification to merge-pr. GitHub performs
+native issue closure on default-branch merge when enabled. A partial fix or mere
+issue mention never qualifies. Each delivery owner retains its explicit authority;
+review does not start implementation, PR creation or merge.

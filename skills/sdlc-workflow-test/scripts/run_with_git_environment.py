@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Launch a normal command with a sealed owned Git profile; never advance SDLC."""
+"""Launch a native agent with an owned Git profile and minimal environment."""
 from __future__ import annotations
 
 import argparse
 import os
 from pathlib import Path
 import sys
+import stat
+import tomllib
 
 # BEGIN shared runtime bootstrap
 def _load_skill_support(group, anchor_file, declared_path, *, source_only=False):
@@ -113,6 +115,87 @@ _load_skill_support("git-environment", __file__, "sdlc-workflow-test/scripts/run
 from git_environment import environment  # noqa: E402
 
 
+NATIVE_VARIABLES = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+    "TERM", "COLORTERM", "TMPDIR", "SKILLS_GIT_PROFILE", "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM", "GIT_ATTR_NOSYSTEM", "GIT_TERMINAL_PROMPT",
+})
+
+
+def native_environment(cwd: Path, profile: Path) -> dict[str, str]:
+    # Validate before filtering so prohibited Git overrides still fail closed.
+    inherited = environment(cwd, profile=profile)
+    selected = inherited.get("SKILLS_AGENT", "codex")
+    if selected not in {"codex", "claude"}:
+        raise ValueError("NATIVE_ENVIRONMENT_INVALID: unsupported agent")
+    key = "CODEX_HOME" if selected == "codex" else "CLAUDE_CONFIG_DIR"
+    home = profile.parent.parent / "private" / (selected + "-home")
+    if (inherited.get(key) != str(home) or home.resolve() != home or not home.is_dir()
+            or home.stat().st_uid != os.getuid() or home.stat().st_mode & 0o077):
+        raise ValueError("NATIVE_ENVIRONMENT_INVALID: require the exact private native home")
+    # Zsh reads ZDOTDIR even for non-login shells. No startup files may be
+    # supplied by this fixture; Bash/POSIX initialization is separately disabled.
+    if any((home / name).exists() or (home / name).is_symlink()
+           for name in (".zshenv", ".zprofile", ".zshrc", ".zlogin")):
+        raise ValueError("NATIVE_ENVIRONMENT_INVALID: shell startup files are forbidden")
+    if selected == "codex":
+        # Git scope and metadata have already been validated by environment().
+        # Native project layers end at this checkout's .git, including a linked
+        # worktree's file marker; ordinary user configuration above it is separate.
+        project_directories = []
+        parent = cwd
+        while profile.parent.parent in parent.parents:
+            project_directories.append(parent)
+            if (parent / ".git").exists():
+                break
+            parent = parent.parent
+        else:
+            raise ValueError("NATIVE_ENVIRONMENT_INVALID: require a Git checkout root")
+        if any((parent / ".codex/config.toml").exists()
+               or (parent / ".codex/config.toml").is_symlink()
+               for parent in project_directories):
+            raise ValueError("NATIVE_ENVIRONMENT_INVALID: project configuration overrides are forbidden")
+        config = home / "config.toml"
+        try:
+            info = config.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > 1048576):
+                raise ValueError
+            settings = tomllib.loads(config.read_text())
+            policy = settings.get("shell_environment_policy", {})
+            if (settings.get("allow_login_shell") is not False
+                    or settings.get("project_root_markers") != [".git"]
+                    or "profile" in settings or "profiles" in settings
+                    or settings.get("features", {}).get("shell_snapshot") is not False
+                    or policy != {"inherit": "all", "ignore_default_excludes": False}):
+                raise ValueError
+        except (OSError, ValueError, TypeError, AttributeError):
+            raise ValueError("NATIVE_ENVIRONMENT_INVALID: require reviewed shell isolation settings") from None
+    result = {key: value for key, value in inherited.items() if key in NATIVE_VARIABLES}
+    result.update({key: str(home), "SKILLS_AGENT": selected, "ZDOTDIR": str(home),
+                   "BASH_ENV": "/dev/null", "ENV": "/dev/null",
+                   "PYTHONDONTWRITEBYTECODE": "1"})
+    return result
+
+
+def validate_native_command(command: list[str], selected: str) -> None:
+    if Path(command[0]).name != selected:
+        raise ValueError("NATIVE_COMMAND_INVALID: require the selected native executable")
+    if selected != "codex":
+        return
+    forbidden = {"--config", "--profile", "--enable", "--disable", "--remote",
+                 "--cd", "--add-dir", "--worktree",
+                 "--remote-auth-token-env", "--oss", "--local-provider",
+                 "--dangerously-bypass-approvals-and-sandbox", "--yolo",
+                 "--dangerously-bypass-hook-trust"}
+    if any(arg.split("=", 1)[0] in forbidden or arg.startswith(("-c", "-p", "-C"))
+           for arg in command[1:]):
+        raise ValueError("NATIVE_COMMAND_INVALID: runtime overrides are forbidden")
+    option_end = command.index("--") if "--" in command else len(command)
+    if "--no-daemon" not in command[1:option_end]:
+        raise ValueError("NATIVE_COMMAND_INVALID: require a private native process")
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--profile", type=Path, required=True)
@@ -123,7 +206,8 @@ def main(argv):
     if not command:
         parser.error("a native command is required")
     try:
-        env = environment(args.cwd, profile=args.profile)
+        env = native_environment(args.cwd, args.profile)
+        validate_native_command(command, env["SKILLS_AGENT"])
         os.chdir(args.cwd)
         os.execvpe(command[0], command, env)
     except (OSError, ValueError) as error:

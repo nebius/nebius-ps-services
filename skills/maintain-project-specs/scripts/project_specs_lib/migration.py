@@ -18,6 +18,7 @@ from .contracts import (
     LEGACY_SDLC_REQUIREMENTS_SCHEMA,
     REQUIREMENTS_SCHEMA,
     ProjectSpecError,
+    _metadata_line_exceptions,
     _read_file,
     digest,
     inspect_pair_bytes,
@@ -397,6 +398,14 @@ def _task_records(body: str, kind: str) -> str:
     return _compact_records(body, kind, canonical=False)
 
 
+def _render_migrated_region(text: str, kind: str) -> bytes:
+    start, end = spec_markers(kind)
+    begin = text.index(start)
+    finish = text.index(end, begin) + len(end)
+    region = _metadata_line_exceptions(text[begin:finish])
+    return (text[:begin] + region + text[finish:]).encode("utf-8")
+
+
 def _convert_task(raw: bytes, kind: str) -> bytes:
     text = raw.decode("utf-8")
     old_start, old_end = legacy_task_markers(kind)
@@ -406,7 +415,7 @@ def _convert_task(raw: bytes, kind: str) -> bytes:
     prefix, remainder = text.split(old_start, 1)
     body, suffix = remainder.split(old_end, 1)
     rendered = _task_records(body, kind)
-    return f"{prefix}{start}\n{rendered}\n{end}{suffix}".encode("utf-8")
+    return _render_migrated_region(f"{prefix}{start}\n{rendered}\n{end}{suffix}", kind)
 
 
 def _convert_canonical_v1(raw: bytes, kind: str) -> bytes:
@@ -429,7 +438,7 @@ def _convert_canonical_v1(raw: bytes, kind: str) -> bytes:
             r"\1status=active\2",
             converted,
         )
-        return converted.encode("utf-8")
+        return _render_migrated_region(converted, kind)
     if kind == "design" and has_rich_start:
         converted = text.replace(old_start, start).replace(old_end, end)
         converted, count = re.subn(
@@ -462,11 +471,11 @@ def _convert_canonical_v1(raw: bytes, kind: str) -> bytes:
             ensure_evidence_sections,
             converted,
         )
-        return converted.encode("utf-8")
+        return _render_migrated_region(converted, kind)
     prefix, remainder = text.split(old_start, 1)
     body, suffix = remainder.split(old_end, 1)
     rendered = _compact_records(body, kind, canonical=True)
-    return f"{prefix}{start}\n{rendered}\n{end}{suffix}".encode("utf-8")
+    return _render_migrated_region(f"{prefix}{start}\n{rendered}\n{end}{suffix}", kind)
 
 
 def _replace_frontmatter_owner(text: str, kind: str) -> str:
@@ -500,7 +509,7 @@ def _convert_sdlc(raw: bytes, kind: str) -> bytes:
     start, end = spec_markers(kind)
     newline = "\r\n" if "\r\n" in text else "\n"
     body = text.strip().replace("\r\n", "\n").replace("\n", newline)
-    return f"{start}{newline}{body}{newline}{end}{newline}".encode("utf-8")
+    return _render_migrated_region(f"{start}{newline}{body}{newline}{end}{newline}", kind)
 
 
 def _write_exclusive(path: Path, value: bytes, mode: int) -> None:

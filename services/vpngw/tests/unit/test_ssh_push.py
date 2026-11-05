@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shlex
+import subprocess
 import zipfile
 from dataclasses import replace
 from io import BytesIO
@@ -91,6 +92,8 @@ def _write_vm_ha_agent_wheel(
     source_root = Path(__file__).parents[2] / "src/nebius_vpngw"
     for source in (
         "ingress_policy.py",
+        "boot_policy.py",
+        "vm_ha_diagnostics.py",
         "schema.py",
         "config_loader.py",
         "agent/firewall_manager.py",
@@ -300,7 +303,7 @@ def _vm_ha_manifest_and_binding() -> tuple[InstanceResolvedConfig, VMHARuntimeBi
         external_ip="203.0.113.10",
         config_yaml=yaml.safe_dump(
             {
-                "gateway": {"ssh_allowed_cidrs": ["203.0.113.4/32"]},
+                "gateway": {},
                 "vm_ha": {
                     "cluster_id": "cluster-a",
                     "node": {"node_id": "node-a", "instance_index": 0, "role": "active"},
@@ -600,7 +603,7 @@ class _StageClient:
         )
 
     def exec_command(self, command: str, **kwargs):
-        if "SSH_CONNECTION" in command and "boot_id" in command:
+        if "boot_id" in command and "config-resolved.yaml" not in command:
             return (
                 BytesIO(),
                 _CommandStream(
@@ -707,7 +710,11 @@ class _ManagedMTLSClient:
         return self.sftp
 
     def exec_command(self, command: str, **kwargs):
-        if "SSH_CONNECTION" in command and "boot_id" in command:
+        if (
+            "boot_id" in command
+            and "config-resolved.yaml" not in command
+            and "u.admit_activation(" not in command
+        ):
             return (
                 BytesIO(),
                 _CommandStream(
@@ -739,9 +746,10 @@ class _ManagedMTLSClient:
             output = json.dumps(
                 {
                     "features": [
-                        "managed-ingress-v1",
+                        "managed-peer-ingress-v2",
                         "vm-ha-live-peer-replacement-v4",
                         "vm-ha-standby-restoration-v2",
+                        "independent-heartbeat-v5",
                     ],
                     "schema": "nebius-vpngw.agent-capabilities.v1",
                 }
@@ -865,12 +873,37 @@ def test_vm_ha_agent_activation_is_controller_owned() -> None:
     assert SSHPush._agent_activation_commands(agent_cmd=agent_cmd, vm_ha=False) == (agent_cmd,)
 
 
+@pytest.fixture
+def selected_package_plan(monkeypatch):
+    from nebius_vpngw.deploy import checkpoint_conversion, ordinary_apply, vm_ha_package
+
+    monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
+
+    observation = dict.fromkeys(vm_ha_package.PACKAGE_FIELDS)
+    plan = SimpleNamespace(
+        observation=observation,
+        manifest={"dependency_wheels": {}},
+        dependency_paths=[],
+        closed=False,
+        wheel=None,
+    )
+    plan.close = lambda: setattr(plan, "closed", True)
+
+    def inspect(*args, **kwargs):
+        plan.wheel = kwargs["wheel"]
+        return plan
+
+    monkeypatch.setattr(vm_ha_package, "inspect_plan", inspect)
+    monkeypatch.setattr(ordinary_apply, "remote", lambda *args: {"observation": observation})
+    return plan
+
+
 @pytest.mark.parametrize(
     ("command_fragment", "reason"),
     [
         ("mktemp -d", "staging directory creation failed"),
         ("sha256sum --check --status", "bytes did not match the approved artifact"),
-        ("--ignore-installed", "package installation failed (remote command failed)"),
+        ("apt-get install -y nftables", "package installation failed (remote command failed)"),
         ("--force-reinstall", "exact agent package installation failed"),
         ("import cffi,cryptography", "package verification failed"),
         ("--agent-capabilities", "capability verification failed"),
@@ -878,7 +911,7 @@ def test_vm_ha_agent_activation_is_controller_owned() -> None:
     ],
 )
 def test_vm_ha_package_failures_keep_safe_reason_and_stop(
-    tmp_path, monkeypatch, command_fragment, reason
+    tmp_path, monkeypatch, command_fragment, reason, selected_package_plan
 ) -> None:
     manifest, _binding = _vm_ha_manifest_and_binding()
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
@@ -915,9 +948,12 @@ def test_vm_ha_package_failures_keep_safe_reason_and_stop(
     )
     assert all(command.startswith("rm -f -- ") for command in client.commands[failed_index + 1 :])
     assert client.closed
+    assert selected_package_plan.closed
 
 
-def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkeypatch) -> None:
+def test_vm_ha_package_preparation_proves_cryptography_and_cffi(
+    tmp_path, monkeypatch, selected_package_plan
+) -> None:
     manifest, _binding = _vm_ha_manifest_and_binding()
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     _write_vm_ha_agent_wheel(wheel)
@@ -947,9 +983,10 @@ def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkey
     assert receipt["cffi_version"] == "1.17.0"
     assert receipt["artifact_sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
     assert receipt["capabilities"] == [
-        "managed-ingress-v1",
+        "managed-peer-ingress-v2",
         "vm-ha-live-peer-replacement-v4",
         "vm-ha-standby-restoration-v2",
+        "independent-heartbeat-v5",
     ]
     assert len(client.sftp.uploads) == 1
     uploaded, remote_wheel = client.sftp.uploads[0]
@@ -959,8 +996,8 @@ def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkey
     )
     assert "sha256sum --check --status" in client.commands[1]
     assert "--force-reinstall" not in client.commands[2]
-    # Fresh/recovery package preparation retains the existing distro-safe path.
-    assert "--ignore-installed" in client.commands[2]
+    assert "--ignore-installed" not in client.commands[2]
+    assert "--no-index --no-deps" in client.commands[2]
     assert "--upgrade" not in client.commands[2]
     assert remote_wheel in client.commands[2]
     assert "--no-deps --force-reinstall" in client.commands[3]
@@ -972,12 +1009,17 @@ def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkey
         f"rm -f -- {remote_wheel} && rmdir /tmp/nebius-vpngw-agent.ABCDEFGHIJ"
     )
     assert client.closed
+    assert selected_package_plan.wheel == artifact.path
+    assert selected_package_plan.closed
 
 
 @pytest.mark.parametrize("drift", [False, True])
 def test_vm_ha_frozen_dependencies_preserve_predecessor_and_distro_install_policy(
     tmp_path, monkeypatch, drift
 ):
+    from nebius_vpngw.deploy import checkpoint_conversion
+
+    monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
     from nebius_vpngw.deploy import ordinary_apply, ordinary_remote, vm_ha_package
 
     manifest, _binding = _vm_ha_manifest_and_binding()
@@ -1040,7 +1082,12 @@ def test_vm_ha_frozen_dependencies_preserve_predecessor_and_distro_install_polic
 def test_vm_ha_package_upload_holds_approved_inode_across_path_replacement(
     tmp_path,
     monkeypatch,
+    selected_package_plan,
 ) -> None:
+    from nebius_vpngw.deploy import checkpoint_conversion
+
+    monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
+
     manifest, _binding = _vm_ha_manifest_and_binding()
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     replacement = tmp_path / "replacement.whl"
@@ -1804,7 +1851,7 @@ class _RemovalPhaseClient(_DeactivationClient):
             return BytesIO(), _CommandStream(payload, 0), BytesIO()
         if "--vm-ha-removal-inhibit" in command:
             schema = "nebius-vpngw/vm-ha-removal-inhibition-v1"
-        elif "--vm-ha-removal-ready" in command:
+        elif "--vm-ha-removal-ready" in command or "verify_vm_ha_removal_quiescent" in command:
             schema = "nebius-vpngw/vm-ha-removal-quiescent-v1"
         elif "--vm-ha-standby-replacement-inhibit" in command:
             schema = "nebius-vpngw/vm-ha-standby-replacement-inhibition-v1"
@@ -1869,6 +1916,99 @@ def test_vm_ha_removal_inhibits_both_writers_before_deactivation() -> None:
     assert all(client.closed for client in issued)
 
 
+@pytest.mark.parametrize(
+    "unsafe",
+    [
+        "",
+        "stale-result",
+        "failed-quiescent",
+        "failed-control-process",
+        "failed-pending-job",
+        "pending-job",
+        "control-process",
+        "active",
+        "guard-failed",
+        "stop-failed",
+    ],
+)
+def test_vm_ha_stop_barrier_drains_dependency_jobs(tmp_path: Path, unsafe: str) -> None:
+    """Execute the emitted barrier and reject unsafe service-manager postconditions."""
+    client = _RemovalPhaseClient()
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+    push.stop_vm_ha_mutation_services("203.0.113.10", "gateway-0", {})
+    command = shlex.split(client.commands[-1])[3]
+    manager = tmp_path / "systemctl"
+    manager.write_text(
+        "#!/bin/bash\n"
+        "set -eu\n"
+        "if [[ $1 == cat ]]; then exit 0; fi\n"
+        "if [[ $1 == --job-mode=replace-irreversibly && $2 == stop ]]; then\n"
+        "  [[ $BARRIER_UNSAFE != stop-failed ]] || exit 1\n"
+        "  for unit in nebius-vpngw-vm-ha-rearm.service nebius-vpngw-vm-ha.service "
+        "nebius-vpngw-agent.service nebius-vpngw-fix-routes.timer "
+        "nebius-vpngw-fix-routes.service nebius-vpngw-health-monitor.service "
+        "frr.service strongswan-starter.service strongswan.service; do\n"
+        '    [[ " $* " == *" $unit "* ]] || exit 10\n'
+        "  done\n"
+        '  touch "$BARRIER_STOPPED"; exit 0\n'
+        "fi\n"
+        "[[ $1 == show && -e $BARRIER_STOPPED ]] || exit 11\n"
+        "case $3 in\n"
+        "  --property=ActiveState) if [[ $BARRIER_UNSAFE == active ]]; then echo active; "
+        "elif [[ $BARRIER_UNSAFE == failed-* ]]; then echo failed; "
+        "else echo inactive; fi;;\n"
+        "  --property=MainPID) if [[ $4 != *.timer ]]; then echo 0; fi;;\n"
+        "  --property=ControlPID) if [[ $BARRIER_UNSAFE == *control-process ]]; then echo 42; "
+        "elif [[ $4 != *.timer ]]; then echo 0; fi;;\n"
+        "  --property=Job) if [[ $BARRIER_UNSAFE == *pending-job ]]; then echo 123; fi;;\n"
+        "  --property=Result) if [[ $BARRIER_UNSAFE == stale-result ]]; then echo exit-code; "
+        "else echo success; fi;;\n"
+        "  *) exit 12;;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    manager.chmod(0o700)
+    (tmp_path / "sysctl").write_text('#!/bin/bash\ncat "$BARRIER_FORWARDING"\n')
+    (tmp_path / "sysctl").chmod(0o700)
+    guard = tmp_path / "guard.json"
+    guard.write_text(json.dumps({"data_plane_mode": "active", "guard_boot_id": "old-boot"}))
+    forwarding = tmp_path / "forwarding"
+    forwarding.write_text("1\n")
+    guard_action = tmp_path / "public-guard"
+    guard_action.write_text(
+        '#!/bin/bash\nset -eu\ntest -e "$BARRIER_STOPPED"\n'
+        "[[ $BARRIER_UNSAFE != guard-failed ]] || exit 1\n"
+        'printf \'{"data_plane_mode":"blocked","guard_boot_id":"boot-a"}\' > "$BARRIER_GUARD"\nprintf "0\\n" > "$BARRIER_FORWARDING"\n'
+    )
+    guard_action.chmod(0o700)
+    command = command.replace(
+        "/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard", str(guard_action)
+    )
+    boot = tmp_path / "boot-id"
+    boot.write_text("boot-a")
+    command = command.replace("/var/lib/nebius-vpngw/vm-ha/guard.json", str(guard)).replace(
+        "/proc/sys/kernel/random/boot_id", str(boot)
+    )
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+            "BARRIER_STOPPED": str(tmp_path / "stopped"),
+            "BARRIER_UNSAFE": unsafe,
+            "BARRIER_FORWARDING": str(forwarding),
+            "BARRIER_GUARD": str(guard),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    safe = unsafe in {"", "stale-result", "failed-quiescent"}
+    assert (result.returncode == 0) is safe, result.stderr
+    assert ("VM_HA_MUTATION_SERVICES_STOPPED=1" in result.stdout) is safe
+
+
 def test_vm_ha_apply_inhibition_requires_quiescent_exact_owner() -> None:
     client = _RemovalPhaseClient()
     push = SSHPush()
@@ -1885,8 +2025,55 @@ def test_vm_ha_apply_inhibition_requires_quiescent_exact_owner() -> None:
         operation_id="d" * 64,
     )
 
-    assert "--vm-ha-removal-ready" in client.commands[-1]
+    assert "verify_vm_ha_removal_quiescent" in client.commands[-1]
+    assert "sudo timeout 65s" in client.commands[-1]
     assert client.closed
+
+
+@pytest.mark.parametrize("outcome", ["delayed", "timeout", "fatal", "late-success"])
+def test_apply_quiescence_script_waits_only_for_controller_acknowledgement(outcome, capsys):
+    import builtins
+
+    from nebius_vpngw.deploy.ssh_push import _VM_HA_APPLY_QUIESCENCE_SCRIPT
+
+    now, calls = [100.0], []
+    operation = "d" * 64
+    payload = {"schema": "nebius-vpngw/vm-ha-removal-quiescent-v1", "operation_id": operation}
+
+    def verify(value):
+        assert value == operation
+        calls.append(now[0])
+        if outcome == "fatal":
+            raise RuntimeError("foreign lock identity")
+        if outcome == "late-success":
+            now[0] += 61
+            return payload
+        if outcome == "timeout" or len(calls) < 3:
+            raise RuntimeError("VM-HA removal inhibition has not reached a quiescent controller")
+        return payload
+
+    def sleep(seconds):
+        assert 0 < seconds <= 1
+        now[0] += seconds
+
+    modules = {
+        "json": json,
+        "sys": SimpleNamespace(argv=["-c", operation]),
+        "time": SimpleNamespace(monotonic=lambda: now[0], sleep=sleep),
+        "nebius_vpngw.agent.main": SimpleNamespace(verify_vm_ha_removal_quiescent=verify),
+    }
+    namespace = {"__builtins__": {**vars(builtins), "__import__": lambda name, *a: modules[name]}}
+    if outcome == "delayed":
+        exec(_VM_HA_APPLY_QUIESCENCE_SCRIPT, namespace)
+        assert json.loads(capsys.readouterr().out) == payload
+        assert calls == [100, 101, 102]
+    else:
+        with pytest.raises(
+            RuntimeError, match="foreign lock" if outcome == "fatal" else "timed out"
+        ):
+            exec(_VM_HA_APPLY_QUIESCENCE_SCRIPT, namespace)
+        assert not capsys.readouterr().out
+        assert len(calls) == (60 if outcome == "timeout" else 1)
 
 
 def test_vm_ha_standby_replacement_uses_capability_gated_transfer_inhibition() -> None:
@@ -2371,9 +2558,11 @@ def test_vm_ha_activation_fails_closed_on_ssh_connect(monkeypatch, tmp_path) -> 
         )
 
 
+@pytest.mark.parametrize("initialize_checkpoint", [False, True])
 def test_vm_ha_activation_reuses_approved_artifact_without_rebuild(
     monkeypatch,
     tmp_path,
+    initialize_checkpoint,
 ) -> None:
     monkeypatch.setattr("nebius_vpngw.deploy.ingress_ssh.verify_fresh", Mock())
     manifest, binding = _vm_ha_manifest_and_binding()
@@ -2413,11 +2602,25 @@ def test_vm_ha_activation_reuses_approved_artifact_without_rebuild(
         staged_receipt=receipt,
         runtime_binding=binding,
         agent_artifact=artifact,
+        apply_operation_id="a" * 64,
+        initialize_checkpoint=initialize_checkpoint,
     )
 
     assert client.sftp.uploads == []
     assert all("pip install" not in command for command in client.commands)
     activation_commands = "\n".join(client.commands)
+    admission_index = next(
+        i for i, command in enumerate(client.commands) if "u.admit_activation(" in command
+    )
+    marker_index = next(
+        i
+        for i, command in enumerate(client.commands)
+        if "/dev/null /etc/nebius-vpngw/vm-ha-enabled" in command
+    )
+    assert admission_index < marker_index
+    assert (
+        f"'unstarted': {initialize_checkpoint}" in shlex.split(client.commands[admission_index])[-1]
+    )
     for source, _destination, _mode in _VM_HA_SERVICE_ASSET_DESTINATIONS:
         assert f"/tmp/{source}" not in activation_commands
     assert (

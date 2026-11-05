@@ -272,6 +272,24 @@ class Holder:
         if package_observation(manifest) != expected:
             raise RuntimeError("HA prepared predecessor changed")
 
+    def convert_checkpoint(self, *, preflight: bool = False) -> None:
+        """Caller holds all HA writer locks and has verified the exact package."""
+        if not self.repairing:
+            return  # First-start activation owns initialization, after cold guard.
+        from nebius_vpngw.checkpoint_upgrade import conversion_preflight, convert_checkpoint
+
+        assert self.plan is not None
+        expected = dict(self.request["repair"], host_id=self.request["repair"]["compute_id"])
+        action = conversion_preflight if preflight else convert_checkpoint
+        action(
+            expected=expected,
+            artifact=self.request["artifact"],
+            state_dir=repair.STATE,
+            repair=repair,
+            boot_id=self.plan["predecessor"]["boot_id"],
+            unstarted=self.request["observed"].get("unstarted", False),
+        )
+
     def prepare(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.check()
         if (
@@ -286,7 +304,6 @@ class Holder:
         self.directory = STAGING / ops.digest(self.plan)
         if repair.read_json(self.directory / "plan.json") != self.plan:
             raise RuntimeError("HA staged package plan changed")
-        remote.command(["apt-get", "install", "-y", "nftables"], limit=120)
         self.operation.phase("install")
         remote.OPERATION = self.operation
         remote.DEADLINE = time.monotonic() + 600
@@ -306,6 +323,7 @@ class Holder:
                     raise RuntimeError("HA package writer is not stopped")
                 if self.repairing:
                     self.require_repair(payload)
+                    self.convert_checkpoint(preflight=True)
                 predecessor = json.loads(json.dumps(self.plan["predecessor"]))
                 for path, item in self.request.get("owned_assets", {}).items():
                     predecessor["assets"][path] = item["sha256"]
@@ -320,6 +338,7 @@ class Holder:
                 dependencies = [
                     str(self.directory / name) for name in manifest["dependency_wheels"]
                 ]
+                remote.command(["apt-get", "install", "-y", "nftables"], limit=120)
                 if dependencies:
                     remote.command(
                         [
@@ -351,6 +370,7 @@ class Holder:
                         limit=240,
                     )
                 receipt = verify_package(manifest)
+                self.convert_checkpoint()
                 if not self.repairing:
                     self.publish_assets(manifest["ordinary_assets"])
                 self.prepared = True
@@ -366,7 +386,9 @@ class Holder:
         peer = payload.get("peer")
         if (
             not isinstance(peer, dict)
-            or peer != self.request.get("peer")
+            or not repair.peer_checkpoint_transition(
+                self.request.get("peer"), peer, self.request["artifact"]
+            )
             or peer.get("lock", {}).get("operation_id") != local["lock"]["operation_id"]
             or peer.get("lock", {}).get("generation_id") != local["lock"]["generation_id"]
             or peer.get("lock", {}).get("cluster_id") != local["lock"]["cluster_id"]
@@ -386,7 +408,9 @@ class Holder:
             if not all(self.operation.manager.stopped(name) for name in ops.HA_WRITERS):
                 raise RuntimeError("HA package repair writer is not stopped")
             self.verify_prepared_predecessor()
-            return verify_package(self.plan["desired"])
+            receipt = verify_package(self.plan["desired"])
+            self.convert_checkpoint()
+            return receipt
 
     def publish_assets(self, assets: dict[str, Any]) -> None:
         assert self.directory is not None and self.plan is not None
@@ -447,6 +471,7 @@ class Holder:
                 repair.verified_file(credentials, receipt["nebius_credentials_sha256"])
                 self.verify_prepared_predecessor()
                 verify_package(manifest)
+                self.convert_checkpoint()
                 repair.publish(remote.CONFIG, raw)
                 # Keep management Wants disabled until every fencing prerequisite
                 # and the independent cold guard are durable.
@@ -458,6 +483,7 @@ class Holder:
                     getattr(repair, "_SOURCE", None) or Path(repair.__file__).read_bytes()
                 )
                 repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
+                remote.command([sys.executable, "-B", "-m", "nebius_vpngw.boot_policy"], limit=30)
                 repair.initialize_unstarted_checkpoint(unstarted=not self.repairing)
                 repair.publish(MARKER, b"")
                 self.publish_assets(
@@ -486,9 +512,6 @@ def main() -> None:
     if request["action"] == "activation-evidence":
         reply(repair.fencing_evidence(request["repair"]))
         return
-    remote.ingress.require_source(
-        request["ingress_policy"], os.environ.get("VPNGW_DEPLOY_SSH_CONNECTION", "")
-    )
     lock = os.open(remote.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     operation = None
     try:

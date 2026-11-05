@@ -1176,7 +1176,7 @@ def test_vm_ha_apply_executor_maps_only_the_typed_engine_approval(
     assert observed["dry_run"] is False
     assert observed["recreate_gw"] is False
     assert observed["region"] == "eu-north1"
-    assert observed["vm_ha_progress_sink"] is None
+    assert callable(observed["vm_ha_progress_sink"])
     assert observed["expected_vm_ha_plan"] == report
 
 
@@ -1385,7 +1385,9 @@ def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> No
     )
 
 
-@pytest.mark.parametrize("failed_target", (None, "owner-target", "standby-target"))
+@pytest.mark.parametrize(
+    "failed_target", (None, "owner-target", "standby-target", "wire-break", "standby-wire-break")
+)
 def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     monkeypatch,
     tmp_path: Path,
@@ -1427,7 +1429,11 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         owner_target="owner-target",
         standby_target="standby-target",
         ssh_policy=object(),  # type: ignore[arg-type]
-        owner_record={},
+        owner_record={
+            "controller_capabilities": []
+            if failed_target == "wire-break"
+            else ["independent-heartbeat-v5"]
+        },
     )
     canonical = _VMHAApplyPlanReport(
         kind="apply-convergence",
@@ -1450,6 +1456,11 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
             order.append(f"install:{target}")
             if target == failed_target:
                 raise EOFError("TOP_SECRET_REMOTE_DETAIL")
+
+        def require_vm_ha_heartbeat_v5(self, target, *_args):
+            assert target == "standby-target"
+            if failed_target == "standby-wire-break":
+                raise RuntimeError("heartbeat wire upgrade requires coordinated two-member apply")
 
         def refresh_vm_ha_control_services(self, target, *_args, **_kwargs) -> None:
             order.append(f"refresh:{target}")
@@ -1513,6 +1524,22 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         lambda *_a, **_k: order.append("canonical-apply"),
     )
 
+    if failed_target == "standby-wire-break":
+        with pytest.raises(RuntimeError, match="coordinated two-member apply"):
+            _execute_vm_ha_artifact_standby_recovery(
+                config_path, report, region=None, progress_sink=None
+            )
+        assert "install:standby-target" not in order
+        assert "refresh:standby-target" not in order
+        assert "canonical-apply" not in order
+        return
+    if failed_target == "wire-break":
+        with pytest.raises(RuntimeError, match="coordinated two-member apply"):
+            _execute_vm_ha_artifact_standby_recovery(
+                config_path, report, region=None, progress_sink=None
+            )
+        assert not order
+        return
     if failed_target is not None:
         with pytest.raises(_VMHAAgentPackagePreparationFailed) as failed:
             _execute_vm_ha_artifact_standby_recovery(
@@ -1605,7 +1632,7 @@ def test_vm_ha_apply_executor_projects_typed_activation_exit_as_convergence_fail
 
     monkeypatch.setattr("nebius_vpngw.cli._apply_impl", fail_activation)
 
-    with pytest.raises(RuntimeError, match="sanitized activation failure"):
+    with pytest.raises(RuntimeError, match="VM-HA activation interrupted"):
         _execute_vm_ha_apply_convergence(tmp_path / "gateway.config.yaml", report)
 
 
@@ -2979,6 +3006,8 @@ def test_replacement_policy_reproof_converges_exact_default_split(
         execute_policy,
     )
 
+    monkeypatch.setattr("nebius_vpngw.cli._read_vm_ha_replacement_policy", lambda *_args: owner)
+
     assert (
         _reconcile_vm_ha_replacement_auto_healing_policy(
             config_path=tmp_path / "gateway.config.yaml",
@@ -3100,6 +3129,8 @@ def test_replacement_policy_reproof_resumes_after_coordinator_prepare(
         "nebius_vpngw.cli._execute_vm_ha_auto_healing_policy",
         execute_policy,
     )
+
+    monkeypatch.setattr("nebius_vpngw.cli._read_vm_ha_replacement_policy", lambda *_args: owner)
 
     assert (
         _reconcile_vm_ha_replacement_auto_healing_policy(
@@ -5194,9 +5225,13 @@ def test_vm_ha_explicitly_safe_plan_executes_without_confirmation(
     assert inspect.call_count == 3
 
 
+@pytest.mark.parametrize(
+    "recovery_kind", ("artifact-standby-recovery", "replacement-artifact-recovery")
+)
 def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
     monkeypatch,
     tmp_path: Path,
+    recovery_kind: str,
 ) -> None:
     config_path = tmp_path / "gateway.vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -5210,7 +5245,7 @@ def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
     healthy = _inspection(_snapshot(overall="HEALTHY", action="none", digest="b" * 64))
     inspect = Mock(side_effect=(drift, drift, healthy, healthy))
     report = _VMHAApplyPlanReport(
-        kind="artifact-standby-recovery",
+        kind=recovery_kind,
         digest="d" * 64,
         engine_digest="e" * 64,
         effects=(
@@ -5220,7 +5255,7 @@ def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
         has_destructive_changes=False,
         managed_ssh_action=None,
         impact=_vm_ha_apply_plan_impact(
-            "artifact-standby-recovery",
+            recovery_kind,
             has_destructive_changes=False,
         ),
     )
@@ -5256,12 +5291,9 @@ def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
 
     assert result.exit_code == 0
     assert "VM-HA is healthy now." in result.stdout
-    assert "Approval kind: artifact-standby-recovery" in result.stderr
+    assert f"Approval kind: {recovery_kind}" in result.stderr
     assert f"Approval digest: {'d' * 64}" in result.stderr
-    assert (
-        "Impact: May briefly interrupt VPN traffic while the serving owner is upgraded; "
-        "no gateway VM or disk is deleted."
-    ) in result.stderr
+    assert f"Impact: {report.impact.summary}." in result.stderr
     assert "install approved artifact on serving owner" in result.stderr
     assert "Proceed with this exact VM-HA plan? [y/N]" in result.stderr
     assert result.stderr.index("Planned effects:") < result.stderr.index("Proceed with")

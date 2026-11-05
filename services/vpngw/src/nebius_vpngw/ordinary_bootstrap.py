@@ -17,10 +17,7 @@ LOADER = (
     "\n raise RuntimeError('ordinary_source_limit')\n"
     "exec(compile(base64.b64decode(_source[:-1],validate=True),'<ordinary-bootstrap>','exec'))"
 )
-COMMAND = (
-    'sudo -n env VPNGW_DEPLOY_SSH_CONNECTION="$SSH_CONNECTION" '
-    "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -c " + shlex.quote(LOADER)
-)
+COMMAND = "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -c " + shlex.quote(LOADER)
 
 
 def source_frame() -> bytes:

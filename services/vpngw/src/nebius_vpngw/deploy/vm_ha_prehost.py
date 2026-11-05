@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import Any
 
 from ..agent.vm_ha.progress import validate_transfer_progress
-from ..agent.vm_ha_checkpoint import controller_checkpoint_from_dict
+from ..checkpoint_upgrade import inspect_checkpoint
 from ..schema import VMHARouteTarget, VMHARuntimeBinding
 from .vm_ha_lifecycle import (
     VMHALifecycleState,
@@ -263,7 +263,7 @@ def validate_prehost_hosts(state: VMHALifecycleState, hosts: Mapping[str, object
         ):
             raise ValueError("VM-HA pre-host recovery installed readiness is inconsistent")
         generations.add(_digest({"id": binding.generation_id, "digests": expected_digests}))
-        checkpoint = controller_checkpoint_from_dict(raw.get("checkpoint"))
+        checkpoint = inspect_checkpoint(raw.get("checkpoint"))
         if checkpoint.pending_action is not None or checkpoint.repair_attempt is not None:
             raise ValueError("VM-HA pre-host recovery controller is not quiescent")
         progress = raw.get("transfer")

@@ -1,7 +1,9 @@
 <!-- markdownlint-disable MD001 MD024 -->
+<!-- markdownlint-disable-next-line MD013 -->
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Project Design
 
+<!-- markdownlint-disable-next-line MD013 -->
 <!-- FEATURE: FEAT-001 reqs=REQ-001 status=draft delivery=not-started priority=P0 version=1 -->
 ### FEAT-001: <Design slice>
 

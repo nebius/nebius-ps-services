@@ -143,6 +143,7 @@ from workflow_interop import (  # noqa: E402 — verified bootstrap precedes run
 )
 
 from agent_runtime import native_session_id  # noqa: E402
+from workflow_state import WorkflowError  # noqa: E402
 
 
 PRIVATE_OUTPUT_KEYS = {
@@ -150,6 +151,7 @@ PRIVATE_OUTPUT_KEYS = {
     "done_criteria",
     "decisions",
     "final_evidence",
+    "issue_evidence",
     "goal",
     "open_risks",
     "promotion_evidence",
@@ -167,21 +169,6 @@ def runtime_session_identity() -> str:
         )
     return value
 
-
-def string_list_json(value: str, label: str) -> list[str]:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ExecutionError(
-            "EXECUTION_STATE_INVALID", f"{label} must be a JSON string array"
-        ) from exc
-    if not isinstance(parsed, list) or any(
-        not isinstance(item, str) or not item.strip() for item in parsed
-    ):
-        raise ExecutionError(
-            "EXECUTION_STATE_INVALID", f"{label} must be a JSON string array"
-        )
-    return parsed
 
 
 def optional_object_json(value: str, label: str) -> dict[str, Any] | None:
@@ -232,6 +219,20 @@ def parser() -> argparse.ArgumentParser:
     tdd.add_argument("--run-dir", type=Path, required=True)
     tdd.add_argument("--execution", required=True)
     tdd.add_argument("--message", required=True)
+
+    revision = sub.add_parser("prepare-design-revision")
+    revision.add_argument("--run-dir", type=Path, required=True)
+    revision.add_argument("--execution", required=True)
+    revision.add_argument("--classification-id", required=True)
+    revision.add_argument("--dispatch-id", required=True)
+    revision.add_argument("--termination", type=Path, action="append", required=True)
+
+    revision_seal = sub.add_parser("seal-design-revision")
+    revision_seal.add_argument("--run-dir", type=Path, required=True)
+    revision_seal.add_argument("--execution", required=True)
+    revision_seal.add_argument("--revision-id", required=True)
+    revision_seal.add_argument("--publication-operation-id", required=True)
+    revision_seal.add_argument("--message", required=True)
 
     wave = sub.add_parser("wave-prepare")
     wave.add_argument("--run-dir", type=Path, required=True)
@@ -331,13 +332,17 @@ def parser() -> argparse.ArgumentParser:
     task_finish.add_argument("--execution", required=True)
     task_finish.add_argument("--wave", required=True)
     task_finish.add_argument("--task", required=True)
-    task_finish.add_argument("--validation", required=True)
-    task_finish.add_argument("--review", required=True)
+    task_finish.add_argument("--receipt", type=Path, required=True)
     task_finish.add_argument("--message", required=True)
-    task_finish.add_argument("--summary", required=True)
-    task_finish.add_argument("--decisions-json", required=True)
-    task_finish.add_argument("--open-risks-json", required=True)
     task_finish.add_argument("--oracle-evidence-json", default="null")
+
+    ingest = sub.add_parser("task-result")
+    ingest.add_argument("--run-dir", type=Path, required=True)
+    ingest.add_argument("--execution", required=True)
+    ingest.add_argument("--wave", required=True)
+    ingest.add_argument("--task", required=True)
+    ingest.add_argument("--result", type=Path, required=True)
+    ingest.add_argument("--termination", type=Path, required=True)
 
     integrate = sub.add_parser("wave-integrate")
     integrate.add_argument("--run-dir", type=Path, required=True)
@@ -363,6 +368,7 @@ def parser() -> argparse.ArgumentParser:
     seal.add_argument("--execution", required=True)
     seal.add_argument("--evidence", required=True)
     seal.add_argument("--message", required=True)
+    seal.add_argument("--issue-evidence", type=Path)
 
     promote = sub.add_parser("promote")
     promote.add_argument("--run-dir", type=Path, required=True)
@@ -407,13 +413,24 @@ def _execute(args: argparse.Namespace) -> Any:
     worker_actions = {"task-start", "task-heartbeat", "task-recover"}
     if args.command not in worker_actions | {"status", "task-watch"}:
         authorize_coordinator(args.run_dir, session)
-    if args.command == "task-finish":
-        from workflow_reconcile import termination
-        termination(args.run_dir, args.execution, args.wave, args.task, args.termination, session)
+    if args.command == "task-result":
+        from workflow_worker_results import ingest_result
+        from workflow_state import read
+        return ingest_result(args.run_dir, args.execution, args.wave, args.task,
+                             read(args.result), args.termination, session)
     if args.command == "authorize-recovery":
+        from agent_runtime import agent_home
         from workflow_reconcile import authorize_recovery
-        return authorize_recovery(args.run_dir, args.execution, args.wave, args.task,
-                                  args.termination, session, args.next_session_sha256)
+        from workflow_execution import assignment_path
+        from workflow_worker_contract import prepare_launch_support, validate_launch_identity
+        validate_launch_identity(
+            assignment_path(args.run_dir, args.execution, args.wave, args.task),
+            agent_home(), session, recovery=True,
+        )
+        result = authorize_recovery(args.run_dir, args.execution, args.wave, args.task,
+                                    args.termination, session, args.next_session_sha256)
+        prepare_launch_support(result["launch"])
+        return result
     if args.command == "worker-reconcile":
         from workflow_reconcile import reconcile_worker
         return reconcile_worker(args.run_dir, args.execution, args.wave, args.task, args.termination, session)
@@ -426,6 +443,14 @@ def _execute(args: argparse.Namespace) -> Any:
         return prepare_specifications(args.run_dir, args.project_root, args.execution)
     if args.command == "seal-tdd":
         return seal_tdd_base(args.run_dir, args.execution, args.message)
+    if args.command == "prepare-design-revision":
+        from workflow_design_revision import prepare_design_revision
+        return prepare_design_revision(args.run_dir, args.execution, args.classification_id,
+                                       args.dispatch_id, args.termination, session)
+    if args.command == "seal-design-revision":
+        from workflow_design_revision import seal_design_revision
+        return seal_design_revision(args.run_dir, args.execution, args.revision_id,
+                                    args.publication_operation_id, args.message, session)
     if args.command == "wave-prepare":
         return prepare_wave(args.run_dir, args.execution, args.wave)
     if args.command == "wave-refill":
@@ -449,13 +474,22 @@ def _execute(args: argparse.Namespace) -> Any:
             args.scope_cwd,
         )
     if args.command == "task-arm":
-        return arm_task(
+        from agent_runtime import agent_home
+        from workflow_execution import assignment_path
+        from workflow_worker_contract import prepare_launch_support, validate_launch_identity
+        validate_launch_identity(
+            assignment_path(args.run_dir, args.execution, args.wave, args.task),
+            agent_home(), session,
+        )
+        result = arm_task(
             args.run_dir,
             args.execution,
             args.wave,
             args.task,
             args.assignment_digest,
         )
+        prepare_launch_support(result["launch"])
+        return result
     if args.command == "task-requeue":
         return requeue_task(
             args.run_dir,
@@ -506,12 +540,10 @@ def _execute(args: argparse.Namespace) -> Any:
             args.execution,
             args.wave,
             args.task,
-            args.validation,
-            args.review,
+            args.receipt,
             args.message,
-            summary=args.summary,
-            decisions=string_list_json(args.decisions_json, "decisions-json"),
-            open_risks=string_list_json(args.open_risks_json, "open-risks-json"),
+            termination=args.termination,
+            session_identity=session,
             regression_oracle_evidence=optional_object_json(
                 args.oracle_evidence_json, "oracle-evidence-json"
             ),
@@ -523,7 +555,9 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "wave-fail":
         return fail_wave(args.run_dir, args.execution, args.wave, args.classification, args.dispatch, args.evidence)
     if args.command == "seal-feature":
-        return seal_feature(args.run_dir, args.execution, args.evidence, args.message)
+        from workflow_state import read
+        issues = read(args.issue_evidence) if args.issue_evidence is not None else None
+        return seal_feature(args.run_dir, args.execution, args.evidence, args.message, issues)
     if args.command == "promote":
         value = promote_feature(args.run_dir, args.execution, args.evidence)
         if value.get("owner") == "implement" and value.get("promotion_source") != "managed-local":
@@ -549,14 +583,20 @@ def _execute(args: argparse.Namespace) -> Any:
 def main() -> int:
     try:
         result = execute(parser().parse_args())
-    except (ExecutionError, ExecutionInteropError) as exc:
-        code = exc.code if isinstance(exc, ExecutionError) else "WORKTREE_CONFLICT"
+    except (ExecutionError, ExecutionInteropError, WorkflowError) as exc:
+        code = exc.code if isinstance(exc, (ExecutionError, WorkflowError)) else "WORKTREE_CONFLICT"
         print(
             json.dumps(
                 {"status": "error", "code": code, "message": str(exc)},
                 sort_keys=True,
             )
         )
+        return 1
+    except OSError:
+        print(json.dumps({
+            "status": "error", "code": "ENVIRONMENT_BLOCKER",
+            "message": "workflow operation could not access a required resource",
+        }, sort_keys=True))
         return 1
     print(json.dumps({"status": "ok", "result": public_result(result)}, sort_keys=True))
     return 0

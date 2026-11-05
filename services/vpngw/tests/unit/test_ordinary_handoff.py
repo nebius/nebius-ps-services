@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -80,3 +82,144 @@ def test_streamed_bootstrap_uses_small_command_and_preserves_request_framing(mon
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == request
+
+
+def test_repair_admission_works_before_new_package_is_installed(monkeypatch, tmp_path):
+    from contextlib import nullcontext
+
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    class AdmissionReached(Exception):
+        pass
+
+    observed = {"mode": "ha"}
+    request = dict(
+        action="reserve",
+        observed=observed,
+        ha={},
+        repair={},
+        binding="binding",
+        artifact="artifact",
+        approval="approval",
+        ingress_policy={},
+    )
+    monkeypatch.setattr(guest, "receive", lambda: request)
+    monkeypatch.setattr(guest, "inspect", lambda _: observed)
+    monkeypatch.setattr(guest.signal, "signal", Mock())
+    monkeypatch.setattr(guest.signal, "alarm", Mock())
+    monkeypatch.setattr(guest.remote, "LOCK", tmp_path / "lock")
+    monkeypatch.setattr(guest.remote, "routing_lock", nullcontext)
+    journal = Mock()
+    journal.read.return_value = None
+    monkeypatch.setattr(guest.ops, "Journal", lambda: journal)
+    manager = Mock()
+    manager.unit.return_value = {"missing": True}
+    manager.stopped.return_value = True
+    manager.network.return_value = {}
+    monkeypatch.setattr(guest.ops, "Manager", lambda _: manager)
+    monkeypatch.setattr(guest.ops, "identity", lambda: {})
+    monkeypatch.setattr(guest.ops, "install_startup_guard", Mock())
+    monkeypatch.setattr(guest.ops, "Operation", lambda *_: Mock())
+    boot = tmp_path / "boot-id"
+    boot.write_text("boot")
+    monkeypatch.setattr(guest.ops, "BOOT", boot)
+    monkeypatch.setattr(guest.repair, "persist_cold_guard", Mock())
+    monkeypatch.setattr(guest.repair, "writer_locks", lambda **_: nullcontext())
+    monkeypatch.setattr(guest.repair, "exact_lock", Mock())
+    guard = Mock()
+    monkeypatch.setattr(guest.repair, "cold_guard", guard)
+    monkeypatch.setattr(guest.repair, "evidence", Mock())
+    command = Mock(side_effect=ModuleNotFoundError("new package is not installed yet"))
+    monkeypatch.setattr(guest.remote, "command", command)
+
+    def admission(*_):
+        guard.assert_called_once()
+        raise AdmissionReached
+
+    monkeypatch.setattr(guest, "Holder", admission)
+    with pytest.raises(AdmissionReached):
+        guest.main()
+    command.assert_not_called()
+
+
+@pytest.mark.parametrize("repairing", [False, True])
+def test_package_install_is_journal_bound_after_admission(
+    monkeypatch, ordinary_operation_guest, repairing
+):
+    from nebius_vpngw import ordinary_operations as ops
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    class AptFailed(RuntimeError):
+        pass
+
+    manifest = {
+        "wheel_name": "nebius_vpngw-1-py3-none-any.whl",
+        "wheel_sha256": "a" * 64,
+        "dependency_wheels": {},
+    }
+    predecessor = {"assets": {}, "asset_modes": {}}
+    plan = {"desired": manifest, "predecessor": predecessor}
+    manager = ops.Manager(time.monotonic() + 60)
+    operation = ops.Operation.begin(
+        request="1" * 32,
+        config="2" * 64,
+        artifact=manifest["wheel_sha256"],
+        predecessor="3" * 64,
+        manager=manager,
+        network=manager.network(),
+        purpose="ha-handoff",
+    )
+    holder = guest.Holder(
+        {
+            "package": plan,
+            "observed": {"mode": "ha" if repairing else "ordinary"},
+            "artifact": manifest["wheel_sha256"],
+            "approval": "3" * 64,
+        },
+        operation,
+    )
+    events = []
+
+    @contextlib.contextmanager
+    def locked(**kwargs):
+        events.append("locked")
+        yield
+
+    def stopped(name):
+        events.append(name)
+        return True
+
+    def predecessor_read(_manifest):
+        events.append("predecessor")
+        return predecessor
+
+    def apt(args, **kwargs):
+        assert args == ["apt-get", "install", "-y", "nftables"]
+        assert guest.remote.OPERATION is operation
+        assert ops.Journal().read()["phase"] == "install"
+        assert "locked" in events and "predecessor" in events
+        assert set(ops.MANAGEMENT).issubset(events)
+        if repairing:
+            assert set(ops.HA_WRITERS).issubset(events) and "repair" in events
+            assert "conversion-preflight" in events
+        raise AptFailed("injected package failure")
+
+    monkeypatch.setattr(guest.remote, "OPERATION", None)
+    monkeypatch.setattr(guest.repair, "read_json", lambda _: plan)
+    monkeypatch.setattr(guest.remote, "routing_lock", locked)
+    monkeypatch.setattr(guest.repair, "writer_locks", locked)
+    monkeypatch.setattr(manager, "stopped", stopped)
+    monkeypatch.setattr(holder, "require_repair", lambda _: events.append("repair"))
+    monkeypatch.setattr(
+        holder,
+        "convert_checkpoint",
+        lambda *, preflight=False: events.append(
+            "conversion-preflight" if preflight else "conversion"
+        ),
+    )
+    monkeypatch.setattr(guest, "package_observation", predecessor_read)
+    monkeypatch.setattr(guest.repair, "verified_file", lambda *args: b"")
+    monkeypatch.setattr(guest.remote, "command", apt)
+    with pytest.raises(AptFailed):
+        holder.prepare({"plan_digest": ops.digest(plan)})
+    assert guest.remote.OPERATION is None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import gzip
 import os
 import shlex
 import subprocess
@@ -12,30 +14,53 @@ import pytest
 import yaml
 
 from nebius_vpngw import ingress_policy
-from nebius_vpngw.deploy.vm_manager import VMManager
+from nebius_vpngw.deploy.ordinary_apply import UFW_ORDERING_PATH
+from nebius_vpngw.deploy.ssh_policy import VM_HA_SSH_HOST_KEY_PATH, SSHHostIdentity
+from nebius_vpngw.deploy.vm_ha_identity import recover_product_host_key
+from nebius_vpngw.deploy.vm_manager import (
+    VMManager,
+    _read_esp4_preflight_script,
+    _read_firewall_setup_script,
+)
 
 
 @pytest.mark.parametrize("vm_ha", [False, True])
 def test_bootstrap_ingress_survives_pinned_host_key_enrollment(vm_ha):
-    policy = {"ssh_allowed_cidrs": ["203.0.113.4/32", "2001:db8::/64"], "peer_ips": []}
+    policy = {"peer_ips": []}
     manager = VMManager(project_id="test", region="eu-west1")
     base = manager._build_cloud_init(ssh_key="ssh-ed25519 AAAAtest", vm_ha=vm_ha, ingress=policy)
-    identity = SimpleNamespace(
-        cloud_init_entries=lambda: (
-            "  - path: /etc/ssh/vpngw_host_key\n"
-            "    permissions: '0600'\n"
-            "    content: |\n"
-            "      synthetic-test-key\n"
-        )
-    )
+    identity = SSHHostIdentity("test-gateway", b"synthetic-test-key\n")
     rendered = manager._render_gateway_ssh_enrollment_cloud_init(base, identity, None)
     document = yaml.safe_load(rendered)
     files = {item["path"]: item for item in document["write_files"]}
-    assert files["/etc/ssh/vpngw_host_key"]["content"] == "synthetic-test-key\n"
-    assert any("HostKey /etc/ssh/vpngw_host_key" in f["content"] for f in files.values())
+    ufw = files[UFW_ORDERING_PATH]
+    canonical = Path(ingress_policy.__file__).parent / "systemd/nebius-vpngw-ufw-ordering.conf"
+    assert ufw["content"].encode() == canonical.read_bytes()
+    assert ufw["owner"] == "root:root" and ufw["permissions"] == "0644"
+    assert "network-online" not in ufw["content"] and "cloud-init" not in ufw["content"]
+    instance = SimpleNamespace(spec=SimpleNamespace(cloud_init_user_data=rendered))
+    assert recover_product_host_key(instance, path=VM_HA_SSH_HOST_KEY_PATH) == identity.private_key
+    script = files[str(ingress_policy.EXECUTABLE)]
+    assert script["encoding"] == "gz+b64"
     assert (
-        files[str(ingress_policy.EXECUTABLE)]["content"]
-        == Path(ingress_policy.__file__).read_text()
+        gzip.decompress(base64.b64decode(script["content"]))
+        == Path(ingress_policy.__file__).read_bytes()
+    )
+    assert script["owner"] == "root:root" and script["permissions"] == "0644"
+    for path, expected in (
+        ("/usr/local/bin/setup-vpngw-firewall.sh", _read_firewall_setup_script()),
+        ("/usr/local/bin/nebius-vpngw-esp4-preflight.sh", _read_esp4_preflight_script()),
+    ):
+        script = files[path]
+        assert script["encoding"] == "gz+b64"
+        assert script["owner"] == "root:root" and script["permissions"] == "0755"
+        assert gzip.decompress(base64.b64decode(script["content"])) == (
+            expected.rstrip() + "\n"
+        ).encode("utf-8")
+    assert len(rendered.encode("utf-8")) <= 32768
+    assert (
+        manager._build_cloud_init(ssh_key="ssh-ed25519 AAAAtest", vm_ha=vm_ha, ingress=policy)
+        == base
     )
     assert files[str(ingress_policy.POLICY_FILE)]["content"] == ingress_policy.serialized(policy)
     assert "nftables" in document["packages"]
@@ -45,13 +70,36 @@ def test_bootstrap_ingress_survives_pinned_host_key_enrollment(vm_ha):
     ]
 
 
+@pytest.mark.parametrize("extra_bytes", [0, 1])
+@pytest.mark.parametrize("padding", ["x", "é"])
+def test_enrollment_validates_final_cloud_init_utf8_size(extra_bytes, padding):
+    base = "#cloud-config\nwrite_files:\n  - content: |\n            Port 22\n"
+    identity = SimpleNamespace(cloud_init_entries=lambda: "")
+    rendered = VMManager._render_gateway_ssh_enrollment_cloud_init(base, identity)
+    remaining = 32768 - len(rendered.encode("utf-8")) + extra_bytes
+    width = len(padding.encode("utf-8"))
+    padded = base + padding * (remaining // width) + "x" * (remaining % width)
+    if extra_bytes:
+        with pytest.raises(ValueError, match="cloud-init.*32768"):
+            VMManager._render_gateway_ssh_enrollment_cloud_init(padded, identity)
+    else:
+        assert (
+            len(
+                VMManager._render_gateway_ssh_enrollment_cloud_init(padded, identity).encode(
+                    "utf-8"
+                )
+            )
+            == 32768
+        )
+
+
 @pytest.mark.parametrize("vm_ha", [False, True])
 @pytest.mark.parametrize("comment", ['operator: "primary"', "secondary # literal key comment"])
 def test_cloud_init_preserves_authorized_key_as_a_yaml_string(vm_ha: bool, comment: str) -> None:
     key = f"ssh-ed25519 AAAAfirst {comment}"
     config = yaml.safe_load(
         VMManager(project_id="test", region="eu-west1")._build_cloud_init(
-            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []},
+            ingress={"peer_ips": []},
             ssh_key=key,
             vm_ha=vm_ha,
         )
@@ -63,7 +111,7 @@ def test_cloud_init_preserves_authorized_key_as_a_yaml_string(vm_ha: bool, comme
 def test_generated_frr_shell_stops_on_required_failure(tmp_path: Path, failure: str) -> None:
     config = yaml.safe_load(
         VMManager(project_id="test", region="eu-west1")._build_cloud_init(
-            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, ssh_key="test"
+            ingress={"peer_ips": []}, ssh_key="test"
         )
     )
     files = {item["path"]: item for item in config["write_files"]}
@@ -121,7 +169,7 @@ def test_generated_frr_shell_stops_on_required_failure(tmp_path: Path, failure: 
 def test_required_firewall_is_not_masked_and_esp4_deferral_is_preserved() -> None:
     config = yaml.safe_load(
         VMManager(project_id="test", region="eu-west1")._build_cloud_init(
-            ingress={"ssh_allowed_cidrs": ["203.0.113.4/32"], "peer_ips": []}, ssh_key="test"
+            ingress={"peer_ips": []}, ssh_key="test"
         )
     )
     commands = config["runcmd"]
