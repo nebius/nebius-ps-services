@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Validate final replacement cloud-init for every ordinary/HA member during
+  inspection and again before preparation effects, including resume. Oversized
+  preserved SSH authorization cannot reserve a source or create candidate resources.
+
 - Require setuptools 84.1.0 or newer for development and isolated builds, and
   refresh the locked version to fix GHSA-xmj3-9gf7-h52w (Dependabot alert #109).
 - Recover interrupted first-start HA activation by quiescing reboot-started

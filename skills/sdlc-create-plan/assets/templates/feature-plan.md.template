@@ -15,7 +15,7 @@ Qualification plan SHA256: <private qualification plan digest>
 
 - Plan kind: <initial or corrective>
 - Supersedes: <exact prior plan filename or none>
-- Diagnosis: <diagnosis-v2 ID or none>
+- Diagnosis: <diagnosis-v3 ID or none>
 - Regression oracle: <original failed evaluator oracle or none>
 - Completed task manifest digest: <sha256 digest or none>
 - Corrective tasks: <appended TASK IDs or none>
@@ -60,7 +60,7 @@ that task rather than guessing that it is parallel-safe.
 - Validation: <focused command or evidence>
 - Done criteria: <observable completion condition>
 - Rollback or stop conditions: <fail-closed boundary>
-- Diagnosis: <diagnosis-v2 ID for a corrective task, or none>
+- Diagnosis: <diagnosis-v3 ID for a corrective task, or none>
 - Regression oracle: <original evaluator oracle for a corrective task, or none>
 
 ## Planned Dependency Waves

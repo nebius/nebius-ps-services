@@ -43,8 +43,8 @@ All notable changes to the reusable Agent Skills are tracked here.
 - Admit a complete validation diagnosis after a failed counted artifact repair
   through the existing owner route, preserving failures and repair ceilings.
   Version the private diagnosis contract to v3 across diagnostic, corrective-plan,
-  Stop-hook and verifier consumers; reject retired active and referenced records
-  before dispatch or completion writes, without migration.
+  Stop-hook and verifier consumers, including the plan template; reject retired
+  active and referenced records before dispatch or completion writes, without migration.
 
 - Validate preserved original TDD evidence across completed appended corrective
   waves using locked plans, owner replan records, unchanged completed tasks and
@@ -82,7 +82,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   revalidation under the new successful dispatch, and allow the final admitted
   repair to finish its gates without increasing the retry ceiling.
 
-### Changed
+### Workflow and runtime changes
 
 - Document the live verifier's existing Compose action list and worker teardown
   with `stop web db`; keep resource deletion with lifecycle cleanup. Expose the

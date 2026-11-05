@@ -3226,7 +3226,9 @@ replacement; an approved replacement freezes one exact image ID. Apply VPN polic
 or topology changes separately from infrastructure changes.
 
 1. Inspect every source VM's live Security Groups, effective SSH authorization,
-   allocations, configuration, attached boot disk and affected routes.
+   allocations, configuration, attached boot disk and affected routes. Render
+   every candidate's final cloud-init and reject oversized data before reserving
+   a source or creating resources; repeat this validation before resumed preparation.
 2. Create one temporary candidate VM, boot disk and public management address at
    a time. Attach the captured Security Groups in the creation request. Prepare
    the candidate behind a persistent boot guard with VPN services, BGP, forwarding

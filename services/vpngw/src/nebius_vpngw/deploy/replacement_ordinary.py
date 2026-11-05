@@ -21,6 +21,7 @@ from .replacement_cloud import Cloud, resource_id, single_nic_status, source_spe
 from .ssh_client_auth import resolve_ssh_client_auth
 from .vm_diff import VMSpec
 from .vm_ha_cloud import InstanceCloudState, instance_cloud_state, vm_ha_request_kwargs
+from .vm_ha_identity import require_cloud_init_size
 
 
 def configuration_digest(instances: tuple) -> str:
@@ -232,7 +233,7 @@ class OrdinaryReplacement:
             )
             for member in members
         ]
-        return Plan(
+        plan = Plan(
             self.manager.project_id,
             self.deployment.gateway_group.name,
             operation,
@@ -243,6 +244,18 @@ class OrdinaryReplacement:
             tuple(members),
             routes,
         )
+        self.validate_candidate_cloud_init(plan)
+        return plan
+
+    def validate_candidate_cloud_init(self, plan: Plan) -> None:
+        for member in plan.members:
+            logical = member.logical_name
+            self.candidate_cloud_init(
+                index=self.instances[logical].instance_index,
+                logical=logical,
+                operation=plan.operation_id,
+                authorization=self.snapshots[logical]["projection"],
+            )
 
     def settle(self, journal: Journal) -> None:
         Cloud(self.sdk, journal).settle()
@@ -391,6 +404,12 @@ class OrdinaryReplacement:
         logical, operation = member["logical_name"], plan["operation_id"]
         if step == "prepare":
             snapshot = self.snapshots[logical]
+            cloud_init = self.candidate_cloud_init(
+                index=self.instances[logical].instance_index,
+                logical=logical,
+                operation=operation,
+                authorization=snapshot["projection"],
+            )
             access, target = self.access(member["compute_id"], logical, cloud=cloud)
             cloud.rename(
                 member["compute_id"], logical, logical=logical, role="source", label="mark-source"
@@ -413,13 +432,6 @@ class OrdinaryReplacement:
                 name=member["candidate_name"] + "-mgmt",
                 subnet=member["security_groups"][0]["subnet_id"],
                 logical=logical,
-            )
-            index = self.instances[logical].instance_index
-            cloud_init = self.candidate_cloud_init(
-                index=index,
-                logical=logical,
-                operation=operation,
-                authorization=snapshot["projection"],
             )
             candidate = cloud.create_candidate(
                 name=member["candidate_name"],
@@ -556,9 +568,11 @@ class OrdinaryReplacement:
         cloud_init = self.manager._render_gateway_ssh_enrollment_cloud_init(
             cloud_init, self.ssh._ssh_policy.identity_for(logical)
         )
-        return replacement_guard.render(
+        rendered = replacement_guard.render(
             cloud_init, operation=operation, authorization=authorization
         )
+        require_cloud_init_size(rendered)
+        return rendered
 
     def _verify_allocations(self, journal: Journal, index: int | None = None) -> None:
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest

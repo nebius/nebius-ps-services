@@ -143,7 +143,12 @@ def test_recovery_package_install_preserves_one_product_distribution(tmp_path, m
     class Stream(io.BytesIO):
         def __init__(self, data=b"", code=0):
             super().__init__(data)
-            self.channel = SimpleNamespace(recv_exit_status=lambda: code)
+            self.channel = SimpleNamespace(
+                recv_exit_status=lambda: code,
+                settimeout=lambda _: None,
+                send=self.write,
+                shutdown_write=lambda: None,
+            )
 
     class Client:
         def __init__(self, version):
@@ -158,6 +163,9 @@ def test_recovery_package_install_preserves_one_product_distribution(tmp_path, m
             return contextlib.nullcontext(SimpleNamespace(putfo=putfo))
 
         def exec_command(self, command, **kwargs):
+            if command == "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B":
+                # Checkpoint observation is simulated; emitted pip commands run below.
+                return Stream(), Stream(b'{"checkpoint":"unstarted"}'), io.BytesIO()
             if "mktemp -d" in command:
                 return io.BytesIO(), Stream(b"/tmp/nebius-vpngw-agent.ABCDEFGHIJ\n"), io.BytesIO()
             if "pip install" in command:

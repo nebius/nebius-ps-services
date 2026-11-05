@@ -303,7 +303,7 @@ class HAReplacement(OrdinaryReplacement):
             for member in members
         ]
         snapshot.assert_current()
-        return Plan(
+        plan = Plan(
             self.manager.project_id,
             self.deployment.gateway_group.name,
             operation,
@@ -317,6 +317,8 @@ class HAReplacement(OrdinaryReplacement):
             owner.instance_name,
             ha,
         )
+        self.validate_candidate_cloud_init(plan)
+        return plan
 
     def _lifecycle(self, journal: Journal) -> None:
         tx = journal.state["transaction"]

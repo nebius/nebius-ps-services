@@ -7546,6 +7546,9 @@ provisioning, delete-first replacement and outstanding owner-review behavior.
 - Infrastructure and VPN-policy changes require separate applies. Bind exact old
   Compute IDs/revisions, attached owned boot disks, operator projections, SGs,
   public/shared allocations, routes, artifact/configuration and candidate specs.
+- Render final cloud-init for every member after freezing its operation identity.
+  Enforce the existing payload limit before source reservation or resource creation,
+  including each resumed preparation. Preserve complete operator authorization.
 - Plan one temporary candidate, disk and management public IP at a time. Create it
   with preserved groups and operator keys and a persistent passive boot guard;
   prepare without VPN initiation, forwarding, BGP export or route/election writers.
@@ -7627,6 +7630,12 @@ bundle. Pending logical bindings block conflicting normal operations. Boot guard
 normalize product sysctl inputs before cloud-init can transiently enable forwarding.
 
 #### Verification Evidence
+
+Local regressions reject an oversized authorization projection on a later ordinary
+member during read-only inspection and reject ordinary/HA preparation before any
+source reservation or cloud mutation. All three fail on the previous ordering and
+pass after preflight repair; 20 focused replacement and package-install tests pass.
+This is isolated source-level evidence, not live replacement qualification.
 
 The apply and VM-HA convergence coordinators retain the canonical gateway writer
 lock through replacement; the helper acquires only its replacement journal lock.
