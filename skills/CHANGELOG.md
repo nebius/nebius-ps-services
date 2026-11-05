@@ -4,6 +4,17 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Make first SDLC phase initialization a tested coordinator-owned operation.
+  Preserve hook audit telemetry, validate native and managed lease ownership,
+  and recover interrupted initial publication without overwriting evidence or
+  resetting later phases. Keep hooks, intake and verifier observers read-only
+  at this transition.
+
+- Include dated Participants additions and proven initial membership in
+  `jira-report` for `--user` and default self. Discover field/account identities,
+  preserve earlier additions after removal, and distinguish confirmed field
+  absence from missing metadata/history without changing report columns.
+
 - Align commit contract checks with Implement's documented dirty-source boundary,
   native termination, typed result ingestion and coordinator-owned commit receipt.
   Include the shared Git environment module in hook installation expectations.

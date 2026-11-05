@@ -89,7 +89,9 @@ checkpoint or dispatching any phase:
 
 - For a fresh accepted run, verify its current project/session ownership and
   absence of prior phase checkpoints or downstream phase, plan and execution
-  evidence. Initialize `current_phase: sdlc-start`, `status: running`, zero retry
+  evidence. Invoke private `scripts/initialize_phase.py --project-root
+  <selected-project>` from the bound native coordinator. Initialize
+  `current_phase: sdlc-start`, `status: running`, zero retry
   counters and no completed-phase evidence. Preserve accepted objective provenance.
   Use the actual registered project/run identities and the normal state schema.
   Follow the checkpoint write order below before observation or first dispatch.
@@ -103,6 +105,30 @@ checkpoint or dispatching any phase:
   artifacts and select a new checkpoint rather than overwriting earlier evidence.
 
 Intake helpers, hooks and verifier observers do not initialize or advance phases.
+
+The private initializer obtains identity from the selected native runtime; it
+accepts no session or run override. Under the project transition lock it checks
+the accepted run, project registration, session binding, active pointer and
+ownership lock. Managed intake must also retain its exact active outer lease;
+`execution/interop.json` alone is not proof of that lease. Initialization does
+not acquire missing ownership or advance a later phase.
+
+Preserve `history/hook-events.jsonl` and `history/continuation-state.json` as
+audit telemetry. They may precede phase initialization and never certify phase
+completion. Unknown history or downstream artifacts require reconciliation.
+The initial checkpoint has no execution, fingerprints or completed evidence.
+Its `initialization` member uses `agentic-sdlc/initial-phase-v1`, binding the
+accepted objective, source revision and native coordinator. `latest.json` uses
+the pointer shape below, not a second state snapshot.
+
+Exact repeated initialization returns `ALREADY_INITIALIZED` without writes.
+Interrupted publication can return `RECOVERED` only when retained snapshots
+match this initial contract and no later work exists. Preserve all prior
+snapshots, including a history record containing only a prefix of its expected
+initial entry, and publish a new checkpoint. Malformed snapshots, unsupported
+initialization records, unsafe files and non-initial content remain blocked;
+never convert them or overwrite their evidence. `BLOCKED` may follow partial
+writes, so inspect retained artifacts before any retry.
 
 ## Minimum current-state.json
 

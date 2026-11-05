@@ -18,6 +18,7 @@ for directory in (
     Path(__file__).parent,
     ROOT / "worktree/scripts",
     ROOT / "maintain-project-specs/scripts",
+    ROOT / "sdlc-start/scripts",
 ):
     sys.path.insert(0, str(directory))
 
@@ -31,6 +32,7 @@ from test_workflow_execution import REQUIREMENTS, DESIGN, PLAN, finish_task as f
 import three_tier_lifecycle as lifecycle  # noqa: E402
 import three_tier_target as target  # noqa: E402
 from git_fixture_environment import isolated_git_configuration  # noqa: E402
+import initialize_phase  # noqa: E402
 
 
 def private_json(path, value):
@@ -72,9 +74,8 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.run = Path(initial['run_dir'])
         self.run_id = self.run.name
         self.manifest = self.run.parent / 'project.json'
-        project_id = json.loads(self.manifest.read_text())['project_id']
-        private_json(self.run / 'current-state.json', {'run_id': self.run_id, 'project_id': project_id,
-                     'current_execution':'FEAT-001','status':'running','current_phase':'sdlc-start'})
+        initialized = initialize_phase.initialize(self.project)
+        self.assertEqual(initialized['status'], 'INITIALIZED')
         self.base = self.git("rev-parse", "HEAD")
         self.startup_observation = target.observe_startup(
             self.state, skills_root=ROOT, agent="codex"
@@ -97,6 +98,10 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.state = lifecycle.record_phase(
             self.root, "sdlc-start", "PASS", "Exact hook registration observed.", [relative]
         )
+        # The deterministic coordinator fixture selects its feature after startup.
+        current = json.loads((self.run / 'current-state.json').read_text())
+        current['current_execution'] = 'FEAT-001'
+        private_json(self.run / 'current-state.json', current)
         publish_spec_pair(
             self.project,
             requirements_candidate=REQUIREMENTS.encode(),

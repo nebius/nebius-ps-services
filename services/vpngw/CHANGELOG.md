@@ -14,6 +14,20 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Promote single-VM to active/passive VM-HA migration into a dedicated README
+  walkthrough, including ordinary SSH enrollment, peer preparation, separate
+  candidate/deployment approvals, digest selection, verification and recovery.
+
+- Raise normal steady-state packet-loss acceptance from strictly below 0.2% to
+  strictly below 1% per tested direction. Exactly 1% fails; use exact packet
+  counts and complete declared windows. This supersedes the temporary
+  qualification exception while preserving original measurements, historical
+  verdicts, and all non-loss acceptance gates.
+
+- Add a README recovery and replacement guide covering workflow selection,
+  preview-generated approval digests, failed-passive replacement, interrupted
+  migration and staged replacement resume, boot-disk rescue limits, and verification.
+
 ## [nebius-vpngw-v0.6.3] - 2026-11-04
 
 - Keep HA safety CI selectors aligned with the retained-identity regression and

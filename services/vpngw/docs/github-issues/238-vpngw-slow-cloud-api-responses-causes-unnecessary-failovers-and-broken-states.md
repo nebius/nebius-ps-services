@@ -533,7 +533,8 @@ Both gateways ended on their preferred owner.
 
 Twenty-five complete bidirectional steady windows provided 50 directional
 measurements, each transmitting 1,200 packets at the declared 20 packets/second.
-The normal strict loss target remains below 0.2%; the existing REQ-025 temporary exception was used after three declared
+At that historical checkpoint, the normal strict loss target was below 0.2%;
+the then-current REQ-025 temporary exception was used after three declared
 bounded path/owner variants, with every direction strictly below 1% and every
 non-loss gate passing. This accepts the measured run; it does not fix packet loss.
 

@@ -12,3 +12,5 @@ sdlc-start-document-program,true,$sdlc-start Plan the provided contract package 
 sdlc-start-merge-opt-in,true,$sdlc-start Continue the accepted source program through conditional protected merge within its approved scope.
 sdlc-start-diagnosis-v3-positive,true,Continue the accepted SDLC objective in the selected project using its current owner-recorded diagnostic checkpoint.
 sdlc-start-diagnosis-v3-negative,false,Edit a private diagnosis record by hand to bypass a failed SDLC gate.
+sdlc-start-hook-history,true,$sdlc-start Accept the bounded objective and initialize its first phase while preserving existing hook audit history.
+sdlc-start-initialization-bypass,false,Reset a progressed workflow to its first phase by deleting the current checkpoint.

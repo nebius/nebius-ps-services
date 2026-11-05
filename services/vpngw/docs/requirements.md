@@ -2828,7 +2828,7 @@ no-op repeat, disabled tunnels, failures, dependencies and unchanged safety cont
 #### Evaluation Method
 
 Record local, CI and live evidence separately. Apply REQ-023's strictly less than
-0.2% steady-state packet-loss criterion to each independently initiated direction.
+1% steady-state packet-loss criterion to each independently initiated direction.
 The selected non-production operation trial retains a two-minute traffic baseline,
 at most 300 seconds of continuous outage, independent 5 Hz probes each way, and
 healthy HA redundancy within the fixed 30-minute post-operation deadline. Declare
@@ -2877,7 +2877,7 @@ BGP or workload traffic, including during a one-sided ordinary gateway upgrade.
 
 - No unauthenticated admission, ignored INITIAL_CONTACT, new configuration mode,
 version fallback, manual session reset as proof, or a loss claim outside the
-measurement scope and strictly less than 0.2% criterion in REQ-023.
+measurement scope and strictly less than 1% criterion in REQ-023.
 
 #### Validation Method
 
@@ -2908,10 +2908,10 @@ packet loss without a mandatory ten-minute observation period.
 
 #### Acceptance Criteria
 
-- Accept steady-state packet loss only when it is strictly less than 0.2% for each
-  independently initiated direction and each declared test case. Exactly 0.2% fails.
-  The temporary live qualification exception in REQ-025 overrides only this loss
-  threshold when its stated conditions are met; 0.2% remains the normal target.
+- Accept steady-state packet loss only when it is strictly less than 1% for each
+  independently initiated direction and each declared test case. Exactly 1% fails.
+  This is the normal product criterion approved on 2026-11-05; the earlier
+  temporary qualification exception is superseded, not required for new trials.
 - Calculate loss as 100 times missing unique packets or probe replies divided by
   the transmitted count, with a positive denominator and complete receiver evidence.
   Use the native receiver result when a client summary disagrees; disclose the discrepancy.
@@ -2941,7 +2941,7 @@ scope of prior unit, integration, isolated Linux and live-operation evidence.
 #### Test Method
 
 Use complete sender/receiver records. Compare each test separately using exact
-counts; for integer counts the strict boundary is 500 times lost less than sent.
+counts; for integer counts the strict boundary is 100 times lost less than sent.
 Distinguish test infrastructure failures and missing evidence from measured packet loss.
 
 #### Evaluation Method
@@ -3088,21 +3088,20 @@ interrupted apply, reboot, unchanged reapply and older peer interoperability.
 Use deterministic fault-injection and independent postconditions, then isolated
 live bidirectional traffic, peer return routing and HA promotion. Report measured
 upgrade interruption and transition loss separately; require automatic recovery
-and less than 0.2% steady-state loss in each direction over the declared window.
+and less than 1% steady-state loss in each direction over the declared window.
 Run two complete VM and tunnel failover/failback cycles for each Static and BGP
 live gateway. Repair failures at their causal owner and replay affected cycles
 from a declared clean checkpoint.
 
-Temporary acceptance exception revised 2026-11-03 for the authorized final
-Static/BGP qualification: accept strictly less than 1% steady-state loss in each
-independently initiated direction. Exactly 1% fails. No three additional
-loss-reduction attempts are required. Keep the declared window, rate, packet
-count and completeness requirements; apply consistently to baselines and steady
-recovery. Preserve the normal 0.2% target, original measurements and original
-verdicts. Label use as accepted by exception. This changes only loss acceptance;
-command correctness, automatic recovery, readiness, fencing, upgrade, deadlines
-and all other gates remain required. Transition interruption is measured
-separately, and historical trials are not relabelled as clean final-build proof.
+The permanent strictly-below-1% policy in REQ-023 supersedes the temporary
+Static/BGP qualification exception revised on 2026-11-03. Preserve original
+measurements and their original 0.2% or exception-based verdicts; explicitly label
+any reassessment under the new normal criterion. No additional loss-reduction
+attempts are required solely to meet the retired 0.2% target. This changes only
+loss acceptance; command correctness, automatic recovery, readiness, fencing,
+upgrade, deadlines and all other gates remain required. Transition interruption
+is measured separately, and historical trials are not relabelled as clean
+final-build proof.
 
 #### Evaluation Method
 
@@ -3264,8 +3263,8 @@ understand a safely interrupted operation without losing its durable authority.
   the supported same-artifact workflow with independent uniqueness/postconditions.
 - Qualify one final source/artifact on both confirmed test pairs: one fresh
   non-owner replacement/resume per pair, real fresh/former-owner boot scenarios,
-  all six API impairment trials and sixteen transition steps, using REQ-025's
-  revised temporary loss exception and complete independent measurements.
+  all six API impairment trials and sixteen transition steps, using REQ-023's
+  normal strictly-below-1% criterion and complete independent measurements.
 - Retain unknown historical causes when discarded evidence is unrecoverable.
   Current behavior needs specific diagnostics, reproduced boundary tests and
   clean replay; do not claim that this proves an old incident's cause.

@@ -21,9 +21,9 @@ Jira edition or MCP implements the same fields, functions or tool names.
 ## Capabilities, Site and Identity
 
 Discover available schemas for current identity, accessible sites, user lookup,
-issue search/read, comments, changelog, and pagination. Use deferred discovery
-only when the host exposes it. Classify operations by effect: allow search and
-read operations only, including through generic executors. Do not call write
+issue search/read, field metadata, comments, changelog, and pagination. Use
+deferred discovery only when the host exposes it. Classify operations by effect:
+allow search and read operations only, including through generic executors. Do not call write
 operations or enable recently viewed history as a side effect of reading.
 
 Select the site established by the user's context, otherwise the sole accessible
@@ -40,12 +40,43 @@ account is acceptable without redisplaying its email. Fuzzy name results alone
 are not exact email matches. Ask for a verified ID or account selection if
 ambiguous; never derive names from email prefixes or merge identical names.
 
+## Participants Fields
+
+Resolve the field named Participants through exposed read metadata or issue
+names/schema. Keep its verified field identifier and applicable project/issue
+type context; names need not be unique. Do not hardcode a custom-field ID, infer
+the field from ticket prose, or treat Request participants or an add-on's
+calculated participants field as interchangeable aliases. If the actual
+Participants field is calculated, apply the same dated-evidence rules below.
+Ambiguous mappings remain unresolved; never choose the first matching field.
+
+Request the resolved field and its necessary history using the actual connector
+schema, without requesting all custom-field values. Resolve members to the same
+stable account selected by `--user` or default self. Use verified identifiers or
+connector-backed identity mappings, not display-name similarity or an email
+substring. A change must prove the target was absent before and present after;
+do not infer an addition from an after-list that still contains the target.
+
+Current membership, including calculated membership, cannot establish when a
+user joined or prove initial membership at creation. Require a dated recorded
+addition or an initial snapshot/complete history proving membership at creation.
+Do not invent missing history, parse ambiguous display-name lists as account
+IDs, or substitute issue.updated for the participation timestamp.
+
+A complete applicable field inventory may confirm that Participants does not
+exist; then this evidence category is not applicable and does not reduce
+coverage. Missing entries in a selected-fields response or issue-creation
+metadata alone do not prove absence. Unavailable/ambiguous field discovery,
+unreadable values or missing history leave participant coverage partial/unknown;
+retain rows independently proven by other evidence and state the material gap.
+
 ## Candidate Discovery
 
 1. Use exhaustive paginated issue search over a conservative updated-since
    boundary, including all statuses and accessible projects. Discover fields
    needed for stable identity, key, URL, summary, created/updated, status and
-   relevant actors. Request only needed fields, not every custom field.
+   relevant actors, including resolved Participants fields where applicable.
+   Request only needed fields, not every custom field.
 2. Do not impose `updated <= end`: an issue changed during collection can still
    contain earlier qualifying activity. Exclude post-end activity locally.
    Use a supported stable ordering and deduplicate immutable IDs across pages.
@@ -59,6 +90,9 @@ ambiguous; never derive names from email prefixes or merge identical names.
    cannot replace the broad scan: someone else may have recorded the credit.
    Native updatedBy has day granularity and includes updates not visible as
    retained comments. Search matches alone do not establish actor/date evidence.
+   Do not require current Participants membership: a later removal must not
+   hide a qualifying earlier addition. Participant-only queries cannot replace
+   broad discovery for the other involvement categories.
 5. If the connector only provides ranked/semantic search, retain proven rows
    with partial discovery coverage. Do not call relevance results exhaustive.
 
@@ -83,15 +117,18 @@ The selected user can have several qualifying roles; a ticket still gets one row
 | Creation | Issue creation with the target as verified creator qualifies at created. |
 | Initial reporter/assignee | Qualifies at creation only if an initial snapshot or complete history proves that initial identity. Current fields alone do not prove it. |
 | Reporter/assignee change | A dated history entry moving the role **to** the target qualifies. Removal by another actor does not. |
+| Initial Participants membership | Qualifies at creation only if an initial snapshot or complete history proves the target was a member then. Current or calculated membership alone does not prove it. |
+| Participants addition | A dated recorded change from target absent to present qualifies at the change time, regardless of the author. Retained membership, another member's addition and removal by another actor do not qualify. Later removal does not erase an earlier qualifying addition. |
 | Authored field change | A dated changelog entry authored by the target qualifies, including a resolution/status transition; another actor's change does not transfer credit. |
 | Authored comment | Every comment with target author qualifies at comment.created, including brief acknowledgments. |
 | Comment edit | A separate event qualifies at comment.updated only when updateAuthor is verified as the target. Do not refresh authorship using another editor's timestamp. |
 | Explicit third-party credit | A comment clearly crediting completed contribution/resolution to the verified target qualifies under the credit rules below. |
 
-Current assignment, reporter, status or resolutionDate alone cannot identify a
-dated actor. Search hits, watchers, votes, bare mentions, requests and assignment
-removal by someone else are not evidence of qualifying activity. If the target
-performed the removal, their own authored field change can independently qualify.
+Current assignment, reporter, Participants, status or resolutionDate alone
+cannot identify dated involvement. Search hits, watchers, votes, bare mentions,
+requests and role removal by someone else are not qualifying activity. If the
+target performed the removal, their own authored field change can independently
+qualify. A Participants addition records involvement, not proof of performed work.
 
 For third-party credit, require affirmative attribution of performed work to
 the target, not a request, speculation, negation, quoted hypothetical or a vague
@@ -119,6 +156,8 @@ remains Open; display Jira's actual observed status.
 ## Coverage and Failures
 
 - Track candidate discovery, identities, fields, comments and history separately.
+  Include Participants field applicability, identity and history coverage; use
+  the field rules above to distinguish confirmed absence from unavailable data.
   A proven row survives other incomplete streams, but its displayed date is
   only the latest **observed** qualifying event when later evidence may be missing.
 - Complete means exhausted discoverable inventory and required evidence streams
@@ -139,14 +178,16 @@ remains Open; display Jira's actual observed status.
 
 ## Official Sources and Applicability
 
-Verified during authoring, 2026-11-03:
+Verified during authoring, 2026-11-03; Participants references checked 2026-11-05:
 
 - [Atlassian MCP supported tools](https://support.atlassian.com/atlassian-rovo-mcp-server/docs/supported-tools): current documentation describes discovery, Jira reads/search and paginated comment/history capabilities. Availability depends on connector version and permissions; discover actual schemas.
 - [JQL fields](https://support.atlassian.com/jira-software-cloud/docs/jql-fields): Cloud date searches use configured Jira timezone; summary search semantics are not this skill's literal substring rule.
 - [JQL functions](https://support.atlassian.com/jira-software-cloud/docs/jql-functions): updatedBy includes field/comment activity, has day granularity and records only the last comment edit.
 - [Profile visibility](https://developer.atlassian.com/cloud/jira/platform/profile-visibility): profile fields such as email may be hidden; never require unrestricted email access.
+- [Jira REST API field examples](https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples): Server examples explain custom-field identifiers and non-unique display names; use actual connector metadata rather than assuming edition parity.
+- [Participant field distinctions](https://support.atlassian.com/automation/kb/how-to-update-the-request-participants-or-a-multi-user-picker-field-from-the): Request participants is similar to a multi-user picker; an add-on's calculated Participants of an issue is a different field type.
 
-These Cloud references are examples, not a promise of Data Center API parity.
+These edition-specific references do not promise Cloud/Data Center API parity.
 Use equivalent verified connector capabilities on other editions; unsupported
 capabilities remain explicit limitations. No particular tool prefix, endpoint,
 plugin extension, authentication flow or custom field is required.

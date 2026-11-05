@@ -11,6 +11,7 @@ Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access
 
 - [Quick Start Guide](#quick-start-guide)
 - [Security Notice](#security-notice)
+- [Migrating one gateway VM to VM-HA](#migrating-one-gateway-vm-to-vm-ha)
 - [Features](#features)
 - [Installation (Detailed)](#installation-detailed)
 - [Architecture](#architecture)
@@ -21,6 +22,7 @@ Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access
 - [Static Routing Configuration](#static-routing-configuration)
 - [Peer Integration](#peer-integration)
 - [VM Management](#vm-management)
+- [Recovery and replacement](#recovery-and-replacement)
 - [System Monitoring](#system-monitoring)
 - [Security](#security)
 - [SSH access](#ssh-access)
@@ -506,35 +508,168 @@ the explicit owner-only `ssh_private_key_path`, one loaded `ssh-agent` key, or
 one owner-only `~/.ssh/id_ed25519`, `id_ecdsa`, or `id_rsa`. Password,
 keyboard-interactive, and unrelated-key fallback are disabled.
 
-### Migrating one gateway VM to VM-HA
+## Migrating one gateway VM to VM-HA
 
-VM-HA remains explicit and default-disabled. Adding an enabled
-`gateway_group.vm_ha` block does not recreate the existing gateway: the
-configured active member keeps its Compute instance, boot disk, NIC, primary
-private allocation, public allocation, and unrelated NIC aliases. Apply adds
-the missing passive with its own primary address and creates one movable
-secondary private alias used only for HA ownership.
+This workflow converts an existing ordinary single-VM gateway into an explicit
+two-VM active/passive HA deployment. The existing VM becomes the configured
+active member; a new VM becomes the passive member. VM-HA remains opt-in.
 
-The preferred idempotent entry point is `vm-ha`. It accepts either the
-ordinary source or an explicit VM-HA candidate, preserves an ordinary source,
-and repeatedly uses the same deterministic `<stem>.vm-ha.config.yaml`
-candidate unless `--output` selects another path:
+| Resource or configuration | Migration behavior |
+| --- | --- |
+| Existing gateway VM, boot disk and NIC | Retained; migration does not recreate the serving VM. |
+| Existing primary private and public allocations, unrelated NIC aliases | Retained. |
+| Passive member | Adds a VM, boot disk, primary address and public allocation; the public allocation can be reserved during preparation. |
+| HA ownership | Adds a movable shared private allocation and converges the product-owned routes through the HA workflow. |
+| Local configuration | Preserves the ordinary source and writes a separate explicit two-member candidate. |
+| Remote peer | Requires additional passive-member tunnel configuration through the peer's own management workflow. |
+
+Use `vm-ha` as the preferred entry point. The walkthrough below separates
+configuration preparation from deployment approval so that you can review the
+complete plan. Migration can interrupt VPN traffic during activation; review its
+reported impact and schedule an appropriate maintenance window.
+
+### 1. Prepare the source and deployment artifact
+
+- Start with the original working schema-v1 configuration: `instance_count: 1`,
+  VM-HA omitted or disabled, and all tunnels assigned to instance zero.
+- Keep working Nebius and SSH access, the source configuration and its secret
+  references. Allow capacity and quota for the additional VM, disk and allocations.
+- Arrange access to the remote peer so you can configure the additional tunnels.
+  The wizard does not configure the remote provider for you.
+- Select an existing deployable agent wheel. Material HA planning does not build
+  or download one automatically. Use the same file for preview and execution:
 
 ```bash
-nebius-vpngw apply --local-config-file my-vpn.config.yaml
-nebius-vpngw vm-ha --local-config-file my-vpn.config.yaml
-nebius-vpngw vm-ha --local-config-file my-vpn.vm-ha.config.yaml --dry-run
+export VPNGW_AGENT_WHEEL=/absolute/path/to/nebius_vpngw-VERSION-py3-none-any.whl
 ```
 
-Run actual ordinary `apply` first, even when the ordinary gateway is already
-installed and requires no infrastructure change. That command is the sole
-writer for the ordinary managed SSH receipt and performs the one-time bounded
-enrollment above only when necessary. `vm-ha` refuses before prompting,
-candidate publication, or passive-IP reservation when the receipt is absent.
-The VM-HA apply plan then carries the retained active's exact pin, ordinary
-predecessor receipt digest, and current Compute binding into the HA trust
-receipt and approval. If only an explicit candidate remains, restore the
-ordinary source and run `apply -c <ordinary-source>` before retrying `vm-ha`.
+Replace the path above with your selected wheel. In these examples,
+`my-vpn.config.yaml` is the original ordinary configuration and
+`my-vpn.vm-ha.config.yaml` is the separate candidate created from it.
+
+### 2. Reconcile the existing ordinary gateway
+
+```bash
+nebius-vpngw apply -c my-vpn.config.yaml --dry-run
+nebius-vpngw apply -c my-vpn.config.yaml
+```
+
+Review any disruption confirmation before approving the actual apply. For
+noninteractive execution, use its printed `--approve-disruption DIGEST` as
+described in [Apply the configuration](#5-apply-the-configuration).
+
+Actual ordinary `apply` is required even when the gateway already exists and
+needs no infrastructure change: it establishes the managed SSH receipt needed
+to retain that VM safely during migration. If the dry run reports that receipt
+is missing, it cannot create it; follow the actual ordinary apply enrollment
+workflow in [VM-HA SSH trust and mTLS](#vm-ha-ssh-trust-and-mtls).
+`vm-ha` stops before the wizard or passive-IP reservation when this prerequisite
+is absent. Complete any required ordinary infrastructure replacement separately
+before starting conversion.
+
+### 3. Prepare the passive tunnels and publish the HA candidate
+
+Run the conversion interactively against the ordinary source:
+
+```bash
+nebius-vpngw vm-ha -c my-vpn.config.yaml
+```
+
+The wizard derives a passive counterpart for each existing tunnel and guides you
+through the new tunnel names, PSK environment-variable references, unused APIPA
+networks and inner endpoints. Supply an eligible reserved passive public IP, or
+review the separate default-No confirmation to reserve one in Nebius. This
+preparation does not create the passive VM or activate HA.
+
+Use the printed peer handoff to configure the additional tunnels on the remote
+peer, preserving the existing active path. If the peer is not ready, stop at that
+handoff and rerun the same command when it can supply the new endpoints. No
+candidate is published yet; any reserved passive IP remains available for reuse.
+
+Once the peer details are ready, review and approve publication of the complete
+candidate. For this example, the default destination is
+`my-vpn.vm-ha.config.yaml`; `--output <candidate-path>` selects a different file.
+The ordinary source and existing environment references are preserved. Existing
+conflicting candidate files are not overwritten.
+
+**Saving the candidate and deploying it are separate approvals.** After saving,
+the same `vm-ha` invocation continues planning and may ask to proceed with the
+HA deployment. To follow the separate preview step below, answer **No** to that
+deployment confirmation. The candidate remains saved; an action-required result
+and exit code `3` are expected. If all inputs are ready, you can instead review
+and accept that deployment plan in the same invocation.
+
+Make the agreed PSKs for the new tunnels available through the candidate's
+environment references before validation and deployment. The wizard asks for
+variable names, not secret values. Missing new secrets can stop planning after
+the candidate was saved; load them securely and continue with the candidate.
+An ordinary-input `vm-ha --dry-run` cannot create a missing candidate or collect
+these wizard inputs.
+
+### 4. Preview and approve the migration
+
+```bash
+nebius-vpngw validate-config my-vpn.vm-ha.config.yaml
+nebius-vpngw vm-ha -c my-vpn.vm-ha.config.yaml --dry-run
+```
+
+Review the proposed resources, effects and VPN impact. Copy the complete
+`Approval digest:` from this preview into:
+
+```bash
+nebius-vpngw vm-ha -c my-vpn.vm-ha.config.yaml --approve <approval-digest>
+```
+
+This approval binds the current plan and artifact. Changed configuration,
+artifact or observed state requires a fresh preview. The approved workflow
+prepares the passive before the retained active and verifies guarded activation,
+shared-address ownership, routes and standby readiness before reporting health.
+Managed runtime credentials and per-VM mTLS identities are handled by approved
+convergence; the candidate-preparation phase does not create them.
+
+If using `apply` directly instead, obtain its own migration preview and digest:
+
+```bash
+nebius-vpngw apply -c my-vpn.vm-ha.config.yaml --dry-run
+nebius-vpngw apply -c my-vpn.vm-ha.config.yaml \
+  --approve-vm-ha-migration <migration-digest>
+```
+
+Use the `Plan digest:` shown under the ordinary-to-HA migration plan. If this
+preview also prints `Disruption plan digest:`, append
+`--approve-disruption <disruption-digest>` for noninteractive execution, or review
+the interactive disruption confirmation. The `vm-ha` approval above covers its
+combined plan and must not be substituted for this apply migration digest.
+First-time conversion does not use `--recover-vm-ha-migration`,
+`--replace-failed-vm-ha-passive` or `--recreate-gw`.
+
+### 5. Verify the two-member deployment
+
+```bash
+nebius-vpngw status -c my-vpn.vm-ha.config.yaml
+nebius-vpngw vm-ha -c my-vpn.vm-ha.config.yaml --dry-run
+```
+
+Confirm a healthy owner and ready passive, matching generations, expected tunnel
+and routing health, and the shared allocation on the expected owner. Independently
+test VPN traffic in both directions. A plan-ready result is not a healthy result;
+these passive checks do not prove that failover has been exercised.
+
+Use the explicit HA candidate for subsequent HA operations. Retain the original
+ordinary file as source history; do not apply it as an ad hoc rollback after HA
+activation has started. Preserve the candidate's lifecycle sidecar, SSH trust and
+runtime credential files.
+
+### If migration is interrupted
+
+Stop any earlier operator process, preserve the configuration, artifact and
+recovery records, then follow [Recovery and replacement](#recovery-and-replacement).
+An unchanged valid checkpoint may resume normally. Only use a recovery or
+failed-passive replacement approval when the current preview offers that exact
+operation. `--approve-vm-ha-migration` approves the initial conversion;
+`--recover-vm-ha-migration` is a separate approval for eligible interrupted states.
+
+### VM-HA lifecycle details
 
 Material VM-HA planning is read-only, classifies destructive and VPN-traffic
 impact independently, and requires one existing deployable wheel. Set
@@ -923,22 +1058,14 @@ monitor also preserve their shared `/run/nebius-vpngw` runtime directory across
 service stops and restarts so controller recovery cannot invalidate the guard's
 routing lock.
 
-For an existing ordinary `instance_count: 1` config, use the dedicated wizard
-instead of editing the two-member topology by hand:
-
-```bash
-nebius-vpngw vm-ha \
-  --local-config-file my-vpn.config.yaml
-```
-
-The default output is `my-vpn.vm-ha.config.yaml`; use `--output` to choose a
-different new file. The command never converts in place, asks for credential
-paths, or creates credentials or IAM resources. Its summary shows the future
-managed source under
+The candidate-preparation phase of `vm-ha` never converts in place, asks for
+credential paths, or creates credentials or IAM resources. Its summary shows the
+future managed source under
 `~/.config/nebius-vpngw/credentials/<project>/<gateway>/nebius-credentials.json`.
-Only the later, exactly approved `apply` resolves the operator home, creates or
-reuses that credential, and installs a separate protected copy on each VM. No
-CA, certificate, or TLS private-key path belongs in YAML: `apply` generates an
+Only exactly approved convergence through the apply engine resolves the operator
+home, creates or reuses that credential, and installs a separate protected copy
+on each VM. This can follow candidate publication in the same `vm-ha` invocation.
+No CA, certificate, or TLS private-key path belongs in YAML: `apply` generates an
 independent self-signed identity on each VM and exchanges only exact public leaf
 certificates over pinned SSH.
 
@@ -954,8 +1081,8 @@ before its result failed, the command reports the deterministic allocation
 name and tells you to rerun for safe reuse; it never claims rollback.
 
 The wizard first prints the secret-free member-1 peer handoff. If the peer is
-not ready, it exits successfully without writing a candidate; a separately
-reserved passive IP remains allocated and is reused on the next run. After the
+not ready, it returns an action-required result without writing a candidate; a
+separately reserved passive IP remains allocated and is reused on the next run. After the
 peer supplies its new public and APIPA endpoints, the wizard validates and
 publishes the complete candidate with mode `0600`. New files use atomic
 no-clobber publication. Replacing an expected candidate uses recoverable
@@ -964,22 +1091,9 @@ an interruption can leave a clearly named private recovery directory for
 manual review. Comments are canonicalized only in the new candidate; the
 source stays byte-for-byte unchanged.
 
-Preview the exact current-state plan without changing lifecycle, cloud, route,
-or host state:
-
-```bash
-nebius-vpngw validate-config my-vpn.vm-ha.config.yaml
-nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml --dry-run
-```
-
-Run the migration interactively, or copy the exact migration digest printed by
-the preview into the noninteractive approval:
-
-```bash
-nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml
-nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml \
-  --approve-vm-ha-migration <MIGRATION_DIGEST>
-```
+Use [Preview and approve the migration](#4-preview-and-approve-the-migration)
+for the command sequence and the distinction between the combined `vm-ha`
+approval, direct apply migration approval and disruption approval.
 
 Apply stages the passive before the retained active, installs and verifies the
 current agent package on both members in that same order before the first lock
@@ -1069,17 +1183,9 @@ its current owner and route receipt independently verified. Any other state is
 reported as unsafe and requires inspection.
 
 If an interrupted deployment already has two VMs but no lifecycle record,
-ordinary migration approval cannot adopt them. Preview the topology and use
-only the separately shown recovery digest:
-
-```bash
-nebius-vpngw apply --local-config-file my-vpn.config.yaml --dry-run
-nebius-vpngw apply --local-config-file my-vpn.config.yaml \
-  --recover-vm-ha-migration <RECOVERY_DIGEST>
-```
-
-Migration and recovery digests bind exact desired and observed cloud/route
-identity, are not interchangeable, and become stale when either side changes.
+ordinary migration approval cannot adopt them. Follow
+[Recover an interrupted HA migration or reapply](#recover-an-interrupted-ha-migration-or-reapply)
+to preview the topology and obtain the separate recovery approval.
 A same-name or foreign allocation, ambiguous route outcome, identity drift, or
 destructive retained-active change remains blocked for operator resolution.
 
@@ -2307,6 +2413,8 @@ nebius-vpngw apply --local-config-file <file> --project-id <id> --region <region
 ```
 
 Safe to rerun. Matching subnet, route table, VM, and allocation state is reused.
+For interrupted applies, failed passive bootstrap, or replacement recovery, see
+[Recovery and replacement](#recovery-and-replacement).
 
 When `gateway_group.external_ips` contains explicit IPs, `apply` resolves those
 allocations by IP in the current project before creating anything new. Existing
@@ -2594,7 +2702,7 @@ must run the new tunnel capability before a tunnel operation is admitted; there
 is no mixed-version failover fallback. SingleVM upgrades use ordinary in-place
 `apply`, retain existing routes, preferences, credentials and resources, and need
 no additional source-filter configuration. Healthy unchanged reapply remains non-disruptive. Measure any upgrade
-interruption separately from steady-state loss (less than 0.2% in each tested
+interruption separately from steady-state loss (strictly less than 1% in each tested
 direction); this feature introduces no numerical upgrade-outage limit.
 
 `restart-tunnel` remains supported only on ordinary gateways: Static restarts the
@@ -3303,6 +3411,188 @@ gateway_group:
 - Provided: Use existing allocations
 - Preserved across VM recreation
 
+## Recovery and replacement
+
+Choose the workflow from the observed failure and a fresh preview. Keep the
+deployment's configuration, lifecycle records, SSH trust and selected agent wheel;
+do not edit or delete recovery records to make a retry proceed. Ensure the previous
+operator process has stopped before starting another recovery writer.
+
+In the examples below, replace `gateway.config.yaml` with your deployment's local
+configuration. HA recovery requires the explicit VM-HA configuration, not its
+original ordinary-gateway source. Replace digest and path placeholders with the
+values printed for that deployment.
+
+### Choose a recovery workflow
+
+| Situation | Workflow | Scope |
+| --- | --- | --- |
+| Ordinary apply failed | `apply -c gateway.config.yaml --dry-run`, then the reviewed `apply` retry | Reapply through the normal workflow; supply `--approve-disruption` when requested. |
+| An exact journaled HA operation was interrupted | `vm-ha -c gateway.config.yaml --dry-run`, then its approved retry | Resumes eligible checkpoints; interruption alone does not require a migration recovery override. |
+| HA migration or reapply needs explicit recovery approval | `vm-ha`, or `apply --recover-vm-ha-migration DIGEST` | Reconciles the exact interrupted transaction and resumes HA apply. |
+| A newly created passive failed initial bootstrap | `vm-ha`, or `apply --replace-failed-vm-ha-passive DIGEST` | Replaces only the transaction-created passive VM and boot disk before staging/activation. |
+| An established HA cluster's non-owner is stopped or confirmed missing | `vm-ha` | Restores an eligible stopped non-owner or plans an identity-bound missing-standby replacement. Failed SSH alone does not prove a VM is missing. |
+| Infrastructure changes require replacing gateway VMs | `apply --recreate-gw` | Uses [staged VM replacement](#vm-replacement-and-recovery), with temporary resources and cutover interruption. |
+| Staged VM replacement was interrupted | `apply --resume-replacement PATH` | Resumes the exact private recovery bundle after the former writer stops. |
+
+First-time conversion uses `--approve-vm-ha-migration DIGEST` when calling `apply`
+directly. That approval does not authorize interrupted migration recovery. See
+[Migrating one gateway VM to VM-HA](#migrating-one-gateway-vm-to-vm-ha).
+
+### Preview and approve HA recovery
+
+Prefer `vm-ha` for HA recovery: it identifies the eligible operation and routes
+approval to the existing recovery engine. Material plans require the deployable
+agent wheel described in the [migration prerequisites](#migrating-one-gateway-vm-to-vm-ha).
+Keep the selected wheel unchanged between preview and execution.
+
+```bash
+nebius-vpngw vm-ha -c gateway.config.yaml --dry-run
+```
+
+Review the reported approval kind, impact and effects. When approval is required,
+copy the complete `Approval digest:` value into:
+
+```bash
+nebius-vpngw vm-ha -c gateway.config.yaml --approve <approval-digest>
+```
+
+Alternatively, run `vm-ha -c gateway.config.yaml` interactively and review its
+confirmation. Without `--dry-run`, `vm-ha` may repair the deployment; it is not a
+read-only status command. An explicitly safe plan may proceed without a prompt.
+An eligible missing-standby plan creates a new VM and disk while leaving old disks
+untouched. Follow any reported prerequisite or blocked-state guidance instead of
+trying to replace an arbitrary unreachable member.
+
+### Where approval digests come from
+
+The CLI generates each digest from the exact plan and its bound state. A digest
+is a 64-character SHA-256 fingerprint, not a value to invent or retrieve from the
+Nebius console. Preview the same command and configuration you intend to execute:
+
+| Preview output | Approval option |
+| --- | --- |
+| `Approval digest:` from `vm-ha --dry-run` | `vm-ha --approve DIGEST` |
+| `Plan digest:` under the ordinary-to-HA migration plan from `apply --dry-run` | `apply --approve-vm-ha-migration DIGEST` |
+| `Recovery digest:` from `apply --dry-run` | `apply --recover-vm-ha-migration DIGEST` |
+| `Replacement digest:` under the failed provisioning passive plan from `apply --dry-run` | `apply --replace-failed-vm-ha-passive DIGEST` |
+| `Disruption plan digest:` from an apply preview | `apply --approve-disruption DIGEST` |
+
+Use the digest for the printed operation and option. In particular, do not pass
+the `vm-ha` approval digest as an apply migration/recovery/passive-replacement
+digest. Those lifecycle approvals are separate from disruption approval. Direct
+HA `apply` can require both: if the preview also prints `Disruption plan digest:`,
+append `--approve-disruption <disruption-digest>` to the reviewed recovery command
+for noninteractive execution, or review the interactive disruption confirmation.
+The `vm-ha` approval covers its combined plan without that second apply option.
+
+Configuration, artifact or observed-state changes can invalidate approval. If a
+digest is rejected as stale, inspect a fresh preview and review its effects again.
+If no eligible recovery or replacement plan is printed, that flag is not an
+override for the failed prerequisite. Never manufacture a digest or delete the
+lifecycle journal to bypass the check.
+
+### Recover an interrupted HA migration or reapply
+
+Use this direct apply path only when its preview offers a `Recovery digest:`.
+Examples include two existing VMs without a lifecycle record and narrowly eligible
+interrupted activation or pre-host reapply states. Recovery verifies retained
+identities and resumes the canonical HA workflow; it does not repair an OS or
+delete the gateway VMs and disks.
+
+```bash
+nebius-vpngw apply -c gateway.config.yaml --dry-run
+nebius-vpngw apply -c gateway.config.yaml \
+  --recover-vm-ha-migration <recovery-digest>
+```
+
+Apply the separate disruption approval above when requested. Do not substitute
+`--approve-vm-ha-migration`, `--recreate-gw`, or a replacement digest. An ordinary
+exact-checkpoint retry does not need this flag unless the current plan requests it.
+
+### Replace a failed provisioning passive
+
+This path is limited to a transaction-created passive that failed initial
+SSH/bootstrap readiness while the active was ready. The lifecycle must record
+the completed bootstrap timeout in `PROVISIONING`, before staging or activation.
+A provisioning checkpoint alone is insufficient.
+
+```bash
+nebius-vpngw apply -c gateway.config.yaml --dry-run
+```
+
+An eligible preview includes:
+
+```text
+Failed PROVISIONING passive replacement plan
+  Passive only: <passive-name>
+  Retained: active VM, all allocations, shared owner, and routes
+  Replacement digest: <replacement-digest>
+```
+
+Review that target and copy the full printed digest:
+
+```bash
+nebius-vpngw apply -c gateway.config.yaml \
+  --replace-failed-vm-ha-passive <replacement-digest>
+```
+
+This deletes the exact failed passive Compute and its transaction-created boot
+disk, creates replacements, and resumes provisioning. It retains the active VM
+and disk, primary/public allocations, shared owner and routes. It is not a general
+replacement flag for an established HA member and must not be combined with
+`--recreate-gw` or another migration/recovery approval.
+
+### Resume a staged VM replacement
+
+For `--recreate-gw` preparation, impact and approval, follow
+[VM replacement and recovery](#vm-replacement-and-recovery). If that operation
+stops partway through, preserve its printed `recovery.json` bundle and the exact
+approved configuration and artifact. Stop the previous writer, then run:
+
+```bash
+nebius-vpngw apply -c gateway.config.yaml \
+  --resume-replacement /absolute/path/to/recovery.json
+```
+
+`PATH` is the existing recovery bundle, not a digest. Do not combine this resume
+with a fresh recreation or migration/recovery approval. Retain the transaction's
+resources and guards until the owning workflow completes.
+
+### Boot-disk rescue
+
+For a diagnosed guest boot or filesystem problem, Nebius documents
+[inspecting and repairing a boot disk through a helper VM](https://docs.nebius.com/compute/virtual-machines/inspect-boot-disk).
+The original VM must be stopped; its disk is attached to the helper, inspected
+read-only initially, optionally repaired, then unmounted and detached from the
+helper before the original VM starts. This requires a separately planned
+maintenance procedure. There is no `--boot-disk-repair` option in this CLI.
+
+Boot-disk rescue does not reconcile an interrupted HA transaction. HA maintenance
+must preserve fencing, shared-allocation ownership and route authority. After an
+external repair, obtain a fresh product preview; restored SSH access alone does
+not prove that HA recovery is complete or that a member may forward traffic.
+
+### Verify recovery
+
+After the selected workflow completes, inspect status:
+
+```bash
+nebius-vpngw status -c gateway.config.yaml
+```
+
+For explicit VM HA, also run the read-only inspection:
+
+```bash
+nebius-vpngw vm-ha -c gateway.config.yaml --dry-run
+```
+
+Confirm the expected owner and standby readiness, generation agreement, tunnel
+health and configured routing state. A plan-ready or action-required result is
+not a healthy result. Independently test VPN traffic before claiming connectivity
+has been restored; passive health inspection does not exercise failover. Ordinary
+Static deployments retain their separate [local-route workflow](#static-routing).
+
 ## System Monitoring
 
 ### Status Overview
@@ -3505,17 +3795,18 @@ similarly named connection cannot trigger its repair or supply its health.
 
 ### Packet-loss Acceptance
 
-Normal product acceptance requires **strictly less than 0.2% steady-state packet loss**
-for each tested direction. Exactly 0.2% fails the normal criterion. There is no fixed ten-minute test
+Normal product acceptance requires **strictly less than 1% steady-state packet loss**
+for each tested direction. Exactly 1% fails. There is no fixed ten-minute test
 requirement: declare a bounded, representative interval before testing and report
 its actual duration, sent/lost counts, protocol, rate, packet size and tested artifact.
 Use complete receiver evidence and the full declared interval; do not combine
 opposite directions, round a result into a pass or retry until a clean sample appears.
 
-[REQ-025's temporary live qualification exception](docs/requirements.md#req-025-ha-connection-tunnel-selection-and-safe-ordinary-upgrades)
-permits strictly below 1% in each direction for the approved final qualification,
-without three additional loss-reduction attempts. It remains in effect until
-withdrawn; exactly 1% fails, and every other acceptance requirement remains in force.
+[REQ-023](docs/requirements.md#req-023-measured-product-packet-loss-acceptance)
+defines the permanent normal criterion, superseding the earlier temporary
+qualification exception. Compare exact counts using `100 * lost < sent`, with
+a positive sent count and complete receiver evidence. Preserve original trial
+verdicts and label any reassessment under this revised policy separately.
 
 The criterion also applies to operation baselines and steady-state recovery.
 Operation-specific outage limits, recovery deadlines, BGP/HA health, ownership and
@@ -3561,6 +3852,9 @@ sudo ausearch -f /etc/nebius-vpngw/
 ```
 
 ## Troubleshooting
+
+For interrupted apply or VM recovery, start with
+[Recovery and replacement](#recovery-and-replacement).
 
 ### Tunnel Issues
 
@@ -4053,8 +4347,8 @@ and standby restoration, and public VM failback. Independent cloud observations
 confirmed the former Compute owner was Stopped before allocation transfer. The
 live restarts exercised owner changes; native tests prove same-owner replay.
 Seven steady bidirectional windows of 1,200 packets per direction at 20 packets
-per second had maximum loss of 0.50%, meeting the temporary exception below.
-The normal 0.2% target was not met in every window. The package-refresh reply gap
+per second had maximum loss of 0.50%, meeting the then-current temporary exception.
+The then-current 0.2% target was not met in every window. The package-refresh reply gap
 reached 89.259 seconds; restart/promotion gaps were 249.537 and 215.569 seconds,
 and planned VM failback reached 286.801 seconds. Transition loss remains separate
 from steady acceptance. Both BGP members have the same verified candidate,
@@ -4073,7 +4367,7 @@ operator guidance. These narrow source changes have local regression coverage;
 the native and live candidate described above predates this delta.
 
 The earlier complete live Static and BGP failover/failback cycles passed under the
-temporary loss criterion below. Static's 28 completed cases ran on the heartbeat
+then-current temporary loss criterion. Static's 28 completed cases ran on the heartbeat
 correction candidate, with maximum steady loss of 0.417%. BGP's 31 completed cases
 ran on that qualification's final candidate, with maximum steady loss of 0.5%.
 Static then received that candidate through normal non-owner-first apply, resuming
@@ -4092,12 +4386,10 @@ earlier pre-host apply-recovery sequence remained unverified. Later qualificatio
 has its own declared scope and artifact lineage in the issue report and design;
 it does not retroactively qualify this historical trial.
 
-The normal steady-state packet-loss target is below 0.2% in each direction.
-REQ-025 records a temporary live qualification exception: strictly below 1%
-in each direction may be accepted for the approved final qualification until
-further notice, without three additional loss-reduction attempts. Keep original
-trial results and label use of this exception; all command, recovery, fencing
-and upgrade checks still apply.
+The current normal steady-state packet-loss criterion is strictly below 1% in
+each direction under REQ-023. It supersedes the temporary REQ-025 exception used
+by those historical trials. Keep their original results and exception labels;
+all command, recovery, fencing and upgrade checks still apply.
 
 ### HA Boot Fencing and Recovery Diagnostics
 

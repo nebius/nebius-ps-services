@@ -1251,6 +1251,15 @@ class VerifierContractTests(unittest.TestCase):
         self,
     ) -> None:
         source = inspect.getsource(verifier.check_capability_regressions)
+        startup = source.split('"objective.lifecycle":', 1)[1].split('"execution.scope":', 1)[0]
+        for name in (
+            "test_hook_only_history_is_preserved_by_fresh_cli",
+            "test_interrupted_initial_publication_uses_new_snapshot",
+            "test_partial_initial_history_is_preserved_and_recovered",
+            "test_managed_intake_requires_exact_active_outer_lease",
+            "test_externally_released_outer_lease_cannot_initialize",
+        ):
+            self.assertIn(name, startup)
         session_recovery = source.split('"execution.sessions-recovery":', 1)[1].split(
             '"execution.replan":', 1
         )[0]

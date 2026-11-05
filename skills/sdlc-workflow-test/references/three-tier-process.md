@@ -45,7 +45,9 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    Complete the coordinator's first-start initialization after intake and before
    reading or recording its startup checkpoint. Accepted registration alone does
    not create phase state; follow `sdlc-start/references/state-schema.md`. The
-   verifier observes that native transition and must not create it on its behalf.
+   native coordinator invokes `sdlc-start/scripts/initialize_phase.py`; existing
+   hook telemetry is not prior phase completion. The verifier observes that
+   transition and must not invoke initialization on the coordinator's behalf.
    Write the observation JSON at the exact private path
    `<run-root>/evidence/phases/<phase>.json`, including
    `evidence/phases/sdlc-start.json` for startup, and supply it with

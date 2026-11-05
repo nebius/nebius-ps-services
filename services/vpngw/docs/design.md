@@ -5237,9 +5237,9 @@ the canary owner's controller service while Compute remains Running; observe
 the product fence, move the allocation, promote and restore its former owner.
 Do not seed authorization, move aliases manually or count recovery as proof.
 A 120-second baseline precedes each operation and uses REQ-023's strictly less
-than 0.2% loss threshold independently in both directions. Independent 5 Hz probes
+than 1% loss threshold independently in both directions. Independent 5 Hz probes
 must show no continuous outage over 300 seconds and a common, prospectively declared
-steady-state measurement interval with loss below 0.2% in each direction plus healthy
+steady-state measurement interval with loss below 1% in each direction plus healthy
 redundancy by the fixed 30-minute deadline. The recovery interval has no fixed
 ten-minute duration; retain all transition loss and outage evidence separately. Retain failed evidence. Clean up only exact fixture-owned resources.
 
@@ -5564,7 +5564,7 @@ Primary semantics: [swanctl configuration](https://docs.strongswan.org/docs/late
 and the [5.9.13 uniqueness implementation](https://github.com/strongswan/strongswan/blob/5.9.13/src/libcharon/sa/ike_sa_manager.c).
 
 <!-- /FEATURE: FEAT-020 -->
-<!-- FEATURE: FEAT-021 reqs=REQ-023 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-021 reqs=REQ-023 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-021: Explicit measured-loss acceptance without a fixed duration
 
 #### Requirements Covered
@@ -5575,14 +5575,15 @@ and the [5.9.13 uniqueness implementation](https://github.com/strongswan/strongs
 
 The implementation and twelve isolated HA/BGP/static live trials are complete for
 an exact source-matching candidate. Separate cross-cloud diagnostics reproduced low
-loss without establishing its cause. A product-owner acceptance revision permits
-loss strictly below 0.2% and removes the fixed ten-minute observation requirement.
+loss without establishing its cause. On 2026-11-05, the accepted normal tolerance
+changed from strictly below 0.2% to strictly below 1% for Internet VPN qualification.
+The absence of a fixed ten-minute observation requirement is retained.
 This policy change accepts measured performance; it is not a network repair.
 
 #### Design Details
 
 For each declared steady-state case and independently initiated direction, compare
-exact counts using `500 * lost < sent`, requiring positive sent and complete receiver
+exact counts using `100 * lost < sent`, requiring positive sent and complete receiver
 evidence. Record the actual duration, protocol, rate, size, topology and artifact.
 Do not aggregate directions or round before comparison. New trials freeze a bounded
 representative observation interval before execution; no universal duration is imposed.
@@ -5598,7 +5599,7 @@ operation checks. Keep existing source behavior and diagnostic evidence unchange
 #### Alternatives Considered
 
 The former zero-loss/600-second gate is superseded by the accepted tolerance. Treating
-0.2% as inclusive would contradict "under"; omitting sample bounds or extrapolating one
+1% as inclusive would contradict "under"; omitting sample bounds or extrapolating one
 sample to all operations would erase material limits. No IPsec, MSS/MTU or replay
 change is justified by the acceptance revision.
 
@@ -5617,7 +5618,7 @@ duration. A passing old-artifact sample never supplies an unrun candidate transi
 #### Validation Plan
 
 Validate the paired specs and changed Markdown, independently review threshold and
-scope wording, and check exact arithmetic below, at and above 0.2%. Reuse prior source
+scope wording, and check exact arithmetic below, at and above 1%. Reuse prior source
 proof only while the candidate identity matches. No new traffic is needed to compare
 already complete measurements; missing operation evidence remains explicit.
 
@@ -5642,20 +5643,28 @@ contract change; it never changes retained observations or original trial verdic
 
 #### Done Definition
 
-All current acceptance statements agree on strictly below 0.2% without a fixed
+All current acceptance statements agree on strictly below 1% without a fixed
 ten-minute gate. Counts and scope substantiate every reported pass, while incomplete
 candidate operations and unresolved root causes remain visible.
 
 #### Implementation Evidence
 
-REQ-021/022 now reference the shared REQ-023 policy. The README and unreleased
-changelog describe the operator-visible criterion. Product source is unchanged.
+On 2026-11-05, REQ-021/022/025 and dependent qualification plans were aligned
+with the normal strictly-below-1% REQ-023 criterion. The README and unreleased
+changelog now describe the same rule and equality rejection. Historical
+measurements retain their original criteria and verdicts. Product source,
+measurement helpers and their 5 Hz probe interval are unchanged.
 
 #### Verification Evidence
 
+The 2026-11-05 policy check uses exact integer arithmetic: 1/300 and 2/300 pass;
+3/300 (exactly 1%) and 4/300 fail. Empty or incomplete samples are invalid.
+Paired-spec and changed-Markdown validation cover this documentation-only change;
+these checks do not establish a packet-loss cause or qualify an unrun operation.
+
 The two complete 60-second, 1 Mbps, 256-byte UDP diagnostic samples had 40/29,297
 and 39/29,297 missing datagrams (approximately 0.13653% and 0.13312%). Both satisfy
-this revised loss criterion for their measured forward direction on the existing
+the original 0.2% criterion for their measured forward direction on the existing
 artifact. Their native receiver records agree; client summaries that incorrectly
 report zero are not used. This is a new comparison, not a rewrite of old verdicts.
 The twelve isolated candidate operation trials already passed the stricter zero-loss
@@ -5949,11 +5958,11 @@ unchanged SingleVM fixtures retain byte/semantic contracts and no selector effec
 Run targeted policy/observer/controller crash and race tests, CLI/schema/render
 matrix, complete project checks, native Linux lanes, genuine prior-release upgrades
 and isolated declared live trials. Measure interruption separately from steady loss.
-Use REQ-025's revised temporary live loss exception directly for the authorized
-final qualification, without three additional reduction attempts. Keep all other gates,
-original trial verdicts and the normal 0.2% target; label every exception-qualified
-result and require strictly less than 1% in each direction until the exception is
-withdrawn. An exception is acceptance authority, not evidence of a root-cause fix.
+Use REQ-023's normal strictly-below-1% criterion independently in each direction.
+It supersedes the earlier temporary exception; new trials need no exception label
+or additional attempts solely to meet the retired 0.2% target. Preserve all other
+gates and original trial verdicts. Changed acceptance is not evidence of a
+packet-loss root-cause fix.
 
 #### Test Plan
 
@@ -5964,9 +5973,8 @@ and missing-heartbeat controls. Native and live results are independently record
 
 #### Evaluation Plan
 
-Require automatic post-upgrade recovery and less than 0.2% steady loss in each
-direction, subject only to the temporary live loss exception in REQ-025; no new
-numerical upgrade-outage bound. No synthetic old wheel substitutes
+Require automatic post-upgrade recovery and strictly less than 1% steady loss in
+each direction under REQ-023; no new numerical upgrade-outage bound. No synthetic old wheel substitutes
 for supported 0.6.0-0.6.2 artifacts.
 
 #### Rollout And Rollback
@@ -6036,7 +6044,7 @@ satisfy REQ-025; incomplete qualification remains explicit.
   former effective selections were invalidated. Seven bidirectional steady
   windows used 1,200 packets per direction at 20 packets/second; maximum loss was
   0.50%. These meet the conditional strict-under-1% exception, not the normal
-  0.2% criterion in every window. No fourth packet-loss remedy was attempted.
+  then-current 0.2% criterion in every window. No fourth packet-loss remedy was attempted.
   BGP package-refresh reply gaps reached 89.259 seconds; restart/promotion gaps
   were 249.537 and 215.569 seconds, and planned VM failback reached 286.801 seconds.
   Transition loss is recorded separately from steady acceptance. Original Compute
@@ -6529,7 +6537,7 @@ Use the selected Static/BGP live targets. Transient12/20-second cloud-traffic
 impairment must clear and yield actual SDK success within30 seconds; separate
 retry exhaustion/outage tests. Run two VM and tunnel failover/failback cycles each.
 Use independently initiated60-second/20pps/1200-packet windows each direction,
-REQ-025 normal loss target and its revised temporary qualification exception. Independent
+the normal strictly-below-1% criterion in REQ-023. Independent
 Compute/allocation/routes/workload proof; separate fixture/recovery and replay
 intervened trials. Upgrade and transition loss are reported separately.
 
@@ -6632,7 +6640,8 @@ Both gateways ended on their preferred owner.
 
 Twenty-five complete bidirectional steady windows provided 50 directional
 measurements, each transmitting 1,200 packets at the declared 20 packets/second.
-The normal strict loss target remains below 0.2%; the existing REQ-025 temporary exception was used after three declared
+At that historical checkpoint, the normal strict loss target was below 0.2%;
+the then-current REQ-025 temporary exception was used after three declared
 bounded path/owner variants, with every direction strictly below 1% and every
 non-loss gate passing. This accepts the measured run; it does not fix packet loss.
 
@@ -6885,7 +6894,7 @@ windows met the strict loss threshold with complete fixed-slot measurements.
 A later BGP planned failback passed independent fencing/ownership checks, but its
 following reverse traffic window lost 5 of 1,200 packets (0.417%). The separate
 post-replacement window lost 3 of 1,200 reverse packets (0.25%). Both exceed the
-below-0.2% criterion despite complete measurements and unchanged terminal
+then-current below-0.2% criterion despite complete measurements and unchanged terminal
 ownership/routes. Their cause is unresolved; subsequent healthy checks cannot
 replace these failed trials.
 
@@ -7016,7 +7025,7 @@ window for exact fixture/credential cleanup and final health verification.
 #### Done Definition
 
 One frozen candidate passes local/native gates, both replacement/resume trials,
-boot qualification and the complete matrix under the revised loss exception.
+boot qualification and the complete matrix under the normal strictly-below-1% criterion in REQ-023.
 Unknown historical causes remain labelled; incomplete gates prevent qualification.
 
 #### Implementation Evidence

@@ -3698,7 +3698,7 @@ Users need explicit workflows to consume conversation intent and deliver verifie
 - AC-007: Use a deterministic ready queue within frozen dependency waves, default at most four workers capped by observed native capacity, configuration and independent work. Refill only after termination, validated results and writer quiescence. Keep a full-wave integration barrier and stable task order. Serialize conflicting paths/resources and lease shared live targets exclusively per assignment. Unknown native capacity uses one worker. Both coordinators consume one assignment-derived launch contract and one strict result-ingestion owner across native parallel and sequential dispatch; host adapters own only native launch, monitoring and termination observations. Workers receive fresh assignment-only context.
 - AC-008: Preserve worker identity/ancestry/paths/evidence, combined validation/alignment, SDLC phase responsibilities, remediation budgets, promotion and cleanup, remote authorization and read-only post-promotion docs assessment.
 - AC-009: Rename the entire verifier to `$implement-test`, preserving no flags, `--create`, `--create --keep`, `--destroy` and private root `<agent-home>/implement-test`. Preserve supported SDLC verifier modes and canonical nested fixtures. Reject obsolete flat fixtures without conversion; retain application/database migration checks.
-- AC-010: Live trials invoke public workflow intake. Preserve owner-executed test receipts/counters, source/deployment identity and headless Playwright evidence. Separate deterministic, installed, native and application results; absent proof remains NOT_RUN/PARTIAL and harness intervention cannot certify PASS. After fresh SDLC intake, the bound coordinator initializes first phase state and its checkpoint before phase observation or routing; accepted registration alone is not initialized phase state. Existing or partial history is reconciled without resetting counters or evidence. Intake helpers, hooks and verifiers do not perform this coordinator transition.
+- AC-010: Live trials invoke public workflow intake. Preserve owner-executed test receipts/counters, source/deployment identity and headless Playwright evidence. Separate deterministic, installed, native and application results; absent proof remains NOT_RUN/PARTIAL and harness intervention cannot certify PASS. After fresh SDLC intake, the bound coordinator initializes first phase state and its checkpoint before phase observation or routing; accepted registration alone is not initialized phase state. Existing or partial history is reconciled without resetting counters or evidence. Intake helpers, hooks and verifiers do not perform this coordinator transition. Use the private coordinator initialization owner to validate the selected native binding and active ownership under the project lock. Preserve known hook audit telemetry without treating it as phase completion; unknown history or later work requires reconciliation. Interrupted initial publication preserves immutable snapshots and never resets progressed state.
 - AC-011: Retire capture hooks, obsolete commands/names/state readers. Installer retirement removes only exact owned obsolete payloads/registrations and preserves foreign/custom hooks, private history and worktrees.
 
 - AC-012: Native workers distinguish completed implementation, material specification gaps and blocked work. Validate the complete transport result and independent native termination into an immutable per-attempt receipt bound to assignment, basis and worker identity before completion. Exact replay is idempotent; changed, sensitive, stale or foreign results fail before effects. Blocked or replan results stop new dispatch and refill while existing peers drain, without completion or integration of the affected task, automatic retry or deadline renewal. Only the existing authorized recovery or replanning path may resume work; preserve prior attempt evidence.
@@ -4445,9 +4445,10 @@ across organizations and compatible connected Jira deployments.
   authenticated user and the preceding 90 times 24 hours; explicit dates start
   at local midnight and end at collection start. Title matching is a literal,
   case-insensitive substring combined with identity and interval selection.
-- AC-002: Include dated creation, reporter, assignment-to-user, authored changes,
-  any authored comments, and explicit contribution/resolution credit in others'
-  comments. Old relationships without qualifying interval evidence do not count.
+- AC-002: Include dated creation, reporter, assignment-to-user, Participants
+  additions, authored changes, any authored comments, and explicit contribution
+  or resolution credit in others' comments. Old relationships without qualifying
+  interval evidence do not count.
   Resolve unique identities and distinguish comment creation from verified edits.
 - AC-003: Emit one row per ticket with Ticket #, Title, Date and Status. Link
   ticket numbers, use latest qualifying recorded involvement, preserve current
@@ -4458,11 +4459,19 @@ across organizations and compatible connected Jira deployments.
   evidence without claiming exhaustive absence or company-global visibility.
 - AC-005: Keep source and fixtures company-neutral, read-only, self-contained and
   portable; integrate catalog, metadata, plugin lists and focused evaluations.
+- AC-006: Resolve the applicable Participants field and selected account through
+  verified connector metadata and stable identities. A dated addition by any
+  actor or independently proven initial membership qualifies; unchanged current
+  membership and another actor's removal do not. Later removal preserves prior
+  qualifying additions. Confirmed field absence is non-applicability; ambiguous
+  or unavailable field/history evidence remains a stated coverage limitation.
 
 #### Negative Criteria
 
 - NC-001: Do not infer involvement from mere mentions, stale assignments, another
-  user's edit timestamp or current role fields lacking dated evidence.
+  user's edit timestamp or current role fields lacking dated evidence. Do not
+  infer participation dates from current or calculated Participants membership,
+  issue.updated, display-name similarity or an unrelated member's addition.
 - NC-002: Do not infer Done from comment prose, silently truncate results, install
   or repair connectors/authentication, write Jira, or save reports automatically.
 - NC-003: Do not embed real accounts, ticket data, private URLs or credentials in

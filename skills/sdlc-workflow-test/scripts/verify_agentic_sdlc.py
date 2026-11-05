@@ -3064,7 +3064,23 @@ def check_capability_regressions(ctx: Context) -> None:
         "spec.validation-receipt": ('Owner-issued specification validation and no-impact outcomes', (('objective', 'test_valid_specs_emit_current_advisory_snapshot'), ('objective', 'test_ready_feature_with_placeholder_is_rejected'), ('objective', 'test_unknown_requirement_mapping_is_rejected'), ('objective', 'test_foreign_owner_marker_is_rejected'), ('task-waves', 'test_no_impact_needs_no_spec_documents'), ('project-specs', 'test_bootstrap_missing_specs_publishes_pending_pair_and_preserves_counterpart'))),
         "objective.revisions": ('Normalized objective revisions', (('execution', 'test_raw_history_keys_are_rejected'), ('execution', 'test_snapshot_tampering_is_rejected'), ('execution', 'test_other_objectives_are_not_queued'))),
         "objective.binding": ('Explicit native session binding', (('execution', 'test_new_session_does_not_infer_sole_active_run'), ('execution', 'test_restore_binding_is_read_only'), ('execution', 'test_cross_session_requires_explicit_continue'))),
-        "objective.lifecycle": ('Objective steering and cancellation', (('execution', 'test_same_session_continues_without_new_revision'), ('execution', 'test_steering_fences_dispatch_before_replanning'), ('execution', 'test_cancellation_fences_without_git_rollback'), ('execution', 'test_old_run_schema_is_rejected_without_conversion'))),
+        "objective.lifecycle": (
+            "Coordinator initialization, steering and cancellation",
+            (
+                ("execution", "test_same_session_continues_without_new_revision"),
+                ("execution", "test_steering_fences_dispatch_before_replanning"),
+                ("execution", "test_cancellation_fences_without_git_rollback"),
+                ("execution", "test_old_run_schema_is_rejected_without_conversion"),
+                ("objective", "test_hook_only_history_is_preserved_by_fresh_cli"),
+                ("objective", "test_concurrent_initialization_has_one_authoritative_snapshot"),
+                ("objective", "test_interrupted_initial_publication_uses_new_snapshot"),
+                ("objective", "test_partial_initial_history_is_preserved_and_recovered"),
+                ("objective", "test_progressed_state_is_never_reset"),
+                ("objective", "test_active_ownership_disagreement_has_no_effect"),
+                ("objective", "test_managed_intake_requires_exact_active_outer_lease"),
+                ("objective", "test_externally_released_outer_lease_cannot_initialize"),
+            ),
+        ),
         "execution.scope": (
             "Exact initialized-folder scope",
             (

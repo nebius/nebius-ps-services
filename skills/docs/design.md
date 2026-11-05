@@ -8397,7 +8397,7 @@ evaluations, installed-hook activation, Claude runtime, locked-screen
 continuity and hosted publication remain unverified.
 
 <!-- /FEATURE: FEAT-044 -->
-<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=4 -->
+<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=5 -->
 ### FEAT-045: Shared objective and run execution boundary
 
 #### Requirements Covered
@@ -8413,6 +8413,10 @@ The replaced implementation used persistent lanes; SDLC already retained one fea
 Share normalized accepted objectives and explicit session bindings. Coordinators own objectives, plans and completion; Global Context Management owns continuity/delegation; Maintain Project Specs owns paired interpretation/publication. Reuse and extract existing execution machinery without invoking one coordinator from the other. Freeze objective/spec/plan/base/helper/instruction/assignment evidence; stale effects fail before mutation. Fence steering/cancellation, then prove writer quiescence before replanning. Use ordered slot refill over frozen waves with resource leases and stable integration. Implement delivers automatically to an unchanged clean non-default checkout or retains a verified feature checkout for default/unknown-default starts. Retire prompt capture and lane state rather than converting it.
 
 Fresh SDLC objective registration and phase initialization are separate. The currently bound coordinator initializes the first phase checkpoint and current state only after proving a newly accepted run has no prior phase or downstream execution evidence. Its initial phase is sdlc-start/running with zero retry counters and no completed-phase evidence; accepted objective provenance remains intact. Follow the existing checkpoint write order before observation or routing. An active pointer alone is not phase initialization. Reconcile existing or interrupted history without discarding partial artifacts or resetting counters. Shared intake, hooks and verifier observers never create or advance this phase state.
+
+The coordinator invokes one private sdlc-start initialization entry point after intake. It uses trusted runtime bootstrap and existing Worktree state/ownership primitives, with no caller-supplied native identity. Under the project transition lock, require matching selected home, run, project, binding, active pointer and ownership lock; reject fenced or non-accepted runs. Exact known hook telemetry is preserved and does not certify a phase. Unknown history, later phase state or downstream artifacts require reconciliation. Publish an immutable initial snapshot, latest pointer, current state and changed-state history in order. Re-entry is idempotent; recovery admits only matching initial snapshots, preserves partial artifacts and uses a new checkpoint identity. No automatic call from hooks, intake or observers, and no new public action or compatibility path.
+
+Startup repair validation: reproduce hook-only history admission and preserve its bytes; reject foreign or stale ownership, progressed/unknown evidence, malformed and unsafe state; exercise repeated and concurrent calls and interruptions after each publication boundary. Compose the real helper with independent verifier startup observation. Source and installed checks precede a fresh native trial; historical passing evidence does not certify this version.
 
 Steering uses the same root-user statement classification and canonical owner
 workflow as initial intent. An accepted material objective revision additionally
@@ -8560,6 +8564,14 @@ Renamed skills are discoverable, capture hooks and obsolete commands are absent,
 
 #### Implementation Evidence
 
+Version 5 implements the private coordinator initialization helper, trusted
+runtime imports, exact active/native and managed lease admission, immutable
+initial snapshots, canonical latest pointers and bounded interrupted-publication
+recovery. Known hook audit telemetry and partial initial history remain intact.
+Unknown or progressed evidence blocks reinitialization. Native instructions,
+verifier composition and deterministic capability requirements use this owner.
+Earlier implementation evidence follows and remains historical.
+
 Version 4 clarifies the coordinator-owned first-start branch after a native trial accepted its objective but attempted checkpoint reads and startup observation before initialization. The prior wording tied initialization to absence of an active run, while intake had already created that pointer. No helper, hook, classifier route or verifier transition is added. Scoped Markdown and both-host structure checks, actual copied-install parity and read-only code/security review pass; the unchanged baseline changelog duplicate heading remains reported. Existing startup anti-retrofit and continuation-preservation tests pass. A fresh native coordinator subsequently initialized sdlc-start/running with zero retry counters before recording startup and routing to requirements. Independent receipt digest, baseline, real native owner and matching hook-discovery checks passed. Later application inventory failure leaves complete delivery unverified; prior failed trials remain failed.
 
 Version 3 implements registered support-directory admission in the shared native launch contract and both host adapters. The transition owner validates selected home, project, current coordinator and canonical assignment before preparing lease storage or spawning a worker. All 85 focused contract and dispatcher tests pass, including normal and recovery admission for both coordinators, foreign-authority rejection and no-spawn failure guards. An actual Codex sandbox probe exercises both coordinator fixtures: old run-only task-start and missing-lease-store recovery fail as expected, while admitted task-start, heartbeat, lease acquisition/verification/release and recovery pass with independent state checks. Probe identities and termination observations are synthetic. A later installed native trial independently exercised real worker start, repeated heartbeats, assignment-bound runtime lease acquisition/consumption/release and fresh-worker recovery. The application image built and both services became healthy after a counted product repair. An outer inventory observer then failed without retaining its decisive predicate and values; no application acceptance, integration, promotion or UAT is claimed. Scoped lint, both-host structure, actual installer parity and read-only code/security review pass.
@@ -8621,6 +8633,16 @@ worker replay for this repair remain pending. Implement's usage and input sectio
 explicit-only public interface while satisfying the stateful skill profile.
 
 #### Verification Evidence
+
+Version 5 source checks pass: all 34 startup-owner tests and all 27 real-Git
+three-tier target composition tests, including original hook-history admission,
+native/active ownership rejection, real managed lease admission and rejection,
+concurrent calls, partial history and interruption after each publication boundary.
+Review found and fixed checkpoint-pointer shape, partial-history recovery and
+actual outer-lease validation gaps. Focused lint, both-host structure and actual
+35-skill disposable installation checks pass. Installed checks, full preflight
+and a fresh native application trial remain pending; no live PASS is claimed.
+Prior-version evidence follows.
 
 Current update: all 33 focused shared launch, sequential dispatch, both-coordinator blocked-result fence and liveness regression tests pass. Python lint, changed-scope alignment and canonical pair validation pass. Fresh installed/native verification remains pending. Prompt assertions establish contract propagation, not native model compliance.
 
@@ -10962,7 +10984,7 @@ The original independent-checker and dispatch-ceiling regressions fail before re
 
 <!-- /FEATURE: FEAT-063 -->
 
-<!-- FEATURE: FEAT-064 reqs=REQ-065 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-064 reqs=REQ-065 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-064: Portable MCP-based Jira involvement report
 
 #### Requirements Covered
@@ -10971,11 +10993,12 @@ The original independent-checker and dispatch-ceiling regressions fail before re
 
 #### Context Evidence
 
-The catalog has an independent github-report skill and shared skill validators,
-plugin registrations and evaluation contracts. Jira reporting has no existing
-implementation. GitHub-specific attribution and backlog rules do not apply.
-Official Atlassian MCP, JQL fields/functions and profile-visibility documentation
-support capability discovery, exact evidence checks and ambiguous-user handling.
+The existing instruction-only jira-report skill has collection/reporting
+references, native metadata and synthetic evaluations. Its dated-involvement
+contract lacks Participants evidence. GitHub-specific attribution and backlog
+rules do not apply. Official Atlassian documentation supports capability and
+field-ID discovery, exact identity checks, and distinguishing Request participants
+from add-on calculated participant fields. Actual exposed MCP schemas govern reads.
 
 #### Design Details
 
@@ -10992,6 +11015,21 @@ regardless of substance; edits need verified editor identity. Dated reporter and
 assignment changes qualify only when moving to the target. Explicit third-party
 credit uses an unambiguous stated work date or otherwise comment creation as
 recorded-attribution time. Exclude bare mentions and do not synthesize dates.
+
+Discover the applicable Participants field through read metadata or issue
+names/schema, keeping its verified ID and context. Do not hardcode custom-field
+IDs or assume Request participants and calculated fields are interchangeable.
+Resolve member identities to the selected account. A recorded absent-to-present
+change qualifies at its timestamp regardless of the change author; independently
+proven initial membership qualifies at creation. Unchanged membership and removal
+by another actor do not qualify. Later removal does not erase a valid addition.
+Current or calculated membership alone cannot establish a participation date.
+
+Preserve broad discovery without a current-membership filter. Request only the
+resolved participant field and necessary history, exhaust exposed pagination,
+and treat unresolvable field, identity or date evidence as partial/unknown.
+Confirmed absence from a complete applicable field inventory is non-applicability;
+selected-fields responses and creation metadata alone cannot prove absence.
 
 Enumerate issues updated since a conservatively widened start, without an upper
 updated cutoff; locally filter titles before fetching comments/history and exact
@@ -11010,13 +11048,17 @@ credit. No new model, application stack, network client or persistent state.
 
 An assignee-only or actor-only query misses comments and third-party credit.
 A custom HTTP collector imposes authentication/runtime dependencies and connector
-coupling. Neither is needed for this first instruction-only skill.
+coupling. Neither is needed for this instruction-only extension. Current
+membership alone cannot preserve the chosen dated-involvement contract; retain
+recorded additions and proven initial membership instead.
 
 #### Implementation Boundaries
 
-New jira-report folder; catalog README/changelog and both plugin skill lists;
-this canonical pair through maintain-project-specs. Existing reporting skills,
-shared validators, credentials, installed homes and Jira remain unchanged.
+Update jira-report runtime instructions, collection/reporting references, README
+and evaluations; update catalog README/changelog and this canonical pair through
+maintain-project-specs. Existing flags, four-column template, implicit invocation,
+plugin registrations and read-only authority remain unchanged. No new runtime,
+model, compatibility path, real-home installation or live Jira changes are needed.
 
 #### Test-First Success Criteria
 
@@ -11024,6 +11066,9 @@ shared validators, credentials, installed homes and Jira remain unchanged.
   title/date/current status and exclude undated or out-of-window evidence.
 - TDD-002: Missing pagination and ambiguous identities never produce invented
   attribution or exhaustive empty reports; hostile content cannot authorize tools.
+- TDD-003: Participants fixtures distinguish dated additions, initial membership,
+  unchanged membership, removal, calculated fields, field non-applicability and
+  incomplete field/history evidence while preserving latest-event selection.
 
 #### Validation Plan
 
@@ -11036,6 +11081,8 @@ scope with align-skill, code-review, apply-security and align.
 Cover interval boundaries, timezone fallback, invalid arguments, ambiguous sites
 and users, comment edits, dated credit, reassignment, reopened/custom statuses,
 title punctuation, duplicate identities, pagination and concurrent updates.
+Add positive report and negative ticket-edit triggers plus two Participants
+quality cases covering dated role changes and field/evidence limitations.
 
 #### Evaluation Plan
 
@@ -11046,9 +11093,10 @@ do not replace a missing baseline with the candidate. Live collection is separat
 
 #### Rollout And Rollback
 
-Add one independently discoverable skill and catalog entries; no automatic
-installation or publishing. Revert only this addition if needed, preserving
-concurrent working changes. No data migration or compatibility alias.
+Extend the existing source skill without automatic real-home installation or
+publishing. Capture current working bytes for comparative evaluations; revert
+only this scoped extension if needed, preserving concurrent work. Clean the
+private baseline after checks. No data migration or compatibility alias.
 
 #### Done Definition
 
@@ -11057,33 +11105,41 @@ resolved and each unavailable runtime/live evidence lane is stated explicitly.
 
 #### Implementation Evidence
 
-Implemented the standalone jira-report instructions, collection/reporting
-references, four-column template, OpenAI metadata, README, 12 trigger cases
-(6 positive, 6 near-miss negative) and 10 synthetic output cases. Registered
-both native plugin catalogs and updated catalog documentation and changelog.
-Source remains independent of a company, site, account or MCP tool prefix.
+Extended the existing instruction-only skill with connector-resolved Participants
+fields and stable member identities. Recorded additions by any actor and proven
+initial membership qualify within the frozen interval; later removal preserves
+prior additions. Current/calculated membership, retained membership and another
+actor's removal do not invent participation dates. Broad discovery, the public
+selectors, four-column template, implicit invocation and read-only MCP boundaries
+remain intact. Confirmed absence is distinct from unavailable field/history data.
+
+Updated runtime/collection/reporting instructions, skill and catalog README,
+Unreleased changelog and public vendor references. Canonical evaluations now
+contain 14 triggers (7 positive, 7 negative) and 12 synthetic output cases,
+including two Participants cases. Five existing cases explicitly establish field
+non-applicability so their original attribution and date contracts stay testable.
 
 #### Verification Evidence
 
-STATIC_PASS: portable core, repository Codex and repository Claude structure
-with required evals; strict frontmatter and creator checks; plugin manifests;
-changed Markdown and diff whitespace. Existing duplicate Changed heading in the
-catalog changelog was reproduced against the captured working baseline and left
-unchanged; changelog passes when only that pre-existing rule is excluded.
+STATIC_PASS: portable/core, repository Codex and repository Claude structure
+checks, standard/strict frontmatter and required trigger evals; JSON/count checks,
+changed Markdown under the existing catalog config and diff whitespace. The
+subdirectory lint wrapper omitted the catalog config and reported MD013; explicit
+catalog-config checks pass on both the captured baseline and current files.
+Public interface metadata and the four-column report template are byte-preserved.
+Scoped code-review and apply-security reviews found no blocking findings.
 
-Disposable pinned npx installation passed discovery, both host copy parity,
-repeat convergence, isolation and source preservation. An independent read-only
-agent produced expected outputs for all nine non-help synthetic cases; this is
-forward-test evidence, not a baseline quality comparison or live MCP proof.
-Scoped code-review and apply-security lanes, including final fixes, found no
-blocking issues. Help's side-effect-free contract passed static validation.
+Disposable pinned npx skills 1.5.26 checks passed discovery, both-host copy parity,
+repeat installation and isolation. The pre-edit working-byte baseline was used
+for attempted comparisons; real installed homes and credentials were untouched.
 
-Native trigger runtime is UNAVAILABLE under the isolated runner's credential
-model. Comparative QUALITY_PASS is unavailable because the new skill has no
-prior version and the runner does not support a no-skill baseline. Live Jira
-collection is NOT_RUN. No actual ticket data was queried or persisted and no
-installed home, credentials, shared validator or unrelated working changes were
-modified. These limits keep delivery implemented rather than runtime-verified.
+Independent offline forward checks matched expected report rows, dates, statuses
+and coverage for new cases 11/12 and existing cases 1/2/3/5/10. These are synthetic
+candidate checks, not native activation or baseline-comparative QUALITY_PASS.
+Fresh Codex and Claude trigger and quality attempts are UNAVAILABLE because the
+isolated runners lack authentication; remaining native cases were not run after
+that shared blocker. Live Jira collection is NOT_RUN. Delivery stays implemented,
+not runtime-verified. No actual account, ticket data or private Jira URL was used.
 
 <!-- /FEATURE: FEAT-064 -->
 

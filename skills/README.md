@@ -128,7 +128,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with headless Playwright Test GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
-| `jira-report` | Implicit allowed | Report one person's dated Jira involvement through an existing MCP connection; filter by user, start date and title text, with ticket number, title, latest involvement date and current status. |
+| `jira-report` | Implicit allowed | Report one person's dated Jira involvement, including Participants additions, through an existing MCP connection; filter by user, start date and title text, with ticket number, title, latest involvement date and current status. |
 | `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations, including Nebius Docs, and recovery. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, selected MCP integrations such as Nebius Docs, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, protected token cache, and enforced read-only tools. |
@@ -200,6 +200,10 @@ validated before spec-dependent planning and dispatch.
 `maintain-project-specs` remains the canonical semantic spec owner; `align` is
 the pre-commit alignment phase, and `troubleshoot` is conditional runtime
 support for ambiguous failure diagnosis.
+
+Fresh SDLC phase state is published by the bound coordinator's private
+initialization helper. Hook audit telemetry is preserved separately from phase
+completion; active registration alone never authorizes resetting a checkpoint.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
@@ -1544,8 +1548,10 @@ and Date. Reporting is read-only and does not save files or publish. See
 `jira-report` reports dated Jira involvement through the connected MCP, using
 the authenticated user and last 90 days by default. Use `--user EMAIL_OR_ID`,
 `--date YYYY-MM-DD`, and `--title TEXT` to select a person, start date and literal
-case-insensitive title substring. Assignments, reporting, any authored comments
-and explicit credited contributions require dated evidence in the interval.
+case-insensitive title substring. Assignments, Participants membership, reporting,
+any authored comments and explicit credited contributions require dated evidence
+in the interval. Participants qualifies through recorded additions or proven
+initial membership; current membership alone does not qualify.
 The four columns are Ticket #, Title, Date and Status. Date is latest qualifying
 recorded involvement; Status is Jira's current exact value. Missing comments,
 history or pagination remain explicit coverage limits. The skill is company-neutral,
