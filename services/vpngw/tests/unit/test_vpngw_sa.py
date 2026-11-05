@@ -531,3 +531,29 @@ def test_impersonated_token_failure_returns_no_ambient_token(monkeypatch) -> Non
 
 def test_access_token_parser_rejects_json_without_a_token() -> None:
     assert vpngw_sa._parse_access_token('{"unexpected":"value"}') is None
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_read_only_service_account_selection_never_repairs(monkeypatch, complete):
+    client = SimpleNamespace(sync_close=Mock())
+    services = _identity_services()
+    monkeypatch.setattr(vpngw_sa, "_init_client", lambda *args: (client, True))
+    monkeypatch.setattr(vpngw_sa, "_iam_services", lambda _: services)
+    token_call = Mock(return_value="ephemeral-token")
+    monkeypatch.setattr(vpngw_sa, "_cli_access_token", token_call)
+    if not complete:
+        monkeypatch.setattr(vpngw_sa, "_list_group_member_ids", lambda *args: ())
+        with pytest.raises(RuntimeError, match="incomplete"):
+            vpngw_sa.inspect_service_account_and_token(
+                "gateway-runtime", None, "project-test", None
+            )
+        token_call.assert_not_called()
+    else:
+        assert (
+            vpngw_sa.inspect_service_account_and_token(
+                "gateway-runtime", None, "project-test", None
+            )
+            == "ephemeral-token"
+        )
+        token_call.assert_called_once_with(timeout_seconds=60, service_account_id="service-account")
+    assert all(service.create_calls == 0 for service in services)

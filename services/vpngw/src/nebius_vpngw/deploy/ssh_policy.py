@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .ssh_client_auth import SSHClientAuth
+from .ssh_client_auth import SSHClientAuth, require_bootstrap_public_key
 
 KNOWN_HOSTS_ENV = "VPNGW_SSH_KNOWN_HOSTS_FILE"
 HOST_KEYS_DIR_ENV = "VPNGW_SSH_HOST_KEYS_DIR"
@@ -1677,6 +1677,7 @@ def require_vm_ha_management_key(
     fields = (public_key or "").strip().split()
     if len(fields) < 2 or "\n" in (public_key or "") or "\r" in (public_key or ""):
         raise ValueError("VM-HA management public key must be one OpenSSH public-key record")
+    require_bootstrap_public_key(public_key)
     try:
         result = subprocess.run(
             ["ssh-keygen", "-y", "-P", "", "-f", str(path)],
@@ -1915,58 +1916,6 @@ def require_vm_ha_ssh_policy(
 
     derived: dict[str, tuple[bytes, str, str]] = {}
     recovered: dict[str, SSHHostKeyRecovery] = {}
-    if (
-        allow_legacy_ordinary_enrollment
-        and explicit is None
-        and HOST_KEYS_DIR_ENV not in source
-        and host_identity_recovery is not None
-    ):
-        recovery_candidates = frozenset(hostname for hostname in retained if not pins.get(hostname))
-        if recovery_candidates:
-            recovered = dict(host_identity_recovery(recovery_candidates))
-            if set(recovered) - set(recovery_candidates):
-                raise ValueError("VM-HA cloud recovery returned an unexpected member identity")
-            for hostname, recovery in recovered.items():
-                if recovery.hostname != hostname:
-                    raise ValueError("VM-HA cloud recovery returned a mismatched member identity")
-                material = _validated_private_host_key_content(
-                    recovery.private_key,
-                    hostname,
-                )
-                derived[hostname] = material
-                pins[hostname] = {material[1]: material[2]}
-                authorities[hostname] = SSHTrustAuthority(kind="product-provisioning-v1")
-                evidence_checks.append(recovery.assert_current)
-            if recovered:
-                source_kind = "cloud"
-
-    enrollment_evidence = dict(legacy_host_key_enrollments or {})
-    if set(enrollment_evidence) - set(hostnames):
-        raise ValueError("Ordinary SSH network enrollment returned an unexpected member")
-    unresolved_retained = {hostname for hostname in retained if not pins.get(hostname)}
-    if enrollment_evidence and not allow_legacy_ordinary_enrollment:
-        raise ValueError("Ordinary SSH network enrollment was not explicitly admitted")
-    if enrollment_evidence:
-        if set(enrollment_evidence) != unresolved_retained:
-            raise ValueError(
-                "Ordinary SSH network enrollment does not match the retained member set"
-            )
-        for hostname, observed in enrollment_evidence.items():
-            if observed.hostname != hostname or observed.key_type != "ssh-ed25519":
-                raise ValueError("Ordinary SSH network enrollment identity is invalid")
-            _validate_public_key(observed.key_type, observed.key_data)
-            authority = _validate_ssh_trust_authority(observed.authority)
-            if authority.kind != "legacy-ordinary-network-enrollment-v1":
-                raise ValueError("Ordinary SSH network enrollment authority is invalid")
-            observed.assert_current()
-            pins[hostname] = {observed.key_type: observed.key_data}
-            authorities[hostname] = authority
-            evidence_checks.append(observed.assert_current)
-        source_kind = "legacy-network-enrollment"
-        unresolved_retained.clear()
-    if unresolved_retained and allow_legacy_ordinary_enrollment:
-        raise LegacyOrdinarySSHEnrollmentRequired(unresolved_retained)
-
     if rotation:
         if explicit is not None or HOST_KEYS_DIR_ENV in source:
             raise VMHAReplacementSSHIdentityUnavailable(
@@ -2079,6 +2028,36 @@ def require_vm_ha_ssh_policy(
         recovered.update(additionally_recovered)
         if additionally_recovered:
             source_kind = "cloud"
+
+    enrollment_evidence = dict(legacy_host_key_enrollments or {})
+    if set(enrollment_evidence) - set(hostnames):
+        raise ValueError("Ordinary SSH network enrollment returned an unexpected member")
+    unresolved_retained = {
+        hostname for hostname in retained if not pins.get(hostname) and hostname not in derived
+    }
+    if enrollment_evidence and not allow_legacy_ordinary_enrollment:
+        raise ValueError("Ordinary SSH network enrollment was not explicitly admitted")
+    if enrollment_evidence:
+        if set(enrollment_evidence) != unresolved_retained:
+            raise ValueError(
+                "Ordinary SSH network enrollment does not match the retained member set"
+            )
+        for hostname, observed in enrollment_evidence.items():
+            if observed.hostname != hostname or observed.key_type != "ssh-ed25519":
+                raise ValueError("Ordinary SSH network enrollment identity is invalid")
+            _validate_public_key(observed.key_type, observed.key_data)
+            authority = _validate_ssh_trust_authority(observed.authority)
+            if authority.kind != "legacy-ordinary-network-enrollment-v1":
+                raise ValueError("Ordinary SSH network enrollment authority is invalid")
+            observed.assert_current()
+            pins[hostname] = {observed.key_type: observed.key_data}
+            authorities[hostname] = authority
+            evidence_checks.append(observed.assert_current)
+        source_kind = "legacy-network-enrollment"
+        private_key_hosts -= set(enrollment_evidence)
+        unresolved_retained.clear()
+    if unresolved_retained and allow_legacy_ordinary_enrollment:
+        raise LegacyOrdinarySSHEnrollmentRequired(unresolved_retained)
 
     identities: list[SSHHostIdentity] = []
     for hostname, pin_target in host_pairs:

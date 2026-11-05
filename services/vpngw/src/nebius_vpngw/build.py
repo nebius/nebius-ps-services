@@ -42,11 +42,19 @@ def build_binary() -> None:
             f"{remote_runner}{os.pathsep}nebius_vpngw/deploy",
         ]
     )
+    from .ingress_policy import INGRESS_SOURCES
     from .ordinary_routes import OWNERSHIP_SOURCES
     from .replay_window import REPLAY_WINDOW_SOURCES
 
     for source_name in dict.fromkeys(
-        (*OWNERSHIP_SOURCES, *REPLAY_WINDOW_SOURCES, "ordinary_bootstrap.py", "packet_health.py")
+        (
+            *OWNERSHIP_SOURCES,
+            *REPLAY_WINDOW_SOURCES,
+            *INGRESS_SOURCES,
+            "ordinary_bootstrap.py",
+            "boot_policy.py",
+            "packet_health.py",
+        )
     ):
         source_path = Path(__file__).parent / source_name
         destination = str(Path("nebius_vpngw") / Path(source_name).parent)
@@ -58,10 +66,17 @@ def build_binary() -> None:
 
     for relative in (
         "ha_repair.py",
+        "checkpoint_upgrade.py",
+        "ipsec_observation.py",
+        "tunnel_restart.py",
+        "agent/tunnel_iterator.py",
         "deploy/handoff_remote.py",
+        "deploy/operator_guest.py",
         "agent/vm_ha_checkpoint.py",
         "agent/vm_ha_controller.py",
         "agent/vm_ha/models.py",
+        "agent/vm_ha/evidence.py",
+        "agent/vm_ha/heartbeat.py",
         "agent/vm_ha/mtls.py",
     ):
         source = Path(__file__).parent / relative

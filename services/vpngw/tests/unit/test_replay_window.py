@@ -186,6 +186,12 @@ def test_stale_artifact_fails_explicit_window_before_package_effects(
     tmp_path, sample_config, value, stale, monkeypatch
 ):
     path = wheel(tmp_path, stale_source=stale)
+    if stale in {"schema.py", "config_loader.py", "agent/main.py"}:
+        # These modules also implement mandatory ingress, so omission of the
+        # optional replay setting cannot admit an obsolete replacement artifact.
+        with pytest.raises(RuntimeError, match="mandatory managed ingress"):
+            VMHAAgentArtifact.from_wheel(path, source="test")
+        return
     artifact = VMHAAgentArtifact.from_wheel(path, source="test")
     assert replay_window.REPLAY_WINDOW_CAPABILITY not in artifact.capabilities
     # Omitted configurations retain the existing HA capability contract.
@@ -202,10 +208,11 @@ def test_stale_artifact_fails_explicit_window_before_package_effects(
     effects.assert_not_called()
 
 
-def test_omitted_ordinary_config_does_not_add_replay_capability_gate(tmp_path, sample_config):
-    ordinary_apply.artifact(
-        wheel(tmp_path, stale_source="schema.py"), yaml.safe_dump(sample_config)
-    )
+def test_omitted_replay_setting_still_requires_mandatory_ingress(tmp_path, sample_config):
+    with pytest.raises(RuntimeError, match="mandatory managed ingress"):
+        ordinary_apply.artifact(
+            wheel(tmp_path, stale_source="schema.py"), yaml.safe_dump(sample_config)
+        )
 
 
 @pytest.mark.parametrize("local_window", [None, 32, 1024])
@@ -238,7 +245,7 @@ def test_early_ordinary_admission_pins_exact_private_wheel_until_deployment(
     instances = tuple(merge_with_peer_configs(sample_config, []).iter_instance_configs())
     ssh = SimpleNamespace(_build_wheel=lambda: selected)
     with ExitStack() as lifetime:
-        ordinary_apply.pin_replay_window_artifact(ssh, instances, sample_config, lifetime)
+        ordinary_apply.pin_agent_artifact(ssh, instances, sample_config, lifetime)
         pinned = ssh._wheel_path
         assert pinned != selected
         original = selected.read_bytes()

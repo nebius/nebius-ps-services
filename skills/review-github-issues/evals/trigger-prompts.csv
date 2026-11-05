@@ -1,12 +1,17 @@
 id,should_trigger,prompt
 explicit-current,true,$review-github-issues
-explicit-numbers,true,$review-github-issues 17 23 --repo example-org/widget
-explicit-url,true,$review-github-issues https://github.com/example-org/widget/issues/17
+explicit-numbers,true,"$review-github-issues --issue 17,23 --repo example-org/widget"
+explicit-url,true,$review-github-issues --repo https://github.com/example-org/widget --issue 17
 explicit-help,true,$review-github-issues --help
-explicit-report,true,"$review-github-issues 17 --repo example-org/widget; report only, do not change files or GitHub."
+explicit-report,true,"$review-github-issues --issue 17 --repo example-org/widget; report only, do not change files or GitHub."
 pr-review,false,Review GitHub pull request 17 and its patch.
 local-code,false,Review my local changes for correctness bugs.
 create-issue,false,Create a GitHub issue describing this error.
 implement-issue,false,Implement GitHub issue 17 and open a PR.
 not-invoked,false,What are sensible ways to prioritize GitHub issues?
 other-tracker,false,Review the selected Jira tickets and prioritize them.
+explicit-backlogs,true,"$review-github-issues --repo example-org/alpha,example-org/beta"
+explicit-priorities,true,"$review-github-issues --priority services/vpngw,services/cli"
+explicit-multi-numbers,true,"$review-github-issues --repo example-org/alpha,example-org/beta --issue 12,34"
+skill-design-only,false,Design changes to the review-github-issues skill interface; do not run issue triage.
+review-github-issues-issue-workflow-explanation,false,Explain how $review-github-issues participates in saved issue plans and closure after merge; do not execute the workflow.

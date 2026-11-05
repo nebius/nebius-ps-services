@@ -14,7 +14,7 @@ ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --config 
 # Option 1: Manual intervals without config file
 # ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 60
 #
-# Option 2: Proactive refresh mode (restart every 8 hours regardless of health)
+# Option 2: Proactive refresh mode (refresh healthy tunnels every 8 hours)
 # ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.tunnel_health_monitor --check-interval 60 --proactive-refresh --refresh-hours 8
 #
 # Option 3: Custom intervals

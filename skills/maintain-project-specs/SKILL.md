@@ -209,6 +209,10 @@ recover  --project-root <path>
 - Every active or satisfied requirement maps to at least one current design
   record. Each design record's marker mapping and body mapping agree.
 - Preserve every byte outside canonical managed regions.
+- Preserve the templates' next-line MD013 directives on long, indivisible
+  metadata markers when expanding records. Apply any added line-length
+  exception only to that marker; keep prose under the project's lint rules.
+  Existing human-owned envelopes remain byte-preserved.
 - Keep requirements focused on durable product truth and acceptance methods.
 - Keep design focused on selected behavior, boundaries, state, alternatives,
   validation, evaluation, rollout, and separate implementation and
@@ -370,3 +374,15 @@ URLs, customer data, raw logs, or one-off local state.
 - `references/migration.md`
 - `assets/templates/requirements.md.template`
 - `assets/templates/design.md.template`
+
+## Source-Package Coverage
+
+For document-driven SDLC, own the pure source inventory and canonical mapping
+validator in `scripts/project_specs_lib/source_bundle.py`. Read the shared
+`../worktree/references/document-delivery.md` contract.
+Portable normative snapshots live under target `docs/contracts`; requirements
+and design stay concise. Preserve original IDs, explicit dispositions and exact
+source digests. Distinguish reviewed prose inventory from mechanically extracted
+catalog completeness, and source coverage from implementation/test completion.
+The SDLC root owns program/slice state and stages only the exact admitted input
+paths. Canonical pair publication remains this skill's sole responsibility.

@@ -517,6 +517,28 @@
         "Binds retained head/base identities and result containment through trusted completion.",
         "Does not require a live fork after confirmed merge or mistake absence before merge for permission."
       ]
+    },
+    {
+      "id": "issue-closure-manual-merge",
+      "prompt": "Offline contract simulation: use synthetic tools only, no real GitHub or checkout writes. Human merged a PR with verified closing references; one target is closed, another open, and result CI failed.",
+      "expected_output": "Read-only per-issue and merge verification.",
+      "files": [],
+      "assertions": [
+        "No second merge, duplicate comment or issue_write.",
+        "Separately reports merged, CI failed and actual issue states.",
+        "No automatic reopen or false all-closed claim."
+      ]
+    },
+    {
+      "id": "issue-closure-related-only",
+      "prompt": "Offline contract simulation: use synthetic tools only, no real GitHub or checkout writes. PR mentions several related issues and has a human closing reference for partially resolved work, with no private receipt.",
+      "expected_output": "Reconcile before merge.",
+      "files": [],
+      "assertions": [
+        "Does not manufacture receipt or closing lines from mentions.",
+        "Reviews explicit closing reference against issue-specific criteria.",
+        "Preserves human text and stops for reconciliation."
+      ]
     }
   ]
 }

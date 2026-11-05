@@ -56,6 +56,42 @@ def test_rules_preserve_separate_source_destination_ports():
     assert grants[1]["dst"] == ["10.20.0.5/32"]
 
 
+def test_vpn_style_grant_is_scoped_and_requires_new_approval():
+    value = row()
+    value["tailscale"]["policy"]["rules"][0].update(protocol="all", ports=[])
+    validate(value)
+    with pytest.raises(ValueError, match="stale"):
+        onboarding.assert_accepted(value)
+    request = onboarding.request(value)
+    assert request["request"]["access_grants"] == [
+        {"src": ["group:users"], "dst": ["10.20.0.0/24"], "ip": ["*"]}
+    ]
+    assert "does not revoke" in request["request"]["policy_note"]
+    accept(value)
+    onboarding.assert_accepted(value)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"sources": ["*"]},
+        {"destinations": ["*"]},
+        {"destinations": ["10.99.0.0/24"]},
+        {"sources": []},
+        {"destinations": []},
+        {"ports": ["443"]},
+        {"ports": ["*"]},
+    ],
+)
+def test_vpn_style_rules_reject_unscoped_or_ambiguous_input(change):
+    value = row()
+    rule = value["tailscale"]["policy"]["rules"][0]
+    rule.update(protocol="all", ports=[])
+    rule.update(change)
+    with pytest.raises(ValueError):
+        validate(value)
+
+
 def test_infrastructure_can_be_draft_but_active_cannot_skip_handoff():
     value = row()
     value["tailscale"] = {"stage": "infrastructure", "routes": ["10.20.0.0/24"]}

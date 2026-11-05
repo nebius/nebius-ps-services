@@ -863,16 +863,26 @@ def _coerce_cidr_list_from_mapping(mapping: dict[str, str], aliases: tuple[str, 
 
 
 def _extract_pattern_values(text: str, patterns: tuple[str, ...]) -> list[str]:
+    # Preserve positional correspondence across repeated values and mixed syntaxes.
+    # Multiple patterns may describe the same source occurrence; only those overlap.
+    occurrences: list[tuple[int, int, int, str]] = []
+    for priority, pattern in enumerate(patterns):
+        for match in re.finditer(pattern, text):
+            group = len(match.groups()) or 0
+            value = match.group(group).strip().strip("'\"")
+            if value:
+                start, end = match.span(group)
+                occurrences.append((start, end, priority, value))
     values: list[str] = []
-    seen: set[str] = set()
-    for pattern in patterns:
-        for match in re.findall(pattern, text):
-            value = match if isinstance(match, str) else match[-1]
-            normalized = str(value).strip().strip("'\"")
-            if not normalized or normalized in seen:
-                continue
-            seen.add(normalized)
-            values.append(normalized)
+    accepted: list[tuple[int, int]] = []
+    for start, end, _priority, value in sorted(occurrences):
+        if any(
+            start < previous_end and previous_start < end
+            for previous_start, previous_end in accepted
+        ):
+            continue
+        accepted.append((start, end))
+        values.append(value)
     return values
 
 

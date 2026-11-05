@@ -36,6 +36,10 @@ def ready(run_dir: Path) -> dict:
     run, _binding = validate_run(run_dir)
     value = refinement(run_dir)
     project = spec_checkout(run_dir, Path(run["project_root"]))
+    from workflow_program import accepted, validate_bundle
+    inputs = accepted(run_dir)[2]["inputs"]
+    if inputs:
+        validate_bundle(project, inputs["manifest"], inputs["manifest_sha256"], specs=False)
     requirements = project / "docs/requirements.md"
     if not requirements.exists() or requirements.is_symlink():
         raise WorkflowError("SPEC_REQUIRED", "SDLC requirements admission needs canonical requirements")
@@ -50,6 +54,8 @@ def ready(run_dir: Path) -> dict:
 def settle(run_dir: Path, claim: dict):
     run, binding = validate_run(run_dir)
     value = refinement(run_dir)
+    from workflow_program import verify_inputs
+    verify_inputs(run_dir, spec_checkout(run_dir, Path(run["project_root"])))
     if claim.get("schema") != CLAIM_SCHEMA:
         raise WorkflowError("OBJECTIVE_IMPACT_INVALID", "objective impact claim schema is unsupported")
     write(run_dir / "objective-impact-claim.json", claim)

@@ -312,7 +312,13 @@ class TwoNodeScenario:
         digests = (
             DIGESTS if generation == GENERATION else replace(DIGESTS, configuration=generation)
         )
+        from nebius_vpngw.agent.vm_ha.models import HeartbeatEvidence
+
+        # This state-machine fixture supplies already-authenticated current peer
+        # evidence; transport/round-trip proof has its own composed coverage.
         return PeerHeartbeat(
+            evidence=HeartbeatEvidence(state="healthy"),
+            health_valid_until=self.clock.now + 20.0,
             cluster_id="cluster-a",
             node_id=peer_id,
             boot_id=peer.boot_id,
@@ -475,9 +481,7 @@ def test_every_transfer_intent_crash_after_each_effect_replays_exactly_once(
     effect = scenario.effects[local]
     assert len(effect.crashed_operation_ids) == 1
     crash_attempts = [
-        operation_id
-        for kind, operation_id in effect.attempted_operations
-        if kind is crash_after
+        operation_id for kind, operation_id in effect.attempted_operations if kind is crash_after
     ]
     assert crash_attempts == list(effect.crashed_operation_ids)
     assert crash_attempts[0] in effect.applied_operation_ids
@@ -574,9 +578,7 @@ def test_reverse_automatic_takeover_replays_each_effect_exactly_once(
     assert scenario.trace == list(TAKEOVER_EFFECTS)
     effect = scenario.effects["node-a"]
     crash_attempts = [
-        operation_id
-        for kind, operation_id in effect.attempted_operations
-        if kind is crash_after
+        operation_id for kind, operation_id in effect.attempted_operations if kind is crash_after
     ]
     assert crash_attempts == list(effect.crashed_operation_ids)
     assert len(crash_attempts) == 1

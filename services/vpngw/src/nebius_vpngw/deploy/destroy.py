@@ -27,6 +27,7 @@ from .vm_ha_cloud import (
     wait_vm_ha_operation,
 )
 from .vm_ha_lifecycle import (
+    REPLACEMENT_CYCLE_PATTERN,
     VMHAApplyLock,
     VMHALifecycleJournal,
     VMHALifecycleState,
@@ -1705,8 +1706,8 @@ class NebiusDestroyBackend:
         if state is None or state.transaction is None:
             return frozenset(value for value in current.values() if value)
         disk_binding = re.compile(
-            r"^(?:disk:|retired(?:-[2-9][0-9]*)?-disk:|"
-            r"replacement(?:-[2-9][0-9]*)?-disk:)"
+            rf"^(?:disk:|retired(?:-{REPLACEMENT_CYCLE_PATTERN})?-disk:|"
+            rf"replacement(?:-{REPLACEMENT_CYCLE_PATTERN})?-disk:)"
         )
         return frozenset(
             {
@@ -1727,8 +1728,8 @@ class NebiusDestroyBackend:
         if state is None or state.transaction is None:
             return {resource_id: name for name, resource_id in current.items() if resource_id}
         compute_binding = re.compile(
-            r"^(?:compute|retired(?:-[2-9][0-9]*)?-compute|"
-            r"replacement(?:-[2-9][0-9]*)?-compute):(.+)$"
+            rf"^(?:compute|retired(?:-{REPLACEMENT_CYCLE_PATTERN})?-compute|"
+            rf"replacement(?:-{REPLACEMENT_CYCLE_PATTERN})?-compute):(.+)$"
         )
         member_names = {member.instance_name for member in state.members}
         authoritative = {resource_id: name for name, resource_id in current.items() if resource_id}

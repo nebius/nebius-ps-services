@@ -14,6 +14,384 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Keep HA safety CI selectors aligned with the retained-identity regression and
+  verify that every explicitly selected safety test exists.
+
+- Validate final replacement cloud-init for every ordinary/HA member during
+  inspection and again before preparation effects, including resume. Oversized
+  preserved SSH authorization cannot reserve a source or create candidate resources.
+
+- Require setuptools 84.1.0 or newer for development and isolated builds, and
+  refresh the locked version to fix GHSA-xmj3-9gf7-h52w (Dependabot alert #109).
+- Recover interrupted first-start HA activation by quiescing reboot-started
+  management writers under exact creation authority before acquiring their locks.
+- Reject restart readiness that finishes validation after its deadline. Treat
+  unavailable enabled ping probes as unknown and show unknown health/counters
+  accurately; remove fixed recovery-time claims from restart guidance.
+
+- Validate both GCP creation/rotation keys before deleting existing peer resources;
+  reject invalid or unknown required pending keys without replacing retained secrets.
+- Bind HA suspicion timers to the observing boot in checkpoint v5. Convert supported
+  predecessors only through guarded coordinated apply, with exact crash-replay
+  receipts and current-runtime activation; keep runtime decoding v5-only.
+- Require exact installed ESP CHILD state and XFRM IDs for tunnel health. Unknown
+  IPsec/BGP observations hold recovery and counters; confirmed health clears them.
+- Stream the shared single-submit restart helper, use target-scaled deadlines and
+  one guest lock through BGP restoration, and reject incomplete remote results.
+
+- Fix staged replacement and resume rejecting their own apply-writer lock.
+  Retain coordinator serialization and the replacement journal lock; cover
+  ordinary and HA entrypoints with real-lock regressions.
+
+- Reject operator enrollment when the same customer-restricted key uses tabs or
+  repeated spaces between its fields. Reject fresh ordinary member provisioning
+  without a matching bootstrap public key, including additions during HA removal
+  and when `--ssh-identity` bypasses the original laptop's public-key path. Validate
+  the selected operator against the configured bootstrap key for fresh HA as well.
+- Treat retained ACTIVE HA members as existing hosts during staged `--recreate-gw`
+  preflight, so an additional operator does not need the original operator's
+  local key. Preserve fresh-host bootstrap checks and replacement fencing.
+
+- Replace delete-first VM recreation with a staged, journalled ordinary/HA workflow:
+  prepare an inactive candidate with live customer Security Groups and full operator
+  authorization, fence the exact source before address transfer, verify service,
+  and retire only exact resources with proven boot-disk ownership. Preserve public
+  and shared addresses; report changed primary private addresses and affected routes.
+  Add `apply --resume-replacement PATH` for recovery after the prior writer stops.
+  Temporary capacity and HA cutover interruption are explicit in the plan.
+- Harden interrupted replacement operation replay, HA unlock recovery, private
+  key selector reads and candidate boot forwarding. Block ordinary tunnel commands
+  while a logical gateway binding is pending; resolve their management addresses
+  from current Compute inventory. Replacement remains locally tested; live cloud
+  cutover qualification is not claimed.
+
+- Repair full-source review findings with focused regression coverage:
+  preserve indentless external-IP YAML sequences during network preparation;
+  require exact tunnel and BGP peer identities in restart/status results;
+  recover interrupted HA activation using the observed owner after failover;
+  journal system-package installation after handoff admission; and coalesce
+  reload signals outside the agent's routing-lock critical section.
+- Preserve accepted CIDR spelling while comparing canonical HA prefixes and
+  detecting equivalent per-instance APIPA networks. Keep required environment
+  variables unresolved when optional placeholders reuse their names.
+- Reuse GCP router tunnel addresses through the correct peer/interface mapping,
+  retain BGP priority zero, and redact malformed private PSK-source YAML from
+  helper errors.
+
+- Remove the unreleased SSH source-CIDR option, public-IP discovery and product-owned
+  SSH source filtering. Customers configure Nebius Security Groups; optional
+  `gateway_group.initial_security_group_ids` attaches existing groups at creation.
+  VPN peer filtering, pinned SSH authentication and fresh-login checks remain.
+- Add `access add-operator` with encrypted local Ed25519 generation or public-key
+  import, automatic public-key installation on every running member, fresh login
+  verification, private file-location output and same-key retries after partial
+  enrollment. Root `--ssh-identity` selects an exact operator identity independently
+  of shared YAML bootstrap paths.
+- Retain ordinary GCP tunnel PSKs before creation, independently for each tunnel;
+  use protected credential/connection files and descriptor-based gcloud secret
+  delivery instead of printing secrets or putting them in process arguments.
+
+- Preserve the failing member and safe reason when post-recovery package
+  verification fails. Avoid an unbound-local error that masked the original
+  failure; retain the existing apply locks, guards and resume guidance.
+
+- Record final ordinary-VM upgrade/reboot and HA replacement/resume, failover
+  and API-impairment qualification, including fixture cleanup and restoration.
+  Retain the unresolved 1.25% Static steady-loss failure; passing repetitions
+  do not establish release readiness or a packet-loss cause. Distinguish historical
+  checkpoints and subsequent source-only fixes from that tested artifact.
+
+- Clarify that optional tunnel probes support Static routing only and that
+  native IPsec/BGP/route readiness cannot establish end-to-end availability.
+  Preserve independent workload testing and the observed blackhole limitation
+  in the qualification report.
+
+- Check deployment reachability through authenticated SSH instead of requiring
+  public ICMP replies. Preserve the selected management user, strict host-key
+  verification, bootstrap gates and existing deadline so gateways behind
+  customer firewalls that block ping can still upgrade through `apply`.
+
+- Keep complete native serving evidence healthy during an active BGP tunnel
+  policy transition. Compare fresh exports with the current operation's scoped
+  normal or previous policy while activation catches up with durable intent.
+  During failed-request restoration, also recognize the exact requested policy
+  until normal policy is restored; reject paths outside the affected connection.
+  Keep requested-policy completion, passive readiness, unknown-path rejection
+  and the existing failover timers and cloud fencing unchanged.
+
+- Preserve early UFW startup in fresh bootstrap and in-place ordinary/HA
+  upgrades. Remove the product override's circular late-networking dependency
+  that could leave enabled saved firewall policy without running chains after
+  reboot. Reject unknown override contents before replacing the file; retain
+  saved rules and HA forwarding fences.
+
+- Use the selected dependency installer for fresh and recovery HA packages as
+  well as normal upgrades. Replace pip-owned predecessors through their records
+  instead of overlaying them, preventing duplicate gateway version metadata from
+  blocking the next `apply`; retain safe apt dependency shadowing.
+
+- Preserve verified owner observation when the non-owner Compute is absent,
+  requiring stable allocation and exact running local NIC ownership. Report the
+  missing peer as unknown so absence never supplies takeover fencing authority.
+- Resolve the current mTLS peer from its exact managed transaction during trust
+  overlap, avoiding ambiguous identity after repeated standby replacement while
+  preserving keys, trust anchors and persisted formats.
+- Extend guarded replacement artifact recovery to the exact activated but
+  unverified standby checkpoint and an independently fenced owner. Preserve
+  completed effects and matching acknowledged policy; reject later release or
+  publication steps and retain all stop, source and cloud ownership barriers.
+  Serialize the admitted acknowledged policy only when it exactly matches the
+  existing activation history and immutable journal binding. Accept a retained
+  failed service label only after the current stop and guard succeed and process,
+  job and forwarding checks prove quiescence; preserve the original failure log.
+
+- Fix normal retained-pair upgrades after completed standby replacement. Keep
+  policy adoption and original-policy persistence scoped to the current replacement
+  transaction so a later upgrade cannot fail while looking for a historical cycle.
+
+- Add digest-bound repaired-artifact recovery through normal `apply` for an exact
+  interrupted, fenced existing-pair upgrade. Preserve resource and credential
+  identities, prior artifact and effect history; verify both installed package
+  postconditions before canonical activation. Require customer upgrade
+  qualification to measure no more than two minutes of traffic interruption.
+  Share the recovery journal with SSH trust checks so each authorized durable
+  transition remains verifiable without accepting unrelated lifecycle drift.
+  Re-prove prepared recovery's stopped writers and exact packages before
+  activation instead of awaiting an acknowledgement from a stopped controller.
+  Keep mutable controller and mTLS transaction progress out of the host identity
+  fingerprint, while rejecting competing work and re-proving fences on resume.
+
+- Keep HA passive materialization and both active reload paths from writing
+  ordinary persistent sysctls. Stop route-maintenance timers and maintenance
+  services with the upgrade barrier so their dependencies cannot restart writers.
+- Verify upgrade shutdown from the current stop, forwarding guard, and process/job
+  postconditions, allowing recovery after a historical failed service stop without
+  clearing its failure history or accepting a failed current guard.
+- Reject conflicting package metadata within one installation prefix before
+  dependency planning can select versions and interrupt a gateway. Preserve
+  normal package shadowing across separate apt and pip installation prefixes.
+- Persist forwarding-off boot policy for HA gateways and reconcile existing
+  product sysctl files behind the forwarding guard before controller activation.
+  Reject unmanaged conflicting forwarding writers; preserve ordinary gateway
+  behavior and guarded reentry after HA deactivation.
+- Preserve bounded, identity-free apply phase and typed cause diagnostics across
+  recovery and CLI exception boundaries. Report unsatisfied standby-replacement
+  readiness predicates without changing acknowledgement, retry or success gates.
+- Record the approved temporary final-qualification threshold of strictly below
+  1% steady packet loss in each direction without three additional reduction
+  attempts. Preserve original strict verdicts and all other qualification gates.
+
+- Repair replacement adoption of canonical generation-rebound auto-healing policies
+  and persist their original lineage for interrupted policy reproof. Add an exact,
+  approval-bound recovery for an already-created, unverified replacement: fence
+  both hosts before installing a repaired artifact, preserve resources and audit
+  history, and resume the original transaction. Explicitly run the forwarding
+  guard when stopping a controller that has never started.
+
+- Keep generated gateway cloud-init within the 32 KiB limit by compressing bundled
+  scripts with cloud-init's native encoding. Validate final enrolled user data
+  before provisioning, preserving pinned SSH identity and script permissions.
+
+- Bound missing-standby replacement planning across controller credential preflight.
+  Wait only for an exact guarded owner with explicit pending identity proof;
+  reject unknown, failed, changed or late evidence before any replacement effect.
+
+- Fix repeated VM-HA replacement cycles at decimal boundaries such as 9→10→11
+  and 99→100. Lifecycle reads, cloud effect guards and cleanup inventory now
+  share one canonical counter grammar, preserving exact member/resource identity
+  and append-only history across interrupted replacement and resume.
+
+- Fix missing-standby replacement after a completed apply: bind its reviewed
+  artifact before the first durable write, preserve predecessor artifact identity
+  as audit history, and reject artifact changes during interrupted replacement.
+- Drain VM-HA writers and dependent service jobs in one irreversible systemd stop
+  transaction before package replacement. Reject late dependency restarts and
+  verify inactive services, absent processes/jobs and the current-boot guard.
+- Decouple VM-HA heartbeat publication and bounded local health collection from
+  cloud observation and effects (issue #238). Add strict v5 challenge/echo freshness,
+  serving-path evidence, atomic receive snapshots and cumulative observation
+  deadlines. Recheck and durably cancel only uncommitted automatic Stop actions;
+  retain strict fencing and reconcile accepted or uncertain operations.
+- Coordinate two-member wire upgrades through inhibition, writer quiescence and
+  verified guards before package replacement. Require reciprocal v5 proof before
+  release, preserve security/operation journals, and reject one-member wire changes.
+  Add cloud-delay, freshness, shutdown, cancellation and interrupted-upgrade tests.
+- Restart the complete guarded controller after an observation or worker failure;
+  never retry ownership decisions with a permanently stopped heartbeat publisher.
+  Live deadline-exhaustion testing exposed that lifecycle error. Wait for the exact
+  apply inhibition acknowledgement before controller shutdown, avoiding an immediate
+  verification race without weakening quiescence checks.
+  Persist artifact intent before bootstrap reads and establish the complete
+  upgrade barrier on markerless retained-pair resume, so early cloud failures
+  remain recoverable without permitting package writes ahead of inhibition.
+- Preserve fresh service liveness when tunnel selection or path checkpoints change,
+  while invalidating path readiness. Recheck service age and boot/configuration
+  identity at send admission so Static recovery keeps its original bounded grace
+  without extending deadlines or suppressing genuine forwarding failure.
+  Require independent receiver-side challenge proof for service-only recovery.
+  Report owner redundancy from fresh standby path evidence and owner-local cloud
+  truth, avoiding false terminal CLI failures during ordinary standby cloud reads.
+- Preserve independently verified BGP forwarding health while a tunnel-selection
+  operation is pending. The prior blanket invalidation could provoke VM takeover
+  during healthy BGP policy convergence. Static retains its existing bounded
+  service-only recovery; BGP gains no grace or timeout extension. Add composed
+  and native-observer regressions for healthy, unknown and failed paths.
+
+- Treat malformed BGP summary containers as unknown tunnel health instead of
+  allowing an observer exception to reach the HA controller. Add real-observer
+  regression cases and clarify HA versus ordinary BGP target selection in CLI
+  help and operator documentation. These alignment corrections have local
+  regression coverage; the previously qualified native/live candidate predates
+  this observer and help-text delta.
+- Bind HA tunnel status to the complete current owner authority, including
+  cluster and incarnation. Keep probe coverage validation consistent with
+  accepted CIDR spelling, and treat malformed BGP state observations as unknown.
+  These corrections have focused regression coverage and are included in the
+  restart-recovery candidate; targeted live trials do not repeat every edge case.
+- Repair HA BGP restart recovery by preparing durable selection while fenced,
+  preserving passive deny-all exports until canonical owner activation, and
+  requiring active route/export verification before tunnel completion. Release
+  confirmed failed overrides, block unknown selected-path evidence, and recheck
+  preferred coverage for failback without extending request deadlines. Refresh
+  stale passive import preferences through the existing checkpointed controller
+  transition, so retained failed-peer routes cannot block recovery. Cold Static
+  readiness never bypasses uncertain BGP policy. Add composed crash regressions
+  and native activate/verify/release/failed-peer restart coverage with exports
+  enabled and disabled; no additional SingleVM migration is required.
+- Qualify the restart repair with 3,186 local tests, two additional crash replay
+  tests, and the complete 86-test native Linux/systemd/strongSwan/FRR lane.
+  Targeted live BGP tunnel command cycles and pending-operation restarts passed
+  on both owners, including automatic VM promotion, strict Compute fencing and
+  standby recovery. Same-owner replay is proven in the native lane. Seven steady
+  traffic windows met the conditional under-1% exception, with maximum loss of
+  0.50%; upgrade and VM-transition loss remain separate. A shorter Static smoke
+  passed backup selection, normal package refresh with selection persistence,
+  and public failback on the same candidate, with exact installed-file checks
+  on both members; it added no workload traffic window.
+- Verify ongoing manual BGP overrides against actual received, selected and
+  advertised routes. Release confirmed failed coverage even when the peer stays
+  Established; keep unknown evidence fail-closed. Add observer and CLI boundary
+  regressions. This correction is included in the restart-recovery candidate;
+  its route-withdrawal fixture proof remains distinct from live restart proof.
+- Include the composed late Static loss and recovery-exhaustion regressions in
+  the CI safety lane, and document the native FRR/HA fixture's proof boundaries.
+- Count complete healthy backup coverage toward the existing owner-repair
+  recovery and sixty-second reset, even while a redundant BGP peer remains down.
+  Preserve two fresh recovery observations and every repair deadline, readiness
+  and fencing gate.
+- Accept the controller's ready `degraded-path` state in the canonical routing
+  writer guard, so ordinary agent reload after BGP recovery preserves forwarding
+  through the healthy backup. Keep current-boot, guard and readiness checks strict.
+- Preserve exact HA cloud-route receipts during confirmed BGP path loss and use
+  the existing five-second repair budget to clear only the failed BGP session
+  when a complete healthy backup is available. Keep healthy tunnels running,
+  release failed manual overrides before repair, and retain strict readiness
+  and fencing checks.
+
+- Write HA BGP tunnel policy through the existing group-writable FRR file,
+  preserving its ownership and permissions inside the controller's systemd
+  sandbox. Avoid temporary-file creation that could crash the owner and trigger
+  VM failover. Add a regression under the production capability restrictions.
+- Reuse controller observations during tunnel work without duplicating cloud
+  reads. Issue #238 moves heartbeat publication onto an independent cadence
+  while retaining exact evidence binding, peer freshness and fencing limits.
+- Admit confirmed Static tunnel recovery before committing generic VM repair when
+  a path fails between health observations. Recheck authority before effects and
+  retain the single persisted 30-second recovery deadline.
+- Reject managed HA route-scope changes before apply effects. Add explicit,
+  digest-bound recovery for an interrupted pre-host reapply after proving retained
+  cloud and installed host identities, preserving journal lineage and normal
+  non-owner-first activation.
+- Keep HA Static preparation inside the controller filesystem sandbox by applying
+  runtime XFRM settings without rewriting persistent bootstrap sysctl configuration.
+- Wait for transient HA controller writer contention during tunnel request
+  admission, preserving serialization and exact authority checks.
+- Accept concurrent scoped IKE teardown only after fresh SA evidence proves
+  absence, so an already-deleted SA does not abort a healthy Static switch.
+- Serialize HA agent reloads with tunnel operations and track configured settings
+  separately from operational selection, avoiding daemon restarts during switching.
+- Retain exact fenced VM transfer proof while completion receipt publication waits
+  for the writer lock, preventing a healthy failover or failback from fencing itself
+  on the following controller tick. Keep fresh Compute and allocation checks.
+- Treat null HA destination lists as unspecified coverage, preserving native
+  routing and reporting switching unavailable instead of failing policy rendering.
+
+- Add controller-owned HA Static automatic tunnel recovery and HA Static/BGP
+  manual tunnel failover/failback on the current owner. Keep Static alternatives
+  cold, preserve native BGP backups, verify import/export policy, and persist
+  selections and operation progress across unchanged apply and service restart.
+- Bound Static recovery to one persisted 30-second episode, including local
+  fencing, with exact owner/configuration binding and optional scoped probes.
+  Expose selection and recovery status without changing the VM status contract.
+- Require both HA members to support connection tunnel selection after the
+  supported non-owner-first upgrade. Preserve ordinary SingleVM behavior and
+  in-place upgrades without an additional configuration migration.
+- Treat established, confirmed-down and unknown BGP peers distinctly when proving
+  HA export readiness; a down redundant peer no longer invalidates healthy coverage.
+- Qualify native packet paths with isolated Linux, strongSwan and FRR 10.5 tests.
+  Include matching FRR reload tools in the disposable systemd fixture.
+  Cover Static switching in mixed deployments while preserving an unrelated
+  BGP session, received/exported routes and traffic under both owner bindings.
+  An earlier candidate passed 3,087 unit tests, 28 native tunnel tests and all six
+  genuine 0.6.0–0.6.2 SingleVM host upgrades, including unchanged reapply,
+  interrupted apply and automatic reboot recovery in both modes. Two complete
+  live Static and BGP failover/failback cycles passed under the temporary loss
+  criterion. Keep Static's earlier full-cycle artifact distinct from its verified
+  final-candidate refresh and selection persistence. Preserve failed/incomplete
+  trial evidence. A fresh complete live replay of the earlier pre-host recovery
+  sequence remains unverified.
+- Clarify that controller restart preserves selection while ownership authority
+  is unchanged. Mandatory startup fencing can trigger existing automatic VM
+  takeover, which resets selection on the new owner.
+- Record the temporary live qualification loss exception in REQ-025: after three
+  bounded reduction attempts, accept below 1% in each direction until withdrawn
+  when loss is the sole remaining issue. Retain 0.2% as the normal target and
+  preserve every other acceptance gate and original trial verdict.
+
+- Install configured VPN peer ingress policy through cloud-init before the first
+  SSH push. Deny empty peer sets and require a fresh authenticated connection after
+  activation. Keep in-place upgrades bound to the reviewed artifact and existing
+  VPN configuration.
+- Replace whole-firewall resets with a validated atomic product-owned nftables policy,
+  preserving customer/UFW rules and HA fencing. Security groups remain customer-owned.
+- Keep expected missing-policy probes out of ordinary apply's failed-command ledger.
+  Preserve HA no-op SSH verification failures and reconcile only confirmed policy
+  drift; malformed gateway blocks report the required-source validation error.
+- Use UFW's complete source/destination syntax for the ESP permit so native
+  gateway upgrades can finish firewall reconciliation. Validate packaged permits
+  with the real UFW parser in the isolated Linux lane.
+- Resume interrupted HA passive materialization before retiring prior-generation
+  adoption records. Keep exact fencing and old proof intact while the controller
+  checkpoints the local safety action for the installed generation; preserve
+  strict runtime identity checks and reject other pending effects.
+
+- Define product packet-loss acceptance as strictly below 0.2% per tested direction,
+  without a fixed ten-minute observation requirement. Preserve declared sample scope,
+  original trial evidence and separate BGP/HA, outage and compatibility checks.
+
+- Wait for a guarded maintenance timer job to settle during ordinary apply's
+  final verification, then recheck the complete runtime proof within the existing
+  deadline. Preserve ownership and fail closed on drift or unavailable evidence.
+- Prevent healthy tunnel restarts caused by similarly named IKE connections or
+  overlapping negotiations; use exact connection identity and all matching SAs.
+- Keep planned HA transfers observing an exact pending ownership self-fence when
+  the current guard is already blocked. Preserve request binding, fencing,
+  success criteria and the existing fixed deadline.
+
+- Prevent repeated IPsec session replacement after overlapping authenticated
+  negotiations. Preserve native INITIAL_CONTACT handling and startup initiation;
+  recover closed active tunnels on demand while keeping inert HA rendering inactive.
+- Add BGP and static compatibility fixtures generated by the verified original
+  0.6.0 release wheel, covering nonempty saved state and tunnel identity.
+- Fix automatic VM-HA restoration after a reverse takeover across configuration
+  generations: retire exact completed authorization before its old promotion
+  receipt so the new transfer can arm and restore the former owner. Preserve
+  policy, fencing, public interfaces and persisted formats; add safe transition
+  diagnostics and crash, identity, I/O and expired-heartbeat regressions.
+- Install configured tunnel host firewall permits before interfaces exist and
+  repair kernel-only rule loss from saved UFW policy in its original order.
+  Preserve existing configuration, unrelated firewall policy and HA fencing;
+  require real-UFW packet regressions in the isolated systemd CI lane.
 - Align CI regression assertions with validated post-merge dispatch, retaining
   the lint dependency and one wheel build per ordinary or manual execution lane.
 
@@ -393,10 +771,10 @@ All notable changes to this project are tracked here. This changelog follows
   inhibition, adopts before VM-HA control services start, and re-proves durable
   agreement before releasing replacement inhibition. Exact package preparation
   now installs service assets from the approval-bound wheel, and staged activation
-  reuses that descriptor without rebuilding or uploading different bytes. A completed replacement
-  with this historical split is classified as apply-owned convergence so bare
-  `vm-ha` can install the fixed artifact and repair it through the same fenced
-  activation path; other policy conflicts remain blocked.
+  reuses that descriptor without rebuilding or uploading different bytes. Policy
+  agreement is established before the replacement completes. Later retained-pair
+  upgrades preserve the committed policy without reentering replacement adoption;
+  unrelated policy conflicts remain blocked.
   Plain `apply` performs no
   unapproved replacement and directs the operator to `vm-ha` without claiming
   that an approval digest was already displayed. SSH identity prerequisites

@@ -1825,6 +1825,29 @@ def stat_mode(path: Path) -> int:
     return os.stat(path).st_mode & 0o777
 
 
+@pytest.mark.parametrize("matching_operator", [False, True])
+def test_vm_ha_fresh_bootstrap_matches_selected_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matching_operator: bool
+) -> None:
+    from nebius_vpngw.deploy import ssh_client_auth
+
+    key = paramiko.RSAKey.generate(1024)
+    private_path = tmp_path / "bootstrap-key"
+    key.write_private_key_file(str(private_path))
+    private_path.chmod(0o600)
+    selected_key = key if matching_operator else paramiko.RSAKey.generate(1024)
+    actor = ssh_client_auth.SSHClientAuth(
+        "operator", selected_key.get_name(), selected_key.get_base64()
+    )
+    monkeypatch.setattr(ssh_client_auth, "operator_identity", lambda: actor)
+    public_key = f"{key.get_name()} {key.get_base64()}"
+    if matching_operator:
+        assert require_vm_ha_management_key(private_path, public_key) == private_path
+    else:
+        with pytest.raises(ValueError, match="bootstrap SSH public key must match"):
+            require_vm_ha_management_key(private_path, public_key)
+
+
 def test_vm_ha_management_key_requires_private_permissions_and_exact_public_key(
     tmp_path: Path,
 ) -> None:
@@ -1863,3 +1886,45 @@ def test_vm_ha_management_key_rejects_missing_inputs(
     candidate = None if private_key is None else tmp_path / private_key
     with pytest.raises(ValueError, match=message):
         require_vm_ha_management_key(candidate, "ssh-ed25519 fixture")
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_ordinary_uses_strong_recovery_before_network_enrollment(tmp_path, monkeypatch, local):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    scope = _trust_scope(cluster_id="ordinary-v1")
+    hostname = "gateway-0"
+    private, _, public = ssh_policy_module._generate_ed25519_host_key(hostname)
+    directory = _default_host_key_directory(tmp_path, scope)
+    key_path = directory / f"{hostname}.key"
+    if local:
+        directory.mkdir(parents=True, mode=0o700)
+        _protect_default_host_key_directories(tmp_path, directory)
+        key_path.write_bytes(private)
+        key_path.chmod(0o600)
+    calls = []
+
+    def recover(hosts):
+        calls.append(hosts)
+        return {
+            name: SSHHostKeyRecovery(
+                hostname=name, private_key=private, assert_current=lambda: None
+            )
+            for name in hosts
+        }
+
+    policy = require_vm_ha_ssh_policy(
+        ((hostname, "203.0.113.10"),),
+        {},
+        retained_hosts=(hostname,),
+        enrollment_hosts=(),
+        trust_scope=scope,
+        allow_managed_repair=True,
+        persist_default_host_keys=True,
+        allow_legacy_ordinary_enrollment=True,
+        host_identity_recovery=recover,
+        managed_root=tmp_path / "managed",
+    )
+    assert public in policy.known_hosts_file.read_text()
+    assert len(calls) == (0 if local else 1)
+    assert publish_vm_ha_ssh_trust(policy)
+    assert key_path.read_bytes() == private

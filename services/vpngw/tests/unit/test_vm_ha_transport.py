@@ -416,6 +416,7 @@ class _FakeTLSConfig:
             certificate_path=Path("/unused/certificate.pem"),
             private_key_path=Path("/unused/private-key.pem"),
             peers=(peer,),
+            current_peer=peer,
             peer_certificate_paths=(Path("/unused/peer.pem"),),
             peer_certificate_pems=(b"unused",),
         )

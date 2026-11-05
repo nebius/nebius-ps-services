@@ -42,7 +42,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
 export SKILLS_INSTALL_PROJECTOR="${SCRIPT_DIR}/global-context-management/scripts"
-HOOK_SUPPORT_FILES=(agent_runtime.py hook_runtime.py trusted_runtime.py task_state_permissions.py)
+HOOK_SUPPORT_FILES=(agent_runtime.py hook_runtime.py trusted_runtime.py task_state_permissions.py git_environment.py)
 readonly HOOK_SUPPORT_FILES
 
 # Color/style output (auto-disabled for non-interactive terminals or NO_COLOR).
@@ -2284,7 +2284,7 @@ for path in (Path(home), Path(home) / "hooks"):
     if path.exists() and (not path.is_dir() or path.stat().st_uid != os.getuid()
                           or path.stat().st_mode & 0o022):
         raise SystemExit("ERROR: agent home and hooks must be owned directories without group/world write access")
-for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
     path = Path(home) / "hooks" / name
     if path.exists() and (not path.is_file() or path.stat().st_uid != os.getuid()
                           or path.stat().st_mode & 0o022):

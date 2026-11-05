@@ -16,6 +16,93 @@ SCRIPT = PROJECT_ROOT / "misc" / "gcp-vpngw.sh"
 HELPER_PATH = PROJECT_ROOT / "misc" / "gcp_vpngw_vm_ha.py"
 
 
+def _run_ordinary_functions(tmp_path, resources, commands):
+    _executable, log = _fake_gcloud(tmp_path, resources)
+    source = SCRIPT.read_text(encoding="utf-8")
+    entrypoint = '\nmain "$@"\n'
+    assert source.endswith(entrypoint)
+    result = subprocess.run(
+        ["bash", "-s"],
+        input=source.removesuffix(entrypoint) + "\n" + commands,
+        cwd=PROJECT_ROOT,
+        env=_subprocess_env(tmp_path, log, resources),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert calls and all(call[:3] == ["compute", "routers", "describe"] for call in calls)
+    return result
+
+
+def test_ordinary_reuses_existing_router_tunnel_addresses(tmp_path):
+    router = _complete_resources(_load_helper())["routers/cr-nebius-ha"]
+    router["interfaces"] = router["interfaces"][:2]
+    router["bgpPeers"] = router["bgpPeers"][:2]
+    result = _run_ordinary_functions(
+        tmp_path,
+        {"routers/cr-nebius-ha": router},
+        """
+GCP_PROJECT_ID=fixture-project
+REGION=europe-west9
+CLOUD_ROUTER_NAME=cr-nebius-ha
+CONNECTION_NAME=site-ha
+IFACE1_NAME=site-ha-if-1
+IFACE2_NAME=site-ha-if-2
+LOCAL_CONFIG_FILE=''
+APIPA_OVERRIDE_SET=0
+plan_tunnel_addressing
+printf 'RESULT=%s,%s,%s;%s,%s,%s\\n' "$TUN1_CIDR" "$TUN1_NEBIUS_IP" "$TUN1_GCP_IP" "$TUN2_CIDR" "$TUN2_NEBIUS_IP" "$TUN2_GCP_IP"
+""",
+    )
+    assert (
+        "RESULT=169.254.20.0/30,169.254.20.1,169.254.20.2;169.254.21.0/30,169.254.21.1,169.254.21.2"
+    ) in result.stdout
+
+
+@pytest.mark.parametrize(("priority", "expected"), [(0, "0"), (100, "100"), (None, "")])
+def test_ordinary_router_peer_rows_preserve_zero_priority(tmp_path, priority, expected):
+    peer = {
+        "name": "site-peer-1",
+        "interfaceName": "site-if-1",
+        "peerIpAddress": "169.254.10.1",
+        "peerAsn": 65010,
+    }
+    if priority is not None:
+        peer["advertisedRoutePriority"] = priority
+    result = _run_ordinary_functions(
+        tmp_path,
+        {"routers/cr-nebius-ha": {"bgpPeers": [peer]}},
+        """
+GCP_PROJECT_ID=fixture-project
+REGION=europe-west9
+CLOUD_ROUTER_NAME=cr-nebius-ha
+router_peer_rows
+""",
+    )
+    assert result.stdout.rstrip("\n").split("\t") == [
+        "site-peer-1",
+        "site-if-1",
+        "169.254.10.1",
+        "65010",
+        expected,
+    ]
+
+
+def test_malformed_private_psk_source_does_not_echo_content(tmp_path):
+    helper = _load_helper()
+    path = tmp_path / "private.yaml"
+    canary = "synthetic-review-secret-canary"
+    path.write_text(f'psk: "{canary}\n', encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(helper.HelperError) as error:
+        helper._psks_from_private_config(str(path), _plan(helper))
+    assert canary not in str(error.value)
+    assert "cannot read PSK source config" in str(error.value)
+
+
 def _load_helper() -> ModuleType:
     spec = importlib.util.spec_from_file_location("test_gcp_vpngw_vm_ha", HELPER_PATH)
     assert spec is not None and spec.loader is not None

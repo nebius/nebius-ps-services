@@ -4,6 +4,21 @@
 and integrates each committed child locally into the current non-default source
 branch. Child branches are never pushed or used for pull requests.
 
+Both coordinators use the shared stop-before-repair worker boundary. An
+unexpected failed check or blocking review finding returns preserved evidence
+and a blocked result before any repair or rerun. Only negative outcomes declared
+in immutable assignment validation before execution are expected feedback.
+Required safe teardown and lease release remain allowed. The owning coordinator
+classifies and authorizes recovery or replanning; workers cannot relabel failures
+or erase them with a later successful check.
+
+Before actions with known access prerequisites, both worker envelopes direct
+agents to supported tools and native approval mechanisms. An approval request
+does not grant access, a denial remains a policy/authority stop, and an
+unexpected executed failure still requires the blocked handoff. Recovery uses
+the existing shared engine with a stopped predecessor, released runtime,
+unchanged assignment and fresh identity; it never grants permission itself.
+
 ## Public Actions
 
 ```text
@@ -43,12 +58,38 @@ integration checkout before initial specification publication. The following
 execution and creates worker waves. This preserves the accepted source and
 keeps initial spec changes out of uncommitted worker inputs. These are internal
 workflow transitions, not additional public Worktree actions.
+SDLC's `prepare` owns the initial source contract commit after objective impact
+and plan validation. It admits only the published canonical pair and exact
+validated document inputs, rejects unrelated changes, and journals the parent,
+branch, objective, plan, file hashes and tree before committing. Recovery accepts
+only the matching clean direct child. Managed SDLC intake acquires ownership
+before authoring; preparation records the contract head in that lease before
+creating integration. Clean sources must match accepted or completed workflow
+checkpoints; arbitrary commits cannot substitute for this transaction.
+
+The transition helper consistently selects the private execution with
+`--execution`, including worker reconciliation. Ordinary feature executions
+and document delivery slices use the same argument; it does not change task
+feature membership or coordinator authorization.
+For a proven active-task design defect, private `prepare-design-revision` consumes
+the canonical classifier's active counted dispatch, exact native terminations
+and released leases. It retains the unmerged failed wave before the semantic
+owner publishes a corrected pair. Private `seal-design-revision` seals only that
+owner-validated pair, journals the exact parent/tree, and safely resumes an
+interrupted commit. Fresh impact and replanning then create new assignments;
+old failures and worker artifacts remain historical evidence. See the
+[execution-plane recovery sequence](../sdlc-prepare-execution/references/execution-plane.md).
 The shared plan parser preserves multiline task contracts and ownership lists,
 and rejects empty fields, duplicate fields and malformed task headings before
 preparation. Implement and SDLC consume this same parser.
 
 `--project` selects the returned starting directory; it is not a sparse
 checkout, branch argument, staging boundary, or changed-path restriction.
+
+Both execution coordinators use one five-minute startup window from arming to
+`task-start`, followed by the existing one-hour work limit. Prepare the handoff
+before arming and spawn immediately afterward. Repeated arming never renews time;
+new policy requires fresh assignments after prior writers are quiescent.
 
 When `<task>` is omitted, `add` normalizes the resolved project directory's
 basename into the task slug. For example, invoking `$worktree` from `skills/`
@@ -149,6 +190,12 @@ Use these boundaries:
   branch. Remove each child separately after its exact local integration proof
   is recorded.
 
+Owned SDLC verification profiles propagate through coordinator Git, linked
+workers, native dispatch and qualification subprocesses. The shared validator
+rechecks exact repository membership and fixed configuration before Git use;
+existing task leases, registration and promotion gates remain authoritative.
+Ordinary worktrees without a verifier profile keep their existing behavior.
+
 ## VS Code Worktree Discovery
 
 VS Code users can enable automatic Git worktree discovery in their user or
@@ -196,12 +243,49 @@ and resource revalidation finish; interruption at either deletion boundary is
 therefore retryable without losing the receipt compare-and-set anchor.
 
 Implement and Agentic SDLC use the shared workflow execution substrate documented
-in [workflow-contract.md](references/workflow-contract.md). Accepted objectives,
+in [workflow-contract.md](references/workflow-contract.md). Worker launch envelopes,
+strict native-result ingestion and immutable per-attempt receipts share this
+owner across parallel and sequential adapters. Blocked or replan results stop
+new dispatch while active peers drain; recovery preserves historical receipts.
+Accepted objectives,
 immutable bases, fresh task worktrees, slot refill, result admission and delivery
 share these Git lifecycle primitives. Execution bases also bind mandatory workflow
 references, supporting owner instructions, and the worker result schema, so
 contract drift is rejected before task dispatch. Obsolete persistent-lane state is rejected
 and retained without conversion or cleanup.
+
+Native worker output uses a provider-supported schema. Local result validation
+enforces status-dependent spec gaps and unique typed requirement/design IDs.
+Launch failures retain the native exit code and a fixed schema-rejection label
+when recognized; raw native error output is never reflected in the result.
+Rejected structured results retain a fixed reason identifying the failed guard,
+including status/spec-gap mismatches. Diagnostics never echo rejected values or
+unknown field names, and invalid results remain `WORKER_FAILED`.
+
+Native `task-arm` and `authorize-recovery` validate the selected home, registered
+project/run, canonical assignment and current coordinator binding before
+admission. The shared launch envelope declares the project-state directory and,
+for runtime tasks or recovery, the shared runtime-lease directory. Both host
+adapters add these directories without changing sandbox mode or approval policy;
+the sequential adapter completes admission before spawning. Unavailable host
+capability blocks launch. The owner prepares missing lease storage after checks.
+These grants include sibling project runs and shared lease records; helper
+ownership and write-claim checks enforce finer authority, not OS isolation
+between records. No grant permits unrelated state edits.
+
+A zero-exit worker still awaiting `task-start` may return a screened blocked or
+replan diagnostic as `prestart_result`. Input and canonical result are each
+limited to 64 KiB. This remains `WORKER_FAILED`, stops later assignments and
+grants no result receipt, completion, recovery or replanning authority. Invalid,
+oversized or implemented output yields only a fixed reason; terminal liveness
+failures retain precedence.
+
+Workers can return `blocked` with empty spec gaps when a non-specification failure
+leaves work or validation incomplete. After full validation, the dispatcher
+returns `WORKER_BLOCKED` with the validated `worker_result` and exit 2, stopping
+later assignments. The coordinator owns diagnosis after observed termination;
+blocked evidence never enters task completion, admission or integration. Workers
+must report unperformed checks honestly instead of inventing a specification gap.
 
 Push and PR guards classify the primary and every linked checkout against Git
 metadata, ownership manifests, integration reservations, and nested lease

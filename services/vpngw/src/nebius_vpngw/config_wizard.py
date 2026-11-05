@@ -403,7 +403,7 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
     advanced = prompt.ask_bool(
         "Configure advanced VM and HA settings",
         default=advanced_default,
-        help_text="Choose yes to customize VM sizing, SSH paths, quotas, timers, or explicit VM-level HA.",
+        help_text="Choose yes to customize VM sizing, SSH paths, Security Groups, quotas, timers, or explicit VM-level HA.",
     )
     if advanced:
         vm_spec = t.cast(dict[str, t.Any], group["vm_spec"])
@@ -466,6 +466,17 @@ def _gateway_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             minimum=max(15, dpd["interval_seconds"] + 1),
             maximum=600,
             help_text="Must be greater than the DPD interval.",
+        )
+        group["initial_security_group_ids"] = _csv_values(
+            prompt,
+            "Initial customer Security Group IDs (comma-separated, optional)",
+            default=group.get("initial_security_group_ids", []),
+            validator=_validate_name,
+            help_text=(
+                "Use existing groups from the gateway VPC. Applied only when creating new VMs; "
+                "replacement preserves each VM's live attached groups. vpngw never manages their rules."
+            ),
+            required=False,
         )
         _vm_ha_config(prompt, group)
     else:

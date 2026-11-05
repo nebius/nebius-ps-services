@@ -122,6 +122,7 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
 _load_skill_support('runtime', __file__, 'sdlc-start/assets/hooks/lib/sdlc_state.py')
 
 from agent_runtime import agent_home, native_session_id  # noqa: E402
+from git_environment import environment as git_environment  # noqa: E402
 
 
 CODEX_HOME = agent_home()
@@ -139,7 +140,7 @@ class ActiveRun:
     lock_path: Path
     canonical_project_root: Path | None = None
     execution_role: str | None = None
-    execution_feature: str | None = None
+    execution_identity: str | None = None
     execution_wave: str | None = None
     execution_task: str | None = None
     registered_branch: str | None = None
@@ -256,10 +257,12 @@ def append_jsonl(path: Path, value: dict[str, Any]) -> None:
 
 
 def run_git(cwd: Path, args: list[str]) -> str:
+    environment = git_environment(cwd)
     try:
         result = subprocess.run(
             ["git", *args],
             cwd=str(cwd),
+            env=environment,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -329,10 +332,12 @@ def staged_files(project_root: Path) -> list[str]:
 
 
 def staged_diff(project_root: Path) -> str:
+    environment = git_environment(project_root)
     try:
         result = subprocess.run(
             ["git", "diff", "--cached", "--no-ext-diff"],
             cwd=str(project_root),
+            env=environment,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -395,13 +400,13 @@ def _run_dir_from_lock(project_dir: Path, lock: dict[str, Any]) -> Path | None:
         return None
     run_dir = project_dir / run_id
     run = _private_json(run_dir / "run.json") or {}
-    if (run.get("schema") != "workflow/run-v1" or run.get("owner") != "agentic-sdlc"
+    if (run.get("schema") != "workflow/run-v2" or run.get("owner") != "agentic-sdlc"
             or run.get("run_id") != run_id or run.get("project_root") != lock.get("project_root")
             or run.get("project_id") != lock.get("project_id")
             or run.get("coordinator_session_sha256") != lock.get("owner_session_hash")):
         return None
     objective = _private_json(run_dir / "objective.json") or {}
-    if (objective.get("schema") != "workflow/accepted-objective-v1"
+    if (objective.get("schema") != "workflow/accepted-objective-v2"
             or objective.get("run_id") != run_id or objective.get("owner") != "agentic-sdlc"
             or not isinstance(objective.get("revisions"), list) or not objective["revisions"]):
         return None
@@ -412,7 +417,7 @@ def _run_dir_from_lock(project_dir: Path, lock: dict[str, Any]) -> Path | None:
         if revision.get("snapshot") != f"objectives/r{index:04d}.json" or revision.get("parent_sha256") != parent:
             return None
         snapshot = _private_json(run_dir / revision["snapshot"])
-        if snapshot is None or set(snapshot) != {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications", "provenance"}:
+        if snapshot is None or set(snapshot) != {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications", "provenance", "inputs", "completion"}:
             return None
         encoded = (json.dumps(snapshot, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
         parent = hashlib.sha256(encoded).hexdigest()
@@ -429,14 +434,14 @@ def _execution_registration(
             coordinator = load_json(coordinator_path) or {}
         except json.JSONDecodeError:
             continue
-        if coordinator.get("schema") != "workflow/execution-coordinator-v1" or coordinator.get("owner") != "agentic-sdlc":
+        if coordinator.get("schema") != "workflow/execution-coordinator-v2" or coordinator.get("owner") != "agentic-sdlc":
             continue
         integration_path = coordinator.get("integration_worktree")
         if coordinator_owned and integration_path and is_inside(cwd_path, str(integration_path)):
             return coordinator, {
                 "role": "integration",
-                "feature_id": str(
-                    coordinator.get("feature_id") or coordinator_path.parent.name
+                "execution_id": str(
+                    coordinator.get("execution_id") or coordinator_path.parent.name
                 ),
                 "wave_id": None,
                 "task_id": None,
@@ -451,7 +456,7 @@ def _execution_registration(
                 assignment = load_json(assignment_path) or {}
             except json.JSONDecodeError:
                 continue
-            if assignment.get("schema") != "workflow/worker-assignment-v1":
+            if assignment.get("schema") != "workflow/worker-assignment-v2":
                 continue
             worker_path = assignment.get("worktree")
             if not worker_path or not is_inside(cwd_path, str(worker_path)):
@@ -478,7 +483,7 @@ def _execution_registration(
                 expected_head = str(result["commit"])
             return coordinator, {
                 "role": "worker",
-                "feature_id": str(assignment.get("feature_id") or ""),
+                "execution_id": str(assignment.get("execution_id") or ""),
                 "wave_id": str(assignment.get("wave_id") or ""),
                 "task_id": str(assignment.get("task_id") or ""),
                 "worktree": str(worker_path),
@@ -514,6 +519,8 @@ def _registered_identity(
 
 def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME, session_id: str | None = None) -> ActiveRun | None:
     cwd_path = resolve_path(cwd)
+    # A missing binding must not silently admit a corrupt owned environment.
+    git_environment(cwd_path)
     runs_root = codex_home.expanduser() / "sdlc-runs"
     session = session_id or native_session_id()
     if not session:
@@ -592,7 +599,7 @@ def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME, session_id: 
             lock_path=lock_path,
             canonical_project_root=project_root,
             execution_role=str(registration["role"]),
-            execution_feature=str(registration["feature_id"]),
+            execution_identity=str(registration["execution_id"]),
             execution_wave=registration.get("wave_id"),
             execution_task=registration.get("task_id"),
             registered_branch=str(registration["branch"]),

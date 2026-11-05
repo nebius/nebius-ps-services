@@ -24,6 +24,10 @@ BROWSER_NAME = "Google Chrome (headless)"
 STAGES = ("capability-discovery", "evaluate", "uat-before-restart", "uat-after-restart")
 ASSETS = Path(__file__).resolve().parents[1] / "assets/headless-browser"
 STAGE_TIMEOUT_SECONDS = 300
+BUNDLE_FILES = (
+    "package.json", "package-lock.json", "playwright.config.mjs",
+    "acceptance.spec.mjs", "completion-control.mjs",
+)
 
 
 class BrowserOwnershipError(RuntimeError):
@@ -104,12 +108,7 @@ def freeze_bundle(run_root: Path) -> dict[str, str]:
     bundle = safe_path(run_root / "private/browser/bundle", run_root)
     bundle.mkdir(parents=True, mode=0o700)
     hashes = {}
-    for name in (
-        "package.json",
-        "package-lock.json",
-        "playwright.config.mjs",
-        "acceptance.spec.mjs",
-    ):
+    for name in BUNDLE_FILES:
         source = ASSETS / name
         shutil.copyfile(source, bundle / name)
         os.chmod(bundle / name, 0o600)
@@ -121,12 +120,7 @@ def verify_bundle(state: dict) -> Path:
     root = Path(state["run_root"])
     bundle = safe_path(root / "private/browser/bundle", root)
     expected = state.get("browser_bundle")
-    if not isinstance(expected, dict) or set(expected) != {
-        "package.json",
-        "package-lock.json",
-        "playwright.config.mjs",
-        "acceptance.spec.mjs",
-    }:
+    if not isinstance(expected, dict) or set(expected) != set(BUNDLE_FILES):
         raise BrowserOwnershipError("Frozen browser oracle is missing.")
     for name, sha in expected.items():
         item = safe_path(bundle / name, root)

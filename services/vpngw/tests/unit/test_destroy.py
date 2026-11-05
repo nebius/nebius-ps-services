@@ -1130,7 +1130,10 @@ def test_resolved_predecessor_operation_binds_only_its_exact_returned_resource()
     assert compute["gateway-1"] == "compute-accepted"
 
 
-def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority() -> None:
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
+def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority(cycle) -> None:
+    from nebius_vpngw.deploy.vm_ha_lifecycle import vm_ha_passive_replacement_binding_key
+
     plan = _plan(topology="vm-ha")
     lifecycle = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
     lifecycle = replace(
@@ -1138,8 +1141,11 @@ def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority() 
         transaction=replace(
             lifecycle.transaction,
             resource_bindings=(
-                ("replacement-disk:gateway-1", "disk-current"),
-                ("retired-disk:gateway-1", "disk-retired"),
+                (vm_ha_passive_replacement_binding_key("disk", "gateway-1", cycle), "disk-current"),
+                (
+                    vm_ha_passive_replacement_binding_key("retired-disk", "gateway-1", cycle),
+                    "disk-retired",
+                ),
             ),
         ),
     )
@@ -1153,7 +1159,10 @@ def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority() 
     assert observed == {"disk-0", "disk-current", "disk-retired"}
 
 
-def test_vm_ha_destroy_plans_present_retired_compute_for_deletion() -> None:
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
+def test_vm_ha_destroy_plans_present_retired_compute_for_deletion(cycle) -> None:
+    from nebius_vpngw.deploy.vm_ha_lifecycle import vm_ha_passive_replacement_binding_key
+
     plan = _plan(topology="vm-ha")
     lifecycle = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
     lifecycle = replace(
@@ -1161,8 +1170,14 @@ def test_vm_ha_destroy_plans_present_retired_compute_for_deletion() -> None:
         transaction=replace(
             lifecycle.transaction,
             resource_bindings=(
-                ("replacement-compute:gateway-1", "compute-current"),
-                ("retired-compute:gateway-1", "compute-retired"),
+                (
+                    vm_ha_passive_replacement_binding_key("compute", "gateway-1", cycle),
+                    "compute-current",
+                ),
+                (
+                    vm_ha_passive_replacement_binding_key("retired-compute", "gateway-1", cycle),
+                    "compute-retired",
+                ),
             ),
         ),
     )
@@ -1276,11 +1291,7 @@ def _ordinary_build_plan_backend(*, route_name: str) -> NebiusDestroyBackend:
         "allocation-public": public,
     }
     backend._get_allocation_by_name = lambda name: next(
-        (
-            allocation
-            for allocation in allocations.values()
-            if allocation.metadata.name == name
-        ),
+        (allocation for allocation in allocations.values() if allocation.metadata.name == name),
         None,
     )
     backend._get_allocation_by_id = lambda resource_id: allocations.get(resource_id)
@@ -1292,12 +1303,8 @@ def test_ordinary_destroy_build_plan_selects_only_exact_owned_resources() -> Non
     plan = _ordinary_build_plan_backend(route_name="vpngw-remote-prefix").build_plan("a" * 64)
 
     assert plan.blockers == ()
-    assert [(item.name, item.resource_id) for item in plan.compute] == [
-        ("gateway-0", "compute-0")
-    ]
-    assert [(item.name, item.resource_id) for item in plan.disks] == [
-        ("gateway-0-boot", "disk-0")
-    ]
+    assert [(item.name, item.resource_id) for item in plan.compute] == [("gateway-0", "compute-0")]
+    assert [(item.name, item.resource_id) for item in plan.disks] == [("gateway-0-boot", "disk-0")]
     assert [(item.name, item.resource_id) for item in plan.allocations] == [
         ("gateway-0-eth0-private-ip", "allocation-private")
     ]
@@ -1314,9 +1321,7 @@ def test_ordinary_destroy_build_plan_blocks_a_foreign_route_to_its_private_alloc
     plan = _ordinary_build_plan_backend(route_name="foreign-route").build_plan("a" * 64)
 
     assert plan.routes == ()
-    assert plan.blockers == (
-        "foreign route foreign-route references a gateway allocation",
-    )
+    assert plan.blockers == ("foreign route foreign-route references a gateway allocation",)
 
 
 @pytest.mark.parametrize(

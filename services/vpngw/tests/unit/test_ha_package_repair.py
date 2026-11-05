@@ -98,6 +98,23 @@ def test_repair_uses_raw_canonical_records(evidence_guest):
     assert value["lock"]["generation_id"] == fixture.expected["generation_id"]
 
 
+def test_activation_fence_survives_mtls_preparation_but_rejects_changed_authority(evidence_guest):
+    fixture = evidence_guest
+    original = ha_repair.fencing_evidence(fixture.expected, state_dir=fixture.root)
+    # The canonical mTLS stage may advance after package repair. Its identity is
+    # verified by activation; package-preparation bytes cannot remain the fence.
+    fixture.active.update(epoch=2, certificate_fingerprint="f" * 64)
+    fixture.write("mtls/active.json", fixture.active)
+    assert ha_repair.fencing_evidence(fixture.expected, state_dir=fixture.root) == original
+    fixture.forwarding.write_text("1\n")
+    with pytest.raises(RuntimeError, match="forwarding exclusion"):
+        ha_repair.fencing_evidence(fixture.expected, state_dir=fixture.root)
+    fixture.forwarding.write_text("0\n")
+    fixture.boot.write_text("changed-boot")
+    with pytest.raises(RuntimeError, match="forwarding exclusion"):
+        ha_repair.fencing_evidence(fixture.expected, state_dir=fixture.root)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

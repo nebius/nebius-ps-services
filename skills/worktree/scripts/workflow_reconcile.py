@@ -35,7 +35,7 @@ def reconcile_worker(run_dir: Path, feature: str, wave: str, task: str, evidence
         if not run.get("fence"):
             raise WorkflowError("RECONCILIATION_INVALID", "normal results must use validated admission")
         assignment, state, observation = termination(run_dir, feature, wave, task, evidence, session)
-        receipt = {"schema": "workflow/writer-reconciliation-v1", "feature_id": feature,
+        receipt = {"schema": "workflow/writer-reconciliation-v1", "execution_id": feature,
                    "wave_id": wave, "task_id": task, "assignment_digest": assignment["assignment_digest"],
                    "basis_sha256": assignment["basis_sha256"], "termination_sha256": digest(observation),
                    "retained_worktree": assignment["worktree"], "retained_branch": assignment["branch"],
@@ -138,11 +138,11 @@ def resume_replanned(run_dir: Path, session: str):
             coordinator = read(path)
             if coordinator["status"] == "done":
                 continue
-            verify_execution(run_dir, coordinator["feature_id"], coordinator["plan_digest"],
+            verify_execution(run_dir, coordinator["execution_id"], coordinator["plan_digest"],
                              Path(coordinator["selected_project_root"]), allow_fenced=True)
             if coordinator.get("active_wave"):
                 from workflow_execution import wave_path
-                active = read(wave_path(run_dir, coordinator["feature_id"], coordinator["active_wave"]))
+                active = read(wave_path(run_dir, coordinator["execution_id"], coordinator["active_wave"]))
                 if active["status"] != "superseded":
                     raise WorkflowError("RECOVERY_REQUIRED", "affected wave has not been retired")
                 coordinator.update(active_wave=None, status="waves_running")
@@ -161,7 +161,7 @@ def resource_inventory(run_dir: Path):
         for kind, field in [('integration', 'integration_worktree')]:
             target = coordinator.get(field)
             if target and Path(target).exists():
-                records.append({'kind': kind, 'path': target, 'feature_id': coordinator['feature_id'],
+                records.append({'kind': kind, 'path': target, 'execution_id': coordinator['execution_id'],
                                 'branch': coordinator.get('integration_branch'), 'disposition': 'retained-recovery'})
     for path in sorted((run_dir / 'execution').glob('*/assignments/*/*.json')):
         assignment = read(path)
@@ -207,12 +207,24 @@ def validate_retained_wave(run_dir, feature, wave):
     return value
 
 
+def recovery_path(run_dir, feature, task, attempt, coordinator_session_hash):
+    return (run_dir / 'execution' / feature / 'recoveries'
+            / f'{task}-{attempt}-{coordinator_session_hash}.json')
+
+
 def authorize_recovery(run_dir, feature, wave, task, evidence, session, next_session_sha256):
     from workflow_execution import _load_coordinator, _assert_current_assignment
     import re
     with lock(run_dir.parent):
         assignment, state, observation = termination(run_dir, feature, wave, task, evidence, session)
         _assert_current_assignment(run_dir, feature, _load_coordinator(run_dir, feature), assignment)
+        if state['status'] != 'running':
+            raise WorkflowError('RECOVERY_REQUIRED', 'only a running task can authorize recovery')
+        from workflow_worker_results import receipt_path, read_receipt
+        if receipt_path(assignment, state['attempt']).exists():
+            _, result = read_receipt(assignment, state)
+            if result['worker_result']['status'] != 'blocked':
+                raise WorkflowError('REPLAN_REQUIRED', 'completed or specification-gap results cannot renew a worker attempt')
         if re.fullmatch(r'[0-9a-f]{64}', next_session_sha256) is None:
             raise WorkflowError('OWNERSHIP_INVALID', 'fresh native worker identity is required')
         receipt = {'schema': 'workflow/recovery-authorization-v1', 'assignment_digest': assignment['assignment_digest'],
@@ -220,13 +232,18 @@ def authorize_recovery(run_dir, feature, wave, task, evidence, session, next_ses
                    'next_worker_session_hash': next_session_sha256,
                    'coordinator_session_hash': validate_run(run_dir)[0]['coordinator_session_sha256'],
                    'termination_path': str(evidence), 'termination_sha256': digest(observation)}
-        path = run_dir / 'execution' / feature / 'recoveries' / f"{task}-{state['attempt']}.json"
+        path = recovery_path(run_dir, feature, task, state['attempt'], receipt['coordinator_session_hash'])
         if path.exists():
             if read(path) != receipt:
                 raise WorkflowError('OWNERSHIP_INVALID', 'recovery authorization is already bound')
         else:
             write(path, receipt, exclusive=True)
-        return receipt
+        from workflow_execution import assignment_path
+        from workflow_worker_contract import launch_contract
+        return {**receipt, 'launch': launch_contract(
+            assignment_path(run_dir, feature, wave, task), assignment,
+            recovery_attempt=state['attempt'],
+        )}
 
 
 def validate_takeover(run_dir, run, evidence, session):
@@ -241,7 +258,7 @@ def validate_takeover(run_dir, run, evidence, session):
         wave = read(path)
         for task in wave.get('active_task_ids', []):
             state = read(task_path(run_dir, path.parent.parent.name, wave['wave_id'], task))
-            expected.append({'feature_id': path.parent.parent.name, 'wave_id': wave['wave_id'],
+            expected.append({'execution_id': path.parent.parent.name, 'wave_id': wave['wave_id'],
                              'task_id': task, 'worker_session_hash': state.get('worker_session_hash')})
     if (value.get('schema') != 'workflow/coordinator-takeover-v1'
             or value.get('prior_coordinator_session_sha256') != run['coordinator_session_sha256']

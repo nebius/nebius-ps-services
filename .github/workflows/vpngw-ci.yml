@@ -238,7 +238,7 @@ jobs:
           python -m pytest -n auto tests/unit \
             --deselect=tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key \
             --deselect=tests/unit/test_cli_helpers.py::test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes \
-            --deselect=tests/unit/test_cli_helpers.py::test_vm_ha_apply_treats_lifecycle_bound_missing_compute_as_retained \
+            --deselect=tests/unit/test_cli_helpers.py::test_vm_ha_apply_retains_lifecycle_identity_before_replacement \
             --deselect=tests/unit/test_vm_manager_allocations.py::test_vm_ha_ssh_compute_reread_uses_bounded_request_policy \
             --deselect=tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment \
             --deselect=tests/unit/test_ssh_policy.py::test_vm_ha_policy_rejects_public_only_host_key \
@@ -250,11 +250,13 @@ jobs:
         run: |
           python -m pytest -n auto \
             tests/integration/test_vm_ha_runtime_composed.py \
+            tests/integration/test_ha_tunnel_repair_order.py \
+            tests/integration/test_ha_bgp_restart_composed.py \
             tests/integration/test_vm_ha_migration_package.py \
             tests/integration/test_vm_ha_failover.py \
             tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key \
             tests/unit/test_cli_helpers.py::test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes \
-            tests/unit/test_cli_helpers.py::test_vm_ha_apply_treats_lifecycle_bound_missing_compute_as_retained \
+            tests/unit/test_cli_helpers.py::test_vm_ha_apply_retains_lifecycle_identity_before_replacement \
             tests/unit/test_vm_manager_allocations.py::test_vm_ha_ssh_compute_reread_uses_bounded_request_policy \
             tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment \
             tests/unit/test_ssh_policy.py::test_vm_ha_policy_rejects_public_only_host_key \

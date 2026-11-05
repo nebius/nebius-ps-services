@@ -1,19 +1,34 @@
-# Issue <number>: <title>
+# Batch <anchor-number>: <shared topic>
 
 - Repository: <verified repository identity>
-- Issue: <number and public URL, or permitted sanitized identifier>
+- Batch identity: <stable initial anchor number and shared remediation identity>
+- Accepted members: <full repository/issue identities and permitted URLs>
+- Related nonmembers: <deferred, unresolved or other related issues; not accepted here>
 - Owning project: <repository-relative project path>
 - Affected projects: <repository-relative paths>
 - Reviewed revision: <commit or source revision and relevant local limitations>
 - Review date: <date>
 - Planning status: <incomplete until independently verified complete>
 - Implementation status: Not started by this skill
-- Priority: <project scale or critical/high/normal/low, with rationale below>
+- Project review order: <explicit priority or selected-issue count basis>
+- Batch severity: <highest supported member severity; rationale below>
+
+## Member decisions and acceptance
+
+| Issue identity | Supported problem and evidence | Severity / acceptance rationale | Acceptance criteria and validation |
+| --- | --- | --- | --- |
+| <repository and issue> | <verified facts, source and confidence> | <individual assessment> | <observable criteria and checks for this member> |
+
+<Include every accepted member once. State material dependencies; do not present
+unresolved or deferred issues as accepted members. For each member, identify the
+sibling discussions, source state and other material evidence that must be
+refreshed before acceptance; explicitly establish any independent coverage.>
 
 ## Problem and evidence
 
-<Expected/observed behavior or substantiated unmet need; affected versions;
-verified evidence and sources; confidence and remaining nonblocking limits.>
+<Shared remediation boundary and why one change can address all members;
+expected/observed behavior or unmet needs, affected versions, evidence sources,
+confidence and remaining nonblocking limits. Shared keywords are insufficient.>
 
 ## Decision and scope
 
@@ -39,6 +54,19 @@ checks already performed during investigation from future implementation tests.>
 
 <Rollout/recovery steps appropriate to the change, operational risks,
 documentation updates and remaining verification needs.>
+
+## Issue delivery handoff
+
+<The accepted-members table is the authoritative candidate list; related
+nonmembers are not closure targets. Give each member explicit, individually
+checkable criteria. Implementation must evaluate every criterion and retain
+resolved/partial/unresolved outcomes. This plan grants no closure authority.>
+
+The maintainer may request implementation of this plan and closure of fully
+resolved members after merge. Implement records local evidence; authorized PR
+work adds closing references only after per-issue validation and a concise
+verified comment. GitHub closes those issues on default-branch merge when
+repository settings permit it. Partial or unverified issues remain open.
 
 ## Maintainer handoff
 

@@ -51,6 +51,10 @@ app = typer.Typer(
     short_help="Install Grafana, show access commands and manage dashboards.",
     help=(
         "Install Grafana and observability, show live access commands, or manage dashboards.\n\n"
+        "grafana install provides focused setup using the shared Apps/component-add wizard, "
+        "then saves settings, renders, and deploys the whole project, including other pending "
+        "changes. It requires --config CONFIG_YAML and --target CLUSTER_TARGET. "
+        "component add only saves configuration for later render/deploy.\n\n"
         "Replace CLUSTER_TARGET with the target ID from config.yaml. Cluster imports save project "
         "state and install immediately; --attach additionally publishes reusable dashboards to "
         "the source catalog.\n\n"
@@ -829,6 +833,7 @@ def validate_command(
 
 @app.command(
     "install",
+    short_help="Configure Grafana, then render and deploy the project.",
     epilog=(
         "Examples: Install with saved settings or local defaults: "
         "nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET | "
@@ -910,11 +915,16 @@ def install_command(
         ),
     ] = None,
 ) -> None:
-    """Install in-cluster Grafana through the shared observability workflow.
+    """Configure Grafana, then render and deploy the project.
 
+    This focused Grafana/observability setup uses the shared Apps/component-add
+    configuration wizard. Both --config CONFIG_YAML and --target CLUSTER_TARGET
+    are required. component add only saves configuration for later render/deploy.
     First install defaults to local stores; reruns preserve configured routing.
-    Setup resolves backends only for the selected target. After confirmation,
-    render replaces generated artifacts and normal deploy applies pending project changes.
+    Setup changes observability settings only for the selected target. After
+    interactive confirmation, settings are saved, render replaces generated
+    artifacts, and normal whole-project deploy can apply other pending project
+    changes with the usual deployment approvals.
     """
     from .grafana_install import install
 

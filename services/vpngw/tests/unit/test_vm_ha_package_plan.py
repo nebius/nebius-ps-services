@@ -105,3 +105,56 @@ def test_package_inspection_never_enters_ordinary_admission(monkeypatch, tmp_pat
     monkeypatch.setattr(ops, "Manager", forbidden)
     result = ordinary_remote.inspect({"files": {}, "assets": {}}, runtime_admission=False)
     assert result["config_sha256"] == ordinary_remote.sha(config.read_bytes())
+
+
+def test_recovered_package_verifies_postcondition_without_reusing_predecessor(
+    monkeypatch, tmp_path
+):
+    from nebius_vpngw.deploy import checkpoint_conversion, ordinary_apply
+    from nebius_vpngw.deploy.vm_ha_package import package_predecessor, verify_prepared
+
+    calls = []
+    monkeypatch.setattr(
+        checkpoint_conversion, "guard_package", lambda *args, **kwargs: calls.append(kwargs)
+    )
+
+    config = tmp_path / "resolved.yaml"
+    config.write_text("gateway: {}\n")
+    boot = tmp_path / "boot"
+    boot.write_text("12345678-1234-1234-1234-123456789012")
+    monkeypatch.setattr(ordinary_remote, "CONFIG", config)
+    monkeypatch.setattr(ordinary_remote, "BOOT", boot)
+    manifest = {"files": {}, "assets": {}, "wheel_sha256": "a" * 64}
+    current = ordinary_remote.inspect(manifest, runtime_admission=False)
+    manifest.update(
+        version=current["package_version"],
+        expected_dependencies=current["dependencies"],
+        expected_requirements=current["requirements"],
+    )
+    predecessor = package_predecessor(current)
+    predecessor["files"] = {"old.py": "old-source"}
+    assert package_predecessor(current) != predecessor
+    plan = SimpleNamespace(
+        target="test", instance=object(), manifest=manifest, observation=predecessor
+    )
+    monkeypatch.setattr(ordinary_apply, "remote", lambda *args: {"observation": current})
+    verify_prepared(object(), plan, {})
+    assert calls == [
+        {"artifact": "a" * 64, "boot_id": predecessor["boot_id"], "expected": None, "publish": True}
+    ]
+    for key in (
+        "files",
+        "package_version",
+        "dependencies",
+        "requirements",
+        "assets",
+        "asset_modes",
+        "boot_id",
+        "config_sha256",
+        "ha_config_digest",
+    ):
+        prior = current[key]
+        current[key] = "foreign-postcondition"
+        with pytest.raises(VMHAAgentPackageError, match="approved postcondition"):
+            verify_prepared(object(), plan, {})
+        current[key] = prior

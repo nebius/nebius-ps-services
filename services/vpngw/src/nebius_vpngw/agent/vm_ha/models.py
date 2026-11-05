@@ -7,6 +7,7 @@ never establish cloud allocation ownership or authorize promotion.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -213,6 +214,75 @@ class TransitionRecord:
 
 
 @dataclass(frozen=True)
+class HeartbeatEvidence:
+    """Wire evidence; receipt proof is deliberately not part of this record."""
+
+    state: str = "unknown"
+    serving: bool = False
+    process_id: str = "0" * 32
+    sample_id: int = 0
+    age_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    cloud_status: str = "unknown"
+    cloud_age_seconds: float | None = None
+    controller_phase: str = "starting"
+    challenge: str = "0" * 32
+    echo: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, str) or self.state not in {"healthy", "unhealthy", "unknown"}:
+            raise StateValidationError("invalid local health evidence")
+        if type(self.serving) is not bool or (self.serving and self.state != "healthy"):
+            raise StateValidationError("invalid serving path evidence")
+        if not isinstance(self.cloud_status, str) or self.cloud_status not in {
+            "complete",
+            "in-progress",
+            "unavailable",
+            "unknown",
+        }:
+            raise StateValidationError("invalid cloud observation status")
+        if self.process_id is None or self.challenge is None:
+            raise StateValidationError("missing heartbeat evidence identity")
+        for value in (self.process_id, self.challenge, self.echo):
+            if value is not None and (
+                not isinstance(value, str)
+                or len(value) != 32
+                or any(c not in "0123456789abcdef" for c in value)
+            ):
+                raise StateValidationError("invalid heartbeat evidence identity")
+        if type(self.sample_id) is not int or self.sample_id < 0:
+            raise StateValidationError("invalid health sample counter")
+        if self.age_seconds is None or self.duration_seconds is None:
+            raise StateValidationError("missing evidence age")
+        for age in (self.age_seconds, self.duration_seconds, self.cloud_age_seconds):
+            if age is not None and (
+                type(age) not in {int, float} or not math.isfinite(age) or age < 0
+            ):
+                raise StateValidationError("invalid evidence age")
+        if self.duration_seconds > self.age_seconds:
+            raise StateValidationError("sample duration exceeds sample age")
+        if not isinstance(self.controller_phase, str) or self.controller_phase not in {
+            "starting",
+            "observing",
+            "idle",
+            "effect",
+            "closing",
+            "failed",
+        }:
+            raise StateValidationError("invalid controller progress")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> HeartbeatEvidence:
+        if not isinstance(value, Mapping):
+            raise StateValidationError("heartbeat evidence must be an object")
+        _require_exact_keys(value, set(cls.__dataclass_fields__), "heartbeat evidence")
+        return cls(**value)
+
+
+@dataclass(frozen=True)
 class PeerHeartbeat:
     """Authenticated advisory state reported by one peer."""
 
@@ -232,6 +302,30 @@ class PeerHeartbeat:
     promotion_ready: bool
     auto_healing_policy_state: str
     auto_healing_policy_digest: str
+    tunnel_capability: bool = True
+    tunnel_recovery: dict[str, Any] | None = None
+    evidence: HeartbeatEvidence = field(default_factory=HeartbeatEvidence)
+    # Set only by the current receiving process after authenticated round trip.
+    # Excluded from all wire/persistence serialization.
+    health_valid_until: float | None = field(default=None, compare=False, repr=False)
+    service_valid_until: float | None = field(default=None, compare=False, repr=False)
+    echo_valid_until: float | None = field(default=None, compare=False, repr=False)
+
+    def local_health_fresh(self, now: float) -> bool:
+        return bool(
+            self.evidence.state == "healthy"
+            and self.health_valid_until is not None
+            and math.isfinite(now)
+            and now < self.health_valid_until
+        )
+
+    def local_service_fresh(self, now: float) -> bool:
+        return bool(
+            self.service_healthy
+            and self.service_valid_until is not None
+            and math.isfinite(now)
+            and now < self.service_valid_until
+        )
 
     def __post_init__(self) -> None:
         _require_identifier("cluster_id", self.cluster_id)
@@ -272,6 +366,32 @@ class PeerHeartbeat:
         }:
             raise StateValidationError("auto_healing_policy_state is invalid")
         _require_sha256("auto_healing_policy_digest", self.auto_healing_policy_digest)
+        _require_bool("tunnel_capability", self.tunnel_capability)
+        if self.tunnel_recovery is not None:
+            claim = self.tunnel_recovery
+            if not isinstance(claim, dict) or set(claim) != {"owner", "started", "deadline"}:
+                raise StateValidationError("invalid tunnel recovery claim")
+            owner = claim["owner"]
+            if not isinstance(owner, dict) or set(owner) != {
+                "cluster",
+                "owner",
+                "allocation",
+                "epoch",
+                "incarnation",
+            }:
+                raise StateValidationError("invalid tunnel recovery owner")
+            for key in ("cluster", "owner", "allocation", "epoch"):
+                _require_identifier(key, owner[key])
+            if type(owner["incarnation"]) is not int or owner["incarnation"] < 0:
+                raise StateValidationError("invalid tunnel recovery incarnation")
+            if (
+                any(
+                    type(claim[key]) not in {int, float} or not math.isfinite(claim[key])
+                    for key in ("started", "deadline")
+                )
+                or not 0 < claim["deadline"] - claim["started"] <= 30
+            ):
+                raise StateValidationError("invalid tunnel recovery deadline")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -288,7 +408,10 @@ class PeerHeartbeat:
             "observed_owner_id": self.observed_owner_id,
             "promotion_ready": self.promotion_ready,
             "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v3",
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v5",
+            "evidence": self.evidence.to_dict(),
+            "tunnel_capability": self.tunnel_capability,
+            "tunnel_recovery": self.tunnel_recovery,
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
@@ -318,10 +441,13 @@ class PeerHeartbeat:
                 "service_healthy",
                 "route_ready",
                 "promotion_ready",
+                "tunnel_capability",
+                "tunnel_recovery",
+                "evidence",
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v3":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v5":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -350,6 +476,9 @@ class PeerHeartbeat:
             auto_healing_policy_digest=_require_sha256(
                 "auto_healing_policy_digest", value["auto_healing_policy_digest"]
             ),
+            tunnel_capability=_require_bool("tunnel_capability", value["tunnel_capability"]),
+            tunnel_recovery=value["tunnel_recovery"],
+            evidence=HeartbeatEvidence.from_mapping(value["evidence"]),
         )
 
 

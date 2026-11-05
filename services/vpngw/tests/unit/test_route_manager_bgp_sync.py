@@ -44,6 +44,7 @@ from nebius_vpngw.schema import VMHARole, VMHARouteTarget
 def _plan() -> ResolvedDeploymentPlan:
     return ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="nebius-vpn-gw",
             instance_count=1,
             region="us-central1",
@@ -654,6 +655,7 @@ def _installed_static_plan_and_state() -> tuple[ResolvedDeploymentPlan, VMHALife
     )
     plan = ResolvedDeploymentPlan(
         gateway_group=GatewayGroupSpec(
+            ingress_policies={i: {"peer_ips": []} for i in range(2)},
             name="gateway",
             instance_count=2,
             region="region-a",

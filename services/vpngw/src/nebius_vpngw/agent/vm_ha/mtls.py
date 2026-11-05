@@ -307,6 +307,7 @@ class MTLSSnapshot:
     certificate_path: Path
     private_key_path: Path
     peers: tuple[PeerLeaf, ...]
+    current_peer: PeerLeaf
     peer_certificate_paths: tuple[Path, ...]
     peer_certificate_pems: tuple[bytes, ...]
 
@@ -989,8 +990,27 @@ class ManagedMTLSStore:
             if transaction.get("new_identity_observed"):
                 raise ManagedMTLSError("managed mTLS transaction must roll forward")
             active = self._load_active()
+            old_local = transaction.get("old_local")
+            pending_local = transaction.get("pending_local")
+            if active is not None:
+                # Publication can commit before the journal records the switch.
+                # The active slot is authoritative even after that crash window.
+                active_identity = (active.get("certificate_fingerprint"), active.get("epoch"))
+                old_identity = (
+                    (old_local.get("certificate_fingerprint"), old_local.get("epoch"))
+                    if isinstance(old_local, Mapping)
+                    else None
+                )
+                pending_identity = (
+                    (pending_local.get("certificate_fingerprint"), transaction.get("target_epoch"))
+                    if isinstance(pending_local, Mapping)
+                    else None
+                )
+                if active_identity == pending_identity and active_identity != old_identity:
+                    raise ManagedMTLSError("managed mTLS transaction must roll forward")
+                if active_identity != old_identity:
+                    raise ManagedMTLSError("managed mTLS rollback active identity conflicts")
             if active is not None and active.get("operation_id") == operation_id:
-                old_local = transaction.get("old_local")
                 if not isinstance(old_local, Mapping):
                     self.active_path.unlink(missing_ok=True)
                     _fsync_directory(self.root)
@@ -1018,6 +1038,14 @@ class ManagedMTLSStore:
             if transaction.get("phase") != MTLSTransactionPhase.COMMITTED.value:
                 raise ManagedMTLSError("managed mTLS transaction is not committed")
             active = dict(self._load_active() or {})
+            pending_local = transaction.get("pending_local")
+            if (
+                not isinstance(pending_local, Mapping)
+                or active.get("certificate_fingerprint")
+                != pending_local.get("certificate_fingerprint")
+                or active.get("epoch") != transaction.get("target_epoch")
+            ):
+                raise ManagedMTLSError("managed mTLS pruning active identity conflicts")
             pending_peer = PeerLeaf.from_mapping(transaction["pending_peer"])
             active["peers"] = [pending_peer.to_dict()]
             active["operation_id"] = None
@@ -1033,10 +1061,35 @@ class ManagedMTLSStore:
             if isinstance(old_local, Mapping):
                 fingerprint = str(old_local["certificate_fingerprint"])
                 if fingerprint != retained_local:
-                    certificate_path, key_path = self._identity_paths(fingerprint)
-                    certificate_path.unlink(missing_ok=True)
-                    key_path.unlink(missing_ok=True)
-                    certificate_path.parent.rmdir()
+                    identity_root = self.identities / _require_sha256(
+                        "certificate fingerprint", fingerprint
+                    )
+                    try:
+                        identity_root.lstat()
+                    except FileNotFoundError:
+                        pass  # The exact obsolete directory was already removed.
+                    else:
+                        certificate_path, key_path = self._identity_paths(fingerprint)
+                        if set(os.listdir(identity_root)) - {"certificate.pem", "private-key.pem"}:
+                            raise ManagedMTLSError(
+                                "managed mTLS obsolete identity contains unexpected files"
+                            )
+                        for path in (certificate_path, key_path):
+                            try:
+                                metadata = path.lstat()
+                            except FileNotFoundError:
+                                continue
+                            if (
+                                not stat.S_ISREG(metadata.st_mode)
+                                or metadata.st_uid != os.geteuid()
+                                or stat.S_IMODE(metadata.st_mode) != 0o600
+                            ):
+                                raise ManagedMTLSError(
+                                    "managed mTLS obsolete identity file is unsafe"
+                                )
+                        certificate_path.unlink(missing_ok=True)
+                        key_path.unlink(missing_ok=True)
+                        identity_root.rmdir()
             _fsync_directory(self.peers)
             _fsync_directory(self.identities)
             transaction["phase"] = MTLSTransactionPhase.PRUNED.value
@@ -1050,6 +1103,29 @@ class ManagedMTLSStore:
         peers = tuple(PeerLeaf.from_mapping(item) for item in active["peers"])
         if not peers:
             raise ManagedMTLSError("managed mTLS peer trust is empty")
+        # The trust set deliberately overlaps during replacement/rotation.
+        # Credential epochs do not order Compute membership: a survivor keeps
+        # its own epoch across repeated replacements. The exact transaction
+        # names the current peer independently of the accepted trust anchors.
+        operation_id = active.get("operation_id")
+        if operation_id is None:
+            if len(peers) != 1:
+                raise ManagedMTLSError("managed mTLS current peer is ambiguous")
+            current_peer = peers[0]
+        else:
+            transaction = self._load_transaction(str(operation_id))
+            if not (
+                transaction is not None
+                and all(
+                    transaction.get(key) == active[key]
+                    for key in ("cluster_id", "node_id", "compute_id")
+                )
+                and _phase_at_least(transaction, MTLSTransactionPhase.PEER_STAGED)
+            ):
+                raise ManagedMTLSError("managed mTLS current peer transaction is invalid")
+            current_peer = PeerLeaf.from_mapping(transaction.get("pending_peer"))
+            if current_peer not in peers:
+                raise ManagedMTLSError("managed mTLS current peer is outside active trust")
         certificate_path, key_path = self._identity_paths(str(active["certificate_fingerprint"]))
         certificate_pem = _safe_read(certificate_path)
         private_key_pem = _safe_read(key_path)
@@ -1090,6 +1166,7 @@ class ManagedMTLSStore:
             certificate_path=certificate_path,
             private_key_path=key_path,
             peers=peers,
+            current_peer=current_peer,
             peer_certificate_paths=tuple(peer_paths),
             peer_certificate_pems=tuple(peer_pems),
         )
@@ -1155,5 +1232,19 @@ class ManagedMTLSStore:
             phase=None if pending is None else str(pending["phase"]),
             recovery=None
             if pending is None
-            else ("roll-forward" if pending.get("new_identity_observed") else "rollback-or-resume"),
+            else (
+                "roll-forward"
+                if pending.get("new_identity_observed")
+                or (
+                    active.get("certificate_fingerprint")
+                    == (pending.get("pending_local") or {}).get("certificate_fingerprint")
+                    and active.get("epoch") == pending.get("target_epoch")
+                    and (active.get("certificate_fingerprint"), active.get("epoch"))
+                    != (
+                        (pending.get("old_local") or {}).get("certificate_fingerprint"),
+                        (pending.get("old_local") or {}).get("epoch"),
+                    )
+                )
+                else "rollback-or-resume"
+            ),
         )

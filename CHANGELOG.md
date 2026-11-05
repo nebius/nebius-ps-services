@@ -6,6 +6,11 @@ project folder.
 
 ## [Unreleased]
 
+- Repair fork Required CI discovery when GitHub omits both run and commit PR
+  associations. Resolve a unique current fork/ref with shared check-suite
+  provenance validation, preserve same-head rerun updates and fail-closed
+  ambiguity handling, and expose sanitized discovery diagnostics.
+
 - Complete github-report retirement by removing its temporary CI validator
   and transition test after the updated required-CI policy reached `main`.
 

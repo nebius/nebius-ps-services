@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from fnmatch import fnmatchcase
 import os
@@ -114,13 +115,31 @@ def contains_secret(text: str) -> bool:
         r"[A-Z0-9_]*\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
         r"\bYC_TOKEN\b\s*[:=]\s*[A-Za-z0-9_./+=:-]{12,}",
         r"\bKUBECONFIG\b.*(certificate-authority-data|client-key-data|token:)",
-        r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?[A-Za-z0-9_./+=:-]{12,}",
     ]
+    generic_assignment = re.compile(
+        r"(?i)\b(password|secret|token)\b\s*[:=]\s*"
+        r"(?P<quote>[\"']?)(?P<value>[A-Za-z0-9_./+=:-]{12,})"
+    )
     for line in text.splitlines() or [text]:
-        lowered = line.lower()
-        if any(marker in lowered for marker in placeholder_markers):
-            continue
         if any(re.search(pattern, line) for pattern in secret_patterns):
+            return True
+        for match in generic_assignment.finditer(line):
+            if match.group("value").lower() in placeholder_markers:
+                continue
+            # Recognize only a complete bounded expression, never evaluate it.
+            # One trailing JavaScript terminator is allowed; additional code,
+            # quoted literals and ambiguous expressions remain fail-closed.
+            rhs = line[match.start("value"):].strip()
+            if not match.group("quote") and len(rhs) <= 4096:
+                try:
+                    expression = ast.parse(rhs.removesuffix(";"), mode="eval").body
+                except (SyntaxError, ValueError, RecursionError):
+                    pass
+                else:
+                    while isinstance(expression, ast.Attribute):
+                        expression = expression.value
+                    if isinstance(expression, (ast.Call, ast.Subscript)):
+                        continue
             return True
     return False
 
@@ -496,6 +515,9 @@ def sensitive_command_wrapper_reason(command: str) -> str | None:
     normalized = [word.rsplit("/", 1)[-1] for word in words]
     sequences = (
         ("gh", "pr", "merge"),
+        ("gh", "workflow", "run"),
+        ("gh", "pr", "review"),
+        ("gh", "api"),
         ("gh", "pr", "create"),
         ("git", "commit"),
         ("git", "push"),
@@ -667,63 +689,28 @@ def pr_auth_valid(active: ActiveRun | None, project_root: Path) -> tuple[bool, s
     )
 
 
-def canonical_gh_pr_merge_target(
-    words: list[str], expected_head: str
-) -> tuple[str | None, str]:
-    if len(words) < 6:
-        return None, "merge command must match the authorized current HEAD"
-    if len(words) > 7:
-        return None, "merge command must use the canonical single-action form"
-    target = words[3]
-    numeric_target = target.isdecimal() and int(target) > 0
-    url_target = bool(
-        re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/pull/[1-9]\d*", target)
-    )
-    if not numeric_target and not url_target:
-        return None, "merge command must name one explicit PR number or URL"
-    option_index = 4
-    if len(words) == 7:
-        if words[option_index] not in {"--merge", "--rebase", "--squash"}:
-            return None, "merge command contains an unsupported strategy or flag"
-        option_index += 1
-    if words[option_index:] != ["--match-head-commit", expected_head]:
-        return None, "merge command must match the authorized current HEAD"
-    return target, "canonical merge command"
-
-
-def merge_auth_valid(
-    active: ActiveRun | None, project_root: Path, command: str, words: list[str]
-) -> tuple[bool, str]:
-    branch = detect_current_branch(project_root)
-    default_branch, default_head = detect_default_identity(project_root)
-    current_head = git_head(project_root)
-    if not branch:
-        return False, "current checkout must have a named branch"
-    if not current_head:
-        return False, "current checkout has no resolvable HEAD"
-    if not default_branch or not default_head:
-        return False, "origin default branch and HEAD cannot be resolved"
-    pr_target, shape_reason = canonical_gh_pr_merge_target(words, current_head)
-    if pr_target is None:
-        return False, shape_reason
-    ok, reason = auth_valid(
-        active,
-        "merge-authorization.json",
-        branch,
-        expected_phase="sdlc-merge-pr",
-        expected_head=current_head,
-        expected_uat_status="passed",
-        expected_command=command,
-        expected_pr=pr_target,
-        expected_checks_status="passed",
-        expected_review_status="passed",
-        expected_base=default_branch,
-        expected_base_head=default_head,
-        require_explicit_user_request=True,
-    )
-    if not ok:
-        return ok, reason
-    return True, "authorized"
+def github_delivery_effect(command: str) -> bool:
+    """Recognize delivery effects through common wrappers and global options."""
+    words = shell_command_words(command)
+    for index, word in enumerate(words):
+        if word.rsplit("/", 1)[-1] != "gh":
+            continue
+        tail = words[index + 1:]
+        for offset, token in enumerate(tail):
+            rest = tail[offset:]
+            if rest[:2] in (["workflow", "run"], ["pr", "merge"]):
+                return True
+            if rest[:2] == ["pr", "review"] and any(v in {"-a", "--approve"} for v in rest[2:]):
+                return True
+            if token == "api":
+                text = " ".join(rest)
+                if (any(v in text for v in ("mergePullRequest", "enqueuePullRequest", "enablePullRequestAutoMerge"))
+                        or "APPROVE" in text and ("review" in text.lower() or "Review" in text)
+                        or "/dispatches" in text
+                        or re.search(r"/pulls/[0-9]+/merge(?:-async)?(?:\s|$|\?)", text)
+                        and not any(rest[i:i + 2] in (["--method", "GET"], ["-X", "GET"]) for i in range(len(rest)))):
+                    return True
+    return False
 
 
 def git_policy_reason(
@@ -732,6 +719,8 @@ def git_policy_reason(
     words = command_words(command)
     if not words:
         return None
+    if active and github_delivery_effect(command):
+        return "Blocked: active SDLC delivery effects require the source-owned protected delivery adapter."
     wrapper_reason = sensitive_command_wrapper_reason(command)
     if wrapper_reason:
         return wrapper_reason
@@ -853,11 +842,8 @@ def git_policy_reason(
     if is_git_command(words, "push") and "--tags" in words:
         return "Blocked: pushing tags requires explicit authorization."
     if is_gh_pr_merge(words):
-        ok, reason = merge_auth_valid(active, project_root, command, words)
-        if not ok:
-            return (
-                f"Blocked: PR merge requires valid SDLC merge authorization: {reason}."
-            )
+        if active:
+            return "Blocked: raw merge commands cannot consume SDLC status-label authorization."
     if active and is_gh_pr_create(words):
         ok, reason = pr_auth_valid(active, project_root)
         if not ok:
@@ -887,12 +873,16 @@ def mcp_policy_reason(
 ) -> str | None:
     lower = tool_name.lower()
     payload = _json_text(tool_input)
+    if active and "github" in lower and (
+        any(token in lower for token in ("workflow_dispatch", "dispatch_workflow", "run_workflow", "auto_merge", "enqueue", "approve"))
+        or "review" in lower and "APPROVE" in payload
+    ):
+        return "Blocked: active SDLC delivery effects require the protected delivery adapter."
     if contains_secret(payload):
         return "Blocked: MCP arguments appear to contain a secret."
     if is_github_pr_merge_tool(lower) and active:
         return (
-            "Blocked: active Agentic SDLC merge must use the exact authorized "
-            "gh pr merge command with --match-head-commit."
+            "Blocked: active Agentic SDLC merge requires the protected delivery adapter."
         )
     if is_github_pr_create_tool(lower):
         ok, reason = pr_auth_valid(active, project_root)

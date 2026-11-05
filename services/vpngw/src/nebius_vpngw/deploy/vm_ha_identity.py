@@ -34,7 +34,7 @@ from .vm_ha_lifecycle import (
 PROVISIONING_MARKER_PREFIX = "# nebius-vpngw-vm-ha-provisioning-v1: "
 PROVISIONING_MARKER_SCHEMA = "nebius-vpngw/vm-ha-provisioning-v1"
 LEGACY_VM_HA_SSH_HOST_KEY_PATH = "/etc/ssh/ssh_host_vpngw_key"
-_MAX_CLOUD_INIT_BYTES = 32 * 1024
+CLOUD_INIT_MAX_BYTES = 32 * 1024
 _MAX_RECOVERED_HOST_KEY_BYTES = 16 * 1024
 
 _IdentifierRecord = tuple[int, str, str, str]
@@ -128,6 +128,13 @@ def _validate_yaml_tree(node: t.Any) -> None:
     raise RuntimeError("VM-HA product cloud-init contains an unsupported YAML node")
 
 
+def require_cloud_init_size(cloud_init: str) -> None:
+    """Reject oversized final user data before provisioning cloud resources."""
+
+    if len(cloud_init.encode("utf-8", errors="strict")) > CLOUD_INIT_MAX_BYTES:
+        raise ValueError(f"Gateway cloud-init exceeds the {CLOUD_INIT_MAX_BYTES}-byte limit")
+
+
 def recover_product_host_key(instance: t.Any, *, path: str) -> bytes:
     """Extract one exact product-written private host key from bounded cloud-init."""
 
@@ -136,7 +143,7 @@ def recover_product_host_key(instance: t.Any, *, path: str) -> bytes:
     if (
         not cloud_init.startswith("#cloud-config\n")
         or not encoded_cloud_init
-        or len(encoded_cloud_init) > _MAX_CLOUD_INIT_BYTES
+        or len(encoded_cloud_init) > CLOUD_INIT_MAX_BYTES
         or "\x00" in cloud_init
         or cloud_init.count(f"path: {path}") != 1
         or cloud_init.count(f"HostKey {path}") != 1

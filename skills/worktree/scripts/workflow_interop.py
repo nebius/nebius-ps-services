@@ -168,7 +168,7 @@ def load(run_dir: Path) -> dict[str, object] | None:
     return value
 
 
-def _inspect_managed(
+def _inspect_lease_identity(
     run_dir: Path,
     selected_project_root: Path,
     state: dict[str, object],
@@ -198,8 +198,30 @@ def _inspect_managed(
         raise ExecutionInteropError("managed outer worktree lease identity changed")
     if inspected.get("state") not in {"active", "released"}:
         raise ExecutionInteropError("managed outer worktree lease state is invalid")
+    return inspected
+
+
+def _inspect_managed(run_dir, selected_project_root, state):
+    inspected = _inspect_lease_identity(run_dir, selected_project_root, state)
     if inspected.get("outer_clean") is not True:
         raise ExecutionInteropError("managed outer worktree must remain clean")
+    return inspected
+
+
+def validate_contract_lease(run_dir, selected_project_root, parent):
+    """Validate existing ownership while the contract owner checks exact dirt.
+
+    This never acquires ownership or records a promotion. Ordinary managed
+    operations continue to require the clean-checkout inspector above.
+    """
+    state = load(run_dir)
+    if state is None or state["mode"] != "managed" or state["released"]:
+        raise ExecutionInteropError("contract authoring requires its clean-intake lease")
+    inspected = _inspect_lease_identity(run_dir, selected_project_root, state)
+    if (inspected.get("state") != "active" or inspected.get("outer_head") != parent
+            or inspected.get("promoted_head") != state.get("promoted_head")
+            or (state.get("promoted_head") or state["initial_head"]) != parent):
+        raise ExecutionInteropError("contract predecessor disagrees with its managed lease")
     return inspected
 
 
@@ -403,6 +425,24 @@ def record_resource(
             state,
         ],
     )
+
+
+
+def record_integration_intent(run_dir, selected_project_root, *, path, branch):
+    """Resume an exact existing resource without reversing its lease state."""
+    state = load(run_dir)
+    if state is not None and state["mode"] == "managed":
+        inspected = _inspect_managed(run_dir, selected_project_root, state)
+        if inspected["state"] != "active":
+            raise ExecutionInteropError("integration intent requires an active lease")
+        for resource in inspected["resources"]:
+            if resource["path"] == str(path.absolute()) and resource["branch"] == branch:
+                if resource["kind"] == "integration" and resource["state"] == "present":
+                    return "present"  # Caller must verify, never recreate this resource.
+                break
+    record_resource(run_dir, selected_project_root, kind="integration", path=path,
+                    branch=branch, state="planned")
+    return "planned"
 
 
 def record_promotion(

@@ -23,3 +23,5 @@ maintain-project-specs-codex-portability,true,$maintain-project-specs Create the
 maintain-project-specs-claude-portability,true,/maintain-project-specs Create the missing canonical requirements and design for this selected project.
 maintain-project-specs-quoted-command,false,"Treat ""/skills:maintain-project-specs"" as sample text in this punctuation exercise; count its punctuation characters only."
 spec-steering-shared-intake,true,This steering changes the accepted API behavior; extract its requirements and reconcile the canonical design through the normal owner workflow.
+spec-metadata-bootstrap,true,"Create the missing canonical spec pair using the owner templates, preserving machine-readable markers and normal prose lint checks."
+spec-prose-formatting,false,Wrap the long prose lines in README.md without changing project requirements or design.

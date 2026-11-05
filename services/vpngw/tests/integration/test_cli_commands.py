@@ -81,18 +81,28 @@ def test_resource_scoped_transfer_help_smoke(arguments: tuple[str, ...]) -> None
     ("arguments", "routing_contract"),
     (
         (("restart-tunnel", "--help"), "matching BGP neighbor when the tunnel uses BGP"),
-        (("failover", "tunnel", "--help"), "using BGP, not Static routing"),
-        (("failback", "tunnel", "--help"), "using BGP, not Static routing"),
+        (("failover", "tunnel", "--help"), "HA owner (Static/BGP)"),
+        (("failback", "tunnel", "--help"), "HA owner (Static/BGP)"),
     ),
 )
-def test_tunnel_operator_help_identifies_regular_non_ha_gateways(
+def test_tunnel_operator_help_identifies_supported_routing_modes(
     arguments: tuple[str, ...], routing_contract: str
 ) -> None:
     result = CliRunner().invoke(app, list(arguments))
 
     assert result.exit_code == 0, result.output
-    normalized_output = " ".join(unstyle(result.output).split())
-    assert "supported only on regular gateways (non-HA)" in normalized_output
+    normalized_output = " ".join(unstyle(result.output).replace("│", " ").split())
+    if arguments[0] == "restart-tunnel":
+        assert "supported only on regular gateways (non-HA)" in normalized_output
+    else:
+        assert "on the current owner" in normalized_output
+        assert "Required when selection is ambiguous" in normalized_output
+        if arguments[0] == "failover":
+            assert "HA: eligible alternative tunnel" in normalized_output
+            assert "Ordinary BGP: passive tunnel" in normalized_output
+        else:
+            assert "HA: configured preferred tunnel" in normalized_output
+            assert "Ordinary BGP: active tunnel" in normalized_output
     assert routing_contract in normalized_output
 
 
@@ -171,6 +181,7 @@ def _vm_ha_wizard_input() -> str:
         "",  # max tunnels
         "",  # DPD interval
         "",  # DPD timeout
+        "",  # initial customer Security Group IDs
         "yes",  # explicitly enable VM-HA
         "",  # cluster ID
         "",  # active node ID

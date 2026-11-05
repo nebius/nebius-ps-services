@@ -66,7 +66,7 @@ sdlc-runs/
 
 No prompt workspace, raw-turn archive or unrelated-objective queue exists.
 `objective.json` selects ordered immutable normalized revisions and ancestry.
-`run.json` uses `workflow/run-v1`; phase fields live in `current-state.json`.
+`run.json` uses `workflow/run-v2`; phase fields live in `current-state.json`.
 The active pointer selects only a project run. It grants no session ownership.
 `active.lock` uses `workflow/coordinator-ownership-v1` and must agree with the
 run, project, native coordinator hash and `workflow/session-binding-v1` record.
@@ -74,11 +74,35 @@ Only the coordinator can create or replace that binding. Session observation is
 read-only and never starts work. A new session uses explicit `continue` after
 writer quiescence. Obsolete schemas fail without conversion or deletion.
 
-Execution coordinators use `workflow/execution-coordinator-v1`, state version 1.
+Execution coordinators use `workflow/execution-coordinator-v2`, state version 1.
 Waves use ready, active and admitted task IDs with one frozen base and a full-wave
 integration barrier. Assignments and results bind immutable basis and plan
 identities. Termination permits slot reuse only after independent coordinator
 observation and result admission; a result file alone is insufficient.
+
+## Initial Phase State
+
+Objective intake registers `run.json`, objective revisions, the active pointer
+and the native ownership binding. It does not create SDLC phase state. The bound
+coordinator distinguishes first initialization from resume before reading a
+checkpoint or dispatching any phase:
+
+- For a fresh accepted run, verify its current project/session ownership and
+  absence of prior phase checkpoints or downstream phase, plan and execution
+  evidence. Initialize `current_phase: sdlc-start`, `status: running`, zero retry
+  counters and no completed-phase evidence. Preserve accepted objective provenance.
+  Use the actual registered project/run identities and the normal state schema.
+  Follow the checkpoint write order below before observation or first dispatch.
+- An active pointer is registration, not proof of initialized phase state.
+  During live verification, the coordinator exposes this initial state for the
+  independent startup receipt before routing to requirements.
+- If phase history exists, reconcile the newest complete checkpoint and current
+  state. Missing or inconsistent state is recovery evidence, never permission to
+  reset counters or recreate a fresh run. Complete interrupted first initialization
+  only after rechecking ownership and absence of later work; preserve partial
+  artifacts and select a new checkpoint rather than overwriting earlier evidence.
+
+Intake helpers, hooks and verifier observers do not initialize or advance phases.
 
 ## Minimum current-state.json
 
@@ -89,7 +113,7 @@ observation and result admission; a result file alone is insufficient.
   "run_id": "<run-id>",
   "iteration": 7,
   "checkpoint_id": "checkpoint-0007",
-  "current_feature": "FEAT-001",
+  "current_execution": "FEAT-001",
   "current_phase": "plan_locked",
   "status": "running",
   "blocked_reason": null,
@@ -127,8 +151,8 @@ observation and result admission; a result file alone is insufficient.
   },
   "repair": null,
   "execution": {
-    "schema": "workflow/execution-coordinator-v1",
-    "feature_id": "FEAT-001",
+    "schema": "workflow/execution-coordinator-v2",
+    "execution_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
     "git_root": "/absolute/git/root",
@@ -160,9 +184,9 @@ second mutable budget:
 ```
 
 `diagnosis` is `null` until causal diagnosis exists. The immutable
-`failure-event-v1`, optional immutable `diagnosis-v1`, optional immutable
+`failure-event-v2`, optional immutable `diagnosis-v3`, optional immutable
 `design-approval-v1`, deterministic classification, append-only repair
-journal, and process-locked atomic `repair-control-v1` projection are
+journal, and process-locked atomic `repair-control-v2` projection are
 authoritative. A broader-design approval also binds the digest and exact
 approval excerpt of its private user-input snapshot. `event_id` identifies exact commit-bound
 evidence; `blocker_key` identifies recurrence across commits and excludes
@@ -171,9 +195,9 @@ human-readable `evidence/FEAT-*/failure-log.md` is derived and never
 authoritative.
 
 After a successful remediation, any non-empty invalidation set creates an
-`agentic-sdlc/revalidation-cursor-v1`. It names the ordered surfaces and exact
+`agentic-sdlc/revalidation-cursor-v2`. It names the ordered surfaces and exact
 next skill. Each phase advances it with immutable, digest-verified
-`revalidation-evidence-v1` bound to current requirements/design/plan
+`revalidation-evidence-v2` bound to current requirements/design/plan
 fingerprints. Pre-commit evidence follows the live integration HEAD; final
 commit evidence follows the promoted project HEAD on the recorded base branch
 only after worktree and branch cleanup. The evidence source is a structured
@@ -191,9 +215,9 @@ while the pending projection becomes empty. Other pending invalidations reject
 recovery. It preserves budgets. This exception cannot
 clear a code-repair cursor, a policy/human block, or a failed verifier trial.
 
-Shared `workflow/execution-coordinator-v1` binds the selected folder through
+Shared `workflow/execution-coordinator-v2` binds the selected folder through
 `git_root`, `selected_project_root`, `project_scope` and `scope_cwd`.
-`workflow/execution-wave-v1` owns ordered ready, active and admitted task IDs;
+`workflow/execution-wave-v2` owns ordered ready, active and admitted task IDs;
 there is no batch cursor. Shared task/assignment/result v1 records carry the
 immutable basis digest, native session history, attempt, direct heartbeat,
 claims, structured evidence and specification gaps. The coordinator records
@@ -219,7 +243,7 @@ without conversation history.
   "run_id": "<run-id>",
   "iteration": 7,
   "created_at": "2026-06-16T00:00:00Z",
-  "current_feature": "FEAT-001",
+  "current_execution": "FEAT-001",
   "current_phase": "plan_locked",
   "status": "running",
   "blocked_reason": null,
@@ -275,7 +299,7 @@ without conversation history.
 
 The `execution` member above is an informational checkpoint projection. The
 execution owner's authoritative state is `execution/<FEAT-ID>/coordinator.json`,
-using `workflow/execution-coordinator-v1` with `state_version: 1`. Retired
+using `workflow/execution-coordinator-v2` with `state_version: 1`. Retired
 `agentic-sdlc/execution-coordinator-v1` through
 `agentic-sdlc/execution-coordinator-v7` records stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate their
@@ -324,17 +348,11 @@ directory. They are local runtime state only and must not be committed.
   must name the same head branch. Shell execution must use one direct action
   without executable wrappers, absolute executable paths, prepended commands,
   shell operators, or redirections.
-- `merge-authorization.json`: written immediately before `sdlc-merge-pr` merges a
-  specific PR, after the explicit user merge request and final readiness
-  checks. It binds `phase: "sdlc-merge-pr"`, the named branch and PR,
-  `expected_head` equal to the promoted and reviewed SHA, the recorded
-  remote-default `base_branch` and `base_head`, and the one
-  canonical single-action `exact_command` containing an explicit PR number or
-  URL and `--match-head-commit <expected_head>`, `explicit_user_request: true`,
-  `checks_status: "passed"`, `review_status: "passed"`,
-  `uat_status: "passed"`, and expiry. Only an optional long-form
-  `--merge`/`--rebase`/`--squash` strategy is allowed; implicit PR selection,
-  other flags, shell operators, and appended commands fail closed.
+- Protected delivery uses `delivery/<SLICE-ID>/review.json`, `submission.json`
+  and `completion.json`, with producer-validated qualification references and
+  the accepted run completion policy. Supplied status-label files grant no
+  merge authority. Raw CLI/API merge, approval and dispatch are denied; only
+  the source-owned delivery adapter may invoke the compatible protected broker.
 - `execution/<action-id>.json`: optional, single-action authorization for an
   operator-visible raw Git command inside a registered integration/worker
   worktree. It must scope the action (`worker-commit`, `integration-merge`,
@@ -382,13 +400,13 @@ write is interrupted, resume by selecting the newest complete checkpoint.
     `$worktree integrate` from that primary checkout
 17. create-pr, from the final unmanaged source branch only
 18. review-pr
-19. sdlc-merge-pr, only after explicit user request
+19. sdlc-merge-pr, only within accepted run-level conditional merge authority
 
 `troubleshoot` is a conditional diagnostic branch, not an additional
 golden-path phase. A proven cause routes directly from
 `sdlc-classify-failure` to its owning phase. An ambiguous, persistent,
 intermittent, or cross-boundary failure routes once to `troubleshoot`, whose
-`diagnosis-v1` must return to `sdlc-classify-failure` before any repair owner is
+`diagnosis-v3` must return to `sdlc-classify-failure` before any repair owner is
 selected. Missing decisive evidence, competing hypotheses, policy, permission,
 human decisions, and exhausted budgets stop the run.
 
@@ -431,6 +449,11 @@ including runtime instructions, requirements-related notes,
 design-related notes, project-instruction updates, documentation updates,
 blockers, priority overrides,
 pause instructions, and UAT rerun requests.
+
+Steering state version 2 uses `objective_id`, `objective_revision`,
+`objective_sha256`, `objective_snapshot` (`objectives/rNNNN.json`) and
+`current_execution` (FEAT or SLICE identity). It never references a raw prompt
+archive. Unsupported earlier active state remains preserved for explicit recovery.
 
 Each inbox entry links the accepted objective ID, revision, SHA-256 digest, and
 snapshot pointer, but includes only a compact safe summary rather than the full

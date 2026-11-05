@@ -13,7 +13,7 @@ from typing import Any
 
 MANIFEST_SCHEMA = "agentic-sdlc/completed-task-manifest-v1"
 TASK_RE = re.compile(r"(?m)^### (TASK-([0-9]{3,}))\s*$")
-PLAN_RE = re.compile(r"(?m)^# (FEAT-[0-9]{3,}) Plan v([0-9]+)\s*$")
+PLAN_RE = re.compile(r"(?m)^# ((?:FEAT|SLICE)-[0-9]{3,}) Plan v([0-9]+)\s*$")
 DIGEST_RE = re.compile(r"(?:sha256:)?([0-9a-f]{64})")
 
 
@@ -116,11 +116,11 @@ def validate_corrective_plan(
     if _field(new_text, "Supersedes") != previous_plan.name:
         raise CorrectivePlanError("Supersedes must name the exact prior plan")
     if _field(new_text, "Diagnosis") != diagnosis_id:
-        raise CorrectivePlanError("Diagnosis must name the exact diagnosis-v1 record")
+        raise CorrectivePlanError("Diagnosis must name the exact diagnosis-v3 record")
     if _field(new_text, "Regression oracle") != regression_oracle:
         raise CorrectivePlanError("Regression oracle changed")
     manifest = _load_manifest(completed_manifest)
-    if manifest.get("feature_id") != old_feature:
+    if manifest.get("execution_id") != old_feature:
         raise CorrectivePlanError("completed task manifest feature changed")
     if manifest.get("plan_digest") != sha256_bytes(previous_plan.read_bytes()):
         raise CorrectivePlanError("completed task manifest plan digest changed")
@@ -169,7 +169,7 @@ def validate_corrective_plan(
             raise CorrectivePlanError(f"{task_id} does not bind the regression oracle")
     return {
         "schema": "agentic-sdlc/corrective-plan-validation-v1",
-        "feature_id": old_feature,
+        "execution_id": old_feature,
         "previous_version": old_version,
         "corrective_version": new_version,
         "previous_plan_digest": f"sha256:{sha256_bytes(previous_plan.read_bytes())}",

@@ -102,14 +102,13 @@ connection:
 - two Cloud Router interfaces
 - two BGP peers
 
-Successful runs print:
-
-- tunnel PSKs when new tunnels are created or rotated
-- a complete Nebius `connections:` entry for that connection only
-- literal PSKs in the printed Nebius connection block when the helper knows
-  them
-- optional export commands with connection-specific variable names for users
-  who prefer env vars in YAML
+Successful runs print the absolute locations of private credential and Nebius
+connection files under
+`~/.local/state/nebius-vpngw/gcp/<project>/<region>/<connection>/`.
+Directories are mode `0700`; files are mode `0600`. Each tunnel's PSK is saved
+before creation and reused after an interrupted run. Known keys remain available
+when another existing tunnel has an unknown key. Secret values are not printed
+or passed in gcloud process arguments.
 
 ## Design Scope
 
@@ -443,12 +442,12 @@ Use the same connection parameters to update that connection, or choose a
 different connection name for a separate site.
 
 By default, the helper also derives connection-specific PSK variable names for
-the optional export commands it prints:
+unknown existing tunnel credentials in the private connection file:
 
 - `GCP_<CONNECTION_NAME>_TUNNEL_1_PSK`
 - `GCP_<CONNECTION_NAME>_TUNNEL_2_PSK`
 
-You can override those printed variable names with `PSK1_ENV_NAME` and
+You can override those placeholder names with `PSK1_ENV_NAME` and
 `PSK2_ENV_NAME`.
 
 For tunnel addressing:
@@ -477,10 +476,18 @@ At a high level:
    auto-select two unused `/30` ranges for the new connection.
 9. Reuse or create the tunnel pair, router interfaces, and BGP peers for that
    one connection.
-10. Print the PSKs and the Nebius connection block for that connection.
+10. Write the private per-tunnel credentials and connection file; print only their locations.
 
-With `--rotate-existing-tunnels`, the helper deletes the matching BGP peers and
-router interfaces first, then recreates the tunnel pair with new PSKs.
+Before any rotation deletion, the helper validates both required tunnel keys:
+nonempty printable ASCII and at most the product limit of 4096 bytes. This is a
+local product bound, not a claim about the provider's maximum. Invalid input leaves
+retained credentials unchanged. A pending operation reuses exactly its retained
+keys; if a formerly unchanged tunnel disappears and its retained key is unknown,
+reconcile the original operation before requesting a new rotation.
+
+With `--rotate-existing-tunnels`, after that preflight the helper deletes the
+matching BGP peers and router interfaces, then recreates the pair with its retained
+keys.
 
 ## Recommended Workflow
 
@@ -499,14 +506,10 @@ nebius-vpngw prep-network --local-config-file <local-config-file>
   <gcp-project-id> <gcp-region> <nebius-public-ip> <nebius-asn>
 ```
 
-1. Export the printed PSKs:
-
-```bash
-export GCP_SITE_1_TUNNEL_1_PSK='<printed-psk-1>'
-export GCP_SITE_1_TUNNEL_2_PSK='<printed-psk-2>'
-```
-
-1. Paste the printed connection block into `connections:` in the Nebius YAML.
+1. Open the private `connection.yaml` path printed by the helper and copy its
+   connection entry into your private Nebius YAML. Preserve mode `0600` on files
+   containing literal keys. Existing unknown PSKs remain `${...}` placeholders;
+   supply those from your existing secret store.
 
 2. If you need another connection to the same Nebius public IP, choose a
    different GCP HA VPN gateway name. Reusing the same Cloud Router is still
@@ -572,7 +575,8 @@ From inside `misc/`:
 - If the selected Cloud Router already has Cloud NAT attached, the helper warns
   because Google documents that combination as unsupported for HA VPN.
 - Existing tunnel PSKs cannot be read back from GCP. Reuse keeps them in place;
-  `--rotate-existing-tunnels` is how you force new PSKs to be printed.
+  `--rotate-existing-tunnels` explicitly recreates them with new keys retained in
+  the private files. Retries of an unfinished rotation reuse its saved keys.
 - Legacy `--status` and VM-HA `--status` require an existing active gcloud
   account. Neither status path runs `gcloud auth login` or changes the active
   project.

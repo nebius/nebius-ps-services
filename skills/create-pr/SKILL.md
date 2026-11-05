@@ -172,6 +172,9 @@ and `commit-push` permit one actual commit plus safe no-commit retries. Active S
 
 ## Required Reads
 
+For issue-linked delivery, read `../worktree/references/issue-resolution.md`.
+Require recorded user closure intent and current per-issue acceptance evidence.
+
 Read current repository instructions, the affected checks, and
 `references/commit-continuation.md` before any PR commit. Read
 [ordinary completion](references/ordinary-completion.md) before local review,
@@ -385,7 +388,8 @@ order, branch selection and base synchronization before the process below.
    the missing write explicitly.
    Remove or expire `permissions/pr-authorization.json` after publishing and
    PR creation/reuse completes.
-12. For ordinary work, execute `references/ordinary-completion.md`: local
+12. Finalize issue-plan delivery under the shared contract after current-head readiness.
+    For ordinary work, execute `references/ordinary-completion.md`: local
     review-pr, safe fixes through the preparation handoff, fresh validation and
     review, then stop at the reviewed PR unless explicit merge intent authorizes
     merge-pr. For multiple PRs, respect declared dependencies without assuming

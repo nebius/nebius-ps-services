@@ -25,7 +25,7 @@ RuntimeDirectory=nebius-vpngw
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 SupplementaryGroups=frr frrvty
-ReadWritePaths=/var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock /proc/sys/net/ipv4/ip_forward /etc/vpngw_peer_ips /etc/vpngw_mgmt_cidrs /etc/vpngw_local_prefixes /etc/ufw /etc/default/ufw /etc/frr
+ReadWritePaths=/etc/nebius-vpngw /var/lib/nebius-vpngw /run/nebius-vpngw /run/ufw.lock /proc/sys/net/ipv4/ip_forward /etc/vpngw_peer_ips /etc/vpngw_local_prefixes /etc/ufw /etc/default/ufw /etc/frr /etc/swanctl
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 

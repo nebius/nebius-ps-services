@@ -30,7 +30,11 @@ def _run(
     *,
     allowed: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
+    from workflow_state import git_environment, WorkflowError
+    try:
+        environment = git_environment(cwd)
+    except WorkflowError as error:
+        raise GitPromotionError(str(error)) from error
     environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["LC_ALL"] = "C"
     try:

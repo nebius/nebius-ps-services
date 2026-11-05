@@ -38,6 +38,10 @@ never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
+When called by `sdlc-create-design`, use advisory methodology only: consume the
+frozen source/spec scope and return decisions, contradictions and evidence. Do
+not start an implementation planner/coordinator or publish canonical specs.
+
 Use this skill to turn a software idea, feature request, application concept or
 standalone portable HTML artifact into an evidence-backed design and
 implementation plan. It works for brownfield systems and greenfield applications,

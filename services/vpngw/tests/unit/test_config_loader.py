@@ -19,6 +19,64 @@ from nebius_vpngw.config_template import DEFAULT_CONFIG_TEMPLATE
 from nebius_vpngw.schema import validate_config
 
 
+@pytest.mark.parametrize(
+    ("local_prefix", "remote_prefix", "source", "target", "error"),
+    [
+        ("10.0.0.1/16", "203.0.113.0/24", "10.0.0.2", "203.0.113.5", None),
+        ("10.0.0.0/16", "203.0.113.1/24", "10.0.0.2", "203.0.113.5", None),
+        ("10.0.0.1/16", "203.0.113.1/24", "10.0.0.2", "203.0.113.5", None),
+        ("10.0.0.1/16", "203.0.113.1/24", "10.1.0.2", "203.0.113.5", "source is outside"),
+        ("10.0.0.1/16", "203.0.113.1/24", "10.0.0.2", "203.0.114.5", "target is outside"),
+    ],
+)
+def test_vm_ha_probe_coverage_preserves_accepted_cidr_spelling(
+    sample_config,
+    local_prefix,
+    remote_prefix,
+    source,
+    target,
+    error,
+):
+    cfg = deepcopy(sample_config)
+    cfg["gateway_group"].update(
+        instance_count=2,
+        external_ips=[["203.0.113.10"], ["203.0.113.20"]],
+        vm_ha={
+            "enabled": True,
+            "cluster_id": "gateway-cluster",
+            "members": [
+                {"node_id": "gateway-a", "instance_index": 0, "role": "active"},
+                {"node_id": "gateway-b", "instance_index": 1, "role": "passive"},
+            ],
+        },
+    )
+    cfg["gateway"]["local_prefixes"] = [local_prefix]
+    connection = cfg["connections"][0]
+    connection["remote_prefixes"] = [remote_prefix]
+    second = deepcopy(connection["tunnels"][0])
+    second.update(
+        name="tunnel-node-b",
+        gateway_instance_index=1,
+        inner_cidr="169.254.19.0/30",
+        inner_local_ip="169.254.19.1",
+        inner_remote_ip="169.254.19.2",
+    )
+    connection["tunnels"].append(second)
+    # Existing CIDR validation accepts host bits without rewriting the config.
+    assert validate_config(cfg).gateway.local_prefixes == [local_prefix]
+    cfg["gateway_group"]["vm_ha"]["tunnel_probes"] = {
+        "tunnel-1": {"source_ip": source, "target_ip": target}
+    }
+    if error:
+        with pytest.raises(ValueError, match=error):
+            validate_config(cfg)
+    else:
+        validated = validate_config(cfg)
+        assert validated.gateway.local_prefixes == [local_prefix]
+        assert validated.connections[0].remote_prefixes == [remote_prefix]
+        assert validated.gateway_group.vm_ha.tunnel_probes["tunnel-1"].source_ip == source
+
+
 def test_load_local_config_reads_ssh_public_key_from_path(
     tmp_path: Path,
     sample_config: dict,
@@ -173,6 +231,10 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 
     first_plan = merge_with_peer_configs(deepcopy(normalized), [])
     second_plan = merge_with_peer_configs(deepcopy(normalized), [])
+    omitted_probes = deepcopy(normalized)
+    omitted_probes["gateway_group"]["vm_ha"].pop("tunnel_probes", None)
+    omitted_plan = merge_with_peer_configs(omitted_probes, [])
+    assert omitted_plan.vm_ha.generation == first_plan.vm_ha.generation
     reordered = deepcopy(normalized)
     reordered["gateway_group"]["vm_ha"]["members"].reverse()
     reordered_plan = merge_with_peer_configs(reordered, [])
@@ -206,7 +268,9 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 def test_template_and_vm_ha_example_match_the_schema() -> None:
     example_path = Path(__file__).parents[2] / "examples" / "vm-ha-bgp-example.yaml"
 
-    template = validate_config(yaml.safe_load(DEFAULT_CONFIG_TEMPLATE))
+    draft = yaml.safe_load(DEFAULT_CONFIG_TEMPLATE)
+    template = validate_config(draft)
+    assert "ssh_allowed_cidrs" not in template.gateway.model_dump()
     example = validate_config(yaml.safe_load(example_path.read_text(encoding="utf-8")))
 
     assert template.gateway_group.vm_ha is not None
@@ -225,6 +289,31 @@ def test_load_local_config_reports_missing_environment_variables(
 
     with pytest.raises(ValueError, match="Missing environment variables"):
         load_local_config(config_path)
+
+
+@pytest.mark.parametrize("optional_field", ["network_id", "external_ips"])
+@pytest.mark.parametrize("required_field", ["project_id", "psk", None])
+@pytest.mark.parametrize("status_only", [False, True])
+def test_optional_placeholder_does_not_hide_required_occurrence(
+    tmp_path, sample_config, monkeypatch, optional_field, required_field, status_only
+):
+    variable = "NETWORK_ID"
+    monkeypatch.delenv(variable, raising=False)
+    placeholder = "${NETWORK_ID}"
+    sample_config["gateway_group"][optional_field] = (
+        placeholder if optional_field == "network_id" else [[placeholder]]
+    )
+    if required_field == "project_id":
+        sample_config["project_id"] = placeholder
+    elif required_field == "psk":
+        sample_config["connections"][0]["tunnels"][0]["psk"] = placeholder
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(sample_config), encoding="utf-8")
+    if required_field == "project_id" or (required_field == "psk" and not status_only):
+        with pytest.raises(ValueError, match="Missing environment variables.*NETWORK_ID"):
+            load_local_config(path, allow_missing_tunnel_psk_placeholders=status_only)
+    else:
+        load_local_config(path, allow_missing_tunnel_psk_placeholders=status_only)
 
 
 def test_load_local_config_can_keep_missing_placeholders_for_bootstrap_commands(

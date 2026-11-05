@@ -313,9 +313,16 @@ or workload egress.
 
 ## Inspection and recovery
 
+`nebius-cxcli nat-gateway` operates on `infra:nat-gateway` configuration and
+retained recovery state. Status and route-policy refresh select enabled components
+in the supplied `CONFIG_YAML`. Recovery also handles retained state for disabled
+or removed components and the shared project lock.
+Configure a new gateway through `component add infra:nat-gateway --config CONFIG_YAML`;
+the normal validate, render, and deploy workflow provisions it and applies routing.
+
 ```bash
-nebius-cxcli nat status ./deployments/tenant/project/config.yaml
-nebius-cxcli nat status ./deployments/tenant/project/config.yaml --ssh-known-hosts-file ./trusted_hosts
+nebius-cxcli nat-gateway status ./deployments/tenant/project/config.yaml
+nebius-cxcli nat-gateway status ./deployments/tenant/project/config.yaml --ssh-known-hosts-file ./trusted_hosts
 ```
 
 Status separates current VM/allocation and attachment observations, optional guest
@@ -339,9 +346,9 @@ requests have stopped or reached a terminal state, including probe SSH collector
 and their descendants on the original runners, use the explicit controls:
 
 ```bash
-nebius-cxcli nat unlock ./deployments/tenant/project/config.yaml \
+nebius-cxcli nat-gateway unlock ./deployments/tenant/project/config.yaml \
   --owner LOCK_OWNER --confirm-writers-stopped
-nebius-cxcli nat reconcile ./deployments/tenant/project/config.yaml \
+nebius-cxcli nat-gateway reconcile ./deployments/tenant/project/config.yaml \
   --confirm-requests-settled
 ```
 
@@ -362,7 +369,7 @@ failed tests perform cleanup automatically.
    drift do not prevent a route-only restoration. Provisioning changes in the
    same plan still require their normal checks. The saved original route takes
    precedence over a concurrently edited VPC route setting during detach.
-2. To revise source policies, run `nat refresh-routes CONFIG_YAML`. This updates
+2. To revise source policies, run `nat-gateway refresh-routes CONFIG_YAML`. This updates
    config snapshots only. Review the diff, set `routing.enabled: true`, render,
    and deploy to reactivate through readiness checks.
 3. To retire the gateway, remove the detached component with `component remove`,

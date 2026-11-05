@@ -322,6 +322,61 @@ def test_ordinary_policy_prepins_fresh_members_and_verifies_retained_members(
     assert verified == [({"gateway-0": "203.0.113.10"}, policy, "operator")]
 
 
+@pytest.mark.parametrize(
+    ("existing_count", "recreate"), [(0, False), (1, False), (2, False), (2, True)]
+)
+@pytest.mark.parametrize("bootstrap", [None, "ssh-ed25519 Y29uZmlndXJlZA=="])
+def test_ordinary_missing_bootstrap_key_blocks_only_fresh_members(
+    monkeypatch: pytest.MonkeyPatch, existing_count: int, recreate: bool, bootstrap: str | None
+) -> None:
+    from nebius_vpngw.deploy import ssh_client_auth
+
+    actor = ssh_client_auth.SSHClientAuth("operator", "ssh-ed25519", "b3BlcmF0b3I=")
+    monkeypatch.setattr(ssh_client_auth, "operator_identity", lambda: actor)
+    manager = VMManager(project_id="project-test", region="eu-west1")
+    spec = SimpleNamespace(name="gateway", region="eu-west1", instance_count=2, vm_ha=None)
+    instances = tuple(
+        SimpleNamespace(hostname=f"gateway-{index}", external_ip="") for index in range(2)
+    )
+    existing = {f"gateway-{index}": f"192.0.2.{index + 1}" for index in range(existing_count)}
+    monkeypatch.setattr(manager, "discover_ordinary_gateway_members", lambda _spec: existing)
+    monkeypatch.setattr(manager, "ordinary_ssh_trust_bindings", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(manager, "verify_ordinary_existing_identities", lambda *_a, **_kw: None)
+    policy = object()
+    prepared = []
+
+    def prepare_policy(*_args, **_kwargs):
+        prepared.append(True)
+        return policy
+
+    monkeypatch.setattr("nebius_vpngw.deploy.vm_manager.require_vm_ha_ssh_policy", prepare_policy)
+
+    def prepare():
+        return manager.prepare_ordinary_ssh_policy(
+            spec,
+            instances,
+            trust_scope=VMHASSHTrustScope(
+                tenant_id="tenant-test",
+                project_id="project-test",
+                region_id="eu-west1",
+                gateway_name="gateway",
+                cluster_id="ordinary-v1",
+            ),
+            recreate=recreate,
+            management_public_key=bootstrap,
+            dry_run=False,
+            username="operator",
+        )
+
+    if existing_count < 2:
+        with pytest.raises(ValueError, match="bootstrap SSH public key"):
+            prepare()
+        assert not prepared
+    else:
+        # Existing updates and staged replacement use verified live authorization.
+        assert prepare() is policy
+
+
 def test_ordinary_cloud_recovery_is_bound_to_the_discovered_compute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -539,6 +594,7 @@ def test_invalid_enrollment_anchors_block_before_recreate_or_allocation() -> Non
     policy = SimpleNamespace(identity_for=lambda hostname: identity)
     manager = VMManager(project_id="project-test", region="eu-west1", ssh_policy=policy)
     spec = SimpleNamespace(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="gateway",
         instance_count=2,
         region="eu-west1",
@@ -563,13 +619,11 @@ def test_invalid_enrollment_anchors_block_before_recreate_or_allocation() -> Non
         ),
         patch.object(manager, "verify_vm_ha_existing_identities"),
         patch.object(manager, "_build_cloud_init", return_value="#cloud-config\n"),
-        patch.object(manager, "_delete_existing_instances_and_boot_disks") as delete,
         patch.object(manager, "_ensure_vm_ha_shared_allocation") as ensure_allocation,
         pytest.raises(RuntimeError, match="cloud-init must contain exactly one"),
     ):
         manager.ensure_group(spec, recreate=True)
 
-    delete.assert_not_called()
     ensure_allocation.assert_not_called()
 
 
@@ -618,13 +672,11 @@ def test_vm_ha_member_snapshot_change_blocks_first_cloud_mutation(
         patch.object(manager, "_discover_vm_ha_members", side_effect=(initial, current)),
         patch.object(manager, "verify_vm_ha_existing_identities"),
         patch.object(manager, "_prepare_gateway_ssh_enrollment_cloud_inits", return_value={}),
-        patch.object(manager, "_delete_existing_instances_and_boot_disks") as delete,
         patch.object(manager, "_ensure_vm_ha_shared_allocation") as ensure_allocation,
         pytest.raises(RuntimeError, match=message),
     ):
         manager.ensure_group(spec)
 
-    delete.assert_not_called()
     ensure_allocation.assert_not_called()
 
 

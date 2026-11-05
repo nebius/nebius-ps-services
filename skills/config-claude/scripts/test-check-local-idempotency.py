@@ -421,7 +421,7 @@ class HookOwnershipTests(unittest.TestCase):
             shutil.copytree(ROOT / owner / "assets", source / owner / "assets")
         target = source / "global-context-management/scripts"
         target.mkdir(parents=True)
-        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
             put(target / name, "raise RuntimeError('must never execute selected source')\n")
         payloads, _hooks = config.source_bundle(source)
         self.assertIn(b"must never execute", payloads["agent_runtime.py"])

@@ -33,6 +33,7 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     VMHAMigrationTransaction,
     normalize_vm_ha_observation,
     vm_ha_missing_standby_disk_name,
+    vm_ha_missing_standby_replacement_effect,
     vm_ha_passive_replacement_binding_key,
 )
 from nebius_vpngw.deploy.vm_manager import (
@@ -84,6 +85,38 @@ def _runtime_credentials() -> VMHACredentialSet:
     )
 
 
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
+@pytest.mark.parametrize("name", ("gateway-1", "10-gateway-1"))
+@pytest.mark.parametrize("kind", ("failed", "missing"))
+def test_replacement_effects_resolve_exact_member_at_decimal_boundaries(cycle, name, kind):
+    from nebius_vpngw.deploy.vm_ha_lifecycle import (
+        vm_ha_missing_standby_replacement_effect,
+        vm_ha_passive_replacement_effect,
+    )
+
+    builder = (
+        vm_ha_passive_replacement_effect
+        if kind == "failed"
+        else vm_ha_missing_standby_replacement_effect
+    )
+    manager = object.__new__(VMManager)
+    observation = {"members": [{"instance_name": "owner"}, {"instance_name": name}]}
+    actions = ["create-compute", "create-boot-disk"]
+    if kind == "failed":
+        actions.extend(("delete-compute", "delete-boot-disk"))
+    for action in actions:
+        effect = builder(name, cycle, action)
+        assert manager._vm_ha_effect_member_index(effect, observation) == 1
+        paths = manager._vm_ha_effect_permitted_paths(effect, observation)
+        assert all(path == "/members/1" or path.startswith("/members/1/") for path in paths)
+        if action == "create-compute":
+            assert "/members/1/state" in paths
+        elif action == "delete-compute":
+            assert "/members/1/*" in paths
+        else:
+            assert paths == ()
+
+
 def test_missing_standby_preflight_uses_fresh_disk_name_and_retained_allocations() -> None:
     manager = VMManager(project_id="project-1", region="eu-north1")
     manager._build_sdk_client = Mock(return_value=object())
@@ -132,6 +165,8 @@ def test_missing_standby_preflight_uses_fresh_disk_name_and_retained_allocations
 def _install_missing_standby_replacement_journal(
     manager: VMManager,
     tmp_path: Path,
+    *,
+    cycle: int = 1,
 ) -> tuple[VMHALifecycleJournal, str]:
     members = (
         VMHALifecycleMember(
@@ -176,6 +211,17 @@ def _install_missing_standby_replacement_journal(
         desired_state_digest="b" * 64,
         current_state_digest="c" * 64,
         initial_resource_bindings={
+            **{
+                vm_ha_passive_replacement_binding_key(kind, "gateway-1", previous): value
+                for previous in range(1, cycle)
+                for kind, value in {
+                    "approval": f"{previous + 32:064x}",
+                    "retired-compute": f"retired-compute-{previous}",
+                    "retired-disk": f"retired-disk-{previous}",
+                    "compute": "compute-retired",
+                    "disk": "disk-retired",
+                }.items()
+            },
             "compute:gateway-0": "compute-0",
             "compute:gateway-1": "compute-retired",
             "disk:gateway-0": "disk-0",
@@ -225,12 +271,12 @@ def _install_missing_standby_replacement_journal(
         gateway_name="gateway",
         instance_name="gateway-1",
         predecessor_sha256=active.record_sha256,
-        cycle=1,
+        cycle=cycle,
     )
     replacement = VMHALifecycleState.start_missing_standby_replacement(
         active,
         target_instance_name="gateway-1",
-        replacement_cycle=1,
+        replacement_cycle=cycle,
         replacement_disk_name=disk_name,
         operation_id="d" * 64,
         approval_digest="e" * 64,
@@ -247,8 +293,76 @@ def _install_missing_standby_replacement_journal(
     return journal, disk_name
 
 
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 100))
+@pytest.mark.parametrize(
+    "action,service,resource_id",
+    (
+        ("create-boot-disk", "DiskServiceClient", "disk-new"),
+        ("create-compute", "InstanceServiceClient", "compute-new"),
+    ),
+)
+def test_replacement_accepted_operation_resumes_from_disk_with_real_effect_guard(
+    tmp_path, cycle, action, service, resource_id
+):
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    journal, _ = _install_missing_standby_replacement_journal(manager, tmp_path, cycle=cycle)
+    observation = {
+        "members": [
+            {
+                "aliases": ["shared-private"],
+                "boot_disk_id": "disk-0",
+                "compute_id": "compute-0",
+                "compute_revision": "11",
+                "instance_name": "gateway-0",
+                "network_interface_name": "eth0",
+                "present": True,
+                "state": "running",
+            },
+            {"instance_name": "gateway-1", "present": False},
+        ],
+        "route_targets": [],
+        "routes": [],
+        "shared_allocation": {
+            "allocation_id": "shared-private",
+            "owner": {
+                "compute_id": "compute-0",
+                "network_interface_name": "eth0",
+            },
+            "present": True,
+        },
+    }
+    effect = vm_ha_missing_standby_replacement_effect("gateway-1", cycle, action)
+    with patch.object(manager, "_stable_vm_ha_effect_observation", return_value=observation):
+        operation_id = manager._begin_vm_ha_effect(effect)
+    journal.record_cloud_operation(effect, "accepted-operation")
+    store = VMHALifecycleStore(tmp_path / "gateway.yaml")
+    loaded = store.read(expected_project_id="project-1", expected_gateway_name="gateway")
+    resumed = VMManager(project_id="project-1", region="eu-north1")
+    resumed.set_vm_ha_lifecycle_journal(VMHALifecycleJournal(store, loaded))
+    resumed._get_client = Mock(return_value=object())
+    accepted = SimpleNamespace(resource_id=resource_id, successful=Mock(return_value=True))
+    operation_service = Mock(get=Mock(return_value=Mock(wait=Mock(return_value=accepted))))
+    cloud_service = Mock(operation_service=Mock(return_value=operation_service))
+    with (
+        patch.object(resumed, "_stable_vm_ha_effect_observation", return_value=observation),
+        patch(f"nebius.api.nebius.compute.v1.{service}", return_value=cloud_service),
+        patch("nebius_vpngw.deploy.vm_manager.wait_vm_ha_operation") as wait_operation,
+    ):
+        assert resumed._begin_vm_ha_effect(effect) == operation_id
+    assert operation_service.get.call_args.args[0].id == "accepted-operation"
+    wait_operation.assert_called_once_with(accepted)
+    assert resumed._vm_ha_accepted_resource_ids[effect] == resource_id
+    assert (
+        resumed._vm_ha_journal.state.transaction.observation_guard
+        == loaded.transaction.observation_guard
+    )
+    assert not cloud_service.create.called
+
+
+@pytest.mark.parametrize("oversized_cloud_init", [False, True])
 def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     tmp_path: Path,
+    oversized_cloud_init: bool,
 ) -> None:
     manager = VMManager(project_id="project-1", region="eu-north1")
     _journal, disk_name = _install_missing_standby_replacement_journal(manager, tmp_path)
@@ -277,6 +391,13 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     manager._prepare_gateway_ssh_enrollment_cloud_inits = Mock(
         return_value={"gateway-1": "#cloud-config\nreplacement\n"}
     )
+    if oversized_cloud_init:
+        manager._prepare_gateway_ssh_enrollment_cloud_inits.side_effect = lambda *_args: (
+            VMManager._render_gateway_ssh_enrollment_cloud_init(
+                "#cloud-config\nwrite_files:\n  - content: |\n            Port 22\n" + "x" * 32768,
+                SimpleNamespace(cloud_init_entries=lambda: ""),
+            )
+        )
     manager._build_vm_provisioning_config = Mock(return_value=provisioning)
     manager._resolve_client_apis = Mock(
         return_value=(instance_api, object(), object(), allocation_client)
@@ -315,6 +436,17 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
         "nebius.api.nebius.compute.v1.DiskServiceClient",
         return_value=disk_client,
     ):
+        if oversized_cloud_init:
+            with pytest.raises(ValueError, match="cloud-init.*32768"):
+                manager.replace_missing_vm_ha_standby(
+                    _ha_spec(), ["10.0.0.0/8"], approval_digest="e" * 64
+                )
+            manager._begin_vm_ha_effect.assert_not_called()
+            manager._submit_boot_disk_create.assert_not_called()
+            manager._create_instance_with_fallback.assert_not_called()
+            manager.set_ha_private_alias.assert_not_called()
+            disk_client.delete.assert_not_called()
+            return
         result = manager.replace_missing_vm_ha_standby(
             _ha_spec(),
             ["10.0.0.0/8"],
@@ -744,6 +876,7 @@ def test_vm_ha_member_preflight_classifies_typed_not_found_as_absent() -> None:
     request = MagicMock()
     request.wait.side_effect = provider_error
     service = MagicMock()
+    service.list.return_value.wait.return_value = SimpleNamespace(items=[], next_page_token="")
     service.get_by_name.return_value = request
 
     with patch(
@@ -918,6 +1051,7 @@ def test_strict_preparation_does_not_create_after_transitional_inventory_read_fa
 
     allocation_client = SimpleNamespace(list=list_allocations)
     spec = GatewayGroupSpec(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="gateway",
         instance_count=1,
         region="eu-north1",
@@ -956,6 +1090,7 @@ def test_interactive_allocation_inventory_filters_and_binds_exact_gateway_attach
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     vm_mgr._sdk_client = object()
     spec = GatewayGroupSpec(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="gateway",
         instance_count=2,
         region="eu-north1",
@@ -1040,6 +1175,7 @@ def test_interactive_allocation_inventory_fails_closed_on_list_error() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     vm_mgr._sdk_client = object()
     spec = GatewayGroupSpec(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="gateway",
         instance_count=1,
         region="eu-north1",
@@ -1304,6 +1440,7 @@ def test_resolve_prepared_public_allocation_rejects_named_allocation_with_differ
 def test_prepare_public_allocations_selects_only_passive_and_reuses_on_retry() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     spec = GatewayGroupSpec(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="nebius-vpn-gw",
         instance_count=2,
         region="eu-north1",
@@ -1369,6 +1506,7 @@ def test_prepare_public_allocations_selects_only_passive_and_reuses_on_retry() -
 def test_passive_allocation_retry_reuses_create_accepted_before_resolution_failure() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     spec = GatewayGroupSpec(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="nebius-vpn-gw",
         instance_count=2,
         region="eu-north1",
@@ -1571,6 +1709,7 @@ def _ha_spec() -> GatewayGroupSpec:
         ),
     )
     return GatewayGroupSpec(
+        ingress_policies={i: {"peer_ips": []} for i in range(2)},
         name="gateway",
         instance_count=2,
         region="eu-north1",

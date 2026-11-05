@@ -140,6 +140,7 @@ def test_create_from_peer_config_generates_bgp_config_from_csv(tmp_path: Path) -
     assert result.exit_code == 0, result.stdout
 
     generated = yaml.safe_load(output_file.read_text(encoding="utf-8"))
+    assert "ssh_allowed_cidrs" not in generated["gateway"]
     assert len(generated["connections"]) == 1
     connection = generated["connections"][0]
     assert connection["name"] == "gcp-ha-vpn"

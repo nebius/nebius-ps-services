@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ from typing import Any
 
 from .contracts import (
     MAX_SPEC_BYTES,
+    git_environment,
     ProjectSpecError,
     digest,
     inspect_pair_bytes,
@@ -67,6 +69,39 @@ def spec_pair_lock(project: Path, git_root: Path, *, shared: bool = False):
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+def read_spec_publication(project_root: Path, operation_id: str) -> dict[str, Any]:
+    """Read an owner journal and verify its completed canonical pair, never a caller receipt."""
+    if not isinstance(operation_id, str) or OPERATION_RE.fullmatch(operation_id) is None:
+        raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "operation ID is invalid")
+    project, git_root, scope, _head = project_identity(project_root)
+    with spec_pair_lock(project, git_root, shared=True):
+        raw, _ = _read_file(_state_root(project, git_root) / f"{operation_id}.json",
+                            "transaction journal", max_bytes=16 * 1024)
+        try:
+            receipt = json.loads(raw)
+        except (ValueError, TypeError) as error:
+            raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "publication journal is invalid") from error
+        if (not isinstance(receipt, dict) or stable_json(receipt) != raw
+                or set(receipt) != {"schema", "operation_id", "project_scope", "git_head",
+                                    "before", "after", "contract_status", "workflow_identity"}
+                or receipt.get("schema") != "maintain-project-specs.transaction.v1"
+                or receipt.get("operation_id") != operation_id or receipt.get("project_scope") != scope
+                or receipt.get("contract_status") != "current"
+                or re.fullmatch(r"[0-9a-f]{40,64}", str(receipt.get("git_head"))) is None):
+            raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "publication journal identity is invalid")
+        for field in ("before", "after"):
+            values = receipt[field]
+            if (not isinstance(values, dict) or set(values) != {"requirements", "design"}
+                    or any(re.fullmatch(r"[0-9a-f]{64}", str(value)) is None for value in values.values())):
+                raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "publication digests are invalid")
+        pair = {kind: _read_file(project / "docs" / f"{kind}.md", kind)[0]
+                for kind in ("requirements", "design")}
+        if ({kind: digest(value) for kind, value in pair.items()} != receipt["after"]
+                or inspect_pair_bytes(pair["requirements"], pair["design"])["status"] != "current"):
+            raise ProjectSpecError("SPEC_TRANSACTION_CONFLICT", "published canonical pair changed")
+        return receipt
 
 
 def _read_optional_at(directory: int, name: str, label: str) -> bytes | None:
@@ -480,7 +515,7 @@ def publish_spec_pair(project_root: Path, *, expected_objective_sha256=None,
     import sys
     project = project_root.resolve()
     result = subprocess.run(["git", "-C", str(project), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                            capture_output=True, text=True, timeout=30, check=False)
+                            capture_output=True, text=True, timeout=30, check=False, env=git_environment(project))
     common = Path(result.stdout.strip()) if result.returncode == 0 else None
     registry = common / "workflow-spec-publication" if common is not None else None
     if registry is None or not (registry.exists() or registry.is_symlink()):

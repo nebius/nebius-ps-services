@@ -157,3 +157,51 @@ def test_resolution_never_falls_back_from_mismatched_explicit_key(tmp_path: Path
         )
 
     assert wrong is not configured
+
+
+def test_operator_override_works_without_original_laptop_paths(tmp_path, sample_config):
+    import yaml
+
+    from nebius_vpngw.config_loader import load_local_config
+    from nebius_vpngw.deploy.ssh_client_auth import OPERATOR_IDENTITY, select_operator_identity
+
+    key = _private_key(tmp_path / "operator")
+    auth = select_operator_identity(tmp_path / "operator")
+    sample_config["gateway_group"]["vm_spec"].update(
+        ssh_public_key=None,
+        ssh_public_key_path=str(tmp_path / "original-laptop.pub"),
+        ssh_private_key_path=str(tmp_path / "original-laptop"),
+    )
+    config = tmp_path / "gateway.yaml"
+    config.write_text(yaml.safe_dump(sample_config))
+    token = OPERATOR_IDENTITY.set(auth)
+    try:
+        loaded = load_local_config(config)
+        assert loaded["gateway_group"]["vm_spec"]["ssh_public_key"] is None
+        selected = resolve_ssh_client_auth(None, explicit_private_key=tmp_path / "missing")
+        assert selected.matches(key.get_name(), key.get_base64())
+    finally:
+        OPERATOR_IDENTITY.reset(token)
+
+
+def test_fresh_bootstrap_public_key_accepts_exact_selected_operator(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import ssh_client_auth
+
+    key = _private_key(tmp_path / "operator")
+    selected = ssh_client_auth.select_operator_identity(tmp_path / "operator")
+    monkeypatch.setattr(ssh_client_auth, "operator_identity", lambda: selected)
+    ssh_client_auth.require_bootstrap_public_key(_public(key))
+
+
+def test_public_selector_requires_exact_agent_even_with_matching_disk_key(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy.ssh_client_auth import select_operator_identity
+
+    key = _private_key(tmp_path / "id_ed25519")
+    public = tmp_path / "operator.pub"
+    public.write_text(_public(key))
+    monkeypatch.setattr(paramiko, "Agent", lambda: _agent().Agent())
+    with pytest.raises(ValueError, match="not loaded in ssh-agent"):
+        select_operator_identity(public)
+    monkeypatch.setattr(paramiko, "Agent", lambda: _agent(key).Agent())
+    selected = select_operator_identity(public)
+    assert selected.paramiko_connect_kwargs()["pkey"] is key

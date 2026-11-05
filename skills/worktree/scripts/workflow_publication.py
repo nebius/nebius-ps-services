@@ -26,7 +26,7 @@ def registry_path(project: Path) -> Path:
 def register(run_dir: Path, feature: str, selected: Path) -> None:
     run, _objective = validate_run(run_dir)
     path = registry_path(selected)
-    value = {"schema": SCHEMA, "run_dir": str(run_dir), "feature_id": feature,
+    value = {"schema": SCHEMA, "run_dir": str(run_dir), "execution_id": feature,
              "selected_project": str(selected), "owner": run["owner"]}
     with lock(path.parent):
         if path.exists():
@@ -36,7 +36,7 @@ def register(run_dir: Path, feature: str, selected: Path) -> None:
             if prior.get("schema") != SCHEMA:
                 raise WorkflowError("WORKFLOW_UPGRADE_REQUIRED", "unsupported specification owner registry")
             old_run, _ = validate_run(Path(prior["run_dir"]))
-            old = read(Path(prior["run_dir"]) / "execution" / prior["feature_id"] / "coordinator.json")
+            old = read(Path(prior["run_dir"]) / "execution" / prior["execution_id"] / "coordinator.json")
             if old.get("status") != "done" and old_run.get("status") != "cancelled":
                 raise WorkflowError("SPEC_CONFLICT", "another run owns canonical publication")
         write(path, value)
@@ -50,7 +50,7 @@ def _basis(run_dir: Path, feature: str):
         return None
     record = read(pointer)
     fingerprint = record.get("sha256")
-    if (record.get("schema") != "workflow/execution-basis-pointer-v1"
+    if (record.get("schema") != "workflow/execution-basis-pointer-v2"
             or record.get("path") != f"bases/{feature}/{fingerprint}.json"
             or not isinstance(fingerprint, str) or len(fingerprint) != 64
             or any(c not in "0123456789abcdef" for c in fingerprint)
@@ -72,9 +72,9 @@ def publication_guard(project: Path, *, objective_sha256, basis_sha256):
     selected = Path(owner["selected_project"])
     if registry_path(selected) != path:
         raise WorkflowError("OWNERSHIP_INVALID", "specification owner belongs to another project")
-    feature = owner["feature_id"]
+    feature = owner["execution_id"]
     if (run_dir != run_dir.resolve() or selected != selected.resolve()
-            or re.fullmatch(r"FEAT-[0-9]{3,}", str(feature)) is None):
+            or re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", str(feature)) is None):
         raise WorkflowError("OWNERSHIP_INVALID", "publication registry identity is invalid")
     with lock(run_dir.parent):
         def check():
@@ -84,9 +84,9 @@ def publication_guard(project: Path, *, objective_sha256, basis_sha256):
             coordinator = read(run_dir / "execution" / feature / "coordinator.json")
             if (run.get("project_root") != str(selected)
                     or run.get("git_common_dir") != str(path.parent.parent)
-                    or coordinator.get("schema") != "workflow/execution-coordinator-v1"
+                    or coordinator.get("schema") != "workflow/execution-coordinator-v2"
                     or coordinator.get("run_id") != run_dir.name
-                    or coordinator.get("feature_id") != feature
+                    or coordinator.get("execution_id") != feature
                     or coordinator.get("selected_project_root") != str(selected)):
                 raise WorkflowError("OWNERSHIP_INVALID", "publication registry and execution identity disagree")
             from agent_runtime import native_session_id
@@ -121,7 +121,7 @@ def publication_guard(project: Path, *, objective_sha256, basis_sha256):
                 or coordinator["bootstrap_objective_sha256"] != objective["revisions"][-1]["sha256"]
             ):
                 raise WorkflowError("SPEC_CONFLICT", "specification bootstrap is not ready for publication")
-            if project != resolve_spec_checkout(run_dir, selected, feature_id=feature):
+            if project != resolve_spec_checkout(run_dir, selected, execution_id=feature):
                 raise WorkflowError("SPEC_CONFLICT", "canonical specs belong to the registered integration checkout")
             from workflow_objectives import _writers_quiescent
             _writers_quiescent(run_dir)

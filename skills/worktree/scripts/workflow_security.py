@@ -46,7 +46,9 @@ def contains_sensitive(value: str) -> bool:
             rhs = line[match.start("value") :].strip()
             if not match.group("quote") and len(rhs) <= 4096:
                 try:
-                    expression = ast.parse(rhs, mode="eval").body
+                    # A single trailing JavaScript statement terminator does
+                    # not turn a DOM lookup into a credential literal.
+                    expression = ast.parse(rhs.removesuffix(";"), mode="eval").body
                 except (SyntaxError, ValueError, RecursionError):
                     pass
                 else:

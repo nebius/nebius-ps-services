@@ -347,6 +347,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     lock_fd = os.open(state_dir / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
     monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: lock_fd)
     monkeypatch.setattr(agent_main, "_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", state_dir)
     monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path=config_path: vm_ha)
     monkeypatch.setattr(
         agent_main,
@@ -362,9 +363,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         agent_main,
         "update_firewall_from_config",
-        lambda cfg, **kwargs: passive_effects.append(
-            f"firewall:{kwargs.get('require_reload')}"
-        ),
+        lambda cfg, **kwargs: passive_effects.append(f"firewall:{kwargs.get('require_reload')}"),
     )
 
     def enforce_passive_hygiene(cfg):
@@ -412,14 +411,18 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
 
     materialized_endpoints: list[dict[str, object]] = []
     agent = agent_main.Agent()
-    agent.xfrm = SimpleNamespace(
-        setup_interfaces=lambda endpoints: materialized_endpoints.extend(endpoints)
-    )
+
+    def setup_interfaces(endpoints, *, persist_sysctl=True):
+        assert persist_sysctl is False, "HA bootstrap must preserve persistent forwarding fencing"
+        materialized_endpoints.extend(endpoints)
+
+    agent.xfrm = SimpleNamespace(setup_interfaces=setup_interfaces)
     agent.reload()
 
     assert materialized_endpoints
     assert "start_action = start" in (tmp_path / "swanctl.conf").read_text()
-    assert "unique = replace" in (tmp_path / "swanctl.conf").read_text()
+    assert "unique = no" in (tmp_path / "swanctl.conf").read_text()
+    assert "close_action = trap" in (tmp_path / "swanctl.conf").read_text()
     assert " neighbor 169.254.10.2 activate" in (tmp_path / "frr.conf").read_text()
     record = json.loads((state_dir / "materialization.json").read_text())
     assert record["boot_id"] == "boot-a"

@@ -81,6 +81,9 @@ Do not archive raw conversation turns or capture prompts globally.
 
 ## Required Reads
 
+- `../worktree/references/document-delivery.md` for source coverage, phase/slice
+  identities, shared-skill caller contracts and protected completion policy.
+
 - `../worktree/references/workflow-contract.md` for objective, binding, basis,
   scheduler and reconciliation contracts.
 - `references/objective-refinement.md` and `references/state-schema.md`.
@@ -107,6 +110,15 @@ the registered checkout and expected revision. Workers never publish them.
    project and candidate. Bare bound continuation uses `observe`; explicit
    cross-session continuation uses `continue`. These are private helper actions.
    Observation restores an existing binding after compaction and starts no work.
+   Managed-child intake acquires the exact SDLC lease while the source is clean,
+   before any canonical authoring. Resume reuses that ownership; an interrupted
+   contract commit is reconciled by preparation before ordinary clean-lease
+   checks. Never acquire a missing lease from a dirty child.
+   Intake registers the objective, run and binding; it does not create phase
+   checkpoints. Before checkpoint reads, refinement, observation or routing,
+   follow the first-start/resume branch in `references/state-schema.md`.
+   The bound coordinator initializes a fresh accepted run at `sdlc-start`,
+   `running`; an active pointer alone does not mean phase state exists.
 3. Accept material steering with `accept --revise`, which fences dispatch and
    promotion before recording the adjacent objective revision. Stop affected
    native writers, record termination, reconcile them without admitting stale
@@ -127,12 +139,13 @@ the registered checkout and expected revision. Workers never publish them.
    a dependency/prioritization queue inside the accepted objective; unrelated
    requests are never appended to it.
 
-- Resume from `checkpoints/latest.json` first. Do not rely on conversation
+- For initialized runs, resume from `checkpoints/latest.json` first. Do not rely on conversation
   memory for current feature, phase, blocker, retry counts, or next skill.
 - Reconcile `current-state.json`, the latest checkpoint, feature queue,
   fingerprints, and evidence. If they disagree, prefer the newest complete
   checkpoint that matches existing evidence, then repair `current-state.json`.
-- Initialize local run state only when no active run or checkpoint exists.
+- Initialize only a verified fresh accepted run without prior phase or downstream
+  work. Reconcile existing or partial history; never reset counters or evidence.
 - If requirements are missing, route to `sdlc-create-requirements`.
 - If design is missing or stale and required context is missing, route only to
   `sdlc-gather-context`.
@@ -145,7 +158,7 @@ the registered checkout and expected revision. Workers never publish them.
   project truth but never authorizes auto-steering, execution, cleanup,
   finalization, or Stop.
 - After design is ready, require the design adapter's initial canonical-pair
-  admission when files are new: only the selected pair may be dirty, guarded
+  admission when files are new: only the selected pair and exact validated snapshot paths may be dirty, guarded
   repo-root staging makes them tracked, and HEAD remains unchanged. Do not
   advance untracked specs or move the preparation phase's commit earlier.
 - After design is ready and before planning, write the complete private impact claim
@@ -161,7 +174,8 @@ the registered checkout and expected revision. Workers never publish them.
   Do not create, edit, retire, or reload project instructions automatically.
   A user-invoked project-instruction workflow remains separately responsible
   for its own mutation safety and cannot become an SDLC prerequisite.
-- Build or refresh the feature queue from `docs/design.md`.
+- Build or refresh the private program from source obligations and `docs/design.md`;
+  admit its frozen digest before planning. Elaborate upcoming slices only.
 - Check `STEERING.md` and `steering/auto-steering.json` before every
   iteration.
 - If there are new or unresolved steering entries, stale steering fingerprints,
@@ -176,8 +190,11 @@ the registered checkout and expected revision. Workers never publish them.
   workflow. Only in that explicit case route to `project-agent-instructions`;
   otherwise record the recommendation and continue under already-effective
   instructions.
-- Select the highest-priority incomplete feature whose dependencies are complete.
-- Keep exactly one feature execution active. After `plan_locked`, route to
+- Keep phase selection in this coordinator. Stop continuation must not infer UAT
+  from aggregate feature-status labels or override the recorded next phase.
+- Select the next admitted delivery slice whose dependency and phase evidence passes;
+  retain original REQ/FEAT mappings across its tasks.
+- Keep exactly one delivery candidate active. After `plan_locked`, route to
   `sdlc-prepare-execution`; after `execution_prepared`, route to `sdlc-tdd` in
   the recorded integration cwd. From TDD through alignment, require phases to
   use that integration checkout and bind evidence to its recorded HEAD.
@@ -196,7 +213,7 @@ the registered checkout and expected revision. Workers never publish them.
   exactly as a conditional diagnostic branch. Persist its diagnosis pointer
   and return every diagnosis to `sdlc-classify-failure`; troubleshooting never
   chooses or executes the repair phase directly.
-- Treat `repair-control-v1` as authoritative for blocker identity, route
+- Treat `repair-control-v2` as authoritative for blocker identity, route
   history, invalidations, active time, and repair dispatch budgets. Freeze new
   worker dispatch while classifying, diagnosing, or replanning. Stop on missing
   evidence, unresolved competing hypotheses, policy/human decisions, semantic
@@ -247,8 +264,9 @@ the registered checkout and expected revision. Workers never publish them.
   SHA, and `review-pr`
   may record findings/readiness without changing the PR head. Any required
   branch change returns through `sdlc-classify-failure` and this coordinator.
-  `sdlc-merge-pr` may merge only after an explicit user request and only while
-  the remote PR head still equals that promoted and reviewed SHA.
+  `sdlc-merge-pr` consumes accepted run-level conditional merge authority; otherwise
+  stop at the reviewed PR. Use its protected adapter and verify the merged result
+  before starting the next delivery branch. A supplied cluster is not merge consent.
 - Before returning a next skill, write a checkpoint containing current feature,
   phase, status, blocker, retry counts, last successful phase, fingerprints,
   evidence pointers, repair event/diagnosis/control pointers, and next

@@ -82,7 +82,7 @@ def trusted_run(api, run, filename, default):
     )
 
 
-def read_intent(api, run_id, attempt, number, head, policy):
+def read_intent(api, run_id, attempt, number, head, policy, *, allowed_ids=None):
     default = api.repo_info()["default_branch"]
     run = api.api(f"actions/runs/{run_id}/attempts/{attempt}")
     trusted_run(api, run, policy["merge_workflow"], default)
@@ -115,7 +115,7 @@ def read_intent(api, run_id, attempt, number, head, policy):
     )
     require(
         type(run["actor"]["id"]) is int
-        and run["actor"]["id"] in operator_ids()
+        and run["actor"]["id"] in (operator_ids() if allowed_ids is None else allowed_ids)
         and type(value.get("review_id")) is int
         and value["review_id"] > 0,
         "Untrusted operator intent",

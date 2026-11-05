@@ -16,10 +16,7 @@ from .vm_ha_controller import (
     TransferContinuity,
 )
 
-_CHECKPOINT_SCHEMA_V1 = "nebius-vpngw/vm-ha-controller-checkpoint-v1"
-_CHECKPOINT_SCHEMA_V2 = "nebius-vpngw/vm-ha-controller-checkpoint-v2"
-_CHECKPOINT_SCHEMA_V3 = "nebius-vpngw/vm-ha-controller-checkpoint-v3"
-_CHECKPOINT_SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v4"
+_CHECKPOINT_SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v5"
 
 
 def _digests_from_dict(payload: object) -> DigestSet:
@@ -102,6 +99,7 @@ def controller_checkpoint_to_dict(checkpoint: ControllerCheckpoint) -> dict[str,
         "sequence": checkpoint.sequence,
         "state": checkpoint.state.value,
         "suspect_since": checkpoint.suspect_since,
+        "suspicion_boot_id": checkpoint.suspicion_boot_id,
         "pending_action": pending,
         "established_ownership_context": established,
         "ownership_continuity_invalidated": checkpoint.ownership_continuity_invalidated,
@@ -126,21 +124,10 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
     }
     if not isinstance(payload, dict):
         raise ValueError("controller checkpoint has an invalid shape")
-    schema = payload.get("schema")
-    expected = common
-    if schema in {_CHECKPOINT_SCHEMA_V2, _CHECKPOINT_SCHEMA_V3, _CHECKPOINT_SCHEMA}:
-        expected |= {"transfer_continuity"}
-    if schema == _CHECKPOINT_SCHEMA:
-        expected |= {"repair_attempt"}
-    if set(payload) != expected:
+    if payload.get("schema") != _CHECKPOINT_SCHEMA:
+        raise ValueError("unsupported controller checkpoint schema; run approved apply conversion")
+    if set(payload) != common | {"suspicion_boot_id", "transfer_continuity", "repair_attempt"}:
         raise ValueError("controller checkpoint has an invalid shape")
-    if schema not in {
-        _CHECKPOINT_SCHEMA_V1,
-        _CHECKPOINT_SCHEMA_V2,
-        _CHECKPOINT_SCHEMA_V3,
-        _CHECKPOINT_SCHEMA,
-    }:
-        raise ValueError("unsupported controller checkpoint schema")
 
     pending_payload = payload["pending_action"]
     pending: ControllerAction | None = None
@@ -156,21 +143,12 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
             "digests",
             "ownership_incarnation",
         }
-        if schema in {_CHECKPOINT_SCHEMA_V3, _CHECKPOINT_SCHEMA}:
-            pending_expected.add("takeover_fence_required")
-        if schema == _CHECKPOINT_SCHEMA:
-            pending_expected.update({"repair_deadline_at", "repair_reasons"})
+        pending_expected.update({"takeover_fence_required", "repair_deadline_at", "repair_reasons"})
         if not isinstance(pending_payload, dict) or set(pending_payload) != pending_expected:
             raise ValueError("pending controller action has an invalid shape")
-        takeover_fence_required = pending_payload.get("takeover_fence_required")
-        if schema in {_CHECKPOINT_SCHEMA_V3, _CHECKPOINT_SCHEMA}:
-            if not isinstance(takeover_fence_required, bool):
-                raise ValueError("pending takeover fence requirement must be boolean")
-        else:
-            # Legacy checkpoints did not distinguish a historical ownership
-            # incarnation from an in-flight takeover. Preserve their stricter
-            # behavior so upgrades never weaken a checkpointed promotion.
-            takeover_fence_required = int(pending_payload["ownership_incarnation"]) > 0
+        takeover_fence_required = pending_payload["takeover_fence_required"]
+        if not isinstance(takeover_fence_required, bool):
+            raise ValueError("pending takeover fence requirement must be boolean")
         repair_deadline_at = pending_payload.get("repair_deadline_at")
         if repair_deadline_at is not None:
             if isinstance(repair_deadline_at, bool) or not isinstance(
@@ -214,88 +192,86 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
         )
 
     continuity: TransferContinuity | None = None
-    if schema in {_CHECKPOINT_SCHEMA_V2, _CHECKPOINT_SCHEMA_V3, _CHECKPOINT_SCHEMA}:
-        continuity_payload = payload["transfer_continuity"]
-        if continuity_payload is not None:
-            continuity_expected = {
-                "allocation_id",
-                "attach_operation_id",
-                "candidate_node_id",
-                "digests",
-                "former_owner_node_id",
-                "generation_id",
-                "ownership_confirmed",
-                "ownership_incarnation",
-                "post_attach_revision",
-                "pre_attach_revision",
-            }
-            if (
-                not isinstance(continuity_payload, dict)
-                or set(continuity_payload) != continuity_expected
-            ):
-                raise ValueError("transfer continuity has an invalid shape")
-            if not isinstance(continuity_payload["ownership_confirmed"], bool):
-                raise ValueError("transfer continuity ownership_confirmed must be boolean")
-            continuity = TransferContinuity(
-                attach_operation_id=str(continuity_payload["attach_operation_id"]),
-                allocation_id=str(continuity_payload["allocation_id"]),
-                former_owner_node_id=str(continuity_payload["former_owner_node_id"]),
-                candidate_node_id=str(continuity_payload["candidate_node_id"]),
-                generation_id=str(continuity_payload["generation_id"]),
-                digests=_digests_from_dict(continuity_payload["digests"]),
-                ownership_incarnation=int(continuity_payload["ownership_incarnation"]),
-                pre_attach_revision=str(continuity_payload["pre_attach_revision"]),
-                post_attach_revision=(
-                    None
-                    if continuity_payload["post_attach_revision"] is None
-                    else str(continuity_payload["post_attach_revision"])
-                ),
-                ownership_confirmed=bool(continuity_payload["ownership_confirmed"]),
-            )
+    continuity_payload = payload["transfer_continuity"]
+    if continuity_payload is not None:
+        continuity_expected = {
+            "allocation_id",
+            "attach_operation_id",
+            "candidate_node_id",
+            "digests",
+            "former_owner_node_id",
+            "generation_id",
+            "ownership_confirmed",
+            "ownership_incarnation",
+            "post_attach_revision",
+            "pre_attach_revision",
+        }
+        if (
+            not isinstance(continuity_payload, dict)
+            or set(continuity_payload) != continuity_expected
+        ):
+            raise ValueError("transfer continuity has an invalid shape")
+        if not isinstance(continuity_payload["ownership_confirmed"], bool):
+            raise ValueError("transfer continuity ownership_confirmed must be boolean")
+        continuity = TransferContinuity(
+            attach_operation_id=str(continuity_payload["attach_operation_id"]),
+            allocation_id=str(continuity_payload["allocation_id"]),
+            former_owner_node_id=str(continuity_payload["former_owner_node_id"]),
+            candidate_node_id=str(continuity_payload["candidate_node_id"]),
+            generation_id=str(continuity_payload["generation_id"]),
+            digests=_digests_from_dict(continuity_payload["digests"]),
+            ownership_incarnation=int(continuity_payload["ownership_incarnation"]),
+            pre_attach_revision=str(continuity_payload["pre_attach_revision"]),
+            post_attach_revision=(
+                None
+                if continuity_payload["post_attach_revision"] is None
+                else str(continuity_payload["post_attach_revision"])
+            ),
+            ownership_confirmed=bool(continuity_payload["ownership_confirmed"]),
+        )
 
     repair_attempt: RepairAttempt | None = None
-    if schema == _CHECKPOINT_SCHEMA:
-        repair_payload = payload["repair_attempt"]
-        repair_expected = {
-            "allocation_id",
-            "boot_id",
-            "deadline_at",
-            "failure_fingerprint",
-            "generation_id",
-            "healthy_observations",
-            "healthy_since",
-            "operation_id",
-            "owner_node_id",
-            "ownership_epoch",
-            "ownership_incarnation",
-            "started_at",
-        }
-        if repair_payload is not None:
-            if not isinstance(repair_payload, dict) or set(repair_payload) != repair_expected:
-                raise ValueError("repair attempt has an invalid shape")
-            fingerprint = repair_payload["failure_fingerprint"]
-            if not isinstance(fingerprint, list) or not all(
-                isinstance(reason, str) and reason for reason in fingerprint
-            ):
-                raise ValueError("repair attempt fingerprint has an invalid shape")
-            repair_attempt = RepairAttempt(
-                operation_id=str(repair_payload["operation_id"]),
-                owner_node_id=str(repair_payload["owner_node_id"]),
-                allocation_id=str(repair_payload["allocation_id"]),
-                ownership_epoch=str(repair_payload["ownership_epoch"]),
-                ownership_incarnation=int(repair_payload["ownership_incarnation"]),
-                generation_id=str(repair_payload["generation_id"]),
-                boot_id=str(repair_payload["boot_id"]),
-                failure_fingerprint=tuple(fingerprint),
-                started_at=float(repair_payload["started_at"]),
-                deadline_at=float(repair_payload["deadline_at"]),
-                healthy_since=(
-                    None
-                    if repair_payload["healthy_since"] is None
-                    else float(repair_payload["healthy_since"])
-                ),
-                healthy_observations=int(repair_payload["healthy_observations"]),
-            )
+    repair_payload = payload["repair_attempt"]
+    repair_expected = {
+        "allocation_id",
+        "boot_id",
+        "deadline_at",
+        "failure_fingerprint",
+        "generation_id",
+        "healthy_observations",
+        "healthy_since",
+        "operation_id",
+        "owner_node_id",
+        "ownership_epoch",
+        "ownership_incarnation",
+        "started_at",
+    }
+    if repair_payload is not None:
+        if not isinstance(repair_payload, dict) or set(repair_payload) != repair_expected:
+            raise ValueError("repair attempt has an invalid shape")
+        fingerprint = repair_payload["failure_fingerprint"]
+        if not isinstance(fingerprint, list) or not all(
+            isinstance(reason, str) and reason for reason in fingerprint
+        ):
+            raise ValueError("repair attempt fingerprint has an invalid shape")
+        repair_attempt = RepairAttempt(
+            operation_id=str(repair_payload["operation_id"]),
+            owner_node_id=str(repair_payload["owner_node_id"]),
+            allocation_id=str(repair_payload["allocation_id"]),
+            ownership_epoch=str(repair_payload["ownership_epoch"]),
+            ownership_incarnation=int(repair_payload["ownership_incarnation"]),
+            generation_id=str(repair_payload["generation_id"]),
+            boot_id=str(repair_payload["boot_id"]),
+            failure_fingerprint=tuple(fingerprint),
+            started_at=float(repair_payload["started_at"]),
+            deadline_at=float(repair_payload["deadline_at"]),
+            healthy_since=(
+                None
+                if repair_payload["healthy_since"] is None
+                else float(repair_payload["healthy_since"])
+            ),
+            healthy_observations=int(repair_payload["healthy_observations"]),
+        )
 
     if not isinstance(payload["ownership_continuity_invalidated"], bool):
         raise ValueError("controller checkpoint invalidation flag must be boolean")
@@ -306,44 +282,12 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
     invalidated = payload["ownership_continuity_invalidated"]
     incarnation = payload["ownership_incarnation"]
     state = HAState(str(payload["state"]))
-    if schema == _CHECKPOINT_SCHEMA_V1:
-        if pending is not None and pending.kind is ActionKind.ATTACH_CANDIDATE:
-            continuity = TransferContinuity(
-                attach_operation_id=pending.operation_id,
-                allocation_id=pending.allocation_id,
-                former_owner_node_id=(
-                    str(ownership.owner_node_id) if ownership is not None else "legacy-former-owner"
-                ),
-                candidate_node_id=pending.target_node_id,
-                generation_id=pending.generation_id,
-                digests=pending.digests,
-                ownership_incarnation=pending.ownership_incarnation,
-                pre_attach_revision=pending.ownership_epoch,
-            )
-        elif (
-            pending is not None
-            and pending.kind
-            in {
-                ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
-                ActionKind.PREPARE_CANDIDATE_DATAPLANE,
-                ActionKind.RECONCILE_ROUTES,
-                ActionKind.ENABLE_ACTIVE,
-            }
-        ) or (pending is None and state in {HAState.OWNERSHIP_TRANSFER, HAState.PROMOTING}):
-            was_invalidated = invalidated
-            pending = None
-            ownership = None
-            continuity = None
-            invalidated = True
-            incarnation = max(1, incarnation + (0 if was_invalidated else 1))
-            state = HAState.BLOCKED
 
     return ControllerCheckpoint(
         sequence=int(payload["sequence"]),
         state=state,
-        suspect_since=(
-            None if payload["suspect_since"] is None else float(payload["suspect_since"])
-        ),
+        suspect_since=payload["suspect_since"],
+        suspicion_boot_id=payload["suspicion_boot_id"],
         pending_action=pending,
         established_ownership_context=ownership,
         ownership_continuity_invalidated=invalidated,
@@ -351,3 +295,49 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
         transfer_continuity=continuity,
         repair_attempt=repair_attempt,
     )
+
+
+def validate_conversion_receipt(receipt: object) -> dict[str, Any]:
+    """Validate the current activation receipt without admitting legacy state."""
+    import re
+
+    fields = {
+        "schema",
+        "cluster_id",
+        "node_id",
+        "generation_id",
+        "operation_id",
+        "host_id",
+        "boot_id",
+        "artifact",
+        "before",
+        "after",
+        "phase",
+    }
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != fields
+        or receipt.get("schema") != "nebius-vpngw/checkpoint-conversion-v1"
+        or receipt.get("phase") not in {"pending", "completed"}
+        or any(not isinstance(value, str) or not value for value in receipt.values())
+        or any(
+            not re.fullmatch(r"[0-9a-f]{64}", receipt[key])
+            for key in ("generation_id", "operation_id", "artifact", "before", "after")
+        )
+    ):
+        raise ValueError("invalid checkpoint conversion receipt")
+    return receipt
+
+
+def completed_conversion_receipt(receipt: object, raw: bytes, boot_id: str) -> dict[str, Any]:
+    """Current-runtime activation, never legacy decoding or read-only completion."""
+    import hashlib
+    import json
+
+    value = validate_conversion_receipt(receipt)
+    if value["phase"] == "completed":
+        return value
+    if value["boot_id"] != boot_id or hashlib.sha256(raw).hexdigest() != value["after"]:
+        raise ValueError("pending checkpoint conversion changed before runtime activation")
+    controller_checkpoint_from_dict(json.loads(raw))
+    return dict(value, phase="completed")

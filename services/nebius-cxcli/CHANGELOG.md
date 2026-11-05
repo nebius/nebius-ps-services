@@ -6,6 +6,34 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Validate router tags immediately in both Tailscale wizards, retrying missing
+  `tag:` prefixes, invalid names and duplicate entries. Report specific config
+  errors with examples instead of calling every invalid tag a duplicate.
+
+- Shorten and dim Tailscale wizard guidance, clarify proposed shared tags and
+  recommend a work email for the handoff owner. Display the `tailscale-gw` name
+  and empty administrator-managed tag-owner defaults while preserving saved values.
+
+- Explain Tailscale SSH management sources, credential custody and request
+  ownership in both setup paths. Offer scoped VPN-style all-protocol/all-port
+  access for new rules while preserving detailed rules and saved destinations.
+  Retry an empty destination checkbox selection instead of accepting the previous scope.
+  Clarify that narrowing configuration does not revoke previously applied grants.
+- Retry wizard input safely after terminal control sequences or malformed YAML;
+  preserve numeric-looking values in comma-separated string lists.
+
+- Add a README Tailscale Install walkthrough covering infrastructure setup,
+  administrator onboarding, activation and client verification. Align the table
+  of contents and links to the detailed Tailscale guide.
+
+- Rename the public `nat` command group to `nat-gateway` without a compatibility
+  alias. Update help and recovery instructions to identify configured
+  `infra:nat-gateway` components and their separate provisioning workflow.
+  Clarify that reconciliation leaves resources unchanged while updating recovery state.
+- Clarify that `grafana install` provides focused shared Grafana setup, saves
+  settings, renders, and runs normal whole-project deployment, including other
+  pending changes. Contrast configuration-only `component add`.
+
 - Stage NAT SSH integration-fixture trust data and private keys under the
   container runtime owner. Simulate foreign input ownership on every host so
   Linux bind-mount UID regressions reach strict host-key and identity checks.

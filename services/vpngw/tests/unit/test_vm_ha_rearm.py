@@ -6,10 +6,12 @@ import os
 import typing as t
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from nebius_vpngw.agent import main as agent_main
 from nebius_vpngw.agent.main import _advance_standby_restoration
 from nebius_vpngw.agent.vm_ha.auto_healing import (
     AutoHealingPolicyPhase,
@@ -21,7 +23,7 @@ from nebius_vpngw.agent.vm_ha.auto_healing import (
     StandbyAutoHealing,
     policy_decision_digest,
 )
-from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
+from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat, ReplayState
 from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore
 from nebius_vpngw.agent.vm_ha.promotion_receipt import promotion_receipt_id_v1
 from nebius_vpngw.agent.vm_ha.restoration import (
@@ -29,6 +31,14 @@ from nebius_vpngw.agent.vm_ha.restoration import (
     RestorationPhase,
     RestorationSource,
     StandbyRestorationStore,
+)
+from nebius_vpngw.agent.vm_ha.store import AtomicGenerationStore
+from nebius_vpngw.agent.vm_ha_controller import (
+    ActionKind,
+    CloudObservation,
+    ComputeState,
+    ConfiguredRole,
+    ControllerAction,
 )
 from nebius_vpngw.agent.vm_ha_rearm import (
     APPLY_LOCK_PATH,
@@ -1419,3 +1429,434 @@ def test_rearm_and_explicit_retry_are_blocked_by_mtls_rotation(tmp_path: Path) -
     )
     with pytest.raises(RuntimeError, match="inhibited by mTLS rotation"):
         request_rearm_retry(config_path=config_path, state_dir=tmp_path)
+
+
+def _reverse_generation_transfer(
+    tmp_path: Path,
+    *,
+    owner: str = "node-a",
+    first_effect: ActionKind = ActionKind.STOP_FORMER_OWNER,
+) -> tuple[RearmRuntime, FakeCloud, dict[str, t.Any], SimpleNamespace, ControllerAction]:
+    """Complete an old restoration, then admit a new generation on the non-owner."""
+    old_runtime, _ = _runtime(tmp_path, local_node_id=owner)
+    _commit_restoration_authority(tmp_path, owner_node_id=owner)
+    assert old_runtime.step()["phase"] == "running"
+    _advance_standby_restoration(
+        status={
+            "redundancy_ready": True,
+            "observed_owner_node_id": owner,
+            "allocation_id": "allocation-a",
+            "generation_id": "a" * 64,
+            "digests": DIGESTS,
+        },
+        state_dir=tmp_path,
+        clock=lambda: 104.0,
+    )
+    assert StandbyRestorationStore(tmp_path).load().phase is RestorationPhase.COMPLETED
+    generation = "d" * 64
+    digests = {**DIGESTS, "configuration": generation}
+    binding = old_runtime.binding.model_copy(
+        update={"generation_id": generation, "configuration_digest": generation}
+    )
+    peer = old_runtime.peer
+    local = old_runtime.local
+    policy = AutoHealingPolicyStore(tmp_path).initialize(
+        cluster_id="cluster-a",
+        node_id=owner,
+        peer_node_id=peer.node_id,
+        generation_id=generation,
+        updated_at=110.0,
+    )
+    heartbeat = PeerHeartbeat(
+        cluster_id="cluster-a",
+        node_id=peer.node_id,
+        boot_id=f"boot-{peer.node_id}",
+        sequence=2,
+        sent_at="1970-01-01T00:02:00Z",
+        configured_role=peer.role,
+        observed_owner_id=peer.node_id,
+        generation_id=generation,
+        mtls_epoch=1,
+        certificate_fingerprint="d" * 64,
+        digests=DigestSet.from_mapping(digests),
+        service_healthy=True,
+        route_ready=True,
+        promotion_ready=True,
+        auto_healing_policy_state="enabled",
+        auto_healing_policy_digest=policy.decision_digest,
+    )
+    generation_store = AtomicGenerationStore(tmp_path / "generation-store")
+    generation_store.save_replay_state(
+        peer.node_id, ReplayState(heartbeat.boot_id, heartbeat.sequence, ())
+    )
+    generation_store.save_accepted_peer_heartbeat(peer.node_id, heartbeat)
+    PolicyAgreementStore(tmp_path).capture(policy=policy, heartbeat=heartbeat, captured_at=120.0)
+    config = {
+        "cluster_id": "cluster-a",
+        "node": {"node_id": owner, "role": local.role.value},
+        "generation": {"generation_id": generation, "digests": digests},
+        "runtime_binding": binding.model_dump(mode="json"),
+    }
+    snapshots = SimpleNamespace(
+        last_snapshot=SimpleNamespace(
+            transfer_intent=None,
+            transfer_effect_started=False,
+            configured_role=ConfiguredRole(local.role),
+            cluster_id="cluster-a",
+            local_node_id=owner,
+            peer_node_id=peer.node_id,
+            cloud=CloudObservation(
+                authoritative=True,
+                allocation_id="allocation-a",
+                observed_owner_node_id=peer.node_id,
+                former_owner_node_id=peer.node_id,
+                former_owner_compute_state=(
+                    ComputeState.RUNNING
+                    if first_effect is ActionKind.STOP_FORMER_OWNER
+                    else ComputeState.STOPPED
+                ),
+                former_attachment_absent=False,
+                former_attachment_exact=True,
+                candidate_attachment_absent=True,
+                candidate_attachment_exact=False,
+                ownership_re_read_exact=False,
+                ownership_epoch="9",
+            ),
+            local_generation_id=generation,
+            local_digests=DigestSet.from_mapping(digests),
+        )
+    )
+    action = ControllerAction(
+        first_effect,
+        "new-first-effect",
+        "new-boot",
+        peer.node_id,
+        "allocation-a",
+        "9",
+        generation,
+        DigestSet.from_mapping(digests),
+    )
+    cloud = FakeCloud(owner=local.compute_id, target_state=InstanceCloudState.STOPPED)
+    runtime = RearmRuntime(
+        binding=binding,
+        local=local,
+        peer=peer,
+        cloud=cloud,
+        state_dir=tmp_path,
+        enabled_path=tmp_path / "enabled",
+        clock=lambda: 200.0,
+    )
+    return runtime, cloud, config, snapshots, action
+
+
+def _record_generation_transfer(
+    tmp_path: Path, config: dict[str, t.Any], snapshots: SimpleNamespace, action: ControllerAction
+) -> None:
+    agent_main._record_transfer_effect_lineage(
+        action=action,
+        snapshots=snapshots,
+        config=config,
+        path=tmp_path / "transfer-lineage.json",
+        clock=lambda: 121.0,
+    )
+
+
+def _commit_generation_transfer(tmp_path: Path, config: dict[str, t.Any]) -> None:
+    owner = config["node"]["node_id"]
+    receipt = agent_main._commit_promotion_receipt(
+        status={
+            "promotion_ready": True,
+            "data_plane_mode": "active",
+            "observed_owner_node_id": owner,
+            "cluster_id": "cluster-a",
+            "allocation_id": "allocation-a",
+            **config["generation"],
+            "former_owner_compute_state": "stopped",
+            "former_attachment_absent": True,
+            "candidate_attachment_exact": True,
+            "ownership_re_read_exact": True,
+            "apply_locked": False,
+            "pending_operation_id": None,
+            "ownership_epoch": "10",
+            "route_reconciliation": {
+                "operation_id": "new-route",
+                "owner_node_id": owner,
+                "allocation_id": "allocation-a",
+            },
+        },
+        config=config,
+        lineage_path=tmp_path / "transfer-lineage.json",
+        receipt_path=tmp_path / PROMOTION_RECEIPT_PATH.name,
+        request_paths=(),
+        clock=lambda: 150.0,
+    )
+    assert receipt is not None
+
+
+@pytest.mark.parametrize("owner", ["node-a", "node-b"])
+@pytest.mark.parametrize(
+    "first_effect", [ActionKind.STOP_FORMER_OWNER, ActionKind.DETACH_FORMER_ATTACHMENT]
+)
+def test_reverse_generation_restoration_survives_expired_peer_and_starts_once(
+    tmp_path: Path,
+    owner: str,
+    first_effect: ActionKind,
+) -> None:
+    runtime, cloud, config, snapshots, action = _reverse_generation_transfer(
+        tmp_path,
+        owner=owner,
+        first_effect=first_effect,
+    )
+    _record_generation_transfer(tmp_path, config, snapshots, action)
+    authorization = StandbyRestorationStore(tmp_path).load()
+    assert authorization is not None
+    assert authorization.phase is RestorationPhase.ARMED
+    assert authorization.generation_id == "d" * 64
+    assert authorization.first_operation_id == action.operation_id
+    _commit_generation_transfer(tmp_path, config)
+    assert StandbyRestorationStore(tmp_path).load().phase is RestorationPhase.COMMITTED
+    # Use the production policy predicate: there is no fresh peer evidence at
+    # rearm time (80 seconds after capture), and no injected policy bypass.
+    assert runtime._auto_healing_inhibition_reason() is not None
+    assert runtime.step()["phase"] == "running"
+    assert runtime.step()["phase"] == "running"
+    assert len(cloud.starts) == 1
+    assert StandbyRestorationStore(tmp_path).load().phase is RestorationPhase.AWAITING_STANDBY
+
+
+class _TransferCrash(BaseException):
+    """A process interruption must escape availability exception handling."""
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "before-retirement",
+        "after-retirement",
+        "after-receipt-removal",
+        "after-arm",
+        "after-lineage",
+        "after-promotion-receipt",
+    ],
+)
+def test_reverse_generation_crash_replay_retains_one_restoration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    runtime, cloud, config, snapshots, action = _reverse_generation_transfer(tmp_path)
+    retire = StandbyRestorationStore.retire_terminal
+    unlink = agent_main._durably_unlink
+    write = agent_main._atomic_write_json
+
+    def interrupted_retire(self: StandbyRestorationStore, **kwargs: t.Any) -> None:
+        if boundary == "after-retirement":
+            retire(self, **kwargs)
+        raise _TransferCrash
+
+    def interrupted_unlink(path: Path) -> None:
+        unlink(path)
+        if path.name == PROMOTION_RECEIPT_PATH.name:
+            raise _TransferCrash
+
+    def interrupted_write(path: Path, payload: t.Any) -> None:
+        if path.name == "transfer-lineage.json":
+            if boundary == "after-lineage":
+                write(path, payload)
+            raise _TransferCrash
+        write(path, payload)
+
+    def interrupted_commit(self: StandbyRestorationStore, **kwargs: t.Any) -> None:
+        raise _TransferCrash
+
+    with monkeypatch.context() as patch:
+        if boundary in {"before-retirement", "after-retirement"}:
+            patch.setattr(StandbyRestorationStore, "retire_terminal", interrupted_retire)
+        elif boundary == "after-receipt-removal":
+            patch.setattr(agent_main, "_durably_unlink", interrupted_unlink)
+        elif boundary in {"after-arm", "after-lineage"}:
+            patch.setattr(agent_main, "_atomic_write_json", interrupted_write)
+        else:
+            patch.setattr(StandbyRestorationStore, "commit", interrupted_commit)
+        with pytest.raises(_TransferCrash):
+            _record_generation_transfer(tmp_path, config, snapshots, action)
+            if boundary == "after-promotion-receipt":
+                _commit_generation_transfer(tmp_path, config)
+    assert cloud.starts == []
+    # A new process sees only persisted state; all injected faults are gone.
+    _record_generation_transfer(tmp_path, config, snapshots, action)
+    _commit_generation_transfer(tmp_path, config)
+    assert runtime.step()["phase"] == "running"
+    assert runtime.step()["phase"] == "running"
+    assert len(cloud.starts) == 1
+    assert StandbyRestorationStore(tmp_path).load().generation_id == "d" * 64
+
+
+@pytest.mark.parametrize("failure", ["read", "unlink", "fsync"])
+def test_optional_restoration_cleanup_io_does_not_veto_fenced_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    runtime, cloud, config, snapshots, action = _reverse_generation_transfer(tmp_path)
+    load = StandbyRestorationStore.load
+    retire = StandbyRestorationStore.retire_terminal
+    first = True
+
+    def unreadable_once(self: StandbyRestorationStore) -> t.Any:
+        nonlocal first
+        if first:
+            first = False
+            raise OSError("private diagnostic must never reach logs")
+        return load(self)
+
+    def fail_io(*args: t.Any, **kwargs: t.Any) -> t.NoReturn:
+        raise OSError("private diagnostic must never reach logs")
+
+    def retirement_io_failure(self: StandbyRestorationStore, **kwargs: t.Any) -> None:
+        with monkeypatch.context() as patch:
+            if failure == "unlink":
+                patch.setattr(Path, "unlink", fail_io)
+            else:
+                patch.setattr(os, "fsync", fail_io)
+            retire(self, **kwargs)
+
+    with monkeypatch.context() as patch:
+        if failure == "read":
+            patch.setattr(StandbyRestorationStore, "load", unreadable_once)
+        else:
+            patch.setattr(StandbyRestorationStore, "retire_terminal", retirement_io_failure)
+        _record_generation_transfer(tmp_path, config, snapshots, action)
+    assert (tmp_path / "transfer-lineage.json").exists()
+    _commit_generation_transfer(tmp_path, config)
+    assert (tmp_path / PROMOTION_RECEIPT_PATH.name).exists()
+    if failure == "fsync":
+        # Deletion happened; the later durable arm and receipt supersede it.
+        assert runtime.step()["phase"] == "running"
+        assert len(cloud.starts) == 1
+    else:
+        # Retained unusable residue cannot become new restoration authority.
+        assert StandbyRestorationStore(tmp_path).load() is None
+        assert runtime.step()["phase"] == "inhibited"
+        assert cloud.starts == []
+    output = capsys.readouterr().out
+    assert "prior-generation-cleanup-unavailable" in output
+    assert "private diagnostic" not in output
+    assert "node-a" not in output
+
+
+@pytest.mark.parametrize("boundary", ["receipt-removal", "arm", "lineage"])
+def test_required_transfer_durability_failure_prevents_external_effect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    _, _, config, snapshots, action = _reverse_generation_transfer(tmp_path)
+    effects: list[ControllerAction] = []
+    write = agent_main._atomic_write_json
+
+    def failed_write(path: Path, payload: t.Any) -> None:
+        if path.name == "transfer-lineage.json":
+            raise OSError("lineage durability failed")
+        write(path, payload)
+
+    def fail(*args: t.Any, **kwargs: t.Any) -> t.NoReturn:
+        raise OSError("required durability failed")
+
+    if boundary == "receipt-removal":
+        monkeypatch.setattr(agent_main, "_durably_unlink", fail)
+    elif boundary == "arm":
+        monkeypatch.setattr(StandbyRestorationStore, "arm", fail)
+    else:
+        monkeypatch.setattr(agent_main, "_atomic_write_json", failed_write)
+    adapter = agent_main.VMHAEffectAdapter(
+        {kind: effects.append for kind in ActionKind},
+        receipt_path=tmp_path / "effect.json",
+        before_effect=lambda accepted: _record_generation_transfer(
+            tmp_path, config, snapshots, accepted
+        ),
+    )
+    with pytest.raises(OSError):
+        adapter.apply(action)
+    assert effects == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("cluster_id", "foreign-cluster"),
+        ("owner_node_id", "foreign-owner"),
+        ("former_owner_node_id", "foreign-peer"),
+        ("allocation_id", "foreign-allocation"),
+        ("generation_id", "f" * 64),
+        ("receipt_id", "0" * 64),
+    ],
+)
+def test_reverse_generation_mismatched_receipt_never_grants_restoration(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    runtime, cloud, config, snapshots, action = _reverse_generation_transfer(tmp_path)
+    store = StandbyRestorationStore(tmp_path)
+    previous = store.path.read_bytes()
+    receipt_path = tmp_path / PROMOTION_RECEIPT_PATH.name
+    receipt = json.loads(receipt_path.read_text())
+    receipt[field] = value
+    receipt_path.write_text(json.dumps(receipt))
+    if field in {"cluster_id", "owner_node_id", "former_owner_node_id", "allocation_id"}:
+        with pytest.raises(ValueError):
+            _record_generation_transfer(tmp_path, config, snapshots, action)
+    else:
+        _record_generation_transfer(tmp_path, config, snapshots, action)
+        assert store.path.read_bytes() == previous
+        _commit_generation_transfer(tmp_path, config)
+    assert runtime.step()["phase"] == (
+        "inhibited" if field in {"generation_id", "receipt_id"} else "blocked"
+    )
+    assert cloud.starts == []
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["corrupt", "active", "blocked", "policy-missing", "policy-generation", "agreement-missing"],
+)
+def test_reverse_generation_unusable_evidence_never_authorizes_start(
+    tmp_path: Path,
+    drift: str,
+) -> None:
+    runtime, cloud, config, snapshots, action = _reverse_generation_transfer(tmp_path)
+    store = StandbyRestorationStore(tmp_path)
+    if drift == "corrupt":
+        store.path.write_text("{broken")
+    elif drift in {"active", "blocked"}:
+        record = store.load()
+        assert record is not None
+        # Existing accepted start fields make this a valid awaiting record.
+        store._write(replace(record, phase=RestorationPhase.AWAITING_STANDBY))
+        if drift == "blocked":
+            store.block(
+                receipt_id=record.promotion_receipt_id or "",
+                reason="standby-timeout",
+                updated_at=110.0,
+            )
+    elif drift == "policy-missing":
+        AutoHealingPolicyStore(tmp_path).path.unlink()
+    elif drift == "policy-generation":
+        AutoHealingPolicyStore(tmp_path).initialize(
+            cluster_id="cluster-a",
+            node_id=runtime.local.node_id,
+            peer_node_id=runtime.peer.node_id,
+            generation_id="f" * 64,
+            updated_at=121.0,
+        )
+    else:
+        PolicyAgreementStore(tmp_path).path.unlink()
+    retained = store.path.read_bytes()
+    _record_generation_transfer(tmp_path, config, snapshots, action)
+    if drift in {"corrupt", "active", "blocked"}:
+        assert store.path.read_bytes() == retained
+    _commit_generation_transfer(tmp_path, config)
+    assert runtime.step()["phase"] == "inhibited"
+    assert cloud.starts == []

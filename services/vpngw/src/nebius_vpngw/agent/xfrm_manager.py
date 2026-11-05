@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..boot_policy import restore_ordinary_bootstrap_policy
 from .local_commands import CURRENT, run
 
 IPSEC_OVERHEAD_BYTES = 64  # NAT-T ESP overhead for IPv4 (bytes)
@@ -28,16 +29,22 @@ class XFRMManager:
     """Manages XFRM network devices for IPsec tunnels."""
 
     def setup_interfaces(
-        self, interface_endpoints: list[dict[str, Any]], parent_dev: str = "eth0"
+        self,
+        interface_endpoints: list[dict[str, Any]],
+        parent_dev: str = "eth0",
+        *,
+        persist_sysctl: bool = True,
     ) -> None:
         """Create XFRM interfaces and configure them with IPs and routes.
 
         Args:
             interface_endpoints: List of interface configs from StrongSwanRenderer
             parent_dev: Parent network device for XFRM interfaces (default: eth0)
+            persist_sysctl: Persist bootstrap settings during ordinary apply.
+                The fenced HA controller changes runtime settings only.
         """
         # Configure rp_filter for XFRM (relax reverse path filtering)
-        self._configure_sysctl(parent_dev)
+        self._configure_sysctl(parent_dev, persist=persist_sysctl)
 
         mtu_info = self._calculate_xfrm_mtu(parent_dev)
         xfrm_mtu = None
@@ -315,7 +322,7 @@ class XFRMManager:
             else:
                 print(f"[XFRM] WARNING: Failed to add route {prefix}: {result.stderr}")
 
-    def _configure_sysctl(self, parent_dev: str) -> None:
+    def _configure_sysctl(self, parent_dev: str, *, persist: bool = True) -> None:
         """Configure sysctl settings for XFRM interfaces.
 
         Relaxes reverse path filtering (rp_filter) to allow asymmetric routing
@@ -340,6 +347,13 @@ class XFRMManager:
                 print(f"[XFRM] ✓ Set {key}={value}")
             else:
                 print(f"[XFRM] WARNING: Failed to set {key}: {result.stderr}")
+
+        # HA preparation runs inside the controller's filesystem sandbox.
+        # Persistent bootstrap settings belong to apply, not this runtime writer.
+        if not persist:
+            return
+
+        restore_ordinary_bootstrap_policy()
 
         # Make sysctl settings persistent without clobbering other hardening
         sysctl_conf = Path("/etc/sysctl.d/99-vpn-gateway.conf")

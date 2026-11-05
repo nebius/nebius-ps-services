@@ -64,6 +64,18 @@ inherited checkout policy and outer-owner completion. Also read [Actions protoco
 for local review evidence, trusted dispatch and setup prerequisites. It owns the GitHub queries, evidence rules, bounded
 polling, CI conclusions, and branch cleanup. Help requests stop before this read.
 
+## Issue closure
+
+For an issue-linked PR, read `../worktree/references/issue-resolution.md`.
+Before merge, verify the intended closing set against current issue scope and
+current-head resolution evidence. Mere references are insufficient. Stale managed
+references route through create-pr's existing preparation owner; preserve human
+content and reconcile conflicting closing keywords or links. GitHub owns native
+closure on default-branch merge. After confirmed merge, independently read the
+intended issue states and report closed/open/unverified separately from result
+CI. Never silently substitute issue-write calls, reopen issues after CI failure,
+or grant publication/merge authority from a plan or receipt.
+
 ## Workflow
 
 1. Confirm explicit merge intent, including delegated combined create/review-and-merge

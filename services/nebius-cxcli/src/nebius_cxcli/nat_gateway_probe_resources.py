@@ -166,7 +166,7 @@ class ProbeResources:
             self.sdk.wait_operation(entry["operation_id"])
         elif entry["phase"] == "submitted":
             raise RuntimeError(
-                "Probe creation outcome is unknown; use nat reconcile after confirming prior requests settled"
+                "Probe creation outcome is unknown; use nat-gateway reconcile after confirming prior requests settled"
             )
         obj = self.read(kind, entry)
         if obj is None:
@@ -229,7 +229,7 @@ class ProbeResources:
             if entry["phase"] == "submitted":
                 if not entry.get("operation_id"):
                     raise RuntimeError(
-                        "Probe creation outcome is unknown; cleanup requires nat reconcile after requests settle"
+                        "Probe creation outcome is unknown; cleanup requires nat-gateway reconcile after requests settle"
                     )
                 from .nat_gateway_sdk import NatOperationFailed
 

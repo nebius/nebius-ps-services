@@ -52,6 +52,12 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
     manifest = ordinary_apply.artifact(wheel, config)
     manifest["ordinary_assets"] = manifest["assets"]
     with zipfile.ZipFile(wheel) as archive:
+        codec = "agent/vm_ha_checkpoint.py"
+        if (
+            archive.read("nebius_vpngw/" + codec)
+            != (Path(__file__).parents[1] / codec).read_bytes()
+        ):
+            raise VMHAAgentPackageError("HA wheel must contain this CLI's current checkpoint codec")
         destinations = (
             *_VM_HA_SERVICE_ASSET_DESTINATIONS,
             (
@@ -68,6 +74,8 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
             }
             for name, path, mode in destinations
         }
+        ufw = ordinary_apply.UFW_ORDERING_PATH
+        manifest["assets"][ufw]["predecessors"] = manifest["ordinary_assets"][ufw]["predecessors"]
     return manifest
 
 
@@ -102,10 +110,62 @@ class VMHAPackagePlan:
         self.temporary.cleanup()
 
 
+def verify_prepared(
+    ssh: Any,
+    plan: VMHAPackagePlan,
+    local: dict,
+    *,
+    checkpoint_conversion: dict[str, str] | None = None,
+    convert: bool = True,
+) -> None:
+    """Prove the approved installed package without replaying its old predecessor."""
+
+    current = ordinary_apply.remote(
+        ssh,
+        plan.target,
+        plan.instance,
+        local,
+        {"action": "inspect-package", "manifest": plan.manifest},
+    )["observation"]
+    manifest = plan.manifest
+    if not (
+        current["boot_id"] == plan.observation["boot_id"]
+        and current["config_sha256"] == plan.observation["config_sha256"]
+        and current["ha_config_digest"] == plan.observation["ha_config_digest"]
+        and current["files"] == manifest["files"]
+        and current["package_version"] == manifest["version"]
+        and current["dependencies"] == manifest["expected_dependencies"]
+        and current["requirements"] == manifest["expected_requirements"]
+        and current["assets"] == {path: item["sha256"] for path, item in manifest["assets"].items()}
+        and current["asset_modes"]
+        == {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
+    ):
+        raise VMHAAgentPackageError("VM-HA recovered package differs from approved postcondition")
+    from .checkpoint_conversion import guard_package
+
+    guard_package(
+        ssh,
+        plan.target,
+        plan.instance,
+        local,
+        artifact=manifest["wheel_sha256"],
+        boot_id=plan.observation["boot_id"],
+        expected=checkpoint_conversion if convert else None,
+        publish=convert,
+    )
+
+
 def inspect_plan(
-    ssh: Any, target: str, instance: InstanceResolvedConfig, local: dict, *, target_identity: str
+    ssh: Any,
+    target: str,
+    instance: InstanceResolvedConfig,
+    local: dict,
+    *,
+    target_identity: str,
+    wheel: Path | None = None,
 ) -> VMHAPackagePlan:
-    wheel = ssh._build_wheel(allow_installed_fallback=False)
+    if wheel is None:
+        wheel = ssh._build_wheel(allow_installed_fallback=False)
     if wheel is None:
         raise RuntimeError("HA deployment requires a deployable agent wheel")
     manifest = artifact(wheel, instance.config_yaml)
@@ -114,6 +174,11 @@ def inspect_plan(
             ssh, target, instance, local, {"action": "inspect-package", "manifest": manifest}
         )["observation"]
     )
+    for path, item in manifest["assets"].items():
+        if "predecessors" in item and observed["assets"].get(path) not in item["predecessors"]:
+            raise VMHAAgentPackageError(
+                "Product service override has unknown contents; no gateway changes are admitted"
+            )
     temporary = tempfile.TemporaryDirectory(prefix="vpngw-ha-dependency-plan-")
     try:
         dependencies = ordinary_apply.resolve_dependencies(manifest, observed, Path(temporary.name))

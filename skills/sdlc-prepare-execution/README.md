@@ -10,7 +10,7 @@ private SDLC run directory. Later implementation workers receive separate
 branches and worktrees from that integration line; the project branch does not
 advance again until the final evidence-gated fast-forward promotion.
 
-Preparation writes `workflow/execution-coordinator-v1`. In unmanaged mode it resolves the actual
+Preparation writes `workflow/execution-coordinator-v2`. In unmanaged mode it resolves the actual
 `origin` default and creates the deterministic run promotion branch when the
 clean checkout is still on that default. In a managed `worktree` child it uses
 the exact local child branch and `HEAD` without fetching or resolving a remote
@@ -54,7 +54,7 @@ exact recovery.
 
 The private helper exposes `prepare`, `seal-tdd`, `replan-future`,
 `wave-prepare`, `wave-refill`, `task-admit`, `authorize-recovery`, `task-arm`, `task-start`, `task-heartbeat`,
-`task-watch`, `task-requeue`, `task-recover`, `task-finish`, `wave-integrate`,
+`task-watch`, `task-requeue`, `task-recover`, `task-result`, `task-finish`, `wave-integrate`,
 `wave-complete`, `wave-fail`, `seal-feature`, `promote`, `release-outer-lease`,
 `complete-outer-integration`, and `status`.
 It is an internal state-transition surface, not a public SDLC CLI.
@@ -66,8 +66,11 @@ base and with no changed paths. Pre-start moved `HEAD`, out-of-claim paths,
 gitlinks, or tracked symlinks are scope violations; only allowed in-claim dirt
 is a pre-start mutation.
 
+The shared `task-arm` launch envelope and `task-result` ingestion receipt apply
+to both Implement and SDLC. Only a current implemented receipt may reach
+`task-finish --receipt`; native termination remains independently observed.
 Before it commits, `task-finish` persists an exact assignment/tree/message/
-evidence intent. A retry adopts only the matching clean direct-child commit and
+evidence intent including the worker-result receipt digest. A retry adopts only the matching clean direct-child commit and
 reuses only an exact matching result, which closes both commit-to-result and
 result-to-task-state crash windows without accepting worker-created history.
 
@@ -75,7 +78,7 @@ For a corrective assignment, `task-finish --oracle-evidence-json` must name
 the assignment's exact regression oracle, a `passed` outcome, and an evidence
 reference. The helper binds that proof to the diagnosis and the
 coordinator-created task commit in
-`workflow/worker-result-v1`; missing or mismatched proof fails closed. Each immutable assignment
+`workflow/worker-result-v3`; missing or mismatched proof fails closed. Each immutable assignment
 also binds the accepted root-intent digest and canonical project-spec receipt;
 worker results carry typed `spec_gaps` for root-coordinator reconciliation.
 Worker path inventories disable Git rename folding so protected source paths

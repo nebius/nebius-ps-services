@@ -335,7 +335,14 @@ def test_atomic_publish_failure_preserves_forced_overwrite_target(tmp_path: Path
     config_path = tmp_path / "atomic.config.yaml"
     config_path.write_text("manual: true\n", encoding="utf-8")
 
-    with patch("nebius_vpngw.cli.os.replace", side_effect=OSError("replace failed")):
+    original_link = cli_module.os.link
+
+    def fail_candidate(source, destination):
+        if Path(source).name == "expected":
+            return original_link(source, destination)
+        raise OSError("publish failed")
+
+    with patch("nebius_vpngw.cli.os.link", side_effect=fail_candidate):
         result = CliRunner().invoke(
             app,
             ["create-config", str(config_path), "--interactive", "--force"],
@@ -344,24 +351,22 @@ def test_atomic_publish_failure_preserves_forced_overwrite_target(tmp_path: Path
 
     assert result.exit_code == 1
     assert config_path.read_text(encoding="utf-8") == "manual: true\n"
-    assert "replace failed" in result.output
+    assert "publication failed" in result.output
     assert list(tmp_path.iterdir()) == [config_path]
 
 
 def test_wizard_refuses_target_created_while_prompts_are_running(tmp_path: Path) -> None:
     config_path = tmp_path / "concurrent.config.yaml"
-    original_fingerprint = cli_module._file_fingerprint
-    calls = 0
+    from nebius_vpngw import config_wizard
 
-    def concurrent_fingerprint(path: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return None
-        path.write_text("concurrent: true\n", encoding="utf-8")
-        return original_fingerprint(path)
+    original_wizard = config_wizard.run_config_wizard
 
-    with patch("nebius_vpngw.cli._file_fingerprint", side_effect=concurrent_fingerprint):
+    def concurrent_wizard(*args, **kwargs):
+        result = original_wizard(*args, **kwargs)
+        config_path.write_text("concurrent: true\n", encoding="utf-8")
+        return result
+
+    with patch("nebius_vpngw.cli.run_config_wizard", side_effect=concurrent_wizard):
         result = CliRunner().invoke(
             app,
             ["create-config", str(config_path), "--interactive"],
@@ -370,7 +375,7 @@ def test_wizard_refuses_target_created_while_prompts_are_running(tmp_path: Path)
 
     assert result.exit_code == 1
     assert config_path.read_text(encoding="utf-8") == "concurrent: true\n"
-    assert "Destination changed while the wizard was running" in result.output
+    assert "another writer" in result.output.lower()
     assert list(tmp_path.iterdir()) == [config_path]
 
 
@@ -414,3 +419,14 @@ def test_wizard_quit_never_creates_partial_file(tmp_path: Path, answer: str) -> 
 
     assert result.exit_code == 0
     assert not config_path.exists()
+
+
+def test_wizard_has_no_ssh_source_configuration(tmp_path):
+    path = tmp_path / "gateway.config.yaml"
+    result = CliRunner().invoke(
+        app, ["create-config", str(path), "--interactive"], input=_bgp_wizard_input()
+    )
+    assert result.exit_code == 0, result.output
+    assert "ssh_allowed_cidrs" not in path.read_text()
+    assert "SSH source" not in result.output
+    assert "ifconfig.me" not in result.output

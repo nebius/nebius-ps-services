@@ -22,6 +22,9 @@ from project_specs_lib.contracts import (
     _parse_requirements,
     canonical_document,
     inspect_project,
+    legacy_task_markers,
+    render_document_bytes,
+    spec_markers,
     validate_project,
 )
 from project_specs_lib.impact import (
@@ -405,6 +408,121 @@ class ProjectSpecsTestCase(unittest.TestCase):
         _prefix, design_body, _suffix = _managed_region(design, "design")
         self.assertEqual(_parse_requirements(requirements_body)[0]["status"], "draft")
         self.assertEqual(_parse_design(design_body)[0]["status"], "draft")
+
+    def test_default_markdown_limits_do_not_reject_template_metadata(self) -> None:
+        templates = Path(__file__).resolve().parents[1] / "assets/templates"
+        for kind in ("requirements", "design"):
+            lines = (templates / f"{kind}.md.template").read_text().splitlines()
+            protected = []
+            for index, line in enumerate(lines):
+                if line.startswith("<!-- ") and len(line) > 80:
+                    with self.subTest(kind=kind, marker=line):
+                        self.assertEqual(
+                            lines[index - 1],
+                            "<!-- markdownlint-disable-next-line MD013 -->",
+                        )
+                    protected.append(line)
+            self.assertTrue(protected)
+            self.assertNotIn("<!-- markdownlint-disable MD013 -->", lines)
+
+    def test_rendered_metadata_exceptions_preserve_records_and_prose(self) -> None:
+        prose = ("This ordinary prose must remain subject to line length checks. " * 3).rstrip()
+        body = rich_design_body("ready") + "\n" + prose
+        rendered = canonical_document("design", body).decode()
+        self.assertIn(
+            "<!-- markdownlint-disable-next-line MD013 -->\n"
+            "<!-- maintain-project-specs:design:start",
+            rendered,
+        )
+        self.assertIn(
+            "<!-- markdownlint-disable-next-line MD013 -->\n<!-- FEATURE:",
+            rendered,
+        )
+        self.assertIn("\n" + prose + "\n", rendered)
+        self.assertNotIn("<!-- markdownlint-disable-next-line MD013 -->\n" + prose, rendered)
+        _, parsed_body, _ = _managed_region(rendered, "design")
+        self.assertEqual(_parse_design(parsed_body), _parse_design(body))
+
+    def test_rendered_metadata_is_idempotent_and_preserves_crlf_envelope(self) -> None:
+        prefix = b"# Human heading\r\n\r\nUnchanged introduction.\r\n\r\n"
+        current = canonical_document("design", rich_design_body("ready"), prefix=prefix)
+        current += b"\r\nUnchanged conclusion.\r\n"
+        before_prefix, body, before_suffix = _managed_region(current.decode(), "design")
+        rendered = render_document_bytes("design", body, current=current)
+        self.assertEqual(rendered, current)
+        after_prefix, _, after_suffix = _managed_region(rendered.decode(), "design")
+        self.assertEqual((after_prefix, after_suffix), (before_prefix, before_suffix))
+        self.assertEqual(rendered.count(b"markdownlint-disable-next-line MD013"), 2)
+        self.assertNotIn(b"\n", rendered.replace(b"\r\n", b""))
+
+    def test_rendering_existing_region_never_reformats_its_envelope(self) -> None:
+        start, end = spec_markers("design")
+        prefix = "# Human prefix\n\n"
+        suffix = "\nHuman suffix.\n"
+        current = f"{prefix}{start}\n{rich_design_body('ready')}\n{end}{suffix}".encode()
+        rendered = render_document_bytes("design", rich_design_body("ready"), current=current)
+        before_prefix, _, before_suffix = _managed_region(current.decode(), "design")
+        after_prefix, _, after_suffix = _managed_region(rendered.decode(), "design")
+        self.assertEqual((after_prefix, after_suffix), (before_prefix, before_suffix))
+        self.assertIn(b"<!-- markdownlint-disable-next-line MD013 -->\n<!-- FEATURE:", rendered)
+
+    def test_long_final_metadata_keeps_crlf_on_repeated_render(self) -> None:
+        body = rich_design_body("ready", identifier="FEAT-" + "1" * 81)
+        current = canonical_document("design", body, prefix=b"# Human title\r\n")
+        rendered = render_document_bytes("design", body, current=current)
+        self.assertEqual(rendered, current)
+        self.assertNotIn(b"\n", rendered.replace(b"\r\n", b""))
+
+    def test_appending_new_region_protects_metadata_and_preserves_existing_bytes(self) -> None:
+        prefix = b"# Existing human document\n\nHuman paragraph.\n\n"
+        rendered = render_document_bytes("requirements", rich_requirement_body("active"), current=prefix)
+        self.assertTrue(rendered.startswith(prefix))
+        self.assertIn(
+            b"<!-- markdownlint-disable-next-line MD013 -->\n"
+            b"<!-- maintain-project-specs:requirements:start",
+            rendered,
+        )
+
+    def test_metadata_exceptions_preserve_other_next_line_rules(self) -> None:
+        body = rich_design_body("ready").replace(
+            "<!-- FEATURE:",
+            "<!-- markdownlint-disable-next-line MD033 -->\n<!-- FEATURE:",
+            1,
+        )
+        rendered = canonical_document("design", body).decode()
+        self.assertIn("<!-- markdownlint-disable-next-line MD033 MD013 -->\n<!-- FEATURE:", rendered)
+        _, updated_body, _ = _managed_region(rendered, "design")
+        self.assertEqual(render_document_bytes("design", updated_body, current=rendered.encode()), rendered.encode())
+
+    def test_malformed_next_line_control_has_bounded_processing(self) -> None:
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from project_specs_lib.contracts import _metadata_line_exceptions; "
+            "bad = '<!-- markdownlint-disable-next-line' + ' ' * 12000 + 'x'; "
+            "marker = '<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready "
+            "delivery=not-started priority=P0 version=1 -->'; "
+            "result = _metadata_line_exceptions(bad + '\\n' + marker + '\\n'); "
+            "assert result.startswith(bad + '\\n'); "
+            "assert result.count('<!-- markdownlint-disable-next-line MD013 -->') == 1"
+        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(SCRIPT.parent)],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("Malformed metadata control exceeded the bounded processing time")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_migration_protects_new_metadata_without_rewriting_human_text(self) -> None:
+        for kind, body in (("requirements", requirement_body()), ("design", design_body())):
+            start, end = legacy_task_markers(kind)
+            prefix, suffix = "# Human prefix\n\n", "\n\nHuman suffix.\n"
+            original = f"{prefix}{start}\n{body}\n{end}{suffix}".encode()
+            rendered = migration._convert_task(original, kind).decode()
+            self.assertTrue(rendered.startswith(prefix))
+            self.assertTrue(rendered.endswith(suffix))
+            self.assertIn("<!-- markdownlint-disable-next-line MD013 -->\n<!-- maintain-project-specs:", rendered)
 
     def test_compatibility_intent_contract_is_semantic_and_owner_controlled(
         self,

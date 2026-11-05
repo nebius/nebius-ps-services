@@ -22,6 +22,8 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     vm_ha_missing_standby_replacement_effect,
     vm_ha_missing_standby_ssh_binding_key,
     vm_ha_passive_replacement_binding_key,
+    vm_ha_passive_replacement_cycle_for_approval,
+    vm_ha_passive_replacement_cycles,
     vm_ha_passive_replacement_effect,
     vm_ha_resource_binding_matches_observation,
 )
@@ -44,6 +46,158 @@ def test_observation_normalizes_json_pointer_order(observation: object) -> None:
 
 def _digest(character: str) -> str:
     return character * 64
+
+
+@pytest.mark.parametrize("cycle", (1, 2, 9, 10, 11, 19, 20, 99, 100, 101, 199, 200, 1000))
+def test_replacement_cycle_readers_agree_at_decimal_boundaries(cycle: int) -> None:
+    name = "gateway-1"
+    bindings = {"compute:gateway-1": "original-vm", "disk:gateway-1": "original-disk"}
+    for current in range(1, cycle + 1):
+        for kind, value in {
+            "approval": f"approval-{current}",
+            "retired-compute": f"vm-{current - 1}",
+            "retired-disk": f"disk-{current - 1}",
+            "compute": f"vm-{current}",
+            "disk": f"disk-{current}",
+        }.items():
+            bindings[vm_ha_passive_replacement_binding_key(kind, name, current)] = value
+    assert vm_ha_passive_replacement_cycles(bindings, name) == tuple(range(1, cycle + 1))
+    assert (
+        vm_ha_passive_replacement_cycle_for_approval(bindings, name, f"approval-{cycle}") == cycle
+    )
+    effective = vm_ha_effective_resource_bindings(bindings)
+    assert effective["compute:gateway-1"] == f"vm-{cycle}"
+    assert effective["disk:gateway-1"] == f"disk-{cycle}"
+
+
+@pytest.mark.parametrize("suffix", ("0", "1", "01", "010", "+10", "-10", "١٠", "10x"))
+def test_replacement_cycle_readers_ignore_noncanonical_suffixes(suffix: str) -> None:
+    bindings = {
+        "compute:gateway-1": "vm-original",
+        "disk:gateway-1": "disk-original",
+        f"passive-replacement-{suffix}-approval:gateway-1": "approval-invalid",
+        f"retired-{suffix}-compute:gateway-1": "vm-original",
+        f"replacement-{suffix}-compute:gateway-1": "vm-invalid",
+        f"replacement-{suffix}-disk:gateway-1": "disk-invalid",
+    }
+    assert vm_ha_passive_replacement_cycles(bindings, "gateway-1") == ()
+    assert (
+        vm_ha_passive_replacement_cycle_for_approval(bindings, "gateway-1", "approval-invalid")
+        is None
+    )
+    assert vm_ha_effective_resource_bindings(bindings)["compute:gateway-1"] == "vm-original"
+
+
+@pytest.mark.parametrize("prior_key", ("heartbeat-initial-artifact", "heartbeat-upgrade-artifact"))
+def test_missing_standby_replacements_persist_through_cycles_nine_ten_eleven(tmp_path, prior_key):
+    config = tmp_path / "gateway.yaml"
+    config.write_text("version: 1\n")
+    store = VMHALifecycleStore(config)
+    active = _missing_standby_state(prior_artifact_key=prior_key, start_replacement=False)
+    owner = active.members[0]
+    store.write_verified(active)
+    history = {}
+    observation = _replacement_observation()
+    observation["members"][0].update(state="running", network_interface_name="eth0")
+    observation["members"][1] = {"instance_name": "gateway-1", "present": False}
+
+    def persist(previous, successor):
+        store.write_verified(successor, predecessor_sha256=previous.record_sha256)
+        loaded = store.read(expected_project_id="project-1", expected_gateway_name="gateway")
+        assert loaded == successor
+        return loaded
+
+    for cycle in range(1, 12):
+        old_bindings = dict(active.transaction.resource_bindings)
+        artifact = f"{cycle + 100:064x}"
+        old_key = prior_key if cycle == 1 else "heartbeat-initial-artifact"
+        history[f"standby-replacement-{cycle}-prior-{old_key}:gateway-1"] = old_bindings[old_key]
+        successor = VMHALifecycleState.start_missing_standby_replacement(
+            active,
+            target_instance_name="gateway-1",
+            replacement_cycle=cycle,
+            replacement_disk_name=vm_ha_missing_standby_disk_name(
+                gateway_name="gateway",
+                instance_name="gateway-1",
+                predecessor_sha256=active.record_sha256,
+                cycle=cycle,
+            ),
+            operation_id=f"{cycle:064x}",
+            approval_digest=f"{cycle + 20:064x}",
+            desired_state_digest=_digest("b"),
+            current_state_digest=_digest("f"),
+            current_observation=observation,
+            artifact_sha256=artifact,
+        )
+        successor = persist(active, successor)
+        journal = VMHALifecycleJournal(store, successor)
+        for kind, action in (("disk", "create-boot-disk"), ("compute", "create-compute")):
+            effect = vm_ha_missing_standby_replacement_effect("gateway-1", cycle, action)
+            journal.begin(effect)
+            # Reconstruct the journal after an interruption, preserving idempotency.
+            operation_id = journal.effect_operation_id(effect)
+            journal = VMHALifecycleJournal(
+                store,
+                store.read(expected_project_id="project-1", expected_gateway_name="gateway"),
+            )
+            assert journal.effect_operation_id(effect) == operation_id
+            journal.complete(
+                effect,
+                resource_updates={
+                    vm_ha_passive_replacement_binding_key(
+                        kind, "gateway-1", cycle
+                    ): f"{kind}-new-{cycle}"
+                },
+            )
+        pending = journal.state
+        activating = replace(
+            pending,
+            status=VMHALifecycleStatus.ACTIVATING,
+            transaction=pending.transaction.advance(
+                predecessor_sha256=pending.record_sha256, checkpoint="activating"
+            ),
+            members=(
+                owner,
+                replace(
+                    pending.members[1],
+                    compute_id=f"compute-new-{cycle}",
+                    disk_id=f"disk-new-{cycle}",
+                    compute_revision=str(cycle + 10),
+                ),
+            ),
+        )
+        activating = persist(pending, activating)
+        active = persist(activating, activating.with_status(VMHALifecycleStatus.ACTIVE))
+        bindings = dict(active.transaction.resource_bindings)
+        assert all(bindings[key] == value for key, value in history.items())
+        assert bindings["heartbeat-initial-artifact"] == artifact
+        assert "heartbeat-upgrade-artifact" not in bindings
+        assert vm_ha_passive_replacement_cycles(bindings, "gateway-1") == tuple(range(1, cycle + 1))
+        effective = vm_ha_effective_resource_bindings(bindings)
+        assert effective["compute:gateway-1"] == f"compute-new-{cycle}"
+        assert effective["disk:gateway-1"] == f"disk-new-{cycle}"
+        assert active.members[0] == owner
+        assert active.allocation_id == "allocation-1"
+        assert active.route_targets == ("route-table-1:10.0.0.0/8",)
+
+
+@pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
+@pytest.mark.parametrize("name", ("gateway-1", "10-gateway-1"))
+@pytest.mark.parametrize("kind", ("failed", "missing"))
+def test_replacement_compute_guard_keeps_exact_member_across_cycles(cycle, name, kind):
+    builder = (
+        vm_ha_passive_replacement_effect
+        if kind == "failed"
+        else vm_ha_missing_standby_replacement_effect
+    )
+    guard = VMHAEffectObservationGuard(
+        effect=builder(name, cycle, "create-compute"),
+        permitted_paths=(),
+        pre_observation=(("/members/1/instance_name", json.dumps(name)),),
+    )
+    assert guard.permits(frozenset({"/members/1/state"}))
+    assert not guard.permits(frozenset({"/members/0/state"}))
+    assert not guard.permits(frozenset({"/shared_allocation/owner"}))
 
 
 def test_pre_compute_member_resource_binding_is_not_claimed_as_observed() -> None:
@@ -199,7 +353,9 @@ def _replacement_state() -> VMHALifecycleState:
     return replace(state, transaction=transaction)
 
 
-def _missing_standby_state() -> VMHALifecycleState:
+def _missing_standby_state(
+    *, prior_artifact_key: str | None = None, start_replacement: bool = True
+) -> VMHALifecycleState:
     members = (_member(0, "active"), _member(1, "passive"))
     observation = {
         "members": [
@@ -238,6 +394,7 @@ def _missing_standby_state() -> VMHALifecycleState:
         desired_state_digest=_digest("b"),
         current_state_digest=_digest("c"),
         initial_resource_bindings={
+            **({prior_artifact_key: "a" * 64} if prior_artifact_key else {}),
             "compute:gateway-0": "vm-0",
             "compute:gateway-1": "vm-1",
             "disk:gateway-0": "disk-0",
@@ -258,6 +415,8 @@ def _missing_standby_state() -> VMHALifecycleState:
         route_runtime_id="route-runtime-1",
         route_targets=("route-table-1:10.0.0.0/8",),
     )
+    if not start_replacement:
+        return active
     disk_name = vm_ha_missing_standby_disk_name(
         gateway_name="gateway",
         instance_name="gateway-1",
@@ -277,7 +436,15 @@ def _missing_standby_state() -> VMHALifecycleState:
     )
 
 
-def test_active_missing_non_owner_starts_creation_only_replacement() -> None:
+@pytest.mark.parametrize(
+    "prior_key", (None, "heartbeat-initial-artifact", "heartbeat-upgrade-artifact")
+)
+@pytest.mark.parametrize(
+    "artifact_sha256", ("a" * 64, "f" * 64), ids=("same-artifact", "new-artifact")
+)
+def test_active_missing_non_owner_starts_creation_only_replacement(
+    tmp_path: Path, prior_key: str | None, artifact_sha256: str
+) -> None:
     members = (_member(0, "passive"), _member(1, "active"))
     observation = {
         "members": [
@@ -313,6 +480,7 @@ def test_active_missing_non_owner_starts_creation_only_replacement() -> None:
         desired_state_digest=_digest("b"),
         current_state_digest=_digest("c"),
         initial_resource_bindings={
+            **({prior_key: "a" * 64} if prior_key else {}),
             "compute:gateway-0": "vm-0",
             "compute:gateway-1": "vm-1",
             "disk:gateway-0": "disk-0",
@@ -350,6 +518,7 @@ def test_active_missing_non_owner_starts_creation_only_replacement() -> None:
         desired_state_digest=_digest("b"),
         current_state_digest=_digest("f"),
         current_observation=observation,
+        artifact_sha256=artifact_sha256,
     )
 
     assert successor.status is VMHALifecycleStatus.PROVISIONING
@@ -370,6 +539,40 @@ def test_active_missing_non_owner_starts_creation_only_replacement() -> None:
     assert "disk:gateway-1" not in effective
     assert effective["compute:gateway-0"] == "vm-0"
     assert effective["shared-allocation-owner-compute"] == "vm-0"
+
+    assert bindings["heartbeat-initial-artifact"] == artifact_sha256
+    assert "heartbeat-upgrade-artifact" not in bindings
+    if prior_key:
+        audit_key = f"standby-replacement-1-prior-{prior_key}:gateway-1"
+        assert bindings[audit_key] == "a" * 64
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    store = VMHALifecycleStore(config_path)
+    store.write_verified(active)
+    if prior_key:
+        assert successor.transaction is not None
+        for bad_value in (None, "0" * 64):
+            bad_bindings = dict(bindings)
+            if bad_value is None:
+                del bad_bindings[audit_key]
+            else:
+                bad_bindings[audit_key] = bad_value
+            tampered = replace(
+                successor,
+                transaction=replace(
+                    successor.transaction, resource_bindings=tuple(sorted(bad_bindings.items()))
+                ),
+            )
+            with pytest.raises(ValueError, match="audit bindings"):
+                store.write_verified(tampered, predecessor_sha256=active.record_sha256)
+    store.write_verified(successor, predecessor_sha256=active.record_sha256)
+    persisted = store.read(expected_project_id="project-1", expected_gateway_name="gateway")
+    assert persisted == successor
+    assert persisted.transaction is not None
+    assert (
+        dict(persisted.transaction.resource_bindings)["heartbeat-initial-artifact"]
+        == artifact_sha256
+    )
 
 
 def test_missing_non_owner_ssh_rotation_is_bound_before_cloud_creation(
@@ -671,49 +874,59 @@ def test_failed_passive_replacement_rejects_unrelated_drift() -> None:
         )
 
 
-def test_failed_passive_replacement_supports_a_second_append_only_cycle() -> None:
-    first = _replacement_state().authorize_failed_passive_replacement(
-        passive_instance_name="gateway-1",
-        approval_digest=_digest("d"),
-        retired_compute_id="vm-1",
-        retired_disk_id="disk-1",
-        current_observation=_replacement_observation(),
+def test_failed_passive_replacements_persist_through_cycles_nine_ten_eleven(tmp_path) -> None:
+    config = tmp_path / "gateway.yaml"
+    config.write_text("version: 1\n")
+    store = VMHALifecycleStore(config)
+    state = _replacement_state()
+    state = replace(
+        state, transaction=replace(state.transaction, revision=1, predecessor_sha256=None)
     )
-    assert first.transaction is not None
-    next_observation = _replacement_observation(passive_revision="9")
-    next_members = next_observation["members"]
-    assert isinstance(next_members, list)
-    next_members[1]["compute_id"] = "vm-2"  # type: ignore[index]
-    next_members[1]["boot_disk_id"] = "disk-2"  # type: ignore[index]
-    transaction = first.transaction.advance(
-        predecessor_sha256=first.record_sha256,
-        completed_effect=vm_ha_passive_replacement_effect("gateway-1", 1, "create-boot-disk"),
-        resource_updates={vm_ha_passive_replacement_binding_key("disk", "gateway-1", 1): "disk-2"},
-    )
-    first = replace(first, transaction=transaction)
-    transaction = transaction.advance(
-        predecessor_sha256=first.record_sha256,
-        completed_effect=vm_ha_passive_replacement_effect("gateway-1", 1, "create-compute"),
-        resource_updates={vm_ha_passive_replacement_binding_key("compute", "gateway-1", 1): "vm-2"},
-        observation=normalize_vm_ha_observation(next_observation),
-    )
-    first = replace(first, transaction=transaction)
+    store.write_verified(state)
+    observation = _replacement_observation()
+    history = {}
 
-    second = first.authorize_failed_passive_replacement(
-        passive_instance_name="gateway-1",
-        approval_digest=_digest("e"),
-        retired_compute_id="vm-2",
-        retired_disk_id="disk-2",
-        current_observation=next_observation,
-        replacement_cycle=2,
-    )
+    def persist(previous, successor):
+        store.write_verified(successor, predecessor_sha256=previous.record_sha256)
+        loaded = store.read(expected_project_id="project-1", expected_gateway_name="gateway")
+        assert loaded == successor
+        return loaded
 
-    assert second.transaction is not None
-    bindings = dict(second.transaction.resource_bindings)
-    assert bindings["retired-2-compute:gateway-1"] == "vm-2"
-    assert bindings["retired-compute:gateway-1"] == "vm-1"
-    assert bindings["passive-replacement-2-approval:gateway-1"] == _digest("e")
-    assert "replace-failed-2-gateway-1-intent" in second.transaction.completed_effects
+    for cycle in range(1, 12):
+        approved = state.authorize_failed_passive_replacement(
+            passive_instance_name="gateway-1",
+            approval_digest=f"{cycle + 20:064x}",
+            retired_compute_id=f"vm-{cycle}",
+            retired_disk_id=f"disk-{cycle}",
+            current_observation=observation,
+            replacement_cycle=cycle,
+        )
+        state = persist(state, approved)
+        for kind in ("compute", "disk"):
+            history[
+                vm_ha_passive_replacement_binding_key(f"retired-{kind}", "gateway-1", cycle)
+            ] = f"{'vm' if kind == 'compute' else 'disk'}-{cycle}"
+        observation["members"][1].update(
+            compute_id=f"vm-{cycle + 1}",
+            boot_disk_id=f"disk-{cycle + 1}",
+            compute_revision=str(cycle + 8),
+        )
+        for kind, action in (("disk", "create-boot-disk"), ("compute", "create-compute")):
+            transaction = state.transaction.advance(
+                predecessor_sha256=state.record_sha256,
+                completed_effect=vm_ha_passive_replacement_effect("gateway-1", cycle, action),
+                resource_updates={
+                    vm_ha_passive_replacement_binding_key(
+                        kind, "gateway-1", cycle
+                    ): f"{'vm' if kind == 'compute' else 'disk'}-{cycle + 1}"
+                },
+                observation=normalize_vm_ha_observation(observation),
+            )
+            state = persist(state, replace(state, transaction=transaction))
+        bindings = dict(state.transaction.resource_bindings)
+        assert all(bindings[key] == value for key, value in history.items())
+        assert vm_ha_passive_replacement_cycles(bindings, "gateway-1") == tuple(range(1, cycle + 1))
+        assert vm_ha_effective_resource_bindings(bindings)["compute:gateway-1"] == f"vm-{cycle + 1}"
 
 
 def test_failed_passive_replacement_rejects_wrong_role_and_late_activation() -> None:
@@ -1512,3 +1725,21 @@ def test_lifecycle_scope_mismatch_and_symlink_fail_closed(tmp_path: Path) -> Non
     store.path.symlink_to(original)
     with pytest.raises(ValueError, match="regular file"):
         store.read(expected_project_id="project-1", expected_gateway_name="gateway")
+
+
+def test_conflicting_heartbeat_artifact_intents_fail_closed() -> None:
+    with pytest.raises(ValueError, match="artifact intent is ambiguous"):
+        vm_ha_effective_resource_bindings(
+            {"heartbeat-upgrade-artifact": "a" * 64, "heartbeat-initial-artifact": "a" * 64}
+        )
+
+
+@pytest.mark.parametrize("prior_key", ("heartbeat-initial-artifact", "heartbeat-upgrade-artifact"))
+def test_missing_standby_preview_retires_completed_artifact_intent(prior_key: str) -> None:
+    state = _missing_standby_state(prior_artifact_key=prior_key)
+    assert state.transaction is not None
+    bindings = dict(state.transaction.resource_bindings)
+    assert "heartbeat-initial-artifact" not in bindings
+    assert "heartbeat-upgrade-artifact" not in bindings
+    assert bindings[f"standby-replacement-1-prior-{prior_key}:gateway-1"] == "a" * 64
+    assert vm_ha_effective_resource_bindings(bindings)["compute:gateway-0"] == "vm-0"

@@ -211,10 +211,14 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     lifecycle.validate_state(self.root, state)
 
     def setUp(self) -> None:
+        from git_fixture_environment import isolated_git_configuration
+
+        self.enterContext(isolated_git_configuration())
         # macOS maps /var to /private/var through a system symlink. Use the
         # home directory so lifecycle symlink rejection is exercised without
         # weakening production path checks for that platform alias.
         self.temporary = tempfile.TemporaryDirectory(dir=Path.home())
+        self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "verification"
         # Synthetic identities for offline lifecycle tests; real registration is
         # exercised separately by test_three_tier_target with actual Git state.
@@ -249,6 +253,28 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = lifecycle.prepare(self.root)
         lifecycle.update_state(self.root, state)
         return state
+
+    def test_historical_tdd_contract_rejects_previous_active_lifecycle(self):
+        state = self.prepare()
+        state["schema"] = "agentic-sdlc/three-tier-lifecycle-v6"
+        lifecycle.private_json(lifecycle.paths(self.root)["active"], state)
+        with self.assertRaises(lifecycle.LifecycleError):
+            lifecycle.load_active(self.root)
+
+    def test_preparation_isolates_inherited_git_filters(self):
+        sentinel = Path(self.temporary.name) / "inherited-filter-executed"
+        attributes = Path.home() / "attributes"
+        attributes.write_text("* filter=ambient\n")
+        executable = Path.home() / "filter.sh"
+        executable.write_text(f'#!/bin/sh\ntouch "{sentinel}"\ncat\n')
+        executable.chmod(0o700)
+        (Path.home() / ".gitconfig").write_text(
+            f'[core]\n attributesFile = {attributes}\n'
+            f'[filter "ambient"]\n clean = {executable}\n'
+        )
+        state = self.prepare()
+        self.assertRegex(state["git"]["baseline_sha"], r"^[0-9a-f]{40}$")
+        self.assertFalse(sentinel.exists())
 
     def reset_prepare_preflight(self) -> None:
         self.require_command.side_effect = ["29.0", "5.0", "git version 2.50"]
@@ -405,6 +431,40 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             )
         self.write_browser_receipts(state, screenshots)
         self.write_test_receipts(state, value)
+        observation = {
+            "schema": lifecycle.three_tier_runtime.OBSERVATION_SCHEMA,
+            "verification_id": state["verification_id"],
+            "mode": "acceptance",
+            "target": {"path": state["project_root"], "head": promoted},
+            "worker_task": None,
+            "assignment_digest": None,
+            "observed_at": lifecycle.utc_now(),
+            "source_operation": "record-runtime",
+            "outcome": "PASS",
+            "category": None,
+            "operation": "inspect_volume",
+            "predicates": [
+                {
+                    "name": "fixture.valid",
+                    "expected": True,
+                    "observed": True,
+                    "passed": True,
+                }
+            ],
+            "resources": state["resources"],
+            "endpoints": state["endpoints"],
+        }
+        relative = "evidence/runtime/observation-" + "e" * 32 + ".json"
+        artifact = run_root / relative
+        lifecycle.private_json(artifact, observation)
+        binding = {
+            "path": relative,
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        }
+        state["runtime_observations"] = [
+            lifecycle.three_tier_runtime.observation_summary(observation, binding)
+        ]
+        state["runtime_inventory"] = binding
         lifecycle.update_state(self.root, state)
         (run_root / "evidence" / "three-tier-results.json").write_text(
             json.dumps(value), encoding="utf-8"
@@ -584,12 +644,36 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.write_build_receipt(state, {"path": state["project_root"], "head": "a" * 40})
         lifecycle.update_state(self.root, state)
         target = {"path": state["project_root"], "head": "b" * 40, "phase": "sdlc-evaluate"}
-        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.object(
-            lifecycle.three_tier_browser, "run_stage"
-        ) as launch:
+        with (
+            mock.patch.object(lifecycle, "execution_target", return_value=target),
+            mock.patch.object(lifecycle.three_tier_browser, "run_stage") as launch,
+            mock.patch.object(
+                lifecycle.three_tier_runtime, "validate_acceptance_inventory"
+            ),
+        ):
             with self.assertRaisesRegex(lifecycle.LifecycleError, "deployment"):
                 lifecycle.run_browser_stage(self.root, "evaluate")
             launch.assert_not_called()
+
+    def test_browser_stage_rejects_wrong_api_path_before_attempt(self):
+        state = self.prepare()
+        state["browser_stages"] = [{"stage": "capability-discovery", "outcome": "PASS", "path": "evidence/capability.json", "sha256": "c" * 64}]
+        state["endpoints"] = {
+            "web": "http://127.0.0.1:49152/",
+            "api": "http://127.0.0.1:49152/api/tasks",
+            "health": "http://127.0.0.1:49152/healthz",
+        }
+        lifecycle.update_state(self.root, state)
+        active = self.root / "three-tier-live/active.json"
+        before = active.read_bytes()
+        target = {"path": state["project_root"], "head": "a" * 40, "phase": "sdlc-evaluate"}
+        with mock.patch.object(lifecycle, "browser_target", return_value=target), mock.patch.object(
+            lifecycle.three_tier_browser, "run_stage"
+        ) as launch:
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "API URL"):
+                lifecycle.run_browser_stage(self.root, "evaluate")
+            launch.assert_not_called()
+        self.assertEqual(active.read_bytes(), before)
 
     def test_deployment_rechecks_running_image_mounts_and_endpoint(self):
         state = self.prepare()
@@ -628,6 +712,74 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(lifecycle.LifecycleError, "Compose action failed"):
                 lifecycle.run_owned_compose(state, ["build", "web"])
             self.assertIsNone(lifecycle.load_active(self.root)[1]["runtime_build"])
+
+    def test_failed_compose_retains_safe_diagnostics_and_nonzero_outcome(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        self.command.return_value = mock.Mock(
+            returncode=1, stdout="Ran 1 test\n", stderr="AssertionError: 500 != 200\n"
+        )
+        with mock.patch.object(lifecycle, "execution_target", return_value=target):
+            with self.assertRaises(lifecycle.LifecycleError) as failure:
+                lifecycle.run_owned_compose(state, ["exec", "-T", "web", "test"])
+        self.assertIn("exit 1", str(failure.exception))
+        self.assertIn("AssertionError: 500 != 200", str(failure.exception))
+
+    def test_failed_compose_diagnostics_redact_before_bounding(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        private_value = "synthetic-private-runtime-value"
+        self.command.return_value = mock.Mock(
+            returncode=7, stdout="x" * 20000,
+            stderr="\x1b[31mAssertionError: " + private_value + "\x1b[0m\n",
+        )
+        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.dict(
+            os.environ, {"POSTGRES_PASSWORD": private_value, "DJANGO_SECRET_KEY": private_value}
+        ):
+            with self.assertRaises(lifecycle.LifecycleError) as failure:
+                lifecycle.run_owned_compose(state, ["exec", "-T", "web", "test"])
+        message = str(failure.exception)
+        self.assertNotIn(private_value, message)
+        self.assertNotIn("\x1b", message)
+        self.assertIn("[REDACTED]", message)
+        self.assertIn("AssertionError", message)
+        self.assertLess(len(message), 8500)
+
+    def test_failed_compose_withholds_credential_like_output(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        private_value = "synthetic-unexpected-secret"
+        self.command.return_value = mock.Mock(
+            returncode=1, stdout="token=" + private_value + "\n" + "x" * 20000,
+            stderr="AssertionError: failure\n",
+        )
+        with mock.patch.object(lifecycle, "execution_target", return_value=target):
+            with self.assertRaises(lifecycle.LifecycleError) as failure:
+                lifecycle.run_owned_compose(state, ["exec", "-T", "web", "test"])
+        self.assertIn("withheld", str(failure.exception))
+        self.assertNotIn(private_value, str(failure.exception))
+
+    def test_compose_diagnostics_withhold_serialized_credentials(self):
+        private_value = "synthetic-sensitive-value"
+        for output in (
+            json.dumps({"password": private_value}),
+            json.dumps({"message": json.dumps({"password": private_value})}),
+            json.dumps({"message": json.dumps({"AWS_SECRET_ACCESS_KEY": private_value})}),
+            '{"passw\\u006frd": "' + private_value + '"}',
+            "https://example.com/?%74oken=" + private_value,
+            repr({"Authorization": "Bearer " + private_value}),
+            "AWS_SECRET_ACCESS_KEY=" + private_value,
+            "https://example.com/file?X-Amz-Signature=" + private_value,
+            "https://example.com/file?sig=" + private_value,
+            "Set-Cookie: session=" + private_value,
+            json.dumps({"clientSecret": private_value}),
+            "-----BEGIN PRIVATE KEY-----\n" + private_value,
+        ):
+            with self.subTest(format=output.partition(private_value)[0]):
+                result = subprocess.CompletedProcess([], 1, stdout=output, stderr="failure")
+                diagnostic = lifecycle.compose_failure_diagnostic(result)
+                self.assertIn("withheld", diagnostic)
+                self.assertNotIn(private_value, diagnostic)
 
     def test_owned_restart_refreshes_dynamic_port_before_deployment_check(self):
         state = self.prepare()
@@ -779,9 +931,13 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         active.chmod(0o644)
         self.assertIsNone(claims())
         active.chmod(0o600)
+        configuration = Path(state["project_root"]) / ".git/config"
+        original_configuration = configuration.read_bytes()
         lifecycle.owned_git_origin._git(Path(state["project_root"]), "remote", "add", "foreign", "/unowned.git")
         self.assertIsNone(claims())
-        lifecycle.owned_git_origin._git(Path(state["project_root"]), "remote", "remove", "foreign")
+        # Fixture recovery cannot use a product command that now rejects the
+        # intentionally corrupted repository before invoking Git.
+        configuration.write_bytes(original_configuration)
         active.unlink()
         self.assertIsNone(claims())
 
@@ -1004,39 +1160,364 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             lifecycle.destroy(self.root)
         self.assertTrue(Path(state["run_root"]).is_dir())
 
-    def test_record_runtime_requires_exact_labelled_inventory(self) -> None:
+    def inventory_fixture(self, state):
+        from test_three_tier_runtime import InventoryFixture
+
+        fixture = InventoryFixture()
+        fixture.state = state
+        fixture.target = {
+            "path": state["project_root"],
+            "head": state["git"]["baseline_sha"],
+        }
+        for value in fixture.records.values():
+            labels = value.get("Config", value).get("Labels", {})
+            labels.update(
+                {
+                    lifecycle.OWNERSHIP_LABEL: state["verification_id"],
+                    lifecycle.COMPOSE_LABEL: state["compose_project"],
+                }
+            )
+        old = fixture.image
+        fixture.image = "sha256:" + "a" * 64
+        fixture.records[("image", fixture.image)] = fixture.records.pop(("image", old))
+        fixture.records[("image", fixture.image)]["Id"] = fixture.image
+        fixture.records[("container", "web")]["Image"] = fixture.image
+        self.write_build_receipt(state, fixture.target)
+        lifecycle.update_state(self.root, state)
+        return fixture
+
+    def test_record_runtime_discovers_and_persists_bound_acceptance(self):
         state = self.prepare()
-
-        def resource(kind: str, identifier: str) -> dict[str, object]:
-            result = {
-                lifecycle.OWNERSHIP_LABEL: state["verification_id"],
-                lifecycle.COMPOSE_LABEL: state["compose_project"],
-            }
-            if kind == "containers":
-                result["com.docker.compose.service"] = {
-                    "web-id": "web",
-                    "db-id": "db",
-                }[identifier]
-            return {"canonical_id": identifier, "labels": result}
-
+        fixture = self.inventory_fixture(state)
         with (
-            mock.patch.object(lifecycle, "inspect_resource", side_effect=resource),
-            mock.patch.object(lifecycle, "assert_port_isolation"),
+            mock.patch.object(
+                lifecycle, "execution_target", return_value=fixture.target
+            ),
+            mock.patch.object(lifecycle, "command", side_effect=fixture.command),
+        ):
+            updated = lifecycle.record_runtime(
+                self.root, web_path="/", health_path="/healthz"
+            )
+        self.assertEqual(updated["resources"]["containers"], ["web", "db"])
+        self.assertEqual(
+            updated["endpoints"]["api"], "http://127.0.0.1:49152/api/v1/tasks"
+        )
+        lifecycle.three_tier_runtime.validate_acceptance_inventory(
+            updated, fixture.target
+        )
+        self.assertEqual(updated["runtime_observations"][0]["mode"], "acceptance")
+
+    def test_runtime_routes_reject_before_inspection_or_state_write(self):
+        self.prepare()
+        active = self.root / "three-tier-live/active.json"
+        before = active.read_bytes()
+        for path in (
+            "http://127.0.0.1:1234/",
+            "//other",
+            "/?query",
+            "/#fragment",
+            "/\n",
+        ):
+            with (
+                self.subTest(path=path),
+                mock.patch.object(lifecycle, "execution_target") as target,
+            ):
+                with self.assertRaises(lifecycle.LifecycleError):
+                    lifecycle.record_runtime(
+                        self.root, web_path=path, health_path="/healthz"
+                    )
+                target.assert_not_called()
+                self.assertEqual(active.read_bytes(), before)
+
+    def test_failed_observation_is_immutable_and_does_not_publish_inventory(self):
+        state = self.prepare()
+        fixture = self.inventory_fixture(state)
+        fixture.records[("container", "web")]["Mounts"] = [
+            {"Type": "bind", "Source": "password=secret"}
+        ]
+        with (
+            mock.patch.object(
+                lifecycle, "execution_target", return_value=fixture.target
+            ),
+            mock.patch.object(lifecycle, "command", side_effect=fixture.command),
+        ):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "web.mounts_absent"):
+                lifecycle.record_runtime(
+                    self.root, web_path="/", health_path="/healthz"
+                )
+            failed = lifecycle.load_active(self.root)[1]
+            observation = failed["runtime_observations"][0]
+            raw = (Path(state["run_root"]) / observation["path"]).read_bytes()
+            fixture.records[("container", "web")]["Mounts"] = []
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "ends this trial"):
+                lifecycle.record_runtime(
+                    self.root, web_path="/", health_path="/healthz"
+                )
+        self.assertEqual(failed["resources"], state["resources"])
+        self.assertEqual(failed["endpoints"], {})
+        self.assertIsNone(failed["runtime_inventory"])
+        self.assertEqual(
+            raw, (Path(state["run_root"]) / observation["path"]).read_bytes()
+        )
+        self.assertNotIn(b"secret", raw)
+        self.assertIn("web.mounts_absent", Path(state["report_path"]).read_text())
+        self.assertNotIn("Playwright report", Path(state["report_path"]).read_text())
+
+    def test_failed_inventory_diagnostics_survive_interrupted_and_successful_cleanup(
+        self,
+    ):
+        state = self.prepare()
+        with mock.patch.object(
+            lifecycle,
+            "execution_target",
+            side_effect=lifecycle.LifecycleError("password=secret"),
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.record_runtime(
+                    self.root, web_path="/", health_path="/healthz"
+                )
+        summary = lifecycle.load_active(self.root)[1]["runtime_observations"]
+        with mock.patch.object(
+            lifecycle,
+            "discover_owned_resources",
+            side_effect=lifecycle.LifecycleError("daemon unavailable"),
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.destroy(self.root)
+        self.assertEqual(
+            lifecycle.load_active(self.root)[1]["runtime_observations"], summary
+        )
+        with mock.patch.object(
+            lifecycle,
+            "discover_owned_resources",
+            return_value={kind: [] for kind in lifecycle.RESOURCE_KINDS},
+        ):
+            result, archived = lifecycle.destroy(self.root)
+        self.assertEqual(result, "DESTROYED")
+        self.assertFalse(Path(state["run_root"]).exists())
+        self.assertEqual(archived["runtime_observations"], summary)
+        report = Path(state["report_path"]).read_text()
+        self.assertIn("target.admitted", report)
+        self.assertIn(summary[0]["sha256"], report)
+        self.assertNotIn("secret", report)
+
+    def test_worker_observations_are_development_only_and_unknown_failure_stays_blocked(
+        self,
+    ):
+        from contextlib import nullcontext
+
+        state = self.prepare()
+        fixture = self.inventory_fixture(state)
+        with (
+            mock.patch.object(
+                lifecycle, "runtime_access", return_value=nullcontext()
+            ) as access,
+            mock.patch.object(
+                lifecycle, "execution_target", return_value=fixture.target
+            ),
+            mock.patch.object(lifecycle, "command", side_effect=fixture.command),
         ):
             updated = lifecycle.record_runtime(
                 self.root,
-                web_url="http://127.0.0.1:49152/",
-                api_url="http://127.0.0.1:49152/api/v1/tasks",
-                health_url="http://127.0.0.1:49152/healthz",
-                database_endpoint="db:5432/taskboard",
-                web_container="web-id",
-                database_container="db-id",
-                networks=["network-id"],
-                volumes=["volume-id"],
-                images=["image-id"],
+                web_path="/",
+                health_path="/healthz",
+                worker_task="TASK-001",
+                assignment_digest="d" * 64,
             )
-        self.assertEqual(updated["endpoints"]["web"], "http://127.0.0.1:49152/")
-        self.assertEqual(updated["resources"]["containers"], ["web-id", "db-id"])
+        access.assert_called_once_with(
+            mock.ANY, worker_task="TASK-001", assignment_digest="d" * 64
+        )
+        self.assertEqual(updated["resources"], state["resources"])
+        self.assertEqual(updated["endpoints"], {})
+        self.assertIsNone(updated["runtime_inventory"])
+        with self.assertRaises(lifecycle.three_tier_runtime.RuntimeEvidenceError):
+            lifecycle.three_tier_runtime.validate_acceptance_inventory(updated)
+        with mock.patch.object(
+            lifecycle,
+            "runtime_access",
+            side_effect=lifecycle.LifecycleError("missing lease"),
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.record_runtime(
+                    self.root,
+                    web_path="/",
+                    health_path="/healthz",
+                    worker_task="TASK-001",
+                    assignment_digest="d" * 64,
+                )
+        failed = lifecycle.load_active(self.root)[1]
+        with self.assertRaisesRegex(
+            lifecycle.LifecycleError, "blocked_missing_evidence"
+        ):
+            lifecycle.validate_inventory_recovery(failed)
+
+    def test_failed_receipt_orphan_is_reconciled_before_retry_and_cleanup(self):
+        state = self.prepare()
+        fixture = self.inventory_fixture(state)
+        fixture.records[("container", "web")]["Mounts"] = [{"Type": "bind"}]
+        original_update = lifecycle.update_state
+
+        def interrupted(root, value):
+            if value["runtime_observations"]:
+                raise OSError("simulated interruption after receipt publication")
+            original_update(root, value)
+
+        with (
+            mock.patch.object(
+                lifecycle, "execution_target", return_value=fixture.target
+            ),
+            mock.patch.object(lifecycle, "command", side_effect=fixture.command),
+            mock.patch.object(lifecycle, "update_state", side_effect=interrupted),
+        ):
+            with self.assertRaises(OSError):
+                lifecycle.record_runtime(
+                    self.root, web_path="/", health_path="/healthz"
+                )
+        saved = lifecycle.load_active(self.root)[1]
+        self.assertEqual(saved["runtime_observations"], [])
+        with self.assertRaisesRegex(
+            lifecycle.three_tier_runtime.RuntimeEvidenceError, "reconciliation"
+        ):
+            lifecycle.three_tier_runtime.validate_observations(saved)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "ends this trial"):
+            lifecycle.record_runtime(self.root, web_path="/", health_path="/healthz")
+        reconciled = lifecycle.load_active(self.root)[1]
+        self.assertEqual(
+            reconciled["runtime_observations"][0]["predicates"][-1]["name"],
+            "web.mounts_absent",
+        )
+        result, archived = lifecycle.destroy(self.root)
+        self.assertEqual(result, "DESTROYED")
+        self.assertEqual(
+            archived["runtime_observations"], reconciled["runtime_observations"]
+        )
+
+    def test_cleanup_resumes_after_raw_observation_was_deleted(self):
+        state = self.prepare()
+        with mock.patch.object(
+            lifecycle,
+            "execution_target",
+            side_effect=lifecycle.LifecycleError("target unavailable"),
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.record_runtime(
+                    self.root, web_path="/", health_path="/healthz"
+                )
+        saved = lifecycle.load_active(self.root)[1]
+        receipt = Path(saved["run_root"]) / saved["runtime_observations"][0]["path"]
+
+        def partial_delete(path):
+            receipt.unlink()
+            raise OSError("simulated interrupted deletion")
+
+        with mock.patch.object(lifecycle.shutil, "rmtree", side_effect=partial_delete):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.destroy(self.root)
+        interrupted = lifecycle.load_active(self.root)[1]
+        self.assertEqual(
+            interrupted["runtime_observations"], saved["runtime_observations"]
+        )
+        self.assertIn("target.admitted", Path(saved["report_path"]).read_text())
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "only status/destroy"):
+            lifecycle.assert_active_generation(self.root, state["verification_id"])
+        result, archived = lifecycle.destroy(self.root)
+        self.assertEqual(result, "DESTROYED")
+        self.assertEqual(
+            archived["runtime_observations"], saved["runtime_observations"]
+        )
+        self.assertFalse(Path(state["run_root"]).exists())
+
+    def test_cleanup_checkpoint_rejects_changed_diagnostics_and_reappeared_runtime(
+        self,
+    ):
+        state = self.prepare()
+        with mock.patch.object(
+            lifecycle.shutil, "rmtree", side_effect=OSError("interrupted")
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.destroy(self.root)
+        saved = lifecycle.load_active(self.root)[1]
+        with mock.patch.object(lifecycle, "agent_name", return_value="claude"):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.validate_filesystem_cleanup(self.root, saved)
+        tampered = {**saved, "runtime_observations": [{"injected": True}]}
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "changed"):
+            lifecycle.validate_filesystem_cleanup(self.root, tampered)
+        with mock.patch.object(
+            lifecycle,
+            "discover_owned_resources",
+            return_value={"containers": ["new-writer"]},
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.destroy(self.root)
+        self.assertTrue(Path(state["run_root"]).exists())
+
+    def test_cleanup_rejects_replacement_directory(self):
+        state = self.prepare()
+        with mock.patch.object(
+            lifecycle.shutil, "rmtree", side_effect=OSError("interrupted")
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.destroy(self.root)
+        run = Path(state["run_root"])
+        run.rename(run.with_name("preserved-original"))
+        run.mkdir(mode=0o700)
+        sentinel = run / "unrelated.txt"
+        sentinel.write_text("preserve")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "replaced"):
+            lifecycle.destroy(self.root)
+        self.assertEqual(sentinel.read_text(), "preserve")
+
+    def test_cleanup_reconciles_exact_unbound_checkpoint(self):
+        self.prepare()
+        original_update = lifecycle.update_state
+
+        def interrupt(root, state):
+            if state.get("filesystem_cleanup"):
+                raise OSError("interrupted binding publication")
+            original_update(root, state)
+
+        with mock.patch.object(lifecycle, "update_state", side_effect=interrupt):
+            with self.assertRaises(OSError):
+                lifecycle.destroy(self.root)
+        self.assertNotIn("filesystem_cleanup", lifecycle.load_active(self.root)[1])
+        self.assertEqual(lifecycle.destroy(self.root)[0], "DESTROYED")
+
+    def test_product_failure_is_not_overwritten_by_a_later_target_failure(self):
+        state = self.prepare()
+        fixture = self.inventory_fixture(state)
+        fixture.records[("container", "web")]["Mounts"] = [{"Type": "bind"}]
+        with (
+            mock.patch.object(
+                lifecycle,
+                "execution_target",
+                side_effect=[fixture.target, lifecycle.LifecycleError("late drift")],
+            ) as target,
+            mock.patch.object(lifecycle, "command", side_effect=fixture.command),
+        ):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "web.mounts_absent"):
+                lifecycle.record_runtime(
+                    self.root, web_path="/", health_path="/healthz"
+                )
+        target.assert_called_once()
+
+    def test_tampered_observation_blocks_admission_and_cleanup(self):
+        state = self.prepare()
+        fixture = self.inventory_fixture(state)
+        with (
+            mock.patch.object(
+                lifecycle, "execution_target", return_value=fixture.target
+            ),
+            mock.patch.object(lifecycle, "command", side_effect=fixture.command),
+        ):
+            saved = lifecycle.record_runtime(
+                self.root, web_path="/", health_path="/healthz"
+            )
+        receipt = Path(state["run_root"]) / saved["runtime_observations"][0]["path"]
+        receipt.write_text(receipt.read_text().replace('"PASS"', '"FAIL"'))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "digest"):
+            lifecycle.destroy(self.root)
+        self.assertTrue(Path(state["run_root"]).exists())
 
     def test_record_git_can_capture_clean_baseline_before_promotion(self) -> None:
         state = self.prepare()
@@ -1047,70 +1528,6 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             updated["git"],
             {"baseline_sha": baseline_sha, "promoted_sha": None},
         )
-
-    def test_record_runtime_rejects_non_loopback_web_endpoint(self) -> None:
-        self.prepare()
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "loopback"):
-            lifecycle.record_runtime(
-                self.root,
-                web_url="http://0.0.0.0:8000/",
-                api_url="http://127.0.0.1:8000/api/v1/tasks",
-                health_url="http://127.0.0.1:8000/healthz",
-                database_endpoint="db:5432/taskboard",
-                web_container="web-id",
-                database_container="db-id",
-                networks=["network-id"],
-                volumes=["volume-id"],
-                images=["image-id"],
-            )
-
-    def test_record_runtime_rejects_option_like_resource_identifier(self) -> None:
-        self.prepare()
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "Invalid containers"):
-            lifecycle.record_runtime(
-                self.root,
-                web_url="http://127.0.0.1:8000/",
-                api_url="http://127.0.0.1:8000/api/v1/tasks",
-                health_url="http://127.0.0.1:8000/healthz",
-                database_endpoint="db:5432/taskboard",
-                web_container="--force",
-                database_container="db-id",
-                networks=["network-id"],
-                volumes=["volume-id"],
-                images=["image-id"],
-            )
-
-    def test_record_runtime_rejects_swapped_container_roles(self) -> None:
-        state = self.prepare()
-
-        def resource(kind: str, identifier: str) -> dict[str, object]:
-            result = {
-                lifecycle.OWNERSHIP_LABEL: state["verification_id"],
-                lifecycle.COMPOSE_LABEL: state["compose_project"],
-            }
-            if kind == "containers":
-                result["com.docker.compose.service"] = {
-                    "web-id": "web",
-                    "db-id": "db",
-                }[identifier]
-            return {"canonical_id": identifier, "labels": result}
-
-        with (
-            mock.patch.object(lifecycle, "inspect_resource", side_effect=resource),
-            self.assertRaisesRegex(lifecycle.LifecycleError, "Compose web service"),
-        ):
-            lifecycle.record_runtime(
-                self.root,
-                web_url="http://127.0.0.1:49152/",
-                api_url="http://127.0.0.1:49152/api/v1/tasks",
-                health_url="http://127.0.0.1:49152/healthz",
-                database_endpoint="db:5432/taskboard",
-                web_container="db-id",
-                database_container="web-id",
-                networks=["network-id"],
-                volumes=["volume-id"],
-                images=["image-id"],
-            )
 
     def test_prepare_public_images_uses_private_config_and_fixed_images(self) -> None:
         state = self.prepare()
@@ -1487,6 +1904,34 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             lifecycle.validate_semantic_results(state, keep=True)
 
 
+    def test_failed_validation_cannot_be_replaced_or_rewritten(self) -> None:
+        state = self.prepare()
+        command = "python3 manage.py check"
+        summary = "Canonical acceptance check failed."
+        lifecycle.record_validation(self.root, command, "FAIL", summary)
+        state_path, failed = lifecycle.load_active(self.root)
+        original_state = state_path.read_bytes()
+        report_path = Path(state["report_path"])
+        original_report = report_path.read_bytes()
+
+        for status, replacement in (("PASS", "Repaired."), ("FAIL", "Changed.")):
+            with self.subTest(status=status), self.assertRaisesRegex(
+                lifecycle.LifecycleError, "Failed validation is immutable"
+            ):
+                lifecycle.record_validation(self.root, command, status, replacement)
+            self.assertEqual(state_path.read_bytes(), original_state)
+            self.assertEqual(report_path.read_bytes(), original_report)
+
+        replayed = lifecycle.record_validation(self.root, command, "FAIL", summary)
+        self.assertEqual(replayed, failed)
+        self.assertEqual(state_path.read_bytes(), original_state)
+        self.assertEqual(report_path.read_bytes(), original_report)
+
+        lifecycle.record_validation(self.root, "cleanup-check", "PASS", "Clean.")
+        _, final = lifecycle.load_active(self.root)
+        self.assertEqual(final["validations"][0], failed["validations"][0])
+        self.assertEqual(len(final["validations"]), 2)
+
     def test_record_validation_populates_report_and_rejects_secrets(self) -> None:
         state = self.prepare()
         command = (
@@ -1749,7 +2194,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         lifecycle.update_state(self.root, state)
         with (
             mock.patch.object(lifecycle, "inspect_labels") as inspect,
-            self.assertRaisesRegex(lifecycle.LifecycleError, "exactly its one approved origin"),
+            self.assertRaisesRegex(lifecycle.LifecycleError, "UNSAFE_GIT_ENVIRONMENT"),
         ):
             lifecycle.destroy(self.root)
         inspect.assert_not_called()
@@ -1837,7 +2282,11 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     "run-compose",
                     "--",
                     "up",
+                    "--force-recreate",
                     "--detach",
+                    "--wait",
+                    "web",
+                    "db",
                 ]
             )
         self.assertEqual(result, 0)
@@ -1850,7 +2299,11 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 "--project-directory",
                 state["project_root"],
                 "up",
+                "--force-recreate",
                 "--detach",
+                "--wait",
+                "web",
+                "db",
             ],
             timeout=1800,
         )
@@ -1874,6 +2327,278 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertIn("cannot override", error.getvalue())
         self.command.assert_not_called()
+
+
+class OwnedComposeStartupTests(unittest.TestCase):
+    def test_incomplete_or_unsafe_startup_is_rejected_before_target_or_docker(self):
+        valid = ["up", "--force-recreate", "--detach", "--wait", "web", "db"]
+        invalid = [
+            ["up", "--detach", "--wait"],
+            *[valid[:index] + valid[index + 1:] for index in range(1, len(valid))],
+            valid + ["--force-recreate"],
+            valid + ["--renew-anon-volumes"],
+            valid + ["--no-recreate"],
+            valid + ["--no-deps"],
+            valid + ["--build"],
+            valid[:-1] + ["web"],
+            valid[:-1] + ["other"],
+        ]
+        for arguments in invalid:
+            with self.subTest(arguments=arguments), mock.patch.object(
+                lifecycle, "execution_target"
+            ) as target, mock.patch.object(lifecycle, "command") as command:
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "startup requires"):
+                    lifecycle._run_owned_compose({}, arguments)
+                target.assert_not_called()
+                command.assert_not_called()
+
+    def test_explicit_two_service_startup_is_forwarded_without_rewriting(self):
+        state = {"compose_project": "owned-fixture"}
+        for arguments in (
+            ["up", "--force-recreate", "--detach", "--wait", "web", "db"],
+            ["up", "--wait", "--detach", "--force-recreate", "db", "web"],
+        ):
+            with self.subTest(arguments=arguments), mock.patch.object(
+                lifecycle, "execution_target", return_value={"path": "/tmp/owned-fixture"}
+            ) as target, mock.patch.object(
+                lifecycle, "command",
+                return_value=subprocess.CompletedProcess([], 0, "started", ""),
+            ) as command:
+                self.assertEqual(lifecycle._run_owned_compose(state, arguments), "started")
+                target.assert_called_once_with(
+                    state, require_clean=False, worker_task=None, assignment_digest=None
+                )
+                command.assert_called_once_with(
+                    ["docker", "compose", "--project-name", "owned-fixture",
+                     "--project-directory", "/tmp/owned-fixture", *arguments],
+                    timeout=1800,
+                )
+
+
+class ClassifierPhaseIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.state = {"verification_id": "a" * 32}
+        self.current = {"current_execution": None}
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.run_dir = Path(directory).resolve()
+        registration = (None, None, None, None, self.run_dir, self.current, None)
+        self.enterContext(mock.patch.object(lifecycle.three_tier_target, "_registration", return_value=registration))
+        self.enterContext(mock.patch.object(lifecycle.three_tier_target, "current_objective", return_value="a" * 64))
+        self.target = self.enterContext(mock.patch.object(lifecycle, "execution_target", return_value={"basis_sha256": "b" * 64}))
+
+    def test_classifier_before_preparation_has_no_execution_basis(self):
+        self.assertEqual(lifecycle.phase_identity(self.state, "sdlc-classify-failure"), ("a" * 64, None))
+        self.target.assert_not_called()
+
+    def historical_classifier_fixture(self):
+        self.current['current_execution'] = 'FEAT-001'
+        self.state.update(run_root=str(self.run_dir), project_root=str(self.run_dir / 'source'),
+                          git={'baseline_sha': 'd' * 40, 'promoted_sha': None})
+        phase = 'sdlc-classify-failure'
+        relative = f'evidence/phases/{phase}.json'
+        result = {'schema': lifecycle.PHASE_RESULT_SCHEMA, 'phase': phase, 'status': 'PASS',
+                  'verification_id': self.state['verification_id'], 'baseline_sha': 'd' * 40,
+                  'recorded_head': 'd' * 40, 'objective_sha256': 'a' * 64,
+                  'basis_sha256': None, 'assertions': lifecycle.PHASE_REQUIRED_ASSERTIONS[phase]}
+        lifecycle.private_json(self.run_dir / relative, result)
+        self.enterContext(mock.patch.object(lifecycle, 'command', return_value=mock.Mock(returncode=0)))
+        self.enterContext(mock.patch.object(lifecycle, 'require_command', return_value='d' * 40))
+        lifecycle.validate_phase_pass_artifact(self.state, phase, [relative])
+        digest = hashlib.sha256((self.run_dir / relative).read_bytes()).hexdigest()
+        archive = f'evidence/phases/attempts/{phase}/{digest}.json'
+        lifecycle.private_json(self.run_dir / archive, result)
+        entry = {'phase': phase, 'status': 'PASS', 'evidence': [archive],
+                 'artifact_sha256': digest, 'attempt': 1, 'supersedes_attempt': None}
+        self.state['phases'] = [entry, {'phase': 'sdlc-prepare-execution', 'status': 'PASS'}]
+        self.prepare()
+        self.target.return_value = {'basis_sha256': 'b' * 64, 'head': 'c' * 40}
+        return phase, archive, entry, result
+
+    def test_preexecution_classifier_archive_survives_preparation(self):
+        phase, archive, entry, _ = self.historical_classifier_fixture()
+        with mock.patch.object(lifecycle.three_tier_target, 'validate_historical_basis') as basis:
+            lifecycle.validate_phase_pass_artifact(self.state, phase, [archive], historical_entry=entry)
+            basis.assert_not_called()
+
+    def test_null_classifier_archive_requires_prior_admission_and_later_execution(self):
+        phase, archive, entry, _ = self.historical_classifier_fixture()
+        prepared = self.state['phases'][1]
+        for history in ([prepared, entry], [entry]):
+            with self.subTest(history=history):
+                self.state['phases'] = history
+                with self.assertRaisesRegex(lifecycle.LifecycleError, 'basis digest is invalid'):
+                    lifecycle.validate_phase_pass_artifact(self.state, phase, [archive], historical_entry=entry)
+
+    def test_preexecution_classifier_archive_still_rejects_tampering(self):
+        phase, archive, entry, result = self.historical_classifier_fixture()
+        path = self.run_dir / archive
+        raw = path.read_bytes()
+        path.write_bytes(raw + b'\n')
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'Immutable phase attempt changed'):
+            lifecycle.validate_phase_pass_artifact(self.state, phase, [archive], historical_entry=entry)
+        lifecycle.private_json(path, {**result, 'objective_sha256': 'e' * 64})
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'basis is stale'):
+            lifecycle.validate_phase_pass_artifact(self.state, phase, [archive], historical_entry=entry)
+
+    def prepare(self):
+        self.current["current_execution"] = "FEAT-001"
+        (self.run_dir / "execution/FEAT-001").mkdir(parents=True)
+
+    def test_selected_locked_plan_before_execution_has_no_basis(self):
+        self.current["current_execution"] = "FEAT-001"
+        (self.run_dir / "plans").mkdir()
+        (self.run_dir / "plans/FEAT-001.plan.v1.md.lock").write_text("locked")
+        self.assertEqual(lifecycle.phase_identity(self.state, "sdlc-classify-failure"), ("a" * 64, None))
+        self.target.assert_not_called()
+
+    def test_unprepared_selected_feature_receipt_uses_source_head(self):
+        self.current["current_execution"] = "FEAT-001"
+        self.state.update(run_root=str(self.run_dir), project_root=str(self.run_dir / "source"),
+                          git={"baseline_sha": "d" * 40, "promoted_sha": None})
+        phase = "sdlc-classify-failure"
+        relative = "evidence/phases/" + phase + ".json"
+        result = {"schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
+                  "verification_id": self.state["verification_id"], "baseline_sha": "d" * 40,
+                  "recorded_head": "d" * 40, "objective_sha256": "a" * 64,
+                  "basis_sha256": None, "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase]}
+        lifecycle.private_json(self.run_dir / relative, result)
+        with (mock.patch.object(lifecycle, "command", return_value=mock.Mock(returncode=0)),
+              mock.patch.object(lifecycle, "require_command", return_value="d" * 40) as source):
+            lifecycle.validate_phase_pass_artifact(self.state, phase, [relative])
+        source.assert_called_once()
+        self.target.assert_not_called()
+
+    def test_partial_preparation_never_falls_back_to_null_basis(self):
+        self.current["current_execution"] = "FEAT-001"
+        self.target.side_effect = lifecycle.three_tier_target.TargetError("Partial execution")
+        for relative in ("execution/FEAT-001", "objective-impact/execution/FEAT-001.json",
+                         "worktrees/FEAT-001"):
+            path = self.run_dir / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("incomplete")
+            with self.subTest(relative=relative), self.assertRaisesRegex(
+                lifecycle.three_tier_target.TargetError, "Partial execution"
+            ):
+                lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+            path.unlink()
+
+    def test_missing_previously_observed_execution_is_not_unprepared(self):
+        self.state["phases"] = [{"phase": "sdlc-prepare-execution", "status": "PASS"}]
+        for feature in (None, "FEAT-001"):
+            self.current["current_execution"] = feature
+            with self.subTest(feature=feature), self.assertRaisesRegex(
+                lifecycle.LifecycleError, "Previously observed execution"
+            ):
+                lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+
+    def test_dangling_preparation_symlink_is_rejected(self):
+        self.current["current_execution"] = "FEAT-001"
+        (self.run_dir / "execution").symlink_to(self.run_dir / "missing")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "Symlinked lifecycle"):
+            lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+        self.target.assert_not_called()
+
+    def test_invalid_preparation_parent_is_rejected(self):
+        self.current["current_execution"] = "FEAT-001"
+        (self.run_dir / "execution").write_text("not a directory")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "preparation path is invalid"):
+            lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+
+    def test_invalid_selected_execution_is_rejected(self):
+        self.current["current_execution"] = "../other"
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "execution selection is invalid"):
+            lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+
+    def test_classifier_after_preparation_uses_validated_execution_basis(self):
+        self.prepare()
+        self.assertEqual(lifecycle.phase_identity(self.state, "sdlc-classify-failure"), ("a" * 64, "b" * 64))
+        self.target.assert_called_once_with(
+            self.state, require_clean=False, classifier_observation=True
+        )
+
+    def test_classifier_invalid_execution_does_not_fall_back_to_null_basis(self):
+        self.prepare()
+        self.target.side_effect = lifecycle.three_tier_target.TargetError("Invalid execution identity")
+        with self.assertRaisesRegex(lifecycle.three_tier_target.TargetError, "Invalid execution"):
+            lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+
+    def test_classifier_receipt_uses_integration_head_and_rejects_null_or_stale_basis(self):
+        self.prepare()
+        self.target.return_value = {"basis_sha256": "b" * 64, "head": "c" * 40}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self.state.update(run_root=str(root), project_root=str(root / "source"), git={"baseline_sha": "d" * 40, "promoted_sha": None})
+            phase = "sdlc-classify-failure"
+            relative = "evidence/phases/" + phase + ".json"
+            result = {"schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
+                      "verification_id": self.state["verification_id"], "baseline_sha": "d" * 40,
+                      "recorded_head": "c" * 40, "objective_sha256": "a" * 64,
+                      "basis_sha256": "b" * 64, "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase]}
+            lifecycle.private_json(root / relative, result)
+            with (mock.patch.object(lifecycle, "command", return_value=mock.Mock(returncode=0)),
+                  mock.patch.object(lifecycle, "require_command", side_effect=AssertionError("Must use integration head"))):
+                lifecycle.validate_phase_pass_artifact(self.state, phase, [relative])
+                for basis in (None, "e" * 64):
+                    lifecycle.private_json(root / relative, {**result, "basis_sha256": basis})
+                    with self.assertRaisesRegex(lifecycle.LifecycleError, "basis is stale"):
+                        lifecycle.validate_phase_pass_artifact(self.state, phase, [relative])
+
+
+class LoopbackContractTests(unittest.TestCase):
+    def state(self, host='127.0.0.1'):
+        return {'resources': {'containers': ['web-id', 'db-id']},
+                'endpoints': {'web': f'http://{host}:49152/',
+                              'api': f'http://{host}:49152/api/v1/tasks',
+                              'health': f'http://{host}:49152/healthz',
+                              'database': 'db:5432'}}
+
+    @staticmethod
+    def owned(kind, identity, state):
+        return {'labels': {'com.docker.compose.service': 'web' if identity == 'web-id' else 'db'}}
+
+    def refresh(self, state, ports):
+        with mock.patch.object(lifecycle, 'assert_resource_owned', side_effect=self.owned), mock.patch.object(
+                lifecycle, 'container_ports', side_effect=lambda identity: ports if identity == 'web-id' else {}):
+            return lifecycle.refreshed_restart_state(state)
+
+    def test_restart_uses_actual_internal_port(self):
+        value = self.refresh(self.state(), {'9000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '49153'}]})
+        self.assertEqual(value['endpoints']['api'], 'http://127.0.0.1:49153/api/v1/tasks')
+
+    def test_ipv6_registration_and_restart(self):
+        state = self.state('[::1]')
+        lifecycle.validate_runtime_endpoints(state['endpoints'])
+        value = self.refresh(state, {'9000/tcp': [{'HostIp': '::1', 'HostPort': '49153'}]})
+        self.assertEqual(value['endpoints']['health'], 'http://[::1]:49153/healthz')
+
+    def test_ipv6_deployment_and_cross_family_rejection(self):
+        state = self.state('[::1]')
+        image = 'sha256:' + 'a' * 64
+        state['resources']['images'] = [image]
+        observed = {'Id': 'web-id', 'Image': image, 'Mounts': [], 'State': {'Running': True},
+                    'NetworkSettings': {'Ports': {'9000/tcp': [{'HostIp': '::1', 'HostPort': '49152'}]}}}
+        command = mock.Mock(return_value=mock.Mock(returncode=0, stdout=json.dumps(observed)))
+        runtime = lifecycle.three_tier_runtime
+        with mock.patch.object(runtime, 'load_build', return_value={'image_id': image}):
+            runtime.validate_deployment(state, {}, command, self.owned)
+            state['endpoints']['api'] = 'http://127.0.0.1:49152/api/v1/tasks'
+            with self.assertRaises(runtime.RuntimeEvidenceError):
+                runtime.validate_deployment(state, {}, command, self.owned)
+
+    def test_extra_published_binding_is_rejected(self):
+        ports = {'8000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '49153'}],
+                 '9000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '49154'}]}
+        with self.assertRaises(lifecycle.LifecycleError):
+            self.refresh(self.state(), ports)
+
+    def test_binding_parser_rejects_malformed_and_public_observations(self):
+        owner = lifecycle.three_tier_runtime
+        for ports in (None, [], {"9000/tcp": {}}, {"9000/tcp": [None]},
+                      {"9000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49152"}]},
+                      {"9000/tcp": [{"HostIp": "::1", "HostPort": "0"}]},
+                      {"9000/tcp": [{"HostIp": "::1", "HostPort": "invalid"}]}):
+            with self.subTest(ports=ports), self.assertRaises(owner.RuntimeEvidenceError):
+                owner.loopback_binding(ports)
 
 
 if __name__ == "__main__":

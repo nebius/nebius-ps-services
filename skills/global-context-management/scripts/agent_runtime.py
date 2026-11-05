@@ -9,6 +9,8 @@ import re
 import stat
 from typing import Any
 
+from git_environment import environment as git_environment
+
 
 AGENTS = ("codex", "claude")
 CLAUDE_READ_ONLY_ROLES = ("repo-mapper", "test-strategist", "risk-reviewer")
@@ -175,7 +177,7 @@ def installed_skills_dir(value: str | None = None) -> Path:
 
 
 def runtime_environment(value: str | None = None, *, home: Path | None = None,
-                        fresh_session: bool = False) -> dict[str, str]:
+                        fresh_session: bool = False, cwd: Path | None = None) -> dict[str, str]:
     """Select a native home without leaking parent identity into a fresh worker."""
     selected = agent_name(value)
     env = dict(os.environ)
@@ -187,7 +189,7 @@ def runtime_environment(value: str | None = None, *, home: Path | None = None,
     if selected == "codex" or fresh_session:
         env.pop("SKILLS_SESSION_ID", None)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    return env
+    return git_environment(cwd or Path.cwd(), env=env)
 
 
 def session_identity_source() -> str:

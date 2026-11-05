@@ -104,7 +104,9 @@ def _private_config_document(
                 ],
             },
         },
-        "gateway": {"local_prefixes": list(plan.nebius_prefixes)},
+        "gateway": {
+            "local_prefixes": list(plan.nebius_prefixes),
+        },
         "connections": [
             {
                 "name": plan.connection,

@@ -752,6 +752,35 @@ def _cli_access_token(
     return _parse_access_token(result.stdout)
 
 
+def inspect_service_account_and_token(
+    sa_name: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    region_id: str | None,
+) -> str:
+    """Select a complete existing IAM graph without provisioning or repairing it."""
+
+    if project_id is None or not project_id.strip():
+        raise ValueError("Service Account inspection requires project_id")
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", sa_name):
+        raise ValueError("Service Account name must be a canonical Nebius resource name")
+    plan = inspect_vm_ha_service_account_identity(
+        sa_name,
+        tenant_id,
+        project_id,
+        region_id,
+        mode="reuse",
+        expected_service_account_id=None,
+        ownership_labels={},
+        client_factory=_init_client,
+    )
+    assert plan.service_account_id is not None
+    token = _cli_access_token(timeout_seconds=60, service_account_id=plan.service_account_id)
+    if token is None:
+        raise RuntimeError("Nebius CLI could not obtain an impersonated Service Account token")
+    return token
+
+
 def ensure_service_account_and_token(
     sa_name: str,
     tenant_id: str | None,

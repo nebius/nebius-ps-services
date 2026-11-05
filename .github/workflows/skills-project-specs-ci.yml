@@ -257,7 +257,6 @@ jobs:
             implement \
             sdlc-create-requirements \
             sdlc-create-design \
-            sdlc-align-specs \
             sdlc-start \
             sdlc-prepare-execution \
             sdlc-implement-plan \
@@ -271,6 +270,12 @@ jobs:
             worktree/scripts/workflow_*.py \
             implement/scripts/test_implement_contract.py \
             implement-test/scripts/public_workflow_trial.py
+
+      - name: Validate GitHub report offline
+        run: |
+          set -euo pipefail
+          python -B github-report/scripts/test_github_report.py
+          ruff check --no-cache github-report/scripts
 
       - name: Validate Nebius capacity planning
         run: |

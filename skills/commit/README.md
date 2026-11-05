@@ -55,6 +55,10 @@ and observe a real prompt produce fresh receipt context before publication.
 The parent task's authorization can cover a call to this shared skill; users
 need not repeat a standalone commit phrase. Worktree integration delegation
 stays exact; Implement workers use their coordinator's `task-finish` owner.
+Agentic SDLC also retains its admission, branch preparation and commit owners.
+A request to run that workflow through commit and UAT does not request a
+standalone commit or require root `begin` before `sdlc-start`. The prompt hook
+states this distinction while still recording nonauthorizing turn metadata.
 An authorized unmanaged `create-pr` task
 uses its own private continuation grant for successive independently reviewed
 commits and safe failed-hook retries. The PR skill owns pushes and checks;
@@ -78,6 +82,12 @@ no-commit retries. See
   the publication skill still owns and bounds the later remote effect.
 
 ## Architecture
+
+Commit intent and transaction preparation share the trusted Git-profile
+validator for disposable SDLC fixtures. Only its exact validated configuration
+keys are exempt from the ordinary environment-override rejection. The profile
+must match the actual checkout and sealed origin; it grants no commit authority
+and cannot be reused for an unrelated repository.
 
 ```text
 Semantic root-user request and receipt binding

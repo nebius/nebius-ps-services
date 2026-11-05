@@ -430,6 +430,7 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, required, unset_on_skip
@@ -551,6 +552,7 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         nonlocal cancelled
@@ -872,6 +874,7 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -1081,6 +1084,7 @@ def test_wizard_back_inside_plain_mk8s_node_group_stays_in_group_loop(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         nonlocal add_another_count, stack_preset_back_once
@@ -1231,6 +1235,7 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         nonlocal resource_prompt_count, reservation_ids_back_once
@@ -1422,6 +1427,7 @@ def test_wizard_plain_mk8s_boot_disk_policy_errors_are_not_hidden(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -1570,6 +1576,7 @@ def test_wizard_declared_infra_field_does_not_warn_when_input_key_is_not_seeded(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -1660,6 +1667,7 @@ def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -1741,6 +1749,7 @@ def test_wizard_declared_target_observability_path_is_prompted(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -1868,6 +1877,7 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -2018,6 +2028,7 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -2315,6 +2326,7 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -2465,6 +2477,7 @@ def test_vm_preemptible_wizard_sets_required_recovery_policy(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -2557,6 +2570,7 @@ def test_vm_preemptible_wizard_hides_preemptible_fields_for_cpu_platform(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -2643,6 +2657,7 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -2737,6 +2752,7 @@ def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -2817,6 +2833,7 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -2998,6 +3015,7 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -3196,6 +3214,7 @@ def test_vm_wizard_prompts_secondary_data_disk_shape_when_enabled(monkeypatch) -
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -3399,6 +3418,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
         blank_text=None,
     ) -> tuple[object, bool]:
@@ -3570,6 +3590,7 @@ def test_vm_style_wizard_prompts_boot_disk_encryption_for_supported_disk_types(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -3714,6 +3735,7 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
         blank_text=None,
     ) -> tuple[object, bool]:
@@ -3834,6 +3856,7 @@ def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -3966,6 +3989,7 @@ def test_wizard_q_revisits_previous_flat_module_prompt(monkeypatch) -> None:
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -4084,6 +4108,7 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -4696,6 +4721,7 @@ def test_wizard_skips_empty_top_level_app_values_prompt_without_known_leaf_field
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -4802,6 +4828,7 @@ def test_wizard_prompts_optional_complex_defaults_but_keeps_them_virtual(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -4969,6 +4996,7 @@ def test_wizard_prompts_literal_component_defaults_for_custom_module_fields(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -5067,6 +5095,7 @@ def test_wizard_skips_optional_module_field_marked_prompt_false(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -5155,6 +5184,7 @@ def test_wizard_uses_declared_default_for_nested_helper_field_without_persisting
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -5348,6 +5378,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -5473,6 +5504,7 @@ def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -5613,6 +5645,7 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -5765,6 +5798,7 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -5868,6 +5902,7 @@ def test_wizard_keeps_optional_provider_field_unset_without_reprompt(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -5982,6 +6017,7 @@ def test_wizard_skips_dependent_fields_when_enabled_toggle_is_false(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -6091,6 +6127,7 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -6208,6 +6245,7 @@ def test_wizard_prompts_gpu_preset_only_after_platform_is_selected(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -6349,6 +6387,7 @@ def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -6493,6 +6532,7 @@ def test_wizard_prompts_infiniband_after_clusterable_gpu_preset(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
@@ -6652,6 +6692,7 @@ def test_wizard_skips_infiniband_for_non_clusterable_gpu_preset(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required, unset_on_skip
@@ -6798,6 +6839,7 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
         choices=None,
         type_hint=None,
         required=False,
+        show_empty_default=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip

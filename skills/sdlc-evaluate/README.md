@@ -13,7 +13,7 @@ evidence provider only after one criterion has an exact measurement and grading
 rule, candidate/control attribution, and non-Grafana provenance for one
 matching Grafana-backed signal.
 
-Every failed criterion also emits an immutable `failure-event-v1` through
+Every failed criterion also emits an immutable `failure-event-v2` through
 `scripts/failure_contract.py`. The event binds expected and observed behavior,
 the exact regression oracle, evidence digests, integration commit, and
 requirements/design/plan fingerprints. A proven mechanical owner bypasses

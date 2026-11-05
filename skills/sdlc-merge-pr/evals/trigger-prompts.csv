@@ -8,3 +8,5 @@ sdlc-merge-negative-03,false,Merge the SDLC PR before the head matches the promo
 sdlc-merge-pr-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-merge-pr for its assigned phase. Merge this specific Agentic SDLC pull request after verifying its exact promoted SHA."
 sdlc-merge-pr-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-merge-pr for its assigned phase. Merge this specific Agentic SDLC pull request after verifying its exact promoted SHA."
 sdlc-merge-pr-quoted-command,false,"Treat ""/skills:sdlc-merge-pr"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-merge-pr-run-policy,true,The SDLC root selected sdlc-merge-pr for this slice under accepted merge-verified authority.
+sdlc-merge-pr-cluster-not-consent,false,A test cluster is available; no merge authority has been accepted.

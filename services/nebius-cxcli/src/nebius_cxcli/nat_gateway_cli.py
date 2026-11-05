@@ -19,7 +19,16 @@ from .runtime_config import to_plain_data
 from .terraform_backend import backend_settings_from_config, ensure_state_bucket
 
 app = typer.Typer(
-    help="Inspect NAT routing, refresh reviewed policies, and recover interrupted ownership.",
+    short_help="Inspect routing and recover operations for configured nat-gateway components.",
+    help=(
+        "Inspect routing, refresh reviewed route policies in configuration, and recover "
+        "interrupted NAT gateway operations. Status and route refresh use enabled "
+        "infra:nat-gateway components in CONFIG_YAML. Recovery also handles retained state "
+        "for disabled or removed components and the shared project lock.\n\n"
+        "Configure a new gateway with nebius-cxcli component add infra:nat-gateway "
+        "--config CONFIG_YAML. Use the normal validate, render, and deploy workflow to "
+        "provision the gateway and apply routing changes."
+    ),
     no_args_is_help=True,
 )
 
@@ -40,7 +49,7 @@ def context(config_path: Path, *, readonly: bool = True):
 
 @app.command(
     "status",
-    epilog="Examples: nebius-cxcli nat status ./deployments/tenant/project/config.yaml | nebius-cxcli nat status ./deployments/tenant/project/config.yaml --ssh-known-hosts-file ./trusted_hosts",
+    epilog="Examples: nebius-cxcli nat-gateway status ./deployments/tenant/project/config.yaml | nebius-cxcli nat-gateway status ./deployments/tenant/project/config.yaml --ssh-known-hosts-file ./trusted_hosts",
 )
 def status(
     config_path: Annotated[
@@ -155,7 +164,7 @@ def status(
 
 @app.command(
     "refresh-routes",
-    epilog="Examples: nebius-cxcli nat refresh-routes ./deployments/tenant/project/config.yaml | nebius-cxcli nat refresh-routes ./deployments/tenant/project/config.yaml",
+    epilog="Examples: nebius-cxcli nat-gateway refresh-routes ./deployments/tenant/project/config.yaml | nebius-cxcli nat-gateway refresh-routes ./deployments/tenant/project/config.yaml",
 )
 def refresh_routes(
     config_path: Annotated[
@@ -219,7 +228,7 @@ def refresh_routes(
 
 @app.command(
     "unlock",
-    epilog="Examples: nebius-cxcli nat unlock ./deployments/tenant/project/config.yaml --owner LOCK_OWNER | nebius-cxcli nat unlock ./deployments/tenant/project/config.yaml --owner LOCK_OWNER --confirm-writers-stopped",
+    epilog="Examples: nebius-cxcli nat-gateway unlock ./deployments/tenant/project/config.yaml --owner LOCK_OWNER | nebius-cxcli nat-gateway unlock ./deployments/tenant/project/config.yaml --owner LOCK_OWNER --confirm-writers-stopped",
 )
 def unlock(
     config_path: Annotated[
@@ -229,7 +238,7 @@ def unlock(
             help="Project config.yaml; its sibling generated directory contains Terraform outputs.",
         ),
     ],
-    owner: Annotated[str, typer.Option(help="Exact lock owner reported by nat status.")],
+    owner: Annotated[str, typer.Option(help="Exact lock owner reported by nat-gateway status.")],
     confirm_writers_stopped: Annotated[
         bool,
         typer.Option(
@@ -254,7 +263,7 @@ def unlock(
 
 @app.command(
     "reconcile",
-    epilog="Examples: nebius-cxcli nat reconcile ./deployments/tenant/project/config.yaml | nebius-cxcli nat reconcile ./deployments/tenant/project/config.yaml --confirm-requests-settled",
+    epilog="Examples: nebius-cxcli nat-gateway reconcile ./deployments/tenant/project/config.yaml | nebius-cxcli nat-gateway reconcile ./deployments/tenant/project/config.yaml --confirm-requests-settled",
 )
 def reconcile(
     config_path: Annotated[
@@ -271,7 +280,7 @@ def reconcile(
         ),
     ] = False,
 ) -> None:
-    """Reconcile settled attachment and temporary probe outcomes without mutations."""
+    """Reconcile settled attachment and temporary probe outcomes without resource mutations."""
     try:
         if not confirm_requests_settled:
             raise ValueError(

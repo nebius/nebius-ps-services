@@ -89,7 +89,7 @@ class CorrectivePlanContractTests(unittest.TestCase):
             json.dumps(
                 {
                     "schema": corrective_plan.MANIFEST_SCHEMA,
-                    "feature_id": "FEAT-001",
+                    "execution_id": "FEAT-001",
                     "plan_digest": corrective_plan.sha256_bytes(
                         self.previous.read_bytes()
                     ),

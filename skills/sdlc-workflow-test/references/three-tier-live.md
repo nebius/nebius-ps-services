@@ -50,7 +50,7 @@ health checks and database readiness before the web service starts.
 
 ## Ownership and private state
 
-The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v5` under:
+The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v7` under:
 
 ```text
 <verification-root>/three-tier-live/
@@ -117,6 +117,18 @@ ownership from a name prefix alone.
    the selected isolated native home (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`,
    passed to the verifier with `--agent-home`) for accepted objective and phase state
    so destroy never targets the user's ordinary `~/.codex/sdlc-runs` tree.
+   Preparation seals one Git profile at
+   `<run-root>/.sdlc-git-environment/context.json`. Use
+   `scripts/run_with_git_environment.py --profile <owned-profile> --cwd
+   <owned-checkout> -- <native-command>` for coordinator launches. The shared
+   runtime carries this exact validated context to fresh workers. Current
+   native launch settings must also satisfy the minimal-environment and shell
+   initialization contract in [the process](three-tier-process.md#native-launch-settings).
+   Never inspect environment values to discover credentials or diagnose identity.
+   Current
+   runtime/hooks belong in the isolated native home; ordinary hooks stay intact.
+   Profile loss, tampering or a foreign checkout blocks startup, resume and
+   cleanup. A passing environment launch never counts as a completed SDLC phase.
 5. Render the fixture objective with `scripts/render_three_tier_objective.py`
    into a verifier-owned input artifact. It replaces the five scenario
    placeholders; the artifact has no workflow-managed frontmatter or identity.
@@ -135,31 +147,54 @@ ownership from a name prefix alone.
    `docker compose` commands directly. The helper fixes the project name and
    project directory, rejects file/project/scale overrides, holds the lifecycle
    lock for the action, and rejects a superseded verification ID before the
-   action begins. Read-only non-Compose Docker inspection may remain direct.
+   action begins. The supported actions are `build`, `exec`, `port`, `ps`,
+   `restart`, `start`, `stop`, and `up`; other actions, including `down` and
+   `logs`, are rejected. Worker teardown requests `stop web db` before lease
+   release, retaining the named volume. Final resource deletion belongs to the
+   lifecycle's `destroy` action. Read-only non-Compose Docker inspection may
+   remain direct after checking exact resource ownership; existing container
+   logs use that observation path with sensitive output screened.
 6. Follow the returned phase skills through requirements, context, design,
    steering, planning, execution preparation, TDD, implementation, validation,
    tests, evaluation, documents, alignment, commit, local ship, UAT, and the
    final document pass. Do not push, publish, create a PR, or merge a PR.
 7. After each phase, record a concise sanitized summary and one canonical
-   `agentic-sdlc/phase-result-v5` JSON result with `record-phase`. Bind it to
+   `agentic-sdlc/phase-result-v5` JSON result with `record-phase`. Write it at
+   the exact input path `<run-root>/evidence/phases/<phase>.json`, supplied by
+   `--evidence`; no alternate directory is accepted. The recorder alone writes
+   the immutable attempt archive. Read its installed subcommand help first.
+   Bind the result to
    the lifecycle verification ID, immutable baseline SHA, phase-time
    `recorded_head`, `objective_sha256`, the current `basis_sha256` for prepared
    phases (null before preparation), and the exact phase-specific assertion list.
+   Conditional `troubleshoot` returns `diagnosis-v3` to the classifier and is
+   not a recordable canonical phase; retain its private diagnostic evidence.
    `record-phase` retains immutable attempts; prior failures and superseded passes
    remain in the ledger. Final ingestion rechecks the admitted current attempt.
    Earlier admitted bases may cross only hash-linked owner spec reconciliation
    with no material effects, retained plan, unchanged objective and execution
-   identities, and valid Git ancestry. New phase admission remains strict;
+   identities, and valid Git ancestry. After clean promotion, the original
+   admitted TDD receipt may also cross appended corrective plans when exact
+   locked plan bytes, completed owner replan records, preserved completed task
+   definitions and assignments, and the original TDD seal prove its lineage.
+   Missing, changed, non-appending or ambiguous lineage fails closed. This
+   exception never applies to later acceptance phases. New admission stays strict;
    never rewrite earlier receipts to today's basis. Phase results
    must be private, bounded, regular, single-link files. Record the clean baseline/promoted Git
    identity, loopback endpoints, Compose-internal database endpoint, and exact
-   labelled Docker inventory. Use `--web-container` and
-   `--database-container`; the helper verifies canonical
-   `com.docker.compose.service` roles and does not infer roles from argument
-   order. Record each sanitized validation command, status, and summary with
-   `record-validation`; never persist credentials or secret-bearing arguments.
+   labelled Docker inventory through [owned runtime discovery](runtime-inventory.md).
+   Supply only route paths and optional paired worker selectors; service roles
+   and resource identities come from inspection. Record each sanitized canonical acceptance validation command, status,
+   and summary with `record-validation`; never persist credentials or
+   secret-bearing arguments. Pre-publication lint, expected TDD failures and
+   worker development checks remain in ordinary phase evidence and counted
+   repair history. Do not submit them as canonical acceptance validation.
+   Its command-text flag is `--validation-command`.
    PASS requires at least one validation record and requires every recorded
-   validation to pass. Record the clean baseline SHA before the first phase,
+   validation to pass. A recorded FAIL cannot be replaced or relabeled, including
+   when recorded by mistake; an identical replay leaves it unchanged. Repair
+   and start a fresh trial after an acceptance failure.
+   Record the clean baseline SHA before the first phase,
    then refresh `record-git` with the clean promoted SHA after final sealing.
    Earlier phase artifacts stay immutable: finalization proves each recorded
    head descends from the baseline and is an ancestor of the promoted head;
@@ -170,15 +205,17 @@ ownership from a name prefix alone.
 8. Run `run-browser-stage --stage evaluate` at evaluation, using the clean
    integration target. Run `uat-before-restart` at UAT against the promoted SHA.
    Before each of these targets is evaluated, use owned `run-compose -- build web`
-   followed by owned `up --detach` and runtime inventory recording. A clean
-   owned `up --build --detach` also records build proof. The immutable receipt
+   followed by owned `up --force-recreate --detach --wait web db` and runtime
+   inventory recording. Every startup requires that explicit shape, with order
+   variation permitted after `up`; build remains a separate action. Both services
+   are recreated while retaining the named database volume. The immutable receipt
    binds the exact checkout and SHA to the built image ID. Browser launch and
    every API/database checkpoint recheck the running web container image,
    ownership, absence of web mounts and loopback endpoint bindings. A dirty
    worker build is useful for development but cannot certify acceptance.
 9. Use generation-locked `run-compose -- restart` to restart both services,
-   retain the same volume, rediscover `port web 8000`, and refresh runtime
-   endpoints. Then run `uat-after-restart` with a new browser. The helper binds
+   retain the same volume, refresh endpoints with the owned `record-runtime` operation described in
+   [runtime inventory](runtime-inventory.md). Then run `uat-after-restart` with a new browser. The helper binds
    it to the pre-restart record and the owned restart receipt.
 10. Write the v3 semantic manifest and validate its exact headless stage,
     Git identity, API/database, restart and five-screenshot evidence. Preserve
@@ -221,8 +258,9 @@ use the declared disposable reset to establish an empty database; resets are
 fixture setup, never part of the product acceptance journey. Never reset between
 UAT stages.
 
-A failed stage remains failed and its artifacts are preserved. Correct the
-proven owner and start a new trial; no later success erases the earlier result.
+A failed browser acceptance stage remains failed and its artifacts are preserved.
+Correct the proven owner and start a new trial; no later success erases the earlier
+result.
 Resume retained application work with a fresh browser, never a retained tab.
 Laptops must remain awake with Docker and the agent running. A locked-screen
 certification additionally needs independently observed lock intervals and an
@@ -230,6 +268,11 @@ actual agent launching a new stage and collecting evidence before unlock;
 a standalone browser smoke test does not certify agent continuity.
 
 Screenshots alone never establish PASS.
+
+## Runtime inventory
+
+Follow [runtime inventory observations](runtime-inventory.md) for discovery,
+private route inputs, lease/build authority, durable diagnostics and recovery.
 
 ## Destroy workflow
 
@@ -277,7 +320,7 @@ python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> status
 python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> --expected-verification-id <id> \
-  run-compose -- up --detach
+  run-compose -- up --force-recreate --detach --wait web db
 python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> destroy
 ```
@@ -297,6 +340,14 @@ run validation on uncommitted integration work before coordinator sealing.
 Shipping and UAT always require a clean promoted checkout. After completed promotion,
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Read-only classifier observations have a separate explicit target purpose. While
+the bound root coordinator is running `sdlc-classify-failure`, it may observe
+unsealed integration files without committing them or changing phase. Exact
+worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+This purpose is never used by Compose, runtime inventory, build certification,
+browser acceptance or test execution; explicit clean-target requests still win.
+Worker selectors and dirty promoted checkouts remain rejected.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.

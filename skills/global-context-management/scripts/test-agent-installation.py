@@ -81,7 +81,7 @@ class RuntimeTests(unittest.TestCase):
                 home = base / agent
                 hooks = home / "hooks"
                 hooks.mkdir(parents=True)
-                for name in ("trusted_runtime.py", "hook_runtime.py", "task_state_permissions.py"):
+                for name in ("trusted_runtime.py", "hook_runtime.py", "task_state_permissions.py", "git_environment.py"):
                     shutil.copyfile(ROOT / "global-context-management/scripts" / name, hooks / name)
                 module = hooks / "agent_runtime.py"
                 env = {**os.environ, "HOME": str(base), "CODEX_HOME": str(base / "codex"),
@@ -246,10 +246,10 @@ class CombinedUpgradeTests(unittest.TestCase):
                 for relative, data in payload_files(ROOT).items():
                     self.assertEqual((home / "hooks" / relative).read_bytes(), data)
                 self.assertTrue(any(p.read_bytes() == original_bytes for p in home.glob("*.bak.*")))
-                snapshot = {str(p.relative_to(base)): p.read_bytes() for p in base.rglob("*") if p.is_file()}
+                snapshot = {str(p.relative_to(base)): hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob("*") if p.is_file()}
                 second = self.run_install(base, agent)
                 self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-                self.assertEqual(snapshot, {str(p.relative_to(base)): p.read_bytes() for p in base.rglob("*") if p.is_file()})
+                self.assertEqual(snapshot, {str(p.relative_to(base)): hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob("*") if p.is_file()})
 
     def test_default_rejects_custom_registration_before_any_installation(self):
         for agent in ("codex", "claude"):
@@ -733,7 +733,7 @@ class InstallationTests(unittest.TestCase):
         support = source / "global-context-management/scripts"
         support.mkdir(parents=True)
         marker = self.base / "untrusted-import"
-        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py"):
+        for name in ("agent_runtime.py", "hook_runtime.py", "trusted_runtime.py", "task_state_permissions.py", "git_environment.py"):
             (support / name).write_text("from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('executed')\n")
         hooks = source / "commit/assets/hooks"
         hooks.mkdir(parents=True)

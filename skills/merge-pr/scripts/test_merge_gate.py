@@ -2,6 +2,7 @@
 """Offline behavioral tests; never contact GitHub or mint credentials."""
 
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -109,7 +110,10 @@ class API:
         self.on_approve = None
         self.intent = None
         self.open_prs = [self.pr]
+        self.commit_prs = []
+        self.requests = []
         self.suite = {
+            "id": 50,
             "app": {"id": 15368},
             "repository": {"full_name": REPO},
             "head_sha": HEAD,
@@ -136,6 +140,7 @@ class API:
         return BASE
 
     def api(self, path, method="GET", data=None):
+        self.requests.append(path)
         if method != "GET":
             self.effects.append((path, method, copy.deepcopy(data)))
             if path.endswith("/reviews"):
@@ -154,6 +159,8 @@ class API:
             return self.intents[0]
         if path == "pulls/1":
             return copy.deepcopy(self.pr)
+        if path == "actions/runs/42":
+            return copy.deepcopy(self.runs[0])
         if path == "check-suites/50":
             return self.suite
         if path.startswith("check-suites/"):
@@ -167,6 +174,9 @@ class API:
         raise AssertionError(path)
 
     def pages(self, path, key=None):
+        self.requests.append(path)
+        if path == f"commits/{HEAD}/pulls":
+            return self.commit_prs
         if path.startswith("pulls?state=open&"):
             return self.open_prs
         if path == "actions/runs/100/artifacts":
@@ -471,6 +481,180 @@ class MergeTests(unittest.TestCase):
         with self.assertRaises(gate.Pending):
             gate.checks_ready(self.api, self.api.pr, self.api.files, POLICY)
 
+    def fork_ci(self):
+        self.api.pr["head"]["repo"]["full_name"] = "contributor/fork"
+        self.api.pr["head"]["ref"] = "fix/ci-status"
+        self.api.runs[0]["head_repository"]["full_name"] = "contributor/fork"
+        self.api.runs[0]["head_branch"] = "fix/ci-status"
+        self.api.runs[0]["pull_requests"] = []
+        self.api.suite["head_branch"] = "fix/ci-status"
+        original = self.api.pages
+
+        def scoped_pages(path, key=None):
+            if path.startswith("pulls?state=open"):
+                self.assertEqual(
+                    path, "pulls?state=open&head=contributor%3Afix%2Fci-status"
+                )
+            return original(path, key)
+
+        self.pages_patch = patch.object(self.api, "pages", side_effect=scoped_pages)
+        self.pages_patch.start()
+        self.addCleanup(self.pages_patch.stop)
+
+    def ci_run_targets(self):
+        self.diagnostics = io.StringIO()
+        with (
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run"}),
+            patch("sys.stderr", self.diagnostics),
+        ):
+            return gate.ci_targets(self.api, {"workflow_run": {"id": 42}}, POLICY)
+
+    def test_ci_targets_resolve_fork_when_both_associations_are_empty(self):
+        self.fork_ci()
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(self.ci_run_targets(), [{"pr": 1, "head": HEAD}])
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(self.api.requests.count(f"commits/{HEAD}/pulls"), 1)
+        self.assertEqual(
+            self.api.requests.count(
+                "pulls?state=open&head=contributor%3Afix%2Fci-status"
+            ),
+            1,
+        )
+        self.assertIn("fork-head", self.diagnostics.getvalue())
+        self.assertIn("run=42", self.diagnostics.getvalue())
+        self.assertIn("pr=1", self.diagnostics.getvalue())
+        self.assertFalse(self.api.effects)
+
+    def test_fork_discovery_to_publication_and_same_head_rerun(self):
+        self.fork_ci()
+        self.api.statuses[0]["state"] = "pending"
+        for attempt, status, conclusion, expected in (
+            (1, "completed", "success", "success"),
+            (2, "in_progress", None, "pending"),
+            (2, "completed", "success", "success"),
+            (3, "completed", "failure", "failure"),
+        ):
+            with self.subTest(attempt=attempt, status=status):
+                self.api.runs[0].update(
+                    run_attempt=attempt, status=status, conclusion=conclusion
+                )
+                targets = self.ci_run_targets()
+                self.assertEqual(targets, [{"pr": 1, "head": HEAD}])
+                target = targets[0]
+                result = gate.publish_ci(self.api, target["pr"], target["head"], POLICY)
+                self.assertEqual(result["state"], expected)
+                self.assertEqual(
+                    self.api.effects[-1][0:2], (f"statuses/{HEAD}", "POST")
+                )
+                self.api.statuses[0]["state"] = expected
+        self.assertEqual(len(self.api.effects), 4)
+        gate.publish_ci(self.api, 1, HEAD, POLICY)
+        self.assertEqual(len(self.api.effects), 4)
+
+    def test_ci_commit_association_keeps_existing_fast_path(self):
+        self.api.runs[0]["pull_requests"] = []
+        self.api.commit_prs = [{"number": 1}]
+        self.assertEqual(self.ci_run_targets(), [{"pr": 1, "head": HEAD}])
+        self.assertFalse(
+            any(p.startswith("pulls?state=open") for p in self.api.requests)
+        )
+        self.assertFalse(self.api.effects)
+
+    def test_fork_discovery_ignores_stale_or_ineligible_candidates(self):
+        self.fork_ci()
+        pr, run = self.api.pr, self.api.runs[0]
+        cases = [
+            (pr, "state", "closed"),
+            (pr["base"], "ref", "release"),
+            (pr["base"]["repo"], "full_name", "other/project"),
+            (pr["head"], "sha", BASE),
+            (pr["head"], "ref", "new-branch"),
+            (pr["head"]["repo"], "full_name", "contributor/other-fork"),
+            (pr["head"], "repo", None),
+            (pr, "created_at", "2026-01-02T00:00:00Z"),
+            (run, "head_repository", None),
+            (run, "head_repository", {"full_name": REPO}),
+        ]
+        for obj, key, value in cases:
+            with self.subTest(key=key, value=value):
+                before = obj[key]
+                obj[key] = value
+                try:
+                    self.assertEqual(self.ci_run_targets(), [])
+                    self.assertIn("no-current-match", self.diagnostics.getvalue())
+                    self.assertFalse(self.api.effects)
+                finally:
+                    obj[key] = before
+        self.api.open_prs = []
+        self.assertEqual(self.ci_run_targets(), [])
+
+    def test_fork_discovery_rejects_ambiguity_before_base_filtering(self):
+        self.fork_ci()
+        second = copy.deepcopy(self.api.pr)
+        second["number"] = 2
+        second["base"]["ref"] = "release"
+        self.api.open_prs.append(second)
+        with self.assertRaisesRegex(gate.Blocked, "Ambiguous"):
+            self.ci_run_targets()
+        self.assertFalse(gate.run_matches_pr(self.api, self.api.runs[0], self.api.pr))
+        self.assertFalse(self.api.effects)
+
+    def test_fork_discovery_rejects_invalid_producer_and_suite(self):
+        self.fork_ci()
+        run, suite = self.api.runs[0], self.api.suite
+        cases = [
+            (run, "head_repository", {}),
+            (run, "head_repository", {"full_name": "invalid\nmetadata"}),
+            (run, "repository", {"full_name": "other/project"}),
+            (run, "head_branch", None),
+            (run, "head_sha", None),
+            (run, "created_at", "invalid-date"),
+            (run, "check_suite_id", True),
+            (suite, "id", 51),
+            (suite, "app", {"id": 999}),
+            (suite, "repository", {"full_name": "other/project"}),
+            (suite, "head_sha", BASE),
+            (suite, "head_branch", "other-branch"),
+            (suite, "app", None),
+        ]
+        for obj, key, value in cases:
+            with self.subTest(key=key, value=value):
+                before = obj[key]
+                obj[key] = value
+                try:
+                    with self.assertRaises(gate.Blocked):
+                        self.ci_run_targets()
+                    self.assertFalse(gate.run_matches_pr(self.api, run, self.api.pr))
+                    self.assertNotIn("invalid\nmetadata", self.diagnostics.getvalue())
+                    self.assertFalse(self.api.effects)
+                finally:
+                    obj[key] = before
+
+    def test_fork_discovery_api_failure_is_not_empty_or_false(self):
+        self.fork_ci()
+        original = self.api.pages
+
+        def incomplete(path, key=None):
+            if path.startswith("pulls?state=open"):
+                raise gate.ApiFailure("Incomplete paginated response")
+            return original(path, key)
+
+        with patch.object(self.api, "pages", side_effect=incomplete):
+            with self.assertRaises(gate.ApiFailure):
+                self.ci_run_targets()
+            with self.assertRaises(gate.ApiFailure):
+                gate.run_matches_pr(self.api, self.api.runs[0], self.api.pr)
+        self.assertFalse(self.api.effects)
+
+    def test_fork_publication_rechecks_head_after_discovery(self):
+        self.fork_ci()
+        target = self.ci_run_targets()[0]
+        self.api.pr["head"]["sha"] = BASE
+        with self.assertRaisesRegex(gate.Blocked, "CI target drift"):
+            gate.publish_ci(self.api, target["pr"], target["head"], POLICY)
+        self.assertFalse(self.api.effects)
+
     def test_missing_or_changed_intent_prevents_effects(self):
         self.api.intents = []
         with self.assertRaises(gate.Pending):
@@ -557,6 +741,46 @@ class MergeTests(unittest.TestCase):
         with self.assertRaises(gate.Blocked):
             self.execute()
         self.assertEqual(len(self.api.effects), 1)
+
+    def sdlc_policy(self):
+        policy = {**POLICY, "sdlc_contract": "workflow/sdlc-delivery-v1"}
+        value = evidence()
+        value["sdlc"] = {
+            "schema": "workflow/sdlc-delivery-v1", "execution_id": "SLICE-001",
+            "objective_sha256": "1" * 64, "basis_sha256": "2" * 64,
+            "qualification_sha256": "3" * 64, "live": True, "criteria": ["AC-001"],
+            "candidate": {"head": HEAD, "artifact_sha256": "4" * 64,
+                          "configuration_sha256": "5" * 64},
+        }
+        self.api.review["body"] = json.dumps(value)
+        self.api.intent = gate.admitted_intent(self.api, 1, HEAD, 10, "squash", policy)
+        return policy
+
+    def test_intent_uses_the_review_validated_by_its_snapshot(self):
+        policy = self.sdlc_policy()
+        self.api.requests.clear()
+        intent = gate.admitted_intent(self.api, 1, HEAD, 10, "squash", policy)
+        self.assertEqual(intent["sdlc"], json.loads(self.api.review["body"])["sdlc"])
+        self.assertEqual(self.api.requests.count("pulls/1/reviews/10"), 1)
+
+    def test_sdlc_evidence_change_after_approval_blocks_merge(self):
+        for mutation in ("qualification", "remove"):
+            with self.subTest(mutation=mutation):
+                self.api = API()
+                policy = self.sdlc_policy()
+
+                def change_review(api):
+                    value = json.loads(api.review["body"])
+                    if mutation == "remove":
+                        del value["sdlc"]
+                    else:
+                        value["sdlc"]["qualification_sha256"] = "6" * 64
+                    api.review["body"] = json.dumps(value)
+
+                self.api.on_approve = change_review
+                with self.assertRaisesRegex(gate.Blocked, "SDLC.*changed"):
+                    gate.execute(self.api, 1, HEAD, 10, "squash", policy)
+                self.assertEqual(len(self.api.effects), 1)
 
     def test_head_advance_after_approval_blocks_merge(self):
         self.api.on_approve = lambda api: api.pr["head"].update(sha="c" * 40)

@@ -57,7 +57,7 @@ def normalize_evaluation_failure(payload: dict[str, Any]) -> dict[str, Any]:
     repair_control = _load_repair_control()
     event_payload = {
         "schema": repair_control.FAILURE_EVENT_SCHEMA,
-        "feature_id": payload.get("feature_id"),
+        "execution_id": payload.get("execution_id"),
         "phase": "evaluation",
         "criterion_id": payload.get("criterion_id"),
         "expected": payload.get("expected"),

@@ -39,9 +39,16 @@ manually declare labels in Docker's reserved `com.docker.compose` namespace.
   `runtime:sdlc-three-tier-{{VERIFICATION_ID}}` as a conflict domain. The assigned
   worker acquires its runtime lease before requesting the outer verifier's
   Compose actions and releases it after the complete live-test sequence and
-  owned runtime teardown. The verifier consumes the exact active lease under
+  owned runtime teardown using `stop web db`, retaining the named volume.
+  Final resource deletion belongs to lifecycle cleanup; `down` is not an
+  admitted worker action. The verifier consumes the exact active lease under
   workflow/resource locks; it never acquires or releases on the worker's behalf.
-  A detached `up` command completing does not end the lease.
+  Every startup request must use
+  `up --force-recreate --detach --wait web db`; request `build web` separately.
+  The helper rejects other startup shapes. Recreate both services while retaining
+  the named database volume, then rediscover endpoints and resource identities.
+  Startup completion does not end the lease. The UAT restart remains a separate
+  owned action and must preserve the existing volume and task data.
 - Bind a Docker-assigned web port to loopback only; never publish PostgreSQL.
 - Generate database credentials in a private mode-0600 environment file under
   `{{PRIVATE_ROOT}}`; inject it through environment and never commit or print it.
@@ -109,8 +116,9 @@ use the declared disposable reset to establish an empty database; resets are
 fixture setup, never part of the product acceptance journey. Never reset between
 UAT stages.
 
-A failed stage remains failed and its artifacts are preserved. Correct the
-proven owner and start a new trial; no later success erases the earlier result.
+A failed browser acceptance stage remains failed and its artifacts are preserved.
+Correct the proven owner and start a new trial; no later success erases the earlier
+result.
 Resume retained application work with a fresh browser, never a retained tab.
 Laptops must remain awake with Docker and the agent running. A locked-screen
 certification additionally needs independently observed lock intervals and an

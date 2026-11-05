@@ -72,6 +72,21 @@ def _duplicate_site_1_apipa(second_connection: dict) -> None:
     second_connection["tunnels"][0]["inner_remote_ip"] = "169.254.10.2"
 
 
+def test_schema_rejects_equivalent_inner_network_on_same_instance(sample_config):
+    cfg = _base_bgp_config(sample_config)
+    second = _second_connection()
+    second["tunnels"][0].update(
+        inner_cidr="169.254.10.1/30",
+        inner_local_ip="169.254.10.2",
+        inner_remote_ip="169.254.10.1",
+    )
+    cfg["connections"].append(second)
+    with pytest.raises(ValueError, match="inner_cidr must be unique per gateway instance"):
+        validate_config(cfg)
+    cfg["connections"].pop(0)
+    assert validate_config(cfg).connections[0].tunnels[0].inner_cidr == "169.254.10.1/30"
+
+
 def _enable_vm_ha(cfg: dict) -> None:
     cfg["gateway_group"]["instance_count"] = 2
     cfg["gateway_group"]["external_ips"] = [["203.0.113.10"], ["203.0.113.20"]]
