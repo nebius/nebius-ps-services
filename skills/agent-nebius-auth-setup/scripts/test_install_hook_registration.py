@@ -908,7 +908,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
         self.assertIn(
-            "Summary: files updated 0, unchanged 27; registrations unchanged 11",
+            "Summary: files updated 0, unchanged 28; registrations unchanged 11",
             second.stdout,
         )
         self.assertTrue(
@@ -1115,10 +1115,15 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             "hook_runtime.py",
             "trusted_runtime.py",
             "task_state_permissions.py",
+            "git_environment.py",
         ):
             self.assertTrue(self.installed_hook_target(name).is_file())
+            self.assertEqual(
+                self.file_sha256(self.installed_hook_target(name)),
+                self.file_sha256(self.repo_root / "global-context-management/scripts" / name),
+            )
         self.assertIn(
-            "Summary: files updated 0, unchanged 7; registrations unchanged 1",
+            "Summary: files updated 0, unchanged 8; registrations unchanged 1",
             second.stdout,
         )
         self.assertNotIn(

@@ -14,6 +14,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Keep HA safety CI selectors aligned with the retained-identity regression and
+  verify that every explicitly selected safety test exists.
+
 - Validate final replacement cloud-init for every ordinary/HA member during
   inspection and again before preparation effects, including resume. Oversized
   preserved SSH authorization cannot reserve a source or create candidate resources.

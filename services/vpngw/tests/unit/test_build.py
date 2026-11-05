@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import shlex
 from pathlib import Path
 from unittest.mock import Mock
@@ -18,7 +19,7 @@ VM_HA_SAFETY_NODES = (
     "tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key",
     "tests/unit/test_cli_helpers.py::test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes",
     "tests/unit/test_cli_helpers.py::"
-    "test_vm_ha_apply_treats_lifecycle_bound_missing_compute_as_retained",
+    "test_vm_ha_apply_retains_lifecycle_identity_before_replacement",
     "tests/unit/test_vm_manager_allocations.py::"
     "test_vm_ha_ssh_compute_reread_uses_bounded_request_policy",
     "tests/unit/test_ssh_policy.py::test_required_vm_ha_trust_rejects_missing_enrollment",
@@ -104,6 +105,11 @@ def test_pull_request_ci_selects_vm_ha_safety_regressions_exactly_once() -> None
     for node in VM_HA_SAFETY_NODES:
         assert safety_run.count(node) == 1
         assert f"--deselect={node}" in unit_run
+        filename, function = node.split("::")
+        module = ast.parse((repo_root / "services/vpngw" / filename).read_text(encoding="utf-8"))
+        assert function in {
+            item.name for item in module.body if isinstance(item, ast.FunctionDef)
+        }, f"CI safety selector does not name an existing test: {node}"
 
     manual_run = next(
         step["run"]

@@ -72,12 +72,17 @@ class CommitContractTest(unittest.TestCase):
             self.assertIn(required, readme)
 
     def test_implement_preserves_dirty_source_and_coordinator_commit_ownership(self) -> None:
-        task_skill = self.text("implement/SKILL.md")
+        task_skill = " ".join(self.text("implement/SKILL.md").split())
         for required in (
             "execute committed history and block if the task depends",
-            "on uncommitted content",
+            "on uncommitted product/spec content",
+            "Never copy source dirt into a worker",
+            "Only an `implemented` result may proceed after native termination",
             "coordinator finishes through the shared owner",
             "transaction for one direct-child commit",
+            "`task-result --result <private-json> --termination <observation>`",
+            "`task-finish --receipt`",
+            "Never project summary, validation or review into a second completion path",
             "Source drift retains the verified result",
         ):
             self.assertIn(required, task_skill)

@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Align commit contract checks with Implement's documented dirty-source boundary,
+  native termination, typed result ingestion and coordinator-owned commit receipt.
+  Include the shared Git environment module in hook installation expectations.
+
 - Carry accepted issue plans through optional typed Implement objective metadata,
   sealed per-issue validation and an immutable local-delivery receipt. Authorized
   PR work refreshes current-head evidence, verifies concise comments and renders

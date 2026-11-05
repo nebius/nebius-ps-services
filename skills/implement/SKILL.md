@@ -156,8 +156,9 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    Task-start is the first transition
    after immediate Git identity inspection.
 7. Workers implement only their claims, validate and use code-review. Only an
-   `implemented` result may proceed after native termination through the shared owner
-   transaction for one direct-child commit. Ingest the full result using
+   `implemented` result may proceed after native termination; the coordinator
+   finishes through the shared owner transaction for one direct-child commit.
+   Ingest the full result using
    `task-result --result <private-json> --termination <observation>`; pass its
    canonical receipt to `task-finish --receipt`, with the termination observation
    and commit message. Never project summary, validation or review into a second
