@@ -158,6 +158,14 @@ or grant publication/merge authority from a plan or receipt.
 - Do not modify files, create commits, rebase branches, or push branch updates;
   use `review-pr` or `create-pr` for those jobs.
 
+## Review Workspace Boundary
+
+Every nested review preserves the caller checkout, index, files and local refs.
+Read the `private-review` reference from the installed create-pr skill before
+checkout-dependent review or repair. Carry the original grant and returned
+execution manifest through repair/publication handoffs; never require local
+adoption of a repaired PR head. Parent effects retain their separate authority.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

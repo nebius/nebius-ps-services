@@ -22,7 +22,26 @@ def review_owner():
     return module
 
 
-def reconcile_pr(value, github, git, *, expected_head, head, review_id):
+def execution_proof(value, *, review_task, head=None, ancestor=None):
+    """Consume canonical private execution evidence without changing release scope."""
+    if not review_task:
+        raise ReleaseError("Private review execution evidence is required for repaired PR heads")
+    path = Path(__file__).resolve().parents[2] / "commit/scripts/commit_transaction.py"
+    if not path.is_file():
+        raise ReleaseError("Install the canonical commit owner before reconciliation")
+    spec = importlib.util.spec_from_file_location("release_commit_owner", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        return module.verify_review_execution(
+            review_task, source_root=value["scope"]["root"], branch=value["branch"],
+            head=head, repository=value["scope"]["repo"], pr=value["pr"], ancestor=ancestor,
+        )
+    except (module.TransactionError, module._pr.PublicationError, OSError, ValueError) as error:
+        raise ReleaseError("Private review execution proof is unavailable or stale") from error
+
+
+def reconcile_pr(value, github, git, *, expected_head, head, review_id, review_task):
     """Return a new checkpoint only after exact, read-only reconciliation."""
     if (
         not expected_head
@@ -47,20 +66,19 @@ def reconcile_pr(value, github, git, *, expected_head, head, review_id):
     history = value.get("head_reconciliations", [])
     if not isinstance(history, list) or len(history) >= 100:
         raise ReleaseError("Reconciliation history requires owner inspection")
-    root = Path(value["scope"]["root"])
+    root = Path(execution_proof(value, review_task=review_task, head=head)["repo_root"])
 
     def checkout():
+        proof = execution_proof(value, review_task=review_task, head=head, ancestor=expected_head)
         if (
-            git(root, "branch", "--show-current") != value["branch"]
-            or git(root, "rev-parse", "HEAD") != head
-            or git(root, "status", "--porcelain")
+            proof["repo_root"] != str(root)
+            or proof["head"] != head
         ):
             raise ReleaseError(
-                "Reconciliation requires the clean active checkout at the reviewed head"
+                "Reconciliation requires the clean registered private checkout at the reviewed head"
             )
 
     checkout()
-    git(root, "merge-base", "--is-ancestor", expected_head, head)
     if github.tag(value["tag"]) != (None, None):
         raise ReleaseError("A remote release tag prevents head reconciliation")
     owner = review_owner()

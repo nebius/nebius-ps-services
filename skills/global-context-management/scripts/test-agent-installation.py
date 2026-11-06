@@ -672,13 +672,146 @@ class InstallationTests(unittest.TestCase):
                 command("complete-checkout", "--mode", "record-merge", "--merged-target", "remote-pr", "--result-sha", merged)
                 command("complete-checkout", "--mode", "finalize")
                 closure = command("finish", "--outcome", "completed")
-                self.assertEqual(closure["schema"], "commit-transaction.task-closure.v3")
+                self.assertEqual(closure["schema"], "commit-transaction.task-closure.v4")
                 self.assertEqual(git("branch", "--show-current"), "feature")
                 self.assertEqual(git("rev-parse", "feature"), merged)
                 self.assertEqual(git("rev-parse", "trunk"), merged)
                 self.assertEqual(git("for-each-ref", "--format=%(refname)", "refs/heads/remote-pr"), "")
                 self.assertEqual(git("status", "--porcelain"), "")
                 command("complete-checkout", "--mode", "finalize", expected=2)
+
+    def test_installed_private_review_on_both_hosts(self):
+        """Native receipt plus installed owner, real Git and mocked GitHub identity."""
+        program = r"""
+import contextlib, hashlib, importlib.machinery, importlib.util, io, json, os, pathlib, shlex, shutil, subprocess, sys
+from unittest import mock
+catalog, source, remote, session = map(str, sys.argv[1:])
+source, remote = pathlib.Path(source), pathlib.Path(remote)
+# The fixture owns the Git configuration, independent of operator LFS/filter setup.
+test_bin = source.parent / ('git-bin-' + source.name); test_bin.mkdir()
+(test_bin/'git').write_text('#!/bin/sh\nexec env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null '
+                            + shlex.quote(shutil.which('git')) + ' "$@"\n')
+(test_bin/'git').chmod(0o700)
+os.environ['PATH'] = str(test_bin) + os.pathsep + os.environ['PATH']
+def git(root, *args):
+    return subprocess.run(['git','-C',str(root),*args],check=True,capture_output=True,text=True).stdout.strip()
+source.mkdir()
+git(source,'init','-b','trunk')
+git(source,'config','user.name','Fixture')
+git(source,'config','user.email','fixture@example.com')
+(source/'tracked.txt').write_text('baseline\n')
+git(source,'add','-A'); git(source,'commit','-m','baseline')
+base = git(source,'rev-parse','HEAD')
+git(source,'init','--bare',str(remote)); git(source,'remote','add','origin',str(remote))
+git(source,'push','origin','trunk'); git(source,'switch','-c','topic')
+(source/'contribution.txt').write_text('PR\n')
+git(source,'add','-A'); git(source,'commit','-m','PR'); git(source,'push','origin','topic')
+head = git(source,'rev-parse','HEAD')
+git(source,'symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/trunk')
+git(source,'switch','-c','working',base)
+agent = os.environ['SKILLS_AGENT']
+home = pathlib.Path(os.environ['CODEX_HOME' if agent=='codex' else 'CLAUDE_CONFIG_DIR'])
+native_key = 'CODEX_THREAD_ID' if agent=='codex' else 'SKILLS_SESSION_ID'
+os.environ[native_key] = session
+payload={'hook_event_name':'UserPromptSubmit','cwd':str(source),'session_id':session,
+         'turn_id' if agent=='codex' else 'prompt_id':'550e8400-e29b-41d4-a716-446655440000',
+         'prompt':'Review the selected PR and repair safe issues'}
+r=subprocess.run([sys.executable,'-B',str(home/'hooks/hook_runtime.py'),'--agent',agent,'--hook','commit_intent.py'],
+                 input=json.dumps(payload),capture_output=True,text=True,check=True)
+assert 'Commit intent receipt only' in r.stdout
+spec=importlib.util.spec_from_file_location('installed_review_owner',pathlib.Path(catalog)/'commit/scripts/commit_transaction.py')
+tx=importlib.util.module_from_spec(spec); spec.loader.exec_module(tx)
+tx._pr.repository_url=lambda name:str(remote)
+def api(route):
+    if route=='repos/org/base': return {'id':1,'default_branch':'trunk','permissions':{'push':True}}
+    if route=='repos/org/base/pulls/7':
+        return {'number':7,'state':'open','merged':False,'maintainer_can_modify':True,
+                'base':{'ref':'trunk','sha':base,'repo':{'id':1,'full_name':'org/base'}},
+                'head':{'ref':'topic','sha':git(remote,'rev-parse','topic'),'repo':{'id':1,'full_name':'org/base'}}}
+    raise AssertionError(route)
+tx._pr.api=api
+receipt=tx.expected_authorization_path(source,session).with_name('intent.json')
+digest=hashlib.sha256(receipt.read_bytes()).hexdigest()
+selectors=source.parent/'selectors.json'; selectors.write_text(json.dumps({'refs/heads/topic':{'repository':'org/base','number':7}}))
+(source/'user.txt').write_text('staged user work\n');git(source,'add','user.txt')
+(source/'untracked.txt').write_text('keep\n')
+before=(git(source,'symbolic-ref','HEAD'),git(source,'show-ref'),(source/'.git/index').read_bytes())
+def call(action, root, *extra):
+    args=[action,'--repo-root',str(root),'--session-id',session]
+    if action!='execute':args+=['--requested-action','create-pr','--intent-sha256',digest]
+    out=io.StringIO()
+    with contextlib.redirect_stdout(out): code=tx.main(args+list(extra))
+    assert code==0,out.getvalue()
+    return json.loads(out.getvalue())
+# Installed ordinary reviews must tolerate inert operator LFS declarations.
+lfs_sentinel=source.parent/('lfs-executed-'+source.name)
+lfs_policy=source.parent/('lfs-policy-'+source.name)
+lfs_policy.write_text('[filter "lfs"]\n clean = touch '+str(lfs_sentinel)+'\n smudge = touch '+str(lfs_sentinel)+'\n process = touch '+str(lfs_sentinel)+'\n required = true\n')
+wrapper=test_bin/'git'
+wrapper.write_text(wrapper.read_text().replace('GIT_CONFIG_GLOBAL=/dev/null','GIT_CONFIG_GLOBAL='+shlex.quote(str(lfs_policy))))
+context=call('begin-review',source,'--pr-base','trunk','--target','topic','--pr-bindings',str(selectors))['executions']['refs/heads/topic']
+root=pathlib.Path(context['repo_root'])
+assert root.is_relative_to(home/'review-workspaces')
+(root/'repair.txt').write_text('repair\n')
+prepared=call('prepare',root,'--authorization',context['authorization'],'--claim',context['claims']['refs/heads/topic'])
+committed=call('execute',root,'--claim',prepared['claim'],'--token',prepared['token'],'--reviewed-tree',prepared['candidate_tree'],'--message','repair')
+call('publish-target',root,'--branch','topic','--reviewed-head',committed['commit'],'--reviewed-base',base)
+# Exercise the installed release consumer and its actual dynamic owner loader.
+# Only GitHub transport is replaced; native session and manifest proof stay real.
+sys.path.insert(0,str(pathlib.Path(catalog)/'publish-release/scripts'))
+import release_reconcile
+original_exec = importlib.machinery.SourceFileLoader.exec_module
+def fixture_github(loader, module):
+    original_exec(loader, module)
+    if module.__name__=='release_commit_owner':
+        module._pr.api=api
+        module._pr.repository_url=lambda name:str(remote)
+release={'scope':{'root':str(source),'repo':'org/base'},'branch':'topic','pr':7}
+with mock.patch.object(importlib.machinery.SourceFileLoader,'exec_module',fixture_github):
+    proof=release_reconcile.execution_proof(release,review_task=context['task'],head=committed['commit'],ancestor=head)
+    assert proof['repo_root']==str(root) and proof['head']==committed['commit']
+    attributes=root/'.git/info/attributes'
+    attributes.parent.mkdir(exist_ok=True)
+    attributes.write_text('*.txt filter=lfs\n')
+    try:
+        release_reconcile.execution_proof(release,review_task=context['task'],head=committed['commit'],ancestor=head)
+    except release_reconcile.ReleaseError:
+        pass
+    else:
+        raise AssertionError('release accepted newly active LFS attributes')
+    assert not lfs_sentinel.exists()
+    attributes.unlink()  # Independent fixture teardown, never product recovery.
+    os.environ[native_key]=session+'-unrelated'
+    try:
+        release_reconcile.execution_proof(release,review_task=context['task'],head=committed['commit'])
+    except release_reconcile.ReleaseError:
+        pass
+    else:
+        raise AssertionError('release accepted another native session')
+    finally:
+        os.environ[native_key]=session
+(source/'user.txt').write_text('continued editing\n')
+call('complete-checkout',source,'--mode','finalize'); call('finish',source,'--outcome','completed')
+call('cleanup-review',source,'--branch','topic')
+assert not root.exists()
+assert before==(git(source,'symbolic-ref','HEAD'),git(source,'show-ref'),(source/'.git/index').read_bytes())
+assert (source/'user.txt').read_text()=='continued editing\n'
+assert (source/'untracked.txt').read_text()=='keep\n'
+print(json.dumps({'status':'PASS','agent':agent}))
+"""
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                catalog = self.base / ("home/.agents/skills" if agent == "codex" else "claude/skills")
+                env = {**self.env, "SKILLS_AGENT": agent, "PYTHONDONTWRITEBYTECODE": "1"}
+                env.pop("CODEX_THREAD_ID", None)
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", program, str(catalog),
+                     str(self.base / ("private-review-" + agent)),
+                     str(self.base / ("review-remote-" + agent + ".git")), "review-" + agent],
+                    env=env, capture_output=True, text=True, timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout)["status"], "PASS")
 
     def test_every_claude_hook_entrypoint_runs_from_installed_payloads(self):
         hooks = {

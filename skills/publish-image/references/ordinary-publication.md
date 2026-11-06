@@ -57,3 +57,12 @@ completion. The publication owner invokes `complete-checkout --mode finalize`
 and closes only at its selected boundary. Timeouts retain the grant; merged
 continuations only observe the existing result, never repair or merge again.
 See create-pr's [checkout completion](../../create-pr/references/checkout-completion.md).
+
+## Private review handoff
+
+Read [private review execution](../../create-pr/references/private-review.md) before
+checkout-dependent review. Retain the original grant and returned execution
+manifest with exact head/base/publication evidence. Verify repaired heads in that
+registered private repository; never import them into the caller or infer them
+from its stale local ref. Publication preparation and exact-result tag checkouts
+retain their own separately authorized boundaries.

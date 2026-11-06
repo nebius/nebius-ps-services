@@ -136,13 +136,19 @@ class CommitContractTest(unittest.TestCase):
             "remote-only",
         ):
             self.assertIn(required, contract)
-        for skill in ("create-pr", "review-pr", "merge-pr"):
+        for skill in ("create-pr", "merge-pr"):
             self.assertIn(
                 "checkout-completion",
                 self.text(f"{skill}/SKILL.md").replace(
                     "checkout completion", "checkout-completion"
                 ),
             )
+        review = self.text("review-pr/SKILL.md")
+        self.assertIn("private-review", review)
+        self.assertIn("caller checkout, index, files and local refs untouched", review)
+        private = self.text("create-pr/references/private-review.md")
+        for action in ("begin-review", "open-review", "review-context", "cleanup-review"):
+            self.assertIn(action, private)
         for skill, ref in (
             ("publish-release", "orchestration"),
             ("publish-helm", "ordinary-publication"),

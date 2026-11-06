@@ -85,10 +85,19 @@ uses nested read-only code-review for complete frozen diff analysis, supplemente
 by matching specialists. Same-operation exact-head/base analysis may be reused,
 but GitHub state and objections are always refreshed.
 
-### Local checkout completion
+### Private review execution
 
-The canonical commit transaction owns safe target checkout and outer completion.
-See [the completion contract](../create-pr/references/checkout-completion.md) for
-review switch-back, create-only behavior, verified-result fast-forwards, resumed
-work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
-are reported independently. No public skill flags are added.
+Executable Git hooks, non-LFS filters, fsmonitor commands and external diff/merge
+drivers remain blocked. Unused global LFS configuration is safe to retain:
+private Git commands disable its executables. Actual LFS-managed files stop with
+a clear unsupported-content diagnostic; full LFS support is deferred.
+
+Every standalone or nested review leaves the caller branch, index, files and
+local refs untouched. Metadata-only review needs no checkout. Checkout-dependent
+review and safe repairs run in an independent owner-bound private repository.
+Repairs may advance the existing remote PR; your local branch stays unchanged
+until you update it yourself. Concurrent edits remain your work.
+
+The [private execution contract](../create-pr/references/private-review.md) defines
+allocation, original authority, recovery and safe cleanup. Candidate tests still
+need restricted execution separate from trusted controls. No public flags change.

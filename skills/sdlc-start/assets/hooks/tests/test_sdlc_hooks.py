@@ -1057,7 +1057,8 @@ class HookTestCase(unittest.TestCase):
         self.switch_feature()
         self.active_run()
         for action in ("begin", "prepare", "execute", "review", "sync", "validate-order", "finish",
-                       "checkout-target", "complete-checkout", "publish-target"):
+                       "checkout-target", "complete-checkout", "publish-target",
+                       "begin-review", "open-review", "review-context", "cleanup-review"):
             command = (
                 "python3 /Users/example/.agents/skills/commit/scripts/"
                 f"commit_transaction.py {action} --private canonical"

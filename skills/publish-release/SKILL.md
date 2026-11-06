@@ -203,6 +203,14 @@ expected assets. Partial modes, no-wait and timeouts must report their actual
 checkpoint and exact next action. Distinguish source tests, installed/native
 behavior and live publication evidence.
 
+## Review Workspace Boundary
+
+Every nested review preserves the caller checkout, index, files and local refs.
+Read the `private-review` reference from the installed create-pr skill before
+checkout-dependent review or repair. Carry the original grant and returned
+execution manifest through repair/publication handoffs; never require local
+adoption of a repaired PR head. Parent effects retain their separate authority.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

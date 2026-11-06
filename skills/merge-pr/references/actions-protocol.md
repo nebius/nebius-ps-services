@@ -181,8 +181,9 @@ blockers. Do not delete old credentials as part of migration.
 ### Coordinated schema cutover
 
 Review and intent v2 require separate numeric base/head repository identities,
-head ref and contribution/spec assessments. Task/checkpoint/closure v3 adds bound
-PR publication. Old schemas fail closed; there is no compatibility reader.
+head ref and contribution/spec assessments. Task/checkpoint/closure v4 retains bound
+PR publication and adds private review execution under the original owner.
+Review and intent remain v2. Old schemas fail closed; there is no compatibility reader.
 Before activation, stop new old-version admissions, settle outstanding pushes
 and completed merges with the old trusted helpers, drain open grants/intents,
 and prove old broker/completion runs quiescent. Then use a protected maintainer

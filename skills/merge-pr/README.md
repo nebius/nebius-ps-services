@@ -142,7 +142,7 @@ and recover already-authorized completion.
 
 The canonical commit transaction owns safe target checkout and outer completion.
 See [the completion contract](../create-pr/references/checkout-completion.md) for
-review switch-back, create-only behavior, verified-result fast-forwards, resumed
+private review execution, parent create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
 

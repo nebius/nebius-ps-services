@@ -20,8 +20,8 @@ so a later review preserves the earlier local branch. Resolve the numeric base I
 from GitHub before selecting the alias. Intake reads the PR, independently
 binds base/head names, numeric IDs and refs, freezes effective fetch/push URLs,
 and fetches only the exact head object. Origin remains the base repository.
-Metadata-only review needs no checkout. Use private `checkout-target` for local
-validation or repair. Missing/deleted forks, collisions and identity drift stop.
+Metadata-only review needs no checkout. Use [private review execution](private-review.md)
+for all review validation or repair. Review never materializes aliases in the caller. Missing/deleted forks, collisions and identity drift stop.
 
 After the owner has committed and synchronized the clean target and the root
 has reviewed the complete final diff, invoke:
@@ -58,6 +58,6 @@ publish and refresh CI on the new head before readiness. Completion records the
 base repository's authoritative merged result even for forks; branch deletion
 remains separately authorized and must never target a same-named base branch.
 
-Task, checkpoint and closure schemas are v3. Drain old transactions with their
+Task, checkpoint and closure schemas are v4. Drain old transactions with their
 old trusted owner before installing this version. Do not translate grants or
 reopen closures. Coordinate this cutover with merge-pr's review/intent v2 rollout.

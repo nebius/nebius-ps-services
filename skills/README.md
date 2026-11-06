@@ -1578,6 +1578,12 @@ See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
 
+`review-pr` preserves your working branch, index and files throughout every
+standalone or nested review. Checkout-dependent work uses an independent private
+repository. Safe fixes may advance the remote PR; your local branch stays unchanged.
+Unused global LFS settings are tolerated without executing LFS; actual LFS-managed
+content remains unsupported and stops private review explicitly.
+
 `review-pr` is the merge-readiness skill for pull requests. Use it to review a
 PR by number, URL, or current branch against its base branch, inspect GitHub
 checks and review state, fix safe issues when the branch can be updated safely,
@@ -2023,7 +2029,8 @@ Only explicit resume renews waiting budgets, and a pending direct async merge
 does not require queue membership.
 
 Ordinary PR workflows use transaction-owned [checkout completion](create-pr/references/checkout-completion.md):
-review switches back without integrating; confirmed merged results refresh only
+review always uses private execution without changing the caller checkout;
+confirmed parent-owned merged results refresh only
 eligible local refs; publication callers preserve their prepared checkout.
 
 Publication YAML templates and deterministic evidence utilities are owned by

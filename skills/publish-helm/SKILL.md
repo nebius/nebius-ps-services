@@ -149,6 +149,14 @@ publication uses private `preserve` policy across nested calls.
 - Never force-push, replace a tag, tag an unrelated default tip, or claim queued
   work is merged. Preserve unrelated user work and exact resume evidence.
 
+## Review Workspace Boundary
+
+Every nested review preserves the caller checkout, index, files and local refs.
+Read the `private-review` reference from the installed create-pr skill before
+checkout-dependent review or repair. Carry the original grant and returned
+execution manifest through repair/publication handoffs; never require local
+adoption of a repaired PR head. Parent effects retain their separate authority.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

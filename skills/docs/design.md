@@ -1875,7 +1875,7 @@ not verified, pending that qualification and subsequent rollout.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=9 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=10 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -2140,7 +2140,7 @@ Private checkout-target materializes a selected target only when checkout-depend
 
 Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
 
-Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+Review leaves the caller untouched throughout and uses owner-bound private execution. Create-only from default retains its new feature; other create-only visits retain their independently authorized completion policy. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
 
 Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
 
@@ -2185,6 +2185,60 @@ both hosts, static plugin catalogs and paired project-spec validation cover
 source wiring. Installation fixtures and actual installed parity are reported
 separately in the task result; no native session restart, real commit, push or
 PR publication is claimed by these source checks.
+
+#### Private Review Execution (implemented source contract)
+
+Every review invocation keeps the caller checkout, index, files and refs unchanged.
+Metadata-only review remains allocation-free. The canonical Git owner creates an
+independent private repository, fetches exact remote PR/base objects and binds a
+subordinate execution manifest to the original receipt/grant and selected target.
+The manifest cannot authorize work without its live original owner. Preserve one
+publication journal per execution target; serialize original-owner then execution
+locks and prevent parent mutation of delegated targets. Do not copy receipts,
+caller dirt, Git configuration, hooks or shared object stores. Pin the effective
+source hook policy. Executable hooks require restricted execution and currently
+block private allocation/repair; never bypass required hooks or run a source
+launcher with writable caller or credentialed candidate access. Unused LFS configuration follows FEAT-068. Other effective executable
+filters, fsmonitor commands and external diff/merge drivers block before
+checkout and at execution boundaries, including private-path includeIf policies.
+
+Trusted helpers perform checkout, scoped repairs, canonical commits, sync and
+non-force publication privately. Revalidate remote identity/head/base and review
+after every repair. Concurrent source edits are user work, never restoration
+instructions. Completion checks the execution repository and publication evidence;
+source completion remains separate. Release bind/reconcile and nested callers
+consume owner-verified execution evidence while retaining original scope identity.
+Keep contributor tests in the existing restricted execution boundary; a private
+clone alone is not a security sandbox. Unavailable isolation blocks validation.
+
+Resume the same registered workspace and reconcile unknown effects before retry.
+Retain unpublished repairs and unresolved effects; cleanup requires exact ownership,
+terminal closure and quiescent children. Strict authority schemas remain v4. Retain historical evidence without
+compatibility conversion; reconcile old operations individually as specified in
+FEAT-068 instead of treating their inventory as a global activation gate. Keep public usage, explicit invocation, SDLC read-only
+review and protected merge ownership unchanged.
+
+Acceptance uses disposable repositories with concurrent caller edits, same-branch
+and fork repairs, nested publication, stale/forged bindings, interrupted allocation
+and push, closure and guarded cleanup. Validate source, installation and native
+runtime separately. Source implementation is complete in the canonical commit
+owner and private workspace module, with create/review/merge/publication handoffs
+and release execution-proof consumption. The focused real-Git private cases cover
+concurrent source edits, nested repair, forged/closed authority, interrupted
+allocation/deletion, unpublished work and executable-hook rejection. General
+transaction, publication, release, contract and active-SDLC guard suites passed;
+GitHub identity/permission responses in these suites are mocked. Disposable native
+Codex/Claude installation and npx discovery/copy/reinstall checks passed separately
+from skill structure, Python/Markdown lint and paired-spec validation.
+
+Delivery remains implemented, not live verified. Historical grants require their original owner or evidence-bound administrative
+retirement; their presence alone does not block new v4 operations. No schema
+translation or unrelated-session closure is authorized. Fresh model
+trigger and comparative output-quality runs are unavailable without clean-runner
+credentials. No real PR repair, push, merge or active installation refresh is
+claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+restricted runner. FEAT-068 separately verifies unused LFS configuration with
+sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-010 -->
 
@@ -7988,7 +8042,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=9 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=10 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -8081,7 +8135,7 @@ Private checkout-target materializes a selected target only when checkout-depend
 
 Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
 
-Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+Review leaves the caller untouched throughout and uses owner-bound private execution. Create-only from default retains its new feature; other create-only visits retain their independently authorized completion policy. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
 
 Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
 
@@ -8134,6 +8188,67 @@ checks pass for the four selected skills; this follow-up did not update personal
 installed copies or repeat live publication acceptance.
 
 Source, installed, bootstrap CI and live merge evidence are distinct. Real Dependabot acceptance remains unverified because no eligible PR was open; Docker admission is covered offline. The workflow-changing bootstrap used a maintainer; built-in-token workflow-file permission behavior is not established by that result. Native trigger and comparative quality evaluation remain authentication-unavailable. Full delivery remains implemented rather than verified.
+
+#### Private Review Execution (implemented source contract)
+
+Every review invocation keeps the caller checkout, index, files and refs unchanged.
+Metadata-only review remains allocation-free. The canonical Git owner creates an
+independent private repository, fetches exact remote PR/base objects and binds a
+subordinate execution manifest to the original receipt/grant and selected target.
+The manifest cannot authorize work without its live original owner. Preserve one
+publication journal per execution target; serialize original-owner then execution
+locks and prevent parent mutation of delegated targets. Do not copy receipts,
+caller dirt, Git configuration, hooks or shared object stores. Pin the effective
+source hook policy. Executable hooks require restricted execution and currently
+block private allocation/repair; never bypass required hooks or run a source
+launcher with writable caller or credentialed candidate access. Unused LFS configuration follows FEAT-068. Other effective executable
+filters, fsmonitor commands and external diff/merge drivers block before
+checkout and at execution boundaries, including private-path includeIf policies.
+
+Trusted helpers perform checkout, scoped repairs, canonical commits, sync and
+non-force publication privately. Revalidate remote identity/head/base and review
+after every repair. Concurrent source edits are user work, never restoration
+instructions. Completion checks the execution repository and publication evidence;
+source completion remains separate. Release bind/reconcile and nested callers
+consume owner-verified execution evidence while retaining original scope identity.
+Keep contributor tests in the existing restricted execution boundary; a private
+clone alone is not a security sandbox. Unavailable isolation blocks validation.
+
+Resume the same registered workspace and reconcile unknown effects before retry.
+Retain unpublished repairs and unresolved effects; cleanup requires exact ownership,
+terminal closure and quiescent children. Strict authority schemas remain v4. Retain historical evidence without
+compatibility conversion; reconcile old operations individually as specified in
+FEAT-068 instead of treating their inventory as a global activation gate. Keep public usage, explicit invocation, SDLC read-only
+review and protected merge ownership unchanged.
+
+Acceptance uses disposable repositories with concurrent caller edits, same-branch
+and fork repairs, nested publication, stale/forged bindings, interrupted allocation
+and push, closure and guarded cleanup. Validate source, installation and native
+runtime separately. Source implementation is complete in the canonical commit
+owner and private workspace module, with create/review/merge/publication handoffs
+and release execution-proof consumption. The focused real-Git private cases cover
+concurrent source edits, nested repair, forged/closed authority, interrupted
+allocation/deletion, unpublished work and executable-hook rejection. General
+transaction, publication, release, contract and active-SDLC guard suites passed;
+GitHub identity/permission responses in these suites are mocked. Disposable native
+Codex/Claude installation and npx discovery/copy/reinstall checks passed separately
+from skill structure, Python/Markdown lint and paired-spec validation.
+
+Delivery remains implemented, not live verified. Historical grants require their original owner or evidence-bound administrative
+retirement; their presence alone does not block new v4 operations. No schema
+translation or unrelated-session closure is authorized. Fresh model
+trigger and comparative output-quality runs are unavailable without clean-runner
+credentials. No real PR repair, push, merge or active installation refresh is
+claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+restricted runner. FEAT-068 separately verifies unused LFS configuration with
+sentinel executables; actual LFS content remains unsupported.
+
+Alignment additionally registers release reconciliation/session suites in the
+workflow adapter CI job. The installed Codex/Claude fixture loads the release
+consumer and canonical commit owner with a real subordinate manifest and native
+session, accepts the matching proof and rejects another session. GitHub transport
+remains mocked. Parent pause/resume evals preserve authority and unfinished-target
+safeguards while separating private review from parent-owned checkout effects.
 
 <!-- /FEATURE: FEAT-042 -->
 
@@ -9971,7 +10086,7 @@ live helpers, which is separate from fresh model evaluation.
 
 <!-- /FEATURE: FEAT-051 -->
 
-<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-052: Contribution acceptance and fork-safe specification repair
 
 #### Requirements Covered
@@ -10035,6 +10150,60 @@ Implemented contribution assessment and root-owned spec handoff in review-pr, co
 #### Verification Evidence
 
 Passing source checks: 61 merge-gate tests, 39 merge-completion tests, 16 real disposable publication cases, a targeted interruption-at-settlement regression, 47 release-consumer tests, 6 commit-contract checks and the SDLC direct-helper guard case. Codex/Claude structural validation, standard-field checks, Ruff and Markdown checks pass. Real pinned npx installation validates both hosts, copied resources, repeat installation and isolation. All 90 transaction regression cases pass on the final helper code: 89 passed in the parallel run and one 30-second checkout-completion timeout passed unchanged in an isolated 12.8-second rerun. Two focused native installed-helper/upgrade cases pass on both hosts using a frozen source snapshot whose four product-helper files match the final source. Together the focused suites cover 262 distinct cases. The ten affected skills pass Codex/Claude structure and disposable copied-payload checks. Native comparative quality runs were attempted on both hosts but authentication was unavailable in isolated homes. No live GitHub PR mutation, workflow activation, protected bootstrap, native semantic quality pass or production deployment is claimed.
+
+#### Private Review Execution (implemented source contract)
+
+Every review invocation keeps the caller checkout, index, files and refs unchanged.
+Metadata-only review remains allocation-free. The canonical Git owner creates an
+independent private repository, fetches exact remote PR/base objects and binds a
+subordinate execution manifest to the original receipt/grant and selected target.
+The manifest cannot authorize work without its live original owner. Preserve one
+publication journal per execution target; serialize original-owner then execution
+locks and prevent parent mutation of delegated targets. Do not copy receipts,
+caller dirt, Git configuration, hooks or shared object stores. Pin the effective
+source hook policy. Executable hooks require restricted execution and currently
+block private allocation/repair; never bypass required hooks or run a source
+launcher with writable caller or credentialed candidate access. Unused LFS configuration follows FEAT-068. Other effective executable
+filters, fsmonitor commands and external diff/merge drivers block before
+checkout and at execution boundaries, including private-path includeIf policies.
+
+Trusted helpers perform checkout, scoped repairs, canonical commits, sync and
+non-force publication privately. Revalidate remote identity/head/base and review
+after every repair. Concurrent source edits are user work, never restoration
+instructions. Completion checks the execution repository and publication evidence;
+source completion remains separate. Release bind/reconcile and nested callers
+consume owner-verified execution evidence while retaining original scope identity.
+Keep contributor tests in the existing restricted execution boundary; a private
+clone alone is not a security sandbox. Unavailable isolation blocks validation.
+
+Resume the same registered workspace and reconcile unknown effects before retry.
+Retain unpublished repairs and unresolved effects; cleanup requires exact ownership,
+terminal closure and quiescent children. Strict authority schemas remain v4. Retain historical evidence without
+compatibility conversion; reconcile old operations individually as specified in
+FEAT-068 instead of treating their inventory as a global activation gate. Keep public usage, explicit invocation, SDLC read-only
+review and protected merge ownership unchanged.
+
+Acceptance uses disposable repositories with concurrent caller edits, same-branch
+and fork repairs, nested publication, stale/forged bindings, interrupted allocation
+and push, closure and guarded cleanup. Validate source, installation and native
+runtime separately. Source implementation is complete in the canonical commit
+owner and private workspace module, with create/review/merge/publication handoffs
+and release execution-proof consumption. The focused real-Git private cases cover
+concurrent source edits, nested repair, forged/closed authority, interrupted
+allocation/deletion, unpublished work and executable-hook rejection. General
+transaction, publication, release, contract and active-SDLC guard suites passed;
+GitHub identity/permission responses in these suites are mocked. Disposable native
+Codex/Claude installation and npx discovery/copy/reinstall checks passed separately
+from skill structure, Python/Markdown lint and paired-spec validation.
+
+Delivery remains implemented, not live verified. Historical grants require their original owner or evidence-bound administrative
+retirement; their presence alone does not block new v4 operations. No schema
+translation or unrelated-session closure is authorized. Fresh model
+trigger and comparative output-quality runs are unavailable without clean-runner
+credentials. No real PR repair, push, merge or active installation refresh is
+claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+restricted runner. FEAT-068 separately verifies unused LFS configuration with
+sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
 <!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=2 -->
@@ -11610,5 +11779,123 @@ Native skill composition, live GitHub comments/closure and installed-home activa
 were not run; offline behavioral cases are definitions, not runtime qualification.
 
 <!-- /FEATURE: FEAT-067 -->
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-068 reqs=REQ-069 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-068: Inert LFS configuration and historical transaction retirement
+
+#### Requirements Covered
+
+- REQ-069: Unblock ordinary private reviews and reconcile historical authority.
+
+#### Context Evidence
+
+The canonical private runner rejects all executable filter declarations, even
+unused global LFS settings. Release reconciliation also runs private Git checks
+outside that runner. Historical task grants have strict incompatible schemas.
+
+#### Design Details
+
+Force empty LFS clean/smudge/process commands and required=true at private command
+precedence. Keep all other executable configuration guards. Inspect effective
+attributes for exact incoming trees, working/index paths and candidate trees;
+reject actual LFS use explicitly and repeat at resume/publication. Canonical
+owner proof also verifies exact private branch, cleanliness and ancestor head
+under its lock; release consumers perform no independent private Git calls.
+
+Administrative audit snapshots historical grant families with digests and
+schema-aware local-effect observations. Unknown schema/effects remain retained.
+An explicit evidence record binds owner relinquishment or verified termination
+and independent settled-effect observations to that audit. Retirement rechecks
+all bytes under the repository lock, fsyncs an immutable archive and intent,
+then atomically replaces the original grant with a distinct retirement schema.
+Never remove the grant first or modify shared receipts/claims. Replay verifies
+archive and tombstone digests without restoring authority or inventing closure.
+
+#### Selected Option
+
+Neutralize unused LFS settings and fail clearly on real LFS use. Preserve v4
+execution authority; historical readers exist only in administrative audit.
+
+#### Alternatives Considered
+
+Full LFS transfer/credential support is deferred because it is not needed.
+Deleting stale grants permits authority recreation; automatic age-based closure
+cannot establish owner inactivity or settled remote effects.
+
+#### Implementation Boundaries
+
+Canonical commit runner/private review owner, release proof consumer and one
+internal transaction audit/retirement helper. No public skill flags, LFS binary
+execution, Git history changes, global config edits or legacy execution shim.
+
+#### Test-First Success Criteria
+
+- TDD-001: Unused LFS settings permit ordinary private review without executing
+  a sentinel program; actual LFS fails without caller mutation.
+- TDD-002: Release proof revalidation cannot execute ambient LFS after drift.
+- TDD-003: Retirement rejects active/unknown/drifting evidence, survives each
+  write interruption and leaves historical executors unable to recreate grants.
+
+#### Validation Plan
+
+Run focused and complete affected transaction/publication/release regressions,
+private installed consumers on both hosts, structure checks and scoped lint.
+
+#### Test Plan
+
+Cover effective global/local/conditional attributes, newly staged paths, resume,
+caller concurrency, symlinks, historical v1-v4 records, unsettled effects,
+archive/tombstone replay and newer shared session evidence preservation.
+
+#### Evaluation Plan
+
+Report per-record dispositions from a real read-only audit; no inactivity or
+remote-success claim is inferred from missing historical fields.
+
+#### Rollout And Rollback
+
+Update source first and validate disposable installs. Existing authority schemas
+remain unchanged; older executors reject retirement tombstones. Preserve unknown
+records. Never roll a retired grant back into executable authority.
+
+#### Done Definition
+
+Focused behavior and security regressions pass, documentation is aligned, and
+all selected historical records have an evidence-qualified disposition.
+
+#### Implementation Evidence
+
+Implemented private per-command LFS neutralization with required-driver failure,
+effective tree/index/worktree preflights and guarded release ancestry/cleanliness
+proof. Added administrative audit, strict historical record parsing, durable
+archive/proof snapshots and atomic tombstone retirement. Scratch-validation
+journals conservatively require their original owner. Shared evidence stays in
+place. Added CLI reference, review evaluations and CI test registration.
+
+#### Verification Evidence
+
+The unused-global-LFS regression failed against the prior guard, then passed.
+Thirteen retirement tests cover retained owner/effect uncertainty, historical
+schemas, unresolved claims, scratch journals, delegation, evidence drift and
+interruptions before/after archive/tombstone publication. The scratch-journal
+regression also failed before its correction. Ninety-one general transaction,
+49 release and six contract tests pass. The installed Codex/Claude fixture uses
+real Git, the installed release-owner loader, a sentinel LFS command, attribute
+drift and native-session rejection; only GitHub transport is mocked. Scoped
+Python/Markdown/actionlint and 15 skill profiles pass. Actual npx discovery,
+copy parity, repeat-install and isolation pass for five skills on both hosts.
+Independent read-only reviews found and corrected proof-archive durability and
+scratch-journal retention gaps. A real read-only audit classified seven old
+records as retained: owner relinquishment and remote settlement remain unproven.
+No real records were retired and no real GitHub publication was performed.
+The full 49-case publication suite and the additional missed-preflight required-
+driver regression pass. Five source-owned Codex skill folders were refreshed
+through the canonical installer and independently compared byte/mode-for-byte
+with source. Existing hook payloads and registrations did not change. The installed
+administrative audit reproduces all seven unchanged retained records. Native
+model trigger/quality evaluation remains unavailable.
+
+<!-- /FEATURE: FEAT-068 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

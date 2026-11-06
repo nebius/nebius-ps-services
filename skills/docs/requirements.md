@@ -1050,6 +1050,8 @@ Agentic SDLC, or transaction-owned safety.
 - AC-012: Completion journals effects before execution, verifies exact results, preserves publication checkpoints and supports interruption/resume without recapturing initial context. Check clean state, Git operations, origin/repository identity, expected heads, ignored collisions and worktree ownership. Unchecked-out refs use expected-old-value updates; integrate only fast-forwards. Closed grants permit no further effects.
 - AC-013: Completed closure verifies the declared checkout and each completed or explicit skipped update. Missing original refs, unexpected movement, dirt and unfinished effects block closure. Divergence preserves history. Fetch or result-verification failure permits safe switch-back without updates. Pending work retains authority; merged targets cannot be repaired, synchronized, pushed or merged again.
 
+- AC-014: The canonical owner binds private review execution to the original immutable receipt/grant, exact PR and frozen head/base. Subordinate execution has no independent root authority. Serialize source/delegated effects, prevent competing parent mutations, preserve recovery journals and reject forged, substituted, closed or stale execution contexts. Completion verifies delegated publication independently of caller dirt.
+
 #### Negative Criteria
 
 - NC-001: Raw `git add`, path-scoped staging, `git add .`, composed or wrapped
@@ -3549,7 +3551,7 @@ Ordinary create-pr performs complete local code review before publication and st
 - AC-013: CI aggregation excludes orchestration checks only through authoritative GitHub Actions app, repository, check-suite/run and configured workflow/event provenance. Names and prefixes cannot exempt checks; unknown provenance remains gated.
 - AC-014: Workflow tests locate exactly one setup-uv action by repository and require a full immutable commit SHA, while retaining tool-version, cache-input, condition and ordering assertions. Valid Dependabot SHA updates require no duplicated golden hash change.
 
-- AC-015: Review without checkout-dependent work leaves local refs and checkout alone. Checkout-dependent review switches back at completion or safe pause without integrating default history. Create-only from default leaves its new feature checked out; visiting existing targets switches back at the outer boundary.
+- AC-015: Every standalone or nested review preserves the caller checkout, index, files and local refs throughout execution. Metadata/diff review needs no checkout. Checkout-dependent review and automatic safe repairs use an owner-bound independent private repository; never fall back to switching the caller. Publish repairs to the existing PR without importing them into the caller. Concurrent caller edits do not prevent review completion. Parent create/merge/publication effects retain their separately authorized boundaries.
 - AC-016: Following confirmed merge and verified destination containment, fetch that destination, fast-forward eligible existing local default/original branches and switch back to the original branch, including after CI or Pages failure/timeout. Preserve unique/diverged histories; never implicitly merge, rebase, reset or recreate missing refs. Resolve the actual default branch. Squash proof uses the authoritative result, not PR-head ancestry.
 - AC-017: A batch completes checkout only at its outer return boundary and never advances an unfinished original publication target. Nested review/merge inherit the caller policy; publication callers retain their existing checkout policy. Report merge, exact-result CI/Pages, checkout and branch updates separately. Explicit deletion follows transaction closure under its own authority and retains checked-out branches. Preserve report-only, fork permission and identity, nondefault-merge, already-merged observation and Agentic SDLC restrictions.
 - AC-018: Global completion discovery failures display a sanitized reason and original nonzero status and publish no targets. Target-specific receipt failures are isolated with blocked diagnostics and aggregate failure, while valid independent targets may proceed. Preserve API deadlines, receipt gates and effect permissions.
@@ -3993,6 +3995,8 @@ Maintainers need ordinary PR review to assess contribution correctness, safety a
 - AC-005: Journal publication, reject destination or remote-head drift, and independently reconcile uncertain push outcomes. Reassess the complete final diff after any head/base change, preserving original grant, deadlines and completion ownership.
 - AC-006: Trusted helpers and policy cannot be replaced by contributor checkout. Credentialed controls are separate from isolated candidate validation. Fork admission, recovery and exact-result completion share immutable identity evidence, including completion after a fork is deleted following merge.
 - AC-007: Report explicit contribution, compatibility and per-project spec assessments on the same final head/base. Hooks remain advisory; unrelated historical pending records do not independently gate merging.
+
+- AC-008: Private review checkout isolation does not authorize credentialed contributor execution. Keep trusted controls separate from restricted candidate tests. Nested publication consumes owner-verified execution evidence without requiring caller HEAD to match a repaired PR; preserve original publication identity. Retain unresolved or unpublished work and clean only exact owned quiescent workspaces.
 
 #### Negative Criteria
 
@@ -4684,5 +4688,53 @@ Use deterministic private-state and mocked GitHub fixtures. Report separately
 source proof, installed distribution and native/live GitHub execution.
 
 <!-- /REQUIREMENT: REQ-068 -->
+<!-- REQUIREMENT: REQ-069 status=active priority=P0 type=feature -->
+### REQ-069: Permit unused LFS configuration and safely retire historical Git tasks
+
+#### User Story
+
+Users need private reviews of ordinary repositories to work with unused global
+LFS configuration, and historical task records to be reconciled without losing
+history or reviving old authority.
+
+#### Acceptance Criteria
+
+- AC-001: Private Git commands neutralize LFS executables without modifying
+  caller configuration. Actual LFS-managed paths fail explicitly before repair
+  or publication; no LFS content is downloaded, uploaded or silently skipped.
+- AC-002: Exact trees, effective working/index attributes and resumed execution
+  are checked. Release consumers obtain clean checkout and ancestry proof from
+  the same guarded canonical owner.
+- AC-003: Historical audit distinguishes settled, unknown and pending effects.
+  Retirement requires exact evidence, owner relinquishment or proven termination,
+  and settled effects; age alone is insufficient. Uncertain records are retained.
+- AC-004: Under the repository lock, archive exact record evidence durably before
+  atomically replacing its grant with a non-executable tombstone. Preserve shared
+  receipts and claims, replay interruptions, and never recreate old authority.
+
+#### Negative Criteria
+
+- NC-001: No full LFS support, global Git edits, arbitrary hook/filter execution,
+  historical execution compatibility, or fabricated successful closure.
+- NC-002: Audit results alone never establish owner inactivity or remote outcome.
+
+#### Validation Method
+
+Inspect all private Git callers, canonical lifecycle boundaries and historical
+record families; keep source, installed and operational evidence separate.
+
+#### Test Method
+
+Use disposable Git repositories and private homes for unused and active LFS,
+conditional attributes/configuration, release consumers, historical schemas,
+retirement replay, changed evidence, owner activity and unknown effects.
+
+#### Evaluation Method
+
+Audit real historical records read-only and report each disposition. Keep native
+model evaluations and real remote publication separate from local fixture evidence.
+
+<!-- /REQUIREMENT: REQ-069 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

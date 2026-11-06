@@ -121,7 +121,7 @@ Native invocation and live publication evidence must be verified separately.
 
 The canonical commit transaction owns safe target checkout and outer completion.
 See [the completion contract](../create-pr/references/checkout-completion.md) for
-review switch-back, create-only behavior, verified-result fast-forwards, resumed
+private review execution, parent create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
 
@@ -134,3 +134,7 @@ Existing releases require trusted pre-publication hashes and downloaded-byte
 verification. Missing or expired evidence is a reconciliation blocker, not a
 reason to overwrite or recreate a release. The workflow must compare any
 retained original manifest before a rebuilt retry can publish.
+
+Private repaired-head reconciliation consumes canonical owner proof of branch,
+cleanliness and prior-head ancestry under the review lock. It performs no separate
+private Git calls that could bypass the review owner's inert-LFS policy.

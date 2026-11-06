@@ -4,6 +4,23 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Permit unused global LFS configuration in private PR reviews without running
+  LFS or changing caller configuration. Reject actual LFS-managed paths at
+  checkout, repair and publication boundaries. Route release cleanliness and
+  ancestry checks through the same guarded owner. Add read-only historical-task
+  audit and evidence-bound, archived tombstone retirement; retain uncertain
+  owners/effects and preserve shared session evidence. Keep v4 authority and
+  defer full LFS support.
+
+- Isolate standalone and nested PR reviews in canonical owner-bound private Git
+  repositories. Preserve concurrent caller edits and local refs while publishing
+  safe repairs to the existing PR. Add subordinate authority, ordered locks,
+  resumable allocation/deletion and release execution-proof handoffs. Upgrade
+  transaction schemas to v4; drain active older operations before installation.
+  Fail closed on executable hooks/filters/drivers until restricted execution exists.
+  Align parent pause/resume evaluations and schema-cutover guidance, register
+  release consumer regressions in CI, and verify installed cross-owner handoffs.
+
 - Make first SDLC phase initialization a tested coordinator-owned operation.
   Preserve hook audit telemetry, validate native and managed lease ownership,
   and recover interrupted initial publication without overwriting evidence or

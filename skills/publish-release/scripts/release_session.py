@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from release_checkpoint import SCHEMA, SHA, ReleaseError, Store, state_home
-from release_reconcile import reconcile_pr
+from release_reconcile import execution_proof, reconcile_pr
 
 PHASE_SECONDS = 10800
 POLL_SECONDS = 15
@@ -522,6 +522,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--pr", type=int)
     p.add_argument("--expected-head", help="Frozen PR head before an authorized repair")
     p.add_argument("--head", help="Exact newly reviewed PR head")
+    p.add_argument("--review-task", type=Path, help="Canonical private review execution manifest")
     p.add_argument(
         "--review-id", type=int, help="Fresh configured-operator COMMENT review"
     )
@@ -653,10 +654,11 @@ def main() -> int:
                     if not args.pr or (value["pr"] and value["pr"] != args.pr):
                         raise ReleaseError("Expected the same positive PR number")
                     pr = github.pr(args.pr)
-                    head = git(
-                        Path(scope["root"]),
-                        "rev-parse",
-                        f"refs/heads/{value['branch']}",
+                    head = (
+                        execution_proof({**value, "pr": args.pr}, review_task=args.review_task)["head"]
+                        if args.review_task else git(
+                            Path(scope["root"]), "rev-parse", f"refs/heads/{value['branch']}",
+                        )
                     )
                     if value["head"] not in (None, head):
                         raise ReleaseError(
@@ -674,6 +676,7 @@ def main() -> int:
                         expected_head=args.expected_head,
                         head=args.head,
                         review_id=args.review_id,
+                        review_task=args.review_task,
                     )
                     store.save(value)
                     result = value

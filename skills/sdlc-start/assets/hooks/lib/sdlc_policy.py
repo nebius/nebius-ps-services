@@ -640,7 +640,8 @@ def is_commit_transaction_command(words: list[str]) -> bool:
         is not None
         and Path(words[1]).name == "commit_transaction.py"
         and words[2] in {"begin", "prepare", "execute", "review", "sync", "validate-order", "finish",
-                         "checkout-target", "complete-checkout", "publish-target"}
+                         "checkout-target", "complete-checkout", "publish-target",
+                       "begin-review", "open-review", "review-context", "cleanup-review"}
     )
 
 
