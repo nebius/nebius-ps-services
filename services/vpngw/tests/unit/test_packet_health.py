@@ -11,16 +11,38 @@ from rich.console import Console
 
 from nebius_vpngw import cli
 from nebius_vpngw import packet_health as health
+from nebius_vpngw.ipsec_observation import Inventory
 
 BOOT = "12345678-1234-1234-1234-123456789012"
 EXPECTED = {"site-a": 1024}
-RAW = (
-    "list-sa event {site-a {uniqueid=5 version=2 local-host=192.0.2.1 "
-    "remote-host=198.51.100.1 child-sas {site-a-7 {name=site-a uniqueid=7 "
-    "reqid=12 state=INSTALLED protocol=ESP spi-in=c0123456 if-id-in=64 "
-    "local-ts=[0.0.0.0/0] remote-ts=[0.0.0.0/0] install-time=23}}}}\n"
-    "list-sas reply {}\n"
-)
+RAW = Inventory.from_events(
+    [
+        {
+            "site-a": {
+                "uniqueid": "5",
+                "version": "2",
+                "state": "ESTABLISHED",
+                "local-host": "192.0.2.1",
+                "remote-host": "198.51.100.1",
+                "child-sas": {
+                    "site-a-7": {
+                        "name": "site-a",
+                        "uniqueid": "7",
+                        "reqid": "12",
+                        "state": "INSTALLED",
+                        "protocol": "ESP",
+                        "spi-in": "c0123456",
+                        "if-id-in": "64",
+                        "if-id-out": "64",
+                        "local-ts": ["0.0.0.0/0"],
+                        "remote-ts": ["0.0.0.0/0"],
+                        "install-time": "23",
+                    }
+                },
+            }
+        }
+    ]
+).json()
 
 
 def xfrm(window=1024, late=10, duplicate=0, integrity=0, packets=100):
@@ -75,6 +97,12 @@ def sample(monkeypatch, *, raw=RAW, state=None, link=None, seq=10):
             raise value
         return value
 
+    def snapshot(_timeout):
+        if isinstance(raw, Exception):
+            raise raw
+        return Inventory.from_json(raw)
+
+    monkeypatch.setattr(health.observation, "snapshot", snapshot)
     monkeypatch.setattr(health, "_command", command)
     return health.snapshot(EXPECTED, time.monotonic() + 20)
 
@@ -103,11 +131,11 @@ def test_balanced_vici_uses_hex_spi_interface_and_decimal_reqid():
     assert result["reqid"] == 12
     assert result["unique"] == 7
     assert "install-time" not in result
-    assert health.parse_sas("list-sas reply {}") == []
+    assert health.parse_sas(Inventory.from_events([]).json()) == []
 
 
 @pytest.mark.parametrize(
-    "raw", [RAW[:-2], RAW.replace("child-sas {", "child-sas {{"), "secret diagnostic"]
+    "raw", [RAW[:-2], RAW.replace('"child-sas":{', '"child-sas":{{'), "secret diagnostic"]
 )
 def test_partial_or_malformed_vici_never_becomes_empty_healthy_response(raw):
     with pytest.raises((ValueError, KeyError)):
@@ -171,7 +199,7 @@ def test_counter_reset_and_rekey_do_not_subtract_unrelated_totals(monkeypatch):
     obs = observation(monkeypatch, state=xfrm(late=1, packets=0))
     assert "sample incomplete" in health.summarize(obs, "site-a", 1024)["health"]
     obs = observation(
-        monkeypatch, raw=RAW.replace("uniqueid=7", "uniqueid=8"), state=xfrm(late=999)
+        monkeypatch, raw=RAW.replace('"uniqueid":"7"', '"uniqueid":"8"'), state=xfrm(late=999)
     )
     result = health.summarize(obs, "site-a", 1024)
     assert result["health"] == "sample incomplete (SAs changed)"
@@ -204,7 +232,7 @@ def test_overlap_preserves_positive_stable_subset(monkeypatch):
 
 @pytest.mark.parametrize("cold", [False, True])
 def test_no_sa_only_expected_for_authoritative_cold_standby(monkeypatch, cold):
-    obs = observation(monkeypatch, raw="list-sas reply {}", state="")
+    obs = observation(monkeypatch, raw=Inventory.from_events([]).json(), state="")
     obs["samples"][0]["tunnels"]["site-a"]["sas"] = {}
     expected = "Cold standby (no inbound SA)" if cold else "No inbound SA"
     assert health.summarize(obs, "site-a", 1024, cold_standby=cold)["health"] == expected
@@ -390,7 +418,7 @@ def test_huge_timestamp_is_unavailable_without_changing_status_exit(monkeypatch)
 
 @pytest.mark.parametrize("promoted", [False, True])
 def test_cold_label_requires_endpoint_role_and_multihost_rows_are_identified(monkeypatch, promoted):
-    obs = observation(monkeypatch, raw="list-sas reply {}", state="")
+    obs = observation(monkeypatch, raw=Inventory.from_events([]).json(), state="")
     obs["samples"][0]["tunnels"]["site-a"]["sas"] = {}
     monkeypatch.setattr(cli, "_status_ssh_target_command", lambda *a, **k: ["ssh", "host"])
     monkeypatch.setattr(health, "collect_gateways", lambda value: {host: obs for host in value})
@@ -454,8 +482,12 @@ def test_stable_overlapping_sas_sum_only_their_individual_deltas(monkeypatch):
 
 
 def test_one_kernel_sa_cannot_be_attributed_to_two_child_names(monkeypatch):
-    extra = RAW.replace("site-a", "site-b").replace("uniqueid=7", "uniqueid=8")
-    raw = RAW.removesuffix("list-sas reply {}\n") + extra
+    extra = RAW.replace("site-a", "site-b").replace('"uniqueid":"7"', '"uniqueid":"8"')
+    payload = json.loads(RAW)
+    extra_payload = json.loads(extra)
+    extra_payload["sas"][0]["site-b"]["uniqueid"] = "6"
+    payload["sas"].extend(extra_payload["sas"])
+    raw = json.dumps(payload)
     obs = observation(monkeypatch, raw=raw)
     assert "ambiguous mapping" in health.summarize(obs, "site-a", 1024)["health"]
 
@@ -463,7 +495,11 @@ def test_one_kernel_sa_cannot_be_attributed_to_two_child_names(monkeypatch):
 def test_probe_source_executes_without_installed_product_or_third_party_packages():
     import subprocess
 
-    source = health.Path(health.__file__).read_text()
+    from nebius_vpngw.observation_bundle import streamed_bootstrap
+
+    source = streamed_bootstrap() + health.Path(health.__file__).read_text().replace(
+        "from __future__ import annotations", ""
+    )
     commands = {
         ("swanctl", "--list-sas", "--raw"): RAW,
         ("ip", "-s", "xfrm", "state", "list", "nokeys"): xfrm(),
@@ -471,6 +507,7 @@ def test_probe_source_executes_without_installed_product_or_third_party_packages
     }
     source += (
         f"\ncommands = {commands!r}\n"
+        f"observation.snapshot = lambda timeout: observation.Inventory.from_json({RAW!r})\n"
         "_command = lambda args, deadline: commands[tuple(args)]\n"
         f"_boot_id = lambda: {BOOT!r}\n"
         "Path.read_text = lambda self: 'XfrmInStateSeqError 10\\n'\n"

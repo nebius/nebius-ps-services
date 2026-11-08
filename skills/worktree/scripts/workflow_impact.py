@@ -46,7 +46,7 @@ from workflow_spec_checkout import SpecCheckoutError, resolve_spec_checkout  # n
 CLAIM_SCHEMA = "workflow/objective-impact-claim-v1"
 RECEIPT_SCHEMA = "workflow/objective-impact-receipt-v1"
 LEDGER_SCHEMA = "workflow/objective-impact-ledger-v1"
-EXECUTION_BASIS_SCHEMA = "workflow/objective-impact-execution-basis-v1"
+EXECUTION_BASIS_SCHEMA = "workflow/objective-impact-execution-basis-v2"
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REVISION_RE = re.compile(r"r[0-9]{4}\Z")
 FEATURE_RE = re.compile(r"(?:FEAT|SLICE)-[0-9]{3,}\Z")
@@ -520,6 +520,7 @@ def _identity_files(project_root: Path) -> dict[str, str]:
         "code-review/references/quality-rubric.md",
         "align/references/quality-gate.md",
         "worktree/references/workflow-contract.md",
+        "worktree/references/worker-waves.md",
         "worktree/references/issue-resolution.md",
         "worktree/references/document-delivery.md",
         "worktree/assets/worker-result.schema.json",
@@ -557,6 +558,8 @@ def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, 
     inputs = run_dir / "input-dependencies.json"
     from workflow_program import slice_basis
     program_basis = slice_basis(run_dir, project_root, execution_id)
+    from workflow_capacity import policy
+    from workflow_validation import plan_path
     return {
         "schema": EXECUTION_BASIS_SCHEMA, "owner": run["owner"],
         "execution_id": execution_id, "objective_id": objective["objective_id"],
@@ -572,7 +575,9 @@ def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, 
         "identities": _identity_files(project_root),
         # Task ownership and validation requirements are part of these exact
         # locked plan bytes, and each immutable assignment binds this basis.
-        "assignment_plan_sha256": plan_digest, "validation_plan_sha256": plan_digest,
+        "assignment_plan_sha256": plan_digest,
+        "validation_plan_sha256": canonical_digest(read(plan_path(plans[0]))),
+        "policy_sha256": canonical_digest(policy(run_dir)),
     }
 
 

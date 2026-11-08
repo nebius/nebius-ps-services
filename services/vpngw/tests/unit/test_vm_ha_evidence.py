@@ -35,6 +35,31 @@ def tracker(now):
     )
 
 
+def test_authority_expiry_charges_round_trip_and_never_extends_cloud_proof():
+    now = [100.0]
+    proof = tracker(now)
+    nonce = proof.issue(heartbeat("a")).evidence.challenge
+    now[0] = 101.0
+    peer = heartbeat(
+        authority_ready=True,
+        evidence=HeartbeatEvidence(
+            state="unknown",
+            process_id="f" * 32,
+            sample_id=1,
+            echo=nonce,
+            cloud_status="in-progress",
+            cloud_age_seconds=28,
+        ),
+    )
+    received = proof.accept(peer)
+    assert received.authority_fresh(101.9)
+    assert not received.authority_fresh(102)
+    assert not PeerHeartbeat.from_mapping(received.to_dict()).authority_fresh(101)
+    nonce = proof.issue(heartbeat("a")).evidence.challenge
+    repeated = proof.accept(replace(peer, evidence=replace(peer.evidence, echo=nonce)))
+    assert repeated.authority_valid_until == received.authority_valid_until
+
+
 def test_positive_health_requires_round_trip_and_expires_without_wall_clock_assumption():
     now = [100.0]
     proof = tracker(now)

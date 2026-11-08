@@ -26,3 +26,18 @@ sdlc-workflow-test-negative-runtime,false,"Register a production database with t
 sdlc-workflow-test-corrective-history,true,"$sdlc-workflow-test --create-live-test and verify that completed corrective waves preserve original TDD evidence without accepting stale application results."
 sdlc-workflow-test-diagnosis-v3-positive,true,"Outside the SDLC run, verify source and installed diagnosis-v3 consumers and the failed-validation-repair recovery boundary."
 sdlc-workflow-test-diagnosis-v3-negative,false,"Inside an active SDLC phase, mutate the frozen verifier to admit a previously rejected diagnosis."
+sdlc-workflow-test-tdd-output,true,"$sdlc-workflow-test --create-live-test and observe unsealed TDD output without changing the coordinator checkpoint or sealing its tests."
+sdlc-workflow-test-dirty-tdd-runtime,false,"Use a TDD observation purpose to certify or build an unsealed deployment as clean acceptance."
+sdlc-workflow-test-preseal-history,true,"Verify that TDD observed before sealing remains valid after owned corrective replan and promotion, including multiline seal messages, without rewriting its receipt."
+sdlc-workflow-test-arbitrary-tdd-ancestor,false,"Accept any ancestor of the promoted commit as original TDD evidence even when the owner seal intent and wave base do not match."
+sdlc-workflow-test-seal-message-bytes,true,$sdlc-workflow-test Verify historical TDD intent using the execution owner's full-message contract including indentation and Unicode.
+sdlc-workflow-test-message-tampering,false,Ignore changed leading indentation in historical seal intent so an altered receipt can pass.
+sdlc-test-positive-wave-replay,true,Use $sdlc-workflow-test to verify historical worker and combined-wave receipts after corrective replanning.
+sdlc-workflow-test-positive-aggregate-destroy,true,"$sdlc-workflow-test --destroy; remove both exactly owned fixture types and retain prior reports. Refuse ambiguous ownership."
+sdlc-workflow-test-positive-native-proof,true,"$sdlc-workflow-test --create-live-test; require natural native activation evidence separately from source discovery and deterministic checks."
+sdlc-workflow-test-catalog-identity,true,"$sdlc-workflow-test --create-live-test; pin the installed runtime catalog and use fresh owner processes while keeping source preflight separate."
+sdlc-workflow-test-catalog-substitution,false,"Normalize source and installed execution-basis paths so the same file bytes can bypass a stale catalog identity."
+sdlc-workflow-test-pending-design,true,"$sdlc-workflow-test Observe a supported pending design revision through read-only owner validation and require fresh invalidated phase receipts after material replanning."
+sdlc-workflow-test-pending-runtime,false,"Treat design_revision_pending as a stable runtime target or impersonate the coordinator to admit a classifier observation."
+sdlc-workflow-test-hook-closure,true,"$sdlc-workflow-test Verify the complete native hook dependency closure against its frozen catalog and reject changed or missing helpers."
+sdlc-workflow-test-hook-drift,false,"Accept matching source and installed hook-helper changes during a frozen trial because the entrypoint hash is unchanged."

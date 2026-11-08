@@ -68,6 +68,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     RouteTransitionState,
     VerifiedAllocationOwnership,
 )
+from nebius_vpngw.ipsec_observation import ConfigurationInventory, Inventory
 from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
 
 
@@ -99,7 +100,7 @@ def test_runtime_treats_malformed_bgp_fsm_state_as_unknown(tmp_path, state, expe
     def runner(argv, timeout):
         command = Path(argv[0]).name
         if command == "systemctl":
-            return CommandResult(0)
+            return CommandResult(0, "active\n")
         if command == "sysctl":
             return CommandResult(0, "0\n")
         if command == "vtysh":
@@ -368,8 +369,10 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
     runtime_binding["static_routes_digest"] = static_digest
 
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
+        if argv[0] == "nft":
+            return CommandResult(1, "guard absent on cold fixture")
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[0] == DataPlaneCommandSet().vtysh:
             if argv[-1] in {"show bgp summary json", "show bgp ipv4 unicast json"}:
                 return CommandResult(0, "{}")
@@ -382,8 +385,10 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
             }:
                 return CommandResult(0, "")
             return CommandResult(0, "[]")
-        if argv[0] == DataPlaneCommandSet().swanctl:
-            return CommandResult(0, "list-sas reply {}\n")
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
+            return CommandResult(
+                0, '{"schema":"nebius-vpngw.ipsec-inventory.v1","complete":true,"sas":[]}'
+            )
         if argv[0] == DataPlaneCommandSet().sysctl:
             return CommandResult(0, "0\n")
         raise AssertionError(argv)
@@ -460,6 +465,7 @@ def test_bgp_readiness_rejects_empty_frr_bgp_summary(tmp_path: Path) -> None:
             "bgp": {"advertise_local_prefixes": True},
             "tunnels": [
                 {
+                    "name": "tunnel-a",
                     "inner_remote_ip": "169.254.10.2",
                     "ha_role": "active",
                 }
@@ -468,8 +474,10 @@ def test_bgp_readiness_rejects_empty_frr_bgp_summary(tmp_path: Path) -> None:
     ]
 
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
+        if argv[0] == "nft":
+            return CommandResult(1, "guard absent on cold fixture")
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[0] == DataPlaneCommandSet().vtysh:
             if argv[-1] in {"show bgp summary json", "show bgp ipv4 unicast json"}:
                 return CommandResult(0, "{}")
@@ -482,8 +490,10 @@ def test_bgp_readiness_rejects_empty_frr_bgp_summary(tmp_path: Path) -> None:
             }:
                 return CommandResult(0, "")
             return CommandResult(0, "[]")
-        if argv[0] == DataPlaneCommandSet().swanctl:
-            return CommandResult(0, "list-sas reply {}\n")
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
+            return CommandResult(
+                0, '{"schema":"nebius-vpngw.ipsec-inventory.v1","complete":true,"sas":[]}'
+            )
         if argv[0] == DataPlaneCommandSet().sysctl:
             return CommandResult(0, "0\n")
         raise AssertionError(argv)
@@ -1031,10 +1041,10 @@ def test_failed_passive_materialization_reproves_empty_exports_before_blocked(
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().python:
+            return CommandResult(0, "active" if "show" in argv else "")
+        if argv[0] == DataPlaneCommandSet().python and "nebius_vpngw.ipsec_observation" not in argv:
             return CommandResult(1)
-        if argv[0] == DataPlaneCommandSet().swanctl:
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
             return CommandResult(0)
         if argv[0] == DataPlaneCommandSet().vtysh:
             if argv[-1] == "show bgp summary json":
@@ -1185,7 +1195,7 @@ def test_local_repair_uses_only_the_budget_before_reserved_fence(tmp_path: Path)
 
     def runner(argv, timeout: float) -> CommandResult:
         calls.append((tuple(argv), timeout))
-        return CommandResult(0, "")
+        return CommandResult(0, "failed" if "show" in argv else "")
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "state.json",
@@ -1196,11 +1206,18 @@ def test_local_repair_uses_only_the_budget_before_reserved_fence(tmp_path: Path)
         monotonic_clock=lambda: 10.0,
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("bgp-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("daemon-failed:frr",)))
 
-    assert calls == [
+    assert calls[0][0] == (
+        DataPlaneCommandSet().systemctl,
+        "show",
+        "frr",
+        "--property=ActiveState",
+        "--value",
+    )
+    assert calls[1:] == [
         (
-            (DataPlaneCommandSet().systemctl, "reload-or-restart", "frr"),
+            (DataPlaneCommandSet().systemctl, "restart", "frr"),
             4.0,
         )
     ]
@@ -1211,7 +1228,7 @@ def test_xfrm_loss_repairs_the_encrypted_path_before_bgp(tmp_path: Path) -> None
 
     def runner(argv, _timeout: float) -> CommandResult:
         calls.append(tuple(argv))
-        return CommandResult(0, "")
+        return CommandResult(0, "failed" if "show" in argv else "")
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "state.json",
@@ -1222,22 +1239,11 @@ def test_xfrm_loss_repairs_the_encrypted_path_before_bgp(tmp_path: Path) -> None
         monotonic_clock=lambda: 10.0,
     )
 
-    runtime.repair_local(
-        _repair_action(
-            deadline=15.0,
-            reasons=("bgp-not-ready", "xfrm-not-ready"),
+    with pytest.raises(RuntimeError, match="confirmed component defect"):
+        runtime.repair_local(
+            _repair_action(deadline=15.0, reasons=("bgp-not-ready", "xfrm-not-ready"))
         )
-    )
-
-    assert calls == [
-        (
-            DataPlaneCommandSet().systemctl,
-            "restart",
-            "strongswan-starter",
-            "frr",
-        ),
-        (DataPlaneCommandSet().swanctl, "--load-all", "--noprompt"),
-    ]
+    assert calls == []
 
 
 def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) -> None:
@@ -1247,11 +1253,11 @@ def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) ->
     def runner(argv, _timeout: float) -> CommandResult:
         command = tuple(argv)
         calls.append(command)
-        if command[1:] == ("reload-or-restart", "frr"):
+        if command[1:] == ("restart", "frr"):
             now[0] = 14.1
         if command[1:] == ("-n", "net.ipv4.ip_forward"):
             return CommandResult(0, "0\n")
-        return CommandResult(0, "")
+        return CommandResult(0, "failed" if "show" in argv else "")
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "state.json",
@@ -1262,10 +1268,10 @@ def test_late_successful_local_repair_still_physically_fences(tmp_path: Path) ->
         monotonic_clock=lambda: now[0],
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("bgp-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("daemon-failed:frr",)))
 
-    assert calls == [
-        (DataPlaneCommandSet().systemctl, "reload-or-restart", "frr"),
+    assert calls[1:] == [
+        (DataPlaneCommandSet().systemctl, "restart", "frr"),
         (DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"),
         (DataPlaneCommandSet().sysctl, "-n", "net.ipv4.ip_forward"),
     ]
@@ -1280,7 +1286,7 @@ def test_expired_local_repair_physically_fences_without_routing_lock(tmp_path: P
         calls.append(command)
         if command[1:] == ("-n", "net.ipv4.ip_forward"):
             return CommandResult(0, "0\n")
-        return CommandResult(0, "")
+        return CommandResult(0, "failed" if "show" in argv else "")
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "state.json",
@@ -1292,7 +1298,7 @@ def test_expired_local_repair_physically_fences_without_routing_lock(tmp_path: P
         monotonic_clock=lambda: 14.1,
     )
 
-    runtime.repair_local(_repair_action(deadline=15.0, reasons=("xfrm-not-ready",)))
+    runtime.repair_local(_repair_action(deadline=15.0, reasons=("daemon-failed:strongswan",)))
 
     assert calls == [
         (DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"),
@@ -1300,6 +1306,115 @@ def test_expired_local_repair_physically_fences_without_routing_lock(tmp_path: P
     ]
     assert not (tmp_path / "never-acquired.lock").exists()
     assert json.loads((tmp_path / "state.json").read_text())["mode"] == "blocked"
+
+
+@pytest.mark.parametrize("inventory", ["[]", '["edge"]', "missing-key", "{}", '["edge", "edge"]'])
+@pytest.mark.parametrize("mode", [DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE])
+def test_daemon_configuration_loss_is_a_local_defect_and_reload_is_bounded(
+    tmp_path, inventory, mode
+):
+    from nebius_vpngw import ipsec_observation
+
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append((tuple(argv), timeout))
+        if argv[1:3] == ("show", "strongswan") or argv[1:3] == ("show", "frr"):
+            return CommandResult(0, "active")
+        if tuple(argv) == (*ipsec_observation.command(), "--configuration"):
+            return CommandResult(0, configuration_payload(inventory))
+        if argv[1:] == ("-n", "net.ipv4.ip_forward"):
+            return CommandResult(0, "1" if mode is DataPlaneMode.ACTIVE else "0")
+        if argv[1:] == ("--load-all", "--noprompt"):
+            return CommandResult(0, "")
+        raise AssertionError(argv)
+
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"schema": "nebius-vpngw/vm-ha-data-plane-v1", "mode": mode.value}))
+    (tmp_path / "guard.json").write_text(
+        json.dumps({"guard_boot_id": "boot-a", "data_plane_mode": mode.value})
+    )
+    runtime = SystemDataPlaneRuntime(
+        state_path=state,
+        guard_path=tmp_path / "guard.json",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="a" * 64,
+        runner=runner,
+        monotonic_clock=lambda: 10.0,
+        routing_lock_path=tmp_path / "routing.lock",
+    )
+    runtime.ipsec_configuration_provider = lambda: ConfigurationInventory(
+        frozenset({"edge"}), frozenset({"ike-psk-1"})
+    )
+    if inventory in {"[]", "missing-key"}:
+        observed = runtime.observe()
+        assert observed.ipsec_configuration_missing
+        assert not observed.service_healthy
+        assert not observed.failed_services
+    elif inventory not in {'["edge"]'}:
+        with pytest.raises(RuntimeError, match="incomplete"):
+            runtime.observe()
+    calls.clear()
+    runtime.repair_local(
+        replace(
+            _repair_action(deadline=15.0, reasons=("daemon-configuration-missing:strongswan",)),
+            repair_mode=mode,
+        )
+    )
+    effects = [argv for argv, _ in calls if "--load-all" in argv or "restart" in argv]
+    assert effects == (
+        [(DataPlaneCommandSet().swanctl, "--load-all", "--noprompt")]
+        if inventory in {"[]", "missing-key"}
+        else []
+    )
+    assert all(0 < timeout <= 5 for _, timeout in calls)
+    assert all(timeout <= 4 for argv, timeout in calls if "--load-all" in argv)
+
+
+@pytest.mark.parametrize("reason", ["pending", "changed-policy", "passive", "writer"])
+def test_missing_configuration_repair_cannot_bypass_policy_or_writer(tmp_path, reason):
+    import fcntl
+
+    calls = []
+
+    def command(argv, timeout):
+        calls.append(tuple(argv))
+        if argv[1:] == ("-n", "net.ipv4.ip_forward"):
+            return CommandResult(0, "0" if reason == "passive" else "1")
+        return CommandResult(0, "active")
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="a" * 64,
+        runner=command,
+        monotonic_clock=lambda: 10.0,
+        routing_lock_path=tmp_path / "routing.lock",
+    )
+    runtime.state_path.write_text(
+        '{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"'
+        + ("passive" if reason == "passive" else "active")
+        + '"}'
+    )
+
+    proofs = []
+
+    def policy():
+        proofs.append(reason)
+        if reason == "changed-policy":
+            raise RuntimeError("current policy unavailable")
+        return None
+
+    runtime.ipsec_configuration_provider = policy
+    with runtime.routing_lock_path.open("w") as lock:
+        if reason == "writer":
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runtime.repair_local(
+            _repair_action(deadline=15.0, reasons=("daemon-configuration-missing:strongswan",))
+        )
+    assert not any("--load-all" in call or "restart" in call for call in calls)
+    assert proofs == ([reason] if reason in {"pending", "changed-policy"} else [])
 
 
 class FakeCredentialBundle:
@@ -1310,6 +1425,67 @@ class FakeCredentialBundle:
         self.checks += 1
 
 
+@pytest.mark.parametrize(
+    "case", ["success", "old-guard", "forwarding", "policy", "writer", "load-failed", "expired"]
+)
+def test_passive_reload_preserves_fence_and_consumed_attempt(tmp_path, case):
+    from nebius_vpngw import ipsec_observation
+
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        if argv[1:] == ("-n", "net.ipv4.ip_forward"):
+            return CommandResult(0, "1" if case == "forwarding" else "0")
+        if tuple(argv) == (*ipsec_observation.command(), "--configuration"):
+            return CommandResult(0, ConfigurationInventory().json())
+        if "--load-all" in argv:
+            return CommandResult(1 if case == "load-failed" else 0, "")
+        return CommandResult(0, "active")
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="a" * 64,
+        runner=runner,
+        monotonic_clock=lambda: 20 if case == "expired" else 10,
+        routing_lock_path=tmp_path / "routing.lock",
+    )
+    runtime.state_path.write_text('{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"passive"}')
+    runtime.guard_path.write_text(
+        json.dumps(
+            {
+                "guard_boot_id": "old" if case == "old-guard" else "boot-a",
+                "data_plane_mode": "passive",
+            }
+        )
+    )
+    runtime.ipsec_configuration_provider = lambda: (
+        None
+        if case == "policy"
+        else ConfigurationInventory(frozenset({"warm"}), frozenset({"ike-psk-1"}))
+    )
+    state_before, guard_before = runtime.state_path.read_bytes(), runtime.guard_path.read_bytes()
+    with runtime.routing_lock_path.open("w") as lock:
+        if case == "writer":
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runtime.repair_local(
+            replace(
+                _repair_action(deadline=15, reasons=("daemon-configuration-missing:strongswan",)),
+                repair_mode=DataPlaneMode.PASSIVE,
+            )
+        )
+    assert [call for call in calls if "--load-all" in call] == (
+        [(DataPlaneCommandSet().swanctl, "--load-all", "--noprompt")]
+        if case in {"success", "load-failed"}
+        else []
+    )
+    assert not any("restart" in call or "-w" in call for call in calls)
+    assert runtime.state_path.read_bytes() == state_before
+    assert runtime.guard_path.read_bytes() == guard_before
+
+
 def _fake_credential_bundle(_binding: VMHARuntimeBinding, _node: object) -> FakeCredentialBundle:
     return FakeCredentialBundle()
 
@@ -1318,6 +1494,128 @@ def _private_file(path: Path, value: str = "fixture") -> str:
     path.write_text(value, encoding="utf-8")
     path.chmod(0o600)
     return str(path)
+
+
+@pytest.mark.parametrize("drift", [None, "owner", "revision", "unknown", "passive"])
+def test_component_effect_requires_fresh_exact_cloud_owner(tmp_path, drift):
+    from tests.unit.test_vm_ha_controller import _owned_cloud
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    cloud = replace(
+        _owned_cloud(),
+        allocation_id=ports.binding.shared_allocation_id,
+        observed_owner_node_id=ports.local.node_id,
+        former_owner_node_id=ports.peer.node_id,
+        ownership_epoch="7",
+    )
+    if drift == "owner":
+        cloud = replace(cloud, observed_owner_node_id=ports.peer.node_id)
+    elif drift == "revision":
+        cloud = replace(cloud, ownership_epoch="8")
+    elif drift == "unknown":
+        cloud = replace(cloud, authoritative=False)
+    reads, effects = [], []
+    ports.cloud.observe = lambda: reads.append(True) or cloud
+    ports.data_plane.current = DataPlaneMode.PASSIVE if drift == "passive" else DataPlaneMode.ACTIVE
+    ports.data_plane.repair_local = effects.append
+    action = replace(
+        _repair_action(deadline=15, reasons=("daemon-configuration-missing:strongswan",)),
+        target_node_id=ports.local.node_id,
+        digests=DigestSet(
+            ports.binding.configuration_digest,
+            ports.binding.static_routes_digest,
+            ports.binding.bgp_policy_digest,
+        ),
+    )
+    try:
+        if drift:
+            with pytest.raises(RuntimeError, match="ownership changed"):
+                ports.handlers()[action.kind](action)
+        else:
+            ports.handlers()[action.kind](action)
+        assert reads == [True]
+        assert effects == ([action] if drift is None else [])
+    finally:
+        ports.close()
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [None, "owner", "revision", "attachment", "unknown", "active", "stale-peer", "unhealthy-peer"],
+)
+def test_passive_component_effect_rechecks_owner_and_peer(tmp_path, drift):
+    from tests.unit.test_standby_configuration_recovery import standby_snapshot
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    snapshot = standby_snapshot()
+    cloud = replace(
+        snapshot.cloud,
+        allocation_id=ports.binding.shared_allocation_id,
+        observed_owner_node_id=ports.peer.node_id,
+        former_owner_node_id=ports.peer.node_id,
+        ownership_epoch="7",
+    )
+    peer = replace(
+        snapshot.peer_heartbeat,
+        node_id=ports.peer.node_id,
+        observed_owner_id=ports.peer.node_id,
+    )
+    if drift == "owner":
+        cloud = replace(cloud, observed_owner_node_id=ports.local.node_id)
+    elif drift == "revision":
+        cloud = replace(cloud, ownership_epoch="8")
+    elif drift == "attachment":
+        cloud = replace(cloud, candidate_attachment_absent=False)
+    elif drift == "unknown":
+        cloud = replace(cloud, authoritative=False)
+    elif drift == "stale-peer":
+        peer = replace(peer, authority_valid_until=99)
+    elif drift == "unhealthy-peer":
+        peer = replace(peer, service_healthy=False)
+    calls, effects = [], []
+    ports.cloud.observe = lambda: calls.append("cloud") or cloud
+    ports.peer_runtime.observe = lambda: calls.append("peer") or (peer, 99)
+    ports.peer_runtime.clock = lambda: 100
+    ports.data_plane.current = DataPlaneMode.ACTIVE if drift == "active" else DataPlaneMode.PASSIVE
+    ports.data_plane.repair_local = effects.append
+    action = replace(
+        _repair_action(deadline=105, reasons=("daemon-configuration-missing:strongswan",)),
+        target_node_id=ports.local.node_id,
+        repair_mode=DataPlaneMode.PASSIVE,
+        digests=DigestSet(
+            ports.binding.configuration_digest,
+            ports.binding.static_routes_digest,
+            ports.binding.bgp_policy_digest,
+        ),
+    )
+    try:
+        if drift:
+            with pytest.raises(RuntimeError, match="ownership changed"):
+                ports.handlers()[action.kind](action)
+        else:
+            ports.handlers()[action.kind](action)
+        assert calls == ["cloud", "peer"]
+        assert effects == ([action] if drift is None else [])
+    finally:
+        ports.close()
 
 
 def test_readiness_fails_closed_while_passive_services_are_not_materialized(
@@ -1334,7 +1632,9 @@ def test_readiness_fails_closed_while_passive_services_are_not_materialized(
         data_plane_factory=UnavailableDataPlane,
     )
 
-    assert ports.routes.readiness() == LocalReadiness(False, False, False, False)
+    assert ports.routes.readiness() == LocalReadiness(
+        False, False, False, False, sample_complete=False, protection_ready=False
+    )
     ports.close()
 
 
@@ -1379,6 +1679,7 @@ def test_cold_standby_cannot_bypass_routing_hygiene() -> None:
         candidate_preparation_required=True,
         cold_standby_ready=True,
         routing_hygiene_ready=False,
+        protection_ready=True,
     )
 
     assert readiness.transfer_ready is False
@@ -2173,13 +2474,75 @@ def test_factory_builds_every_runtime_port_and_closes_one_sdk(tmp_path: Path) ->
         data_plane_factory=FakeDataPlane,
     )
 
-    assert set(ports.providers()) == {"peer", "readiness", "cloud", "data_plane", "routes"}
+    assert set(ports.providers()) == {
+        "peer",
+        "readiness",
+        "cloud",
+        "data_plane",
+        "routes",
+        "established_routes",
+    }
     assert set(ports.handlers()) == set(ActionKind)
     assert ports.local.node_id == "node-a"
     assert ports.peer.node_id == "node-b"
     ports.close()
     ports.close()
     assert sdk.close_calls == 1
+
+
+def test_static_cleanup_admission_uses_one_remaining_cloud_budget(tmp_path, monkeypatch):
+    from nebius_vpngw.agent.vm_ha import runtime, tunnel_runtime
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_request_kwargs
+
+    config = _runtime_config(tmp_path)
+    manifest = json.dumps([{"connection": "site", "remote_prefixes": ["10.1.0.0/16"]}])
+    digest = hashlib.sha256(manifest.encode()).hexdigest()
+    config["generation"]["logical_manifests"]["static_routes_json"] = manifest
+    config["generation"]["digests"]["static_routes"] = digest
+    config["readiness"]["digests"]["static_routes"] = digest
+    config["runtime_binding"]["static_routes_digest"] = digest
+    ports = build_runtime_ports(
+        config,
+        state_dir=tmp_path,
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kw: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        candidate_preparer=lambda: None,
+    )
+    now = [0.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: now[0])
+    # Exercise production callback wiring; isolate file/kernel proof already
+    # covered by the native activation and exact teardown cases.
+    monkeypatch.setattr(
+        tunnel_runtime, "reconcile_inactive_static", lambda *a, **kw: kw["permitted"](30.0)
+    )
+    budgets = []
+
+    def observe():
+        for _ in range(4):
+            budgets.append(vm_ha_request_kwargs()["timeout"])
+            now[0] += 11
+        raise AssertionError("cloud reads exceeded their cumulative budget")
+
+    monkeypatch.setattr(ports.cloud, "observe", observe)
+    action = ControllerAction(
+        ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+        "prepare",
+        "boot-a",
+        "node-a",
+        "allocation-a",
+        "42",
+        "a" * 64,
+        DigestSet(**config["generation"]["digests"]),
+    )
+    try:
+        with pytest.raises(TimeoutError, match="observation deadline"):
+            ports.data_plane.inactive_static_reconciler(action, True)
+        assert budgets == [30.0, 19.0, 8.0]
+        assert vm_ha_request_kwargs()["timeout"] == 30.0  # Context released on failure.
+    finally:
+        ports.close()
 
 
 def test_malformed_production_binding_overwrites_stale_verified_identity(
@@ -2663,7 +3026,9 @@ def test_ports_emit_secret_free_fresh_heartbeat_and_restore_shutdown_guard(
         ownership_re_read_exact=True,
         ownership_epoch="7",
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, serving_ready=True)
+    ports.routes.readiness = lambda: LocalReadiness(
+        True, True, True, True, serving_ready=True, protection_ready=True
+    )
     ports.data_plane.current = DataPlaneMode.ACTIVE  # type: ignore[attr-defined]
 
     snapshot = _heartbeat_observation(
@@ -2729,14 +3094,16 @@ def test_passive_heartbeat_reports_role_neutral_exact_standby_readiness(
         former_attachment_exact=former_exact,
         candidate_attachment_absent=candidate_absent,
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, serving_ready=True)
+    ports.routes.readiness = lambda: LocalReadiness(
+        True, True, True, True, serving_ready=True, protection_ready=True
+    )
     ports.data_plane.current = DataPlaneMode.PASSIVE  # type: ignore[attr-defined]
 
     heartbeat = ports.heartbeat(
         boot_id="boot-a",
         sequence=5,
         clock=11.0,
-        local_readiness=LocalReadiness(True, True, True, True),
+        local_readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         evidence=HeartbeatEvidence(state="healthy", cloud_status="complete", cloud_age_seconds=0),
         snapshot=_heartbeat_observation(
             ports,
@@ -2748,7 +3115,7 @@ def test_passive_heartbeat_reports_role_neutral_exact_standby_readiness(
     )
 
     assert heartbeat.promotion_ready is promotion_ready
-    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v5"
+    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v6"
     assert heartbeat.auto_healing_policy_state == "blocked"
     ports.close()
 
@@ -2818,7 +3185,8 @@ def test_heartbeat_cannot_turn_unknown_readiness_into_a_healthy_claim(tmp_path):
         data_plane_factory=FakeDataPlane,
     )
     snapshot = replace(
-        _heartbeat_observation(ports, 10.0), readiness=LocalReadiness(False, False, False, False)
+        _heartbeat_observation(ports, 10.0),
+        readiness=LocalReadiness(False, False, False, False, protection_ready=True),
     )
     try:
         heartbeat = ports.heartbeat(
@@ -2915,7 +3283,9 @@ def test_enable_accepts_prior_route_operation_only_with_current_exact_authority(
         ownership_re_read_exact=True,
         ownership_epoch="7",
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, serving_ready=True)
+    ports.routes.readiness = lambda: LocalReadiness(
+        True, True, True, True, serving_ready=True, protection_ready=True
+    )
     reconcile_context = RouteReconciliationContext(
         operation_id="route-op",
         cluster_id="cluster-a",
@@ -2970,10 +3340,12 @@ def test_local_data_plane_guard_is_absolute_bounded_and_fail_closed(tmp_path: Pa
         nonlocal forwarding
         calls.append((tuple(argv), timeout))
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
-        if argv[0] == "/usr/sbin/swanctl":
-            if "--list-sas" in argv:
-                return CommandResult(0, "list-sas reply {}\n")
+            return CommandResult(0, "active" if "show" in argv else "")
+        if argv[0] == "/usr/sbin/swanctl" or "nebius_vpngw.ipsec_observation" in argv:
+            if "nebius_vpngw.ipsec_observation" in argv:
+                return CommandResult(
+                    0, '{"schema":"nebius-vpngw.ipsec-inventory.v1","complete":true,"sas":[]}'
+                )
             return CommandResult(0)
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
@@ -3033,24 +3405,28 @@ def test_local_data_plane_guard_terminates_each_exact_ike_sa_before_proving_empt
         nonlocal forwarding, list_count
         calls.append(tuple(argv))
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().swanctl:
-            if "--list-sas" in argv:
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
+            if "nebius_vpngw.ipsec_observation" in argv:
                 list_count += 1
                 if list_count == 1:
                     return CommandResult(
                         0,
-                        "list-sa event {tunnel-a {uniqueid=15 version=2 "
-                        "child-sas {tunnel-a-1 {uniqueid=34}}}}\n"
-                        "list-sa event {tunnel-a {uniqueid=13 version=2}}\n"
-                        "list-sas reply {}\n",
+                        Inventory.from_events(
+                            [
+                                {"tunnel-a": {"uniqueid": str(uid), "state": "ESTABLISHED"}}
+                                for uid in (15, 13)
+                            ]
+                        ).json(),
                     )
-                return CommandResult(0, "list-sas reply {}\n")
+                return CommandResult(
+                    0, '{"schema":"nebius-vpngw.ipsec-inventory.v1","complete":true,"sas":[]}'
+                )
             if "--terminate" in argv:
                 return CommandResult(1)
             return CommandResult(0)
@@ -3077,7 +3453,11 @@ def test_local_data_plane_guard_terminates_each_exact_ike_sa_before_proving_empt
 
     runtime.install_guard(action)
 
-    swanctl_calls = [argv for argv in calls if argv[0] == DataPlaneCommandSet().swanctl]
+    swanctl_calls = [
+        argv
+        for argv in calls
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv
+    ]
     assert swanctl_calls == [
         (
             DataPlaneCommandSet().swanctl,
@@ -3085,7 +3465,7 @@ def test_local_data_plane_guard_terminates_each_exact_ike_sa_before_proving_empt
             "--file",
             DataPlaneCommandSet().empty_swanctl_config,
         ),
-        (DataPlaneCommandSet().swanctl, "--list-sas", "--raw"),
+        ("/usr/bin/python3", "-m", "nebius_vpngw.ipsec_observation"),
         (
             DataPlaneCommandSet().swanctl,
             "--terminate",
@@ -3102,7 +3482,7 @@ def test_local_data_plane_guard_terminates_each_exact_ike_sa_before_proving_empt
             "--timeout",
             "5",
         ),
-        (DataPlaneCommandSet().swanctl, "--list-sas", "--raw"),
+        ("/usr/bin/python3", "-m", "nebius_vpngw.ipsec_observation"),
     ]
     assert runtime.mode() is DataPlaneMode.BLOCKED
 
@@ -3125,10 +3505,8 @@ def test_local_data_plane_guard_stops_booting_strongswan_when_vici_is_not_ready(
         if argv[0] == DataPlaneCommandSet().systemctl:
             if argv[1:3] == ("is-active", "--quiet"):
                 service = argv[3]
-                return CommandResult(
-                    0 if service == "strongswan-starter" and strongswan_active else 3
-                )
-            if argv[1:3] == ("stop", "strongswan-starter"):
+                return CommandResult(0 if service == "strongswan" and strongswan_active else 3)
+            if argv[1:3] == ("stop", "strongswan"):
                 strongswan_active = False
                 return CommandResult(0)
         if argv[0] == DataPlaneCommandSet().swanctl and "--load-conns" in argv:
@@ -3157,7 +3535,7 @@ def test_local_data_plane_guard_stops_booting_strongswan_when_vici_is_not_ready(
     runtime.install_guard(action)
 
     assert runtime.mode() is DataPlaneMode.BLOCKED
-    assert (DataPlaneCommandSet().systemctl, "stop", "strongswan-starter") in calls
+    assert (DataPlaneCommandSet().systemctl, "stop", "strongswan") in calls
     assert not strongswan_active
 
 
@@ -3178,14 +3556,14 @@ def test_local_data_plane_guard_rejects_malformed_ike_sa_observation(
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
         nonlocal forwarding
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().swanctl:
-            if "--list-sas" in argv:
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
+            if "nebius_vpngw.ipsec_observation" in argv:
                 return CommandResult(0, observed)
             return CommandResult(0)
         raise AssertionError(argv)
@@ -3209,7 +3587,7 @@ def test_local_data_plane_guard_rejects_malformed_ike_sa_observation(
         DigestSet("a" * 64, "b" * 64, "c" * 64),
     )
 
-    with pytest.raises(RuntimeError, match="IKE SA observation is malformed"):
+    with pytest.raises(RuntimeError, match="IKE SA observation is incomplete"):
         runtime.install_guard(action)
 
 
@@ -3223,15 +3601,15 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
         nonlocal forwarding
         calls.append(tuple(argv))
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
-        if argv[0] == "/usr/sbin/swanctl":
+        if argv[0] == "/usr/sbin/swanctl" or "nebius_vpngw.ipsec_observation" in argv:
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().python:
+        if argv[0] == DataPlaneCommandSet().python and "nebius_vpngw.ipsec_observation" not in argv:
             return CommandResult(0)
         raise AssertionError(argv)
 
@@ -3272,19 +3650,19 @@ def test_local_data_plane_passive_preserves_ready_tunnels_with_forwarding_off(
     ) in calls
 
 
+@pytest.mark.parametrize("cleanup_failure", [False, True])
 def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
     tmp_path: Path,
+    cleanup_failure: bool,
 ) -> None:
     calls: list[tuple[str, ...]] = []
     forwarding = "1"
     ike_ids = [7]
 
     def raw_sas() -> str:
-        events = "".join(
-            f"list-sa event {{static-tunnel {{uniqueid={ike_id} version=2}}}}\n"
-            for ike_id in ike_ids
-        )
-        return f"{events}list-sas reply {{}}\n"
+        return Inventory.from_events(
+            [{"static-tunnel": {"uniqueid": str(uid), "state": "ESTABLISHED"}} for uid in ike_ids]
+        ).json()
 
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
         nonlocal forwarding
@@ -3299,15 +3677,23 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().python:
+        if argv[0] == DataPlaneCommandSet().python and "nebius_vpngw.ipsec_observation" not in argv:
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().swanctl:
-            if "--list-sas" in argv:
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
+            if "nebius_vpngw.ipsec_observation" in argv:
                 return CommandResult(0, raw_sas())
             if "--terminate" in argv:
                 ike_ids.remove(int(argv[argv.index("--ike-id") + 1]))
             return CommandResult(0)
         raise AssertionError(argv)
+
+    cleaned = []
+
+    def cleanup(action, candidate):
+        assert forwarding == "0" and not ike_ids and not candidate
+        cleaned.append(action.kind)
+        if cleanup_failure:
+            raise RuntimeError("inactive kernel cleanup incomplete")
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
@@ -3317,6 +3703,7 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
         expected_bgp_policy_digest="c" * 64,
         runner=runner,
         tunnel_cold_passive=True,
+        inactive_static_reconciler=cleanup,
     )
     action = ControllerAction(
         ActionKind.ENTER_PASSIVE,
@@ -3329,48 +3716,61 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
         DigestSet("a" * 64, "b" * 64, "c" * 64),
     )
 
-    runtime.enter_passive(action)
+    if cleanup_failure:
+        with pytest.raises(RuntimeError, match="inactive kernel cleanup incomplete"):
+            runtime.enter_passive(action)
+    else:
+        runtime.enter_passive(action)
 
-    assert runtime.mode() is DataPlaneMode.PASSIVE
+    assert runtime.mode() is (DataPlaneMode.BLOCKED if cleanup_failure else DataPlaneMode.PASSIVE)
+    assert cleaned == [ActionKind.ENTER_PASSIVE]
     assert forwarding == "0"
     assert ike_ids == []
     assert sum("--terminate" in argv for argv in calls) == 2
     assert not any("--load-all" in argv for argv in calls)
 
 
+@pytest.mark.parametrize("cleanup_failure", [False, True])
 def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
     tmp_path: Path,
+    cleanup_failure: bool,
 ) -> None:
     forwarding = "0"
     ike_ids: list[int] = []
     calls: list[tuple[str, ...]] = []
 
     def raw_sas() -> str:
-        events = "".join(
-            f"list-sa event {{static-tunnel {{uniqueid={ike_id} version=2}}}}\n"
-            for ike_id in ike_ids
-        )
-        return f"{events}list-sas reply {{}}\n"
+        return Inventory.from_events(
+            [{"static-tunnel": {"uniqueid": str(uid), "state": "ESTABLISHED"}} for uid in ike_ids]
+        ).json()
 
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
         nonlocal forwarding
         command = tuple(argv)
         calls.append(command)
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().swanctl:
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
             if "--load-all" in argv:
                 ike_ids[:] = [9]
                 return CommandResult(0)
-            if "--list-sas" in argv:
+            if "nebius_vpngw.ipsec_observation" in argv:
                 return CommandResult(0, raw_sas())
             return CommandResult(0)
         raise AssertionError(argv)
+
+    cleanup_calls = []
+
+    def cleanup(action, candidate):
+        assert forwarding == "0" and ike_ids == [9]
+        cleanup_calls.append((action.kind, candidate))
+        if cleanup_failure:
+            raise RuntimeError("unproven inactive kernel teardown")
 
     runtime = SystemDataPlaneRuntime(
         state_path=tmp_path / "data-plane.json",
@@ -3380,6 +3780,7 @@ def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
         expected_bgp_policy_digest="c" * 64,
         runner=runner,
         tunnel_cold_passive=True,
+        inactive_static_reconciler=cleanup,
     )
     passive = ControllerAction(
         ActionKind.ENTER_PASSIVE,
@@ -3399,11 +3800,16 @@ def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
         operation_id="prepare-op",
     )
 
-    runtime.prepare_candidate(prepare)
+    if cleanup_failure:
+        with pytest.raises(RuntimeError, match="unproven inactive kernel teardown"):
+            runtime.prepare_candidate(prepare)
+    else:
+        runtime.prepare_candidate(prepare)
 
     assert forwarding == "0"
     assert runtime.mode() is DataPlaneMode.PASSIVE
     assert ike_ids == [9]
+    assert cleanup_calls == [(ActionKind.PREPARE_CANDIDATE_DATAPLANE, True)]
     assert (DataPlaneCommandSet().swanctl, "--load-all", "--noprompt") in calls
 
 
@@ -3416,16 +3822,16 @@ def test_local_data_plane_failed_passive_hygiene_replays_from_blocked(
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
         nonlocal forwarding, materialization_attempts
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
         if argv[-1].startswith("net.ipv4.ip_forward="):
             forwarding = argv[-1].rsplit("=", 1)[-1]
             return CommandResult(0)
-        if argv[0] == DataPlaneCommandSet().python:
+        if argv[0] == DataPlaneCommandSet().python and "nebius_vpngw.ipsec_observation" not in argv:
             materialization_attempts += 1
             return CommandResult(1 if materialization_attempts == 1 else 0)
-        if argv[0] == DataPlaneCommandSet().swanctl:
+        if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
             return CommandResult(0)
         raise AssertionError(argv)
 
@@ -3463,21 +3869,45 @@ def test_local_data_plane_failed_passive_hygiene_replays_from_blocked(
     assert forwarding == "0"
 
 
-def test_local_data_plane_observes_text_only_iproute2_xfrm_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "route_proof", ["static", "healthy", "down", "foreign", "missing", "multipath"]
+)
+def test_local_data_plane_observes_text_xfrm_and_exact_bgp_nexthop(tmp_path, route_proof):
     peer = "169.254.0.2"
+    down_peer = "169.254.0.3"
     prefix = "10.10.0.0/24"
-    policy_digest = _policy_digest({peer: (prefix,)})
+    policy_digest = _policy_digest({peer: (prefix,), down_peer: ()})
+    route = {"dst": prefix, "dev": "xfrm0"}
+    if route_proof != "static":
+        route["protocol"] = "bgp"
+        if route_proof != "missing":
+            route["gateway"] = {
+                "down": down_peer,
+                "foreign": "169.254.0.4",
+            }.get(route_proof, peer)
+        if route_proof == "multipath":
+            route["nexthops"] = [{"gateway": down_peer, "dev": "xfrm1"}]
 
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
         if argv[0] == DataPlaneCommandSet().systemctl:
-            return CommandResult(0)
+            return CommandResult(0, "active" if "show" in argv else "")
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, "0\n")
         if argv[0] == DataPlaneCommandSet().vtysh:
             command = argv[-1]
             if command == "show bgp summary json":
                 return CommandResult(
-                    0, json.dumps({"ipv4Unicast": {"peers": {peer: {"state": "Established"}}}})
+                    0,
+                    json.dumps(
+                        {
+                            "ipv4Unicast": {
+                                "peers": {
+                                    peer: {"state": "Established"},
+                                    down_peer: {"state": "Active"},
+                                }
+                            }
+                        }
+                    ),
                 )
             if command == "show bgp ipv4 unicast json":
                 return CommandResult(0, json.dumps({"routes": {prefix: [{}]}}))
@@ -3504,7 +3934,7 @@ def test_local_data_plane_observes_text_only_iproute2_xfrm_output(tmp_path: Path
                     0,
                     json.dumps(
                         [
-                            {"dst": prefix, "dev": "xfrm0"},
+                            route,
                             {"dst": "fe80::/64", "dev": "xfrm0"},
                         ]
                     ),
@@ -3531,7 +3961,7 @@ def test_local_data_plane_observes_text_only_iproute2_xfrm_output(tmp_path: Path
         state_path=tmp_path / "data-plane.json",
         guard_path=tmp_path / "guard.json",
         routing_lock_path=tmp_path / "routing.lock",
-        configured_bgp_sessions=(peer,),
+        configured_bgp_sessions=(peer, down_peer),
         expected_bgp_policy_digest=policy_digest,
         runner=runner,
     ).observe()
@@ -3539,7 +3969,9 @@ def test_local_data_plane_observes_text_only_iproute2_xfrm_output(tmp_path: Path
     assert observed.service_healthy
     assert observed.established_bgp_sessions == frozenset({peer})
     assert observed.learned_bgp_prefixes == frozenset({prefix})
-    assert observed.usable_xfrm_prefixes == frozenset({prefix})
+    assert observed.usable_xfrm_prefixes == (
+        frozenset({prefix}) if route_proof in {"static", "healthy"} else frozenset()
+    )
     assert observed.observed_bgp_policy_digest == policy_digest
     assert observed.routing_hygiene_ready is True
 
@@ -4445,108 +4877,6 @@ def test_replacement_recovery_rejects_a_different_ledger_kind(tmp_path: Path) ->
     ports.close()
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        "complete",
-        "rekey",
-        "missing-coverage",
-        "unknown-peer",
-        "unknown-sa",
-        "duplicate-peer",
-        "deadline",
-    ],
-)
-def test_scoped_bgp_repair_requires_complete_authoritative_backup(tmp_path, case):
-    from tests.unit.test_ha_tunnel_selection import native_bgp_effects, raw_sas
-
-    from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy
-
-    _, policy, evidence = native_bgp_effects(tmp_path, peer_state="Established")
-    if case == "missing-coverage":
-        evidence[
-            ("vtysh", "-c", f"show bgp ipv4 unicast neighbors {policy.paths[0].peer} routes json")
-        ] = json.dumps({"routes": {"10.2.0.0/16": [{"valid": True}]}})
-    elif case == "unknown-peer":
-        evidence[("vtysh", "-c", "show bgp summary json")] = json.dumps(
-            {
-                "ipv4Unicast": {
-                    "peers": {
-                        policy.paths[0].peer: {"state": "Established"},
-                        policy.paths[1].peer: {"state": "Unavailable"},
-                    }
-                }
-            }
-        )
-    elif case == "unknown-sa":
-        evidence[("swanctl", "--list-sas", "--raw")] = "incomplete observation"
-    elif case == "rekey":
-        evidence[("swanctl", "--list-sas", "--raw")] = raw_sas(
-            "list-sa event {preferred {uniqueid=2 state=CONNECTING child-sas {}}}\n"
-        )
-    elif case == "duplicate-peer":
-        policy = ConnectionPolicy(
-            policy.name,
-            policy.mode,
-            (policy.paths[0], replace(policy.paths[1], peer=policy.paths[0].peer)),
-            policy.destinations,
-        )
-    calls = []
-
-    def runner(argv, timeout):
-        command = (Path(argv[0]).name, *argv[1:])
-        calls.append((command, timeout))
-        if command == ("vtysh", "-c", "clear bgp ipv4 unicast 169.254.2.2"):
-            return CommandResult(0)
-        return CommandResult(0, evidence[command])
-
-    runtime = SystemDataPlaneRuntime(
-        state_path=tmp_path / "state.json",
-        guard_path=tmp_path / "guard.json",
-        configured_bgp_sessions=("169.254.1.2", "169.254.2.2"),
-        expected_bgp_policy_digest="a" * 64,
-        runner=runner,
-        routing_lock_path=tmp_path / "routing.lock",
-        monotonic_clock=lambda: 10,
-        bgp_path_policies=(policy,),
-    )
-    action = _repair_action(deadline=15, reasons=("bgp-not-ready", "xfrm-not-ready"))
-    if case in {"unknown-peer", "unknown-sa", "deadline"}:
-        with pytest.raises(RuntimeError):
-            runtime._repair_failed_bgp_paths(action, 10 if case == "deadline" else 14)
-    else:
-        assert runtime._repair_failed_bgp_paths(action, 14) is (case in {"complete", "rekey"})
-    effects = [command for command, _ in calls if command[-1].startswith("clear ")]
-    assert effects == (
-        [("vtysh", "-c", "clear bgp ipv4 unicast 169.254.2.2")]
-        if case in {"complete", "rekey"}
-        else []
-    )
-    assert all(0 < timeout <= 4 for _, timeout in calls)
-
-
-def test_scoped_bgp_repair_cannot_consume_the_fencing_reserve(tmp_path, monkeypatch):
-    now = [10.0]
-    runtime = SystemDataPlaneRuntime(
-        state_path=tmp_path / "state.json",
-        guard_path=tmp_path / "guard.json",
-        configured_bgp_sessions=(),
-        expected_bgp_policy_digest="a" * 64,
-        monotonic_clock=lambda: now[0],
-    )
-
-    def finishes_at_reserve(action, deadline):
-        now[0] = deadline
-        return True
-
-    fenced = []
-    monkeypatch.setattr(runtime, "_repair_failed_bgp_paths", finishes_at_reserve)
-    monkeypatch.setattr(runtime, "emergency_fence", fenced.append)
-    action = _repair_action(deadline=15, reasons=("bgp-not-ready", "xfrm-not-ready"))
-    runtime.repair_local(action)
-    assert fenced == [action]
-
-
 @pytest.mark.parametrize("mode", ["static", "bgp", "bgp-ineligible", "unbound"])
 @pytest.mark.parametrize("pending", [False, True])
 @pytest.mark.parametrize("path_case", ["healthy", "path-down", "forwarding-off"])
@@ -4605,7 +4935,9 @@ def test_sampler_distinguishes_serving_failure_and_pending_recovery(
     monkeypatch.setattr(
         BoundRouteRuntime,
         "readiness",
-        lambda self, strict=False: LocalReadiness(True, path_ready, True, True),
+        lambda self, strict=False: LocalReadiness(
+            True, path_ready, True, True, protection_ready=True
+        ),
     )
     # This test isolates publication/receiver semantics with synthetic readiness.
     # Real native exports and bound selector context are exercised below.
@@ -4648,6 +4980,7 @@ def test_sampler_distinguishes_serving_failure_and_pending_recovery(
             service_healthy=bool(local and local.service_healthy),
             route_ready=bool(local and local.transfer_ready),
             promotion_ready=False,
+            authority_ready=forwarding,
             evidence=replace(
                 evidence, echo=proof.issue(_peer(node_id="node-b")).evidence.challenge
             ),
@@ -4655,6 +4988,7 @@ def test_sampler_distinguishes_serving_failure_and_pending_recovery(
         send=lambda heartbeat, remaining: received.append(proof.accept(heartbeat)),
         clock=lambda: now[0],
     )
+    publisher.observed(None)
     controller = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
     checkpoint = ControllerCheckpoint(state=HAState.NORMAL)
     cloud = replace(_cloud(), former_attachment_exact=True, candidate_attachment_absent=True)
@@ -4670,18 +5004,25 @@ def test_sampler_distinguishes_serving_failure_and_pending_recovery(
         )
         checkpoint = result.checkpoint
     assert (result.action is not None and result.action.kind is ActionKind.STOP_FORMER_OWNER) is (
-        not protects
+        not forwarding
     )
     assert {p.name: p.read_bytes() for p in state_dir.iterdir()} == before
     ports.close()
 
 
 @pytest.mark.parametrize("case", ["healthy", "unknown-bgp", "missing-rib", "missing-xfrm"])
-def test_pending_bgp_sampler_requires_complete_native_evidence(tmp_path, case):
+def test_pending_bgp_sampler_requires_complete_native_evidence(tmp_path, case, monkeypatch):
     import yaml
     from tests.unit.test_ha_tunnel_selection import AUTH, Effects, config
 
     from nebius_vpngw.agent.vm_ha.tunnels import STATE_NAME, TunnelController
+
+    # This fixture supplies complete SA/FRR evidence; loader admission is covered
+    # separately with real canonical files and malformed connection inventories.
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.tunnel_runtime.authorized_configuration",
+        lambda cfg: ConfigurationInventory(),
+    )
 
     cfg = config("bgp")
     peers = tuple(t["inner_remote_ip"] for t in cfg["connections"][0]["tunnels"])
@@ -4693,7 +5034,7 @@ def test_pending_bgp_sampler_requires_complete_native_evidence(tmp_path, case):
         command = Path(argv[0]).name
         calls.append((tuple(argv), timeout))
         if command == "systemctl":
-            return CommandResult(0)
+            return CommandResult(0, "active\n")
         if command == "sysctl":
             return CommandResult(0, "1\n")
         if command == "vtysh":
@@ -4800,13 +5141,20 @@ def test_pending_bgp_sampler_requires_complete_native_evidence(tmp_path, case):
         "stale-authority",
     ],
 )
-def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(tmp_path, case):
+def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(
+    tmp_path, case, monkeypatch
+):
     import yaml
     from tests.unit.test_ha_tunnel_selection import AUTH, Effects, config
 
     from nebius_vpngw.agent.vm_ha.tunnels import STATE_NAME, TunnelController
     from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
     from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
+
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.tunnel_runtime.authorized_configuration",
+        lambda cfg: ConfigurationInventory(),
+    )
 
     cfg = config("bgp")
     cfg["gateway"]["local_prefixes"] = ["10.0.0.0/24"]
@@ -4824,7 +5172,7 @@ def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(tmp_
         command = Path(argv[0]).name
         calls.append((tuple(argv), timeout))
         if command == "systemctl":
-            return CommandResult(0)
+            return CommandResult(0, "active\n")
         if command == "sysctl":
             return CommandResult(0, "0\n" if case == "passive" else "1\n")
         if command == "vtysh":
@@ -4960,3 +5308,13 @@ def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(tmp_
     assert calls and all(0 < timeout <= 3 for _, timeout in calls)
     assert {p.name: p.read_bytes() for p in state_dir.iterdir()} == before
     ports.close()
+
+
+def configuration_payload(value):
+    if value == "[]":
+        return ConfigurationInventory().json()
+    if value == '["edge"]':
+        return ConfigurationInventory(frozenset({"edge"}), frozenset({"ike-psk-1"})).json()
+    if value == "missing-key":
+        return ConfigurationInventory(frozenset({"edge"})).json()
+    return value

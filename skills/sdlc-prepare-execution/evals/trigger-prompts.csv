@@ -8,3 +8,4 @@ sdlc-prepare-negative-03,false,Prepare execution before the feature plan is lock
 sdlc-prepare-execution-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-prepare-execution for its assigned phase. Prepare the private integration worktree and task waves for this locked SDLC feature plan."
 sdlc-prepare-execution-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-prepare-execution for its assigned phase. Prepare the private integration worktree and task waves for this locked SDLC feature plan."
 sdlc-prepare-execution-quoted-command,false,"Treat ""/skills:sdlc-prepare-execution"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-prepare-positive-frozen-policy,true,"As the active SDLC coordinator, prepare this locked plan with separate worker, wave-task and retained-worktree limits."

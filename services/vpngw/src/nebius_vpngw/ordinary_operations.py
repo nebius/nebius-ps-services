@@ -35,7 +35,9 @@ MANAGEMENT = (
 HA_WRITERS = ("nebius-vpngw-vm-ha-rearm.service", "nebius-vpngw-vm-ha.service")
 HA_GUARD = "nebius-vpngw-vm-ha-guard.service"
 DATAPLANE = (
+    "strongswan.service",
     "strongswan-starter.service",
+    "strongswan-swanctl.service",
     "frr.service",
     "ufw.service",
     "nebius-vpngw-esp4-preflight.service",
@@ -187,7 +189,21 @@ class Journal:
                     ):
                         raise ValueError
                     jobs = effect.get("jobs")
-                    if effect["state"] != "intent" and not jobs:
+                    retired_on_reboot = (
+                        effect["state"] == "settled"
+                        and effect["writer"]["boot"] != value["owner"]["boot"]
+                    )
+                    retired_handoff_stop = (
+                        effect["state"] == "settled"
+                        and value["purpose"] == "ha-handoff"
+                        and effect["action"] == "stop"
+                        and effect["writer"] != value["owner"]
+                    )
+                    if (
+                        effect["state"] != "intent"
+                        and not jobs
+                        and not (retired_on_reboot or retired_handoff_stop)
+                    ):
                         raise ValueError
                     if jobs is not None and (
                         not isinstance(jobs, list)
@@ -408,6 +424,20 @@ def require_idle() -> None:
         )
 
 
+def wait_quiet(manager: Manager, admission: Callable[[], Any]) -> None:
+    """Observe existing jobs under one deadline without cancelling or starting work."""
+    while True:
+        admission()
+        if time.monotonic() >= manager.deadline:
+            raise TimeoutError("ordinary_manager_unresolved")
+        if manager.quiet((*MANAGEMENT, *DATAPLANE)):
+            admission()
+            if time.monotonic() >= manager.deadline:
+                raise TimeoutError("ordinary_manager_unresolved")
+            return
+        time.sleep(min(0.1, max(0, manager.deadline - time.monotonic())))
+
+
 @contextlib.contextmanager
 def mutation_lock() -> Iterator[None]:
     """Guest-side admission, including callers streamed to older guest packages."""
@@ -610,7 +640,7 @@ class Manager:
                 # This reserved startup precondition is durably installed
                 # before reservation and may be loaded lazily by PID 1. It has
                 # no dependency effects; installation validates its contents.
-                if path.name != "ordinary-admission.conf" or name not in MANAGEMENT:
+                if path.name not in {"ordinary-admission.conf", "20-runtime-admission.conf"}:
                     files[str(path)] = hashlib.sha256(raw).hexdigest()
                 known = text == "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf"
                 if text in unit.get("DropInPaths", []) and not known and name in MANAGEMENT:
@@ -779,12 +809,33 @@ class Operation:
         previous: str | None = None,
         journal: Journal | None = None,
         purpose: str = "ordinary",
+        resume_inhibited_quiescence: bool = False,
     ) -> Operation:
         journal = Journal() if journal is None else journal
         old = journal.read()
         if old and old["state"] != "complete":
-            if previous != digest(old) or not recoverable(old, manager):
+            recovered = (
+                recoverable(old, manager)
+                if purpose == "ordinary"
+                else handoff_recoverable(
+                    old, manager, inhibited_quiescence=resume_inhibited_quiescence
+                )
+            )
+            if previous != digest(old) or not recovered:
                 raise OperationBlocked("ordinary_operation_unresolved")
+            if request == old["id"]:
+                if (
+                    old["config"] != config
+                    or old["artifact"] != artifact
+                    or old["purpose"] != purpose
+                ):
+                    raise OperationBlocked("ordinary_operation_identity_changed")
+                value = dict(old, owner=identity(), state="active", phase="quiesce")
+                value["effects"] = [dict(effect, state="settled") for effect in old["effects"]]
+                # Recovery above independently proves every earlier writer settled.
+                # Preserve settled effects and the original approval/route binding.
+                journal.write(value, expected=digest(old))
+                return cls(value, manager, journal)
         value = {
             "schema": SCHEMA,
             "purpose": purpose,
@@ -873,6 +924,28 @@ class Operation:
             *((*HA_WRITERS, HA_GUARD) if self.value["purpose"] == "ha-handoff" else ()),
         ):
             raise OperationBlocked("ordinary_service_scope_unknown")
+        metadata = self.manager.unit(name)
+        canonical = metadata.get("Id", name)
+        if canonical != name:
+            # Ubuntu's daemon package exposes strongswan-swanctl.service as an
+            # alias. PID 1 returns the primary Id in its job reply. Resolve that
+            # exact native mapping before intent, without admitting aliases to
+            # another component (notably networking or firewall services).
+            daemon_names = {
+                "strongswan.service",
+                "strongswan-starter.service",
+                "strongswan-swanctl.service",
+            }
+            names = metadata.get("Names")
+            if (
+                not isinstance(canonical, str)
+                or not isinstance(names, list)
+                or not all(isinstance(item, str) for item in names)
+                or not {name, canonical}.issubset(daemon_names)
+                or not {name, canonical}.issubset(names)
+            ):
+                raise OperationBlocked("ordinary_service_alias_unproven")
+            name = canonical
         index = self.intent("unit", unit=name, action=action)
         result = self.manager.system("EnqueueUnitJob", "sss", name, action, "fail")
         if result["type"] != "uososa(uosos)" or len(result["data"]) != 6:
@@ -981,10 +1054,13 @@ def process_group_empty(process: dict[str, Any]) -> bool:
     return True
 
 
-def handoff_recoverable(value: dict[str, Any], manager: Manager) -> bool:
+def handoff_recoverable(
+    value: dict[str, Any], manager: Manager, *, inhibited_quiescence: bool = False
+) -> bool:
     """Handoff recovery has its own admission, never ordinary recovery authority."""
     if value["purpose"] != "ha-handoff" or alive(value["owner"]):
         return False
+    quiescing = inhibited_quiescence and value["phase"] == "quiesce"
     new_boot = value["owner"]["boot"] != BOOT.read_text().strip()
     for effect in value["effects"]:
         if alive(effect["writer"]):
@@ -993,6 +1069,21 @@ def handoff_recoverable(value: dict[str, Any], manager: Manager) -> bool:
             if not new_boot and not process_group_empty(effect.get("process", {})):
                 return False
         elif effect["kind"] == "unit":
+            if quiescing and effect.get("action") != "stop":
+                return False
+            # A lost reply does not prove cancellation. For a stop with no
+            # receipt, require authoritative job/cgroup settlement before the
+            # new owner retires it and repeats quiescence under inhibition.
+            # Recheck an already retired receipt-less stop on later resumes.
+            if not new_boot and not effect.get("jobs"):
+                retired_stop = (
+                    effect["state"] == "settled"
+                    and effect.get("action") == "stop"
+                    and effect["writer"] != value["owner"]
+                )
+                if not (quiescing or retired_stop) or not manager.unit_finished(effect):
+                    return False
+                continue
             if (
                 not new_boot
                 and effect["state"] != "settled"
@@ -1055,6 +1146,9 @@ def observation(manager: Manager) -> dict[str, Any] | None:
         pass
     return {
         "digest": digest(value),
+        "id": value["id"],
+        "config": value["config"],
+        "artifact": value["artifact"],
         "recoverable": ready,
         "status": "review_required" if ready else "unresolved",
     }

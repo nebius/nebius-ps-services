@@ -141,8 +141,10 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
 5. Freeze objective, applicable spec receipt, plan, committed base, effective
    instructions/helper identities, assignments, ownership and validation. All
    effect boundaries reject stale bases. Record observed native capacity;
-   default at most four, capped by native slots, host/configuration limits and
-   independent tasks. Missing capacity evidence uses one isolated worker.
+   freeze configurable worker/wave/retention limits (defaults 4/8/16) and
+   executable acceptance checks using the shared wave contract in the required sibling
+   `../worktree/references/worker-waves.md`.
+   Fresh zero capacity waits; unknown capacity permits one total worker.
 6. Prepare a deterministic ready queue within the current dependency wave.
    Each worker uses the same frozen wave base and a fresh worktree and native
    identity. Give assignment-only context, including paths, validation and
@@ -155,9 +157,10 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    and schema identity. Host adapters do not reconstruct this contract.
    Task-start is the first transition
    after immediate Git identity inspection.
-7. Workers implement only their claims, validate and use code-review. Only an
-   `implemented` result may proceed after native termination; the coordinator
-   finishes through the shared owner transaction for one direct-child commit.
+7. Workers implement only their claims, validate and use code-review. Both `implemented` and
+   `verified_no_change` proposals may proceed after native termination. The former
+   requires one direct-child commit; the latter requires independent task acceptance
+   through `validate-target --task` at its exact clean base and creates no commit.
    Ingest the full result using
    `task-result --result <private-json> --termination <observation>`; pass its
    canonical receipt to `task-finish --receipt`, with the termination observation

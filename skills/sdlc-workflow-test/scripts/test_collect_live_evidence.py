@@ -25,7 +25,7 @@ SPEC.loader.exec_module(collector)
 class LiveEvidenceCollectorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name) / "verification"
+        self.root = Path(self.temporary.name).resolve() / "verification"
         self.root.mkdir(mode=0o700)
         marker = self.root / collector.verifier.VERIFICATION_ROOT_MARKER
         marker.write_text(
@@ -148,7 +148,7 @@ class LiveEvidenceCollectorTests(unittest.TestCase):
     def test_permissive_marker_is_rejected(self) -> None:
         marker = self.root / collector.verifier.VERIFICATION_ROOT_MARKER
         marker.chmod(0o644)
-        with self.assertRaisesRegex(ValueError, "marker must be private"):
+        with self.assertRaisesRegex(ValueError, "invalid or unsafe"):
             collector.collect(
                 self.root,
                 owner_kind="lane",

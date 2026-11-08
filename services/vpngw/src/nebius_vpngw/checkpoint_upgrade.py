@@ -1,4 +1,4 @@
-"""Deployment-only lossless checkpoint conversion; runtime accepts v5 only.
+"""Deployment-only lossless checkpoint conversion; runtime accepts v7 only.
 
 This module may inspect predecessors before importing the installed agent. Its
 publisher requires caller-owned HA writer locks and exact package verification.
@@ -20,9 +20,18 @@ from .agent.vm_ha_checkpoint import (
 )
 from .agent.vm_ha_controller import ControllerCheckpoint
 
-SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v5"
+SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v7"
 PREFIX = "nebius-vpngw/vm-ha-controller-checkpoint-v"
 RECEIPT = "nebius-vpngw/checkpoint-conversion-v1"
+
+
+def _completed_predecessor(receipt: dict, payload: dict, artifact: str) -> bool:
+    """A completed older release is distinct from rollback of this conversion."""
+    return (
+        receipt.get("phase") == "completed"
+        and receipt.get("artifact") != artifact
+        and payload.get("schema") != SCHEMA
+    )
 
 
 def inspect_checkpoint(payload: object) -> ControllerCheckpoint:
@@ -31,7 +40,7 @@ def inspect_checkpoint(payload: object) -> ControllerCheckpoint:
         raise ValueError("controller checkpoint has an invalid shape")
     if payload.get("schema") == SCHEMA:
         return controller_checkpoint_from_dict(payload)
-    versions = {PREFIX + str(version): version for version in range(1, 5)}
+    versions = {PREFIX + str(version): version for version in range(1, 7)}
     version = versions.get(str(payload.get("schema")))
     if version is None:
         raise ValueError("unsupported predecessor checkpoint schema")
@@ -49,6 +58,10 @@ def inspect_checkpoint(payload: object) -> ControllerCheckpoint:
         expected.add("transfer_continuity")
     if version >= 4:
         expected.add("repair_attempt")
+    if version >= 5:
+        expected.add("suspicion_boot_id")
+    if version >= 6:
+        expected.add("path_transfer_destinations")
     if set(payload) != expected:
         raise ValueError("predecessor checkpoint has an invalid shape")
     suspicion = payload["suspect_since"]
@@ -94,11 +107,24 @@ def inspect_checkpoint(payload: object) -> ControllerCheckpoint:
             pending["takeover_fence_required"] = incarnation > 0
         if version < 4:
             pending.update(repair_deadline_at=None, repair_reasons=[])
+        pending["repair_mode"] = "active"
     if version == 1 and value["state"] in {"ownership-transfer", "promoting"}:
         raise ValueError("predecessor lacks transfer continuity; conversion refused")
     value.setdefault("transfer_continuity", None)
     value.setdefault("repair_attempt", None)
-    value.update(schema=SCHEMA, suspect_since=None, suspicion_boot_id=None)
+    if value["repair_attempt"] is not None:
+        # Predecessor repair was restricted to active owners. Preserve every
+        # existing budget field and make that authority explicit for v7.
+        if (
+            not isinstance(value["repair_attempt"], dict)
+            or "repair_mode" in value["repair_attempt"]
+        ):
+            raise ValueError("predecessor repair attempt has an invalid shape")
+        value["repair_attempt"]["repair_mode"] = "active"
+    value["schema"] = SCHEMA
+    value.setdefault("path_transfer_destinations", [])
+    if version < 5:
+        value.update(suspect_since=None, suspicion_boot_id=None)
     checkpoint = controller_checkpoint_from_dict(value)
     # Decoder coercion must not silently change any predecessor recovery field.
     if json.dumps(controller_checkpoint_to_dict(checkpoint), sort_keys=True) != json.dumps(
@@ -129,7 +155,11 @@ def conversion_preflight(
     receipt = repair.read_json(receipt_path) if receipt_path.exists() else None
     if receipt is not None:
         validate_conversion_receipt(receipt)
-    if receipt is not None and receipt["phase"] == "completed":
+    if receipt is not None and _completed_predecessor(receipt, payload, artifact):
+        # The supported predecessor reader above has validated the older
+        # checkpoint. This new release still needs the current lock/boot fence.
+        receipt = None
+    elif receipt is not None and receipt["phase"] == "completed":
         controller_checkpoint_from_dict(payload)
         return False
     if receipt is None and payload.get("schema") == SCHEMA:
@@ -301,7 +331,11 @@ def convert_checkpoint(
     receipt = repair.read_json(receipt_path) if receipt_path.exists() else None
     if receipt is not None:
         validate_conversion_receipt(receipt)
-    if receipt is not None and receipt.get("phase") == "completed":
+    prior_completed = None
+    if receipt is not None and _completed_predecessor(receipt, payload, artifact):
+        prior_completed = repair.verified_file(receipt_path, repair.sha(receipt_path.read_bytes()))
+        receipt = None
+    elif receipt is not None and receipt.get("phase") == "completed":
         controller_checkpoint_from_dict(payload)
         return receipt
     if receipt is not None:
@@ -332,6 +366,16 @@ def convert_checkpoint(
     if receipt is not None and receipt != proposed:
         raise RuntimeError("checkpoint conversion candidate changed")
     guard()
+    if prior_completed is not None:
+        # Keep the completed prior release as immutable audit evidence before
+        # publishing the next canonical conversion receipt.
+        prior_hash = repair.sha(prior_completed)
+        archive = state_dir / f"checkpoint-conversion-{prior_hash}.completed.json"
+        if archive.exists():
+            repair.verified_file(archive, prior_hash)
+        else:
+            repair.publish(archive, prior_completed)
+        repair.verified_file(receipt_path, prior_hash)
     repair.publish(receipt_path, json.dumps(proposed, sort_keys=True).encode() + b"\n")
     guard()
     repair.verified_file(path, current_hash)

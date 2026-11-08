@@ -323,16 +323,16 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     assert "/usr/local/bin/nebius-vpngw-esp4-preflight.sh" in rendered
     assert "/etc/systemd/system/nebius-vpngw-esp4-preflight.service" in rendered
     assert "/var/lib/nebius-vpngw/esp4-reboot-pending" in rendered
-    assert "systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr" in " ".join(
+    assert "systemctl start nebius-vpngw-esp4-preflight strongswan frr" in " ".join(
         rendered.split()
     )
-    assert "  - [ systemctl, start, strongswan-starter ]" not in rendered
+    assert "  - [ systemctl, start, strongswan ]" not in rendered
     assert "/usr/sbin/sshd -t" in rendered
     assert "systemctl restart ssh.socket" in rendered
     assert "ss -H -lnt sport = :22 | grep -q ." in rendered
     assert "[ systemctl, reload, ssh ]" not in rendered
     assert "net.ipv4.ip_forward = 1" in rendered
-    assert yaml.safe_load(rendered)["package_upgrade"] is True
+    assert yaml.safe_load(rendered)["package_upgrade"] is False
 
 
 def test_vm_ha_controller_checkpoint_round_trip_preserves_complete_action_identity(
@@ -463,6 +463,7 @@ def test_vm_ha_v1_late_transfer_migration_invalidates_a_new_incarnation() -> Non
             ownership_incarnation=3,
         )
     )
+    payload.pop("path_transfer_destinations")
     payload.pop("suspicion_boot_id")
     payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v1"
     payload.pop("transfer_continuity")
@@ -471,6 +472,7 @@ def test_vm_ha_v1_late_transfer_migration_invalidates_a_new_incarnation() -> Non
     payload["pending_action"].pop("takeover_fence_required")
     payload["pending_action"].pop("repair_deadline_at")
     payload["pending_action"].pop("repair_reasons")
+    payload["pending_action"].pop("repair_mode")
 
     from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
 
@@ -500,6 +502,7 @@ def test_vm_ha_v2_checkpoint_preserves_strict_legacy_takeover_fence() -> None:
             ownership_incarnation=3,
         )
     )
+    payload.pop("path_transfer_destinations")
     payload.pop("suspicion_boot_id")
     payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v2"
     payload.pop("repair_attempt")
@@ -507,6 +510,7 @@ def test_vm_ha_v2_checkpoint_preserves_strict_legacy_takeover_fence() -> None:
     payload["pending_action"].pop("takeover_fence_required")
     payload["pending_action"].pop("repair_deadline_at")
     payload["pending_action"].pop("repair_reasons")
+    payload["pending_action"].pop("repair_mode")
 
     from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
 
@@ -537,12 +541,14 @@ def test_vm_ha_v3_checkpoint_preserves_explicit_takeover_fence() -> None:
         ownership_incarnation=3,
     )
     payload = controller_checkpoint_to_dict(expected)
+    payload.pop("path_transfer_destinations")
     payload.pop("suspicion_boot_id")
     payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v3"
     payload.pop("repair_attempt")
     assert isinstance(payload["pending_action"], dict)
     payload["pending_action"].pop("repair_deadline_at")
     payload["pending_action"].pop("repair_reasons")
+    payload["pending_action"].pop("repair_mode")
 
     from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
 
@@ -714,7 +720,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
 
     assert json.loads(capsys.readouterr().out) == {
         "features": [
-            "independent-heartbeat-v5",
+            "independent-heartbeat-v6",
             "connection-tunnel-selection-v1",
             "ordinary-apply-v1",
             "managed-peer-ingress-v2",
@@ -743,7 +749,7 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     ufw_lock = (systemd / "nebius-vpngw-ufw-lock.conf").read_text(encoding="utf-8")
     fix_routes = (systemd / "nebius-vpngw-fix-routes.service").read_text(encoding="utf-8")
 
-    assert "Before=network-online.target strongswan-starter.service" in guard
+    assert "Before=network-online.target strongswan.service" in guard
     assert "After=local-fs.target systemd-sysctl.service systemd-tmpfiles-setup.service" in guard
     assert "f /run/ufw.lock 0600 root root -" in ufw_lock
     assert "ExecStart=/usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-guard" in guard
@@ -766,7 +772,7 @@ def test_vm_ha_systemd_units_guard_vpn_services_before_controller() -> None:
     assert "Type=notify" in controller
     assert "After=nebius-vpngw-vm-ha-guard.service" in controller
     assert "After=network-online.target" not in controller
-    assert "Before=strongswan-starter.service strongswan.service frr.service" in controller
+    assert "Before=strongswan.service frr.service" in controller
     assert "After=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
     assert "Requires=nebius-vpngw-vm-ha-guard.service nebius-vpngw-vm-ha.service" in ordering
     assert (

@@ -1,5 +1,5 @@
+import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +12,7 @@ def build_binary() -> None:
       - PyInstaller installed in the current environment (dev dependency)
       - __main__.py present to serve as entry point
     """
-    if shutil.which("pyinstaller") is None:
+    if importlib.util.find_spec("PyInstaller") is None:
         print("[build-binary] PyInstaller not found. Install with: pip install pyinstaller")
         sys.exit(1)
 
@@ -66,8 +66,12 @@ def build_binary() -> None:
 
     for relative in (
         "ha_repair.py",
+        "runtime_migration.py",
+        "apply_lock.py",
+        "faults.py",
         "checkpoint_upgrade.py",
         "ipsec_observation.py",
+        "observation_bundle.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
         "deploy/handoff_remote.py",
@@ -85,8 +89,16 @@ def build_binary() -> None:
         destination = "nebius_vpngw" + ("/" + str(Path(relative).parent) if "/" in relative else "")
         add_data_args.extend(["--add-data", f"{source}{os.pathsep}{destination}"])
 
+    import vici
+
+    for source in Path(vici.__file__).parent.glob("*.py"):
+        add_data_args.extend(["--add-data", f"{source}{os.pathsep}vici"])
     cmd = [
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--copy-metadata",
+        "vici",
         "--onefile",
         "--name",
         "nebius-vpngw",

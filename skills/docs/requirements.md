@@ -3697,7 +3697,7 @@ Users need explicit workflows to consume conversation intent and deliver verifie
 - AC-004: Steering is direct root-user input and uses the same statement-level requirements/design extraction and reconciliation as other prompts. Questions, status and execution-only instructions do not invent specification changes. Maintain Project Specs owns interpretation and paired publication through the registered integration checkout during execution and delivered checkout afterward. Workers report gaps. Execution-only/no-effect objectives do not require unnecessary specs.
 - AC-005: Implement uses one integration worktree per run, fresh task workers and existing Worktree transactions/locks/recovery. Execute committed history, preserve unrelated dirty files and block dependencies on uncommitted content.
 - AC-006: Automatically deliver to the unchanged clean original non-default branch. Source drift retains the verified result. Default or unknown-default starts deliver a feature branch and checkout while preserving the default. Reject detached/unborn starts; preserve managed outer ownership.
-- AC-007: Use a deterministic ready queue within frozen dependency waves, default at most four workers capped by observed native capacity, configuration and independent work. Refill only after termination, validated results and writer quiescence. Keep a full-wave integration barrier and stable task order. Serialize conflicting paths/resources and lease shared live targets exclusively per assignment. Unknown native capacity uses one worker. Both coordinators consume one assignment-derived launch contract and one strict result-ingestion owner across native parallel and sequential dispatch; host adapters own only native launch, monitoring and termination observations. Workers receive fresh assignment-only context.
+- AC-007: Use a deterministic ready queue within frozen dependency waves, a configurable worker ceiling (default four) capped by current observed native capacity and independent work. Refill only after termination, validated results and writer quiescence. Keep a full-wave integration barrier and stable task order. Serialize conflicting paths/resources and lease shared live targets exclusively per assignment. Unknown native capacity uses one worker. Both coordinators consume one assignment-derived launch contract and one strict result-ingestion owner across native parallel and sequential dispatch; host adapters own only native launch, monitoring and termination observations. Workers receive fresh assignment-only context.
 - AC-008: Preserve worker identity/ancestry/paths/evidence, combined validation/alignment, SDLC phase responsibilities, remediation budgets, promotion and cleanup, remote authorization and read-only post-promotion docs assessment.
 - AC-009: Rename the entire verifier to `$implement-test`, preserving no flags, `--create`, `--create --keep`, `--destroy` and private root `<agent-home>/implement-test`. Preserve supported SDLC verifier modes and canonical nested fixtures. Reject obsolete flat fixtures without conversion; retain application/database migration checks.
 - AC-010: Live trials invoke public workflow intake. Preserve owner-executed test receipts/counters, source/deployment identity and headless Playwright evidence. Separate deterministic, installed, native and application results; absent proof remains NOT_RUN/PARTIAL and harness intervention cannot certify PASS. After fresh SDLC intake, the bound coordinator initializes first phase state and its checkpoint before phase observation or routing; accepted registration alone is not initialized phase state. Existing or partial history is reconciled without resetting counters or evidence. Intake helpers, hooks and verifiers do not perform this coordinator transition. Use the private coordinator initialization owner to validate the selected native binding and active ownership under the project lock. Preserve known hook audit telemetry without treating it as phase completion; unknown history or later work requires reconciliation. Interrupted initial publication preserves immutable snapshots and never resets progressed state.
@@ -3708,6 +3708,9 @@ Users need explicit workflows to consume conversation intent and deliver verifie
 - AC-013: Fresh workers in both workflows stop before repairing or rerunning an unexpected failed check or blocking review finding. Preserve honest failure evidence, return the shared blocked result and leave classification and authorized retry to the owning coordinator. Only negative outcomes declared before execution in immutable assignment validation are expected feedback; never relabel a discovered failure. Required safe teardown and lease release remain allowed.
 
 - AC-014: Every native worker adapter obtains its support write directories through the shared, coordinator-authorized launch admission owner. Validate the selected home, registered run/project, current binding and canonical assignment before native launch or support-directory creation. Cover the project transition lock and run state, plus shared runtime lease storage for runtime tasks and recovery. Preserve existing lock scope, workspace sandbox, approval controls, assignment ownership and claim guards; absent host capability blocks launch. Directory grants do not authorize unrelated state edits.
+
+- AC-015: Managed Agentic SDLC run completion requires separately recorded exact outer source-integration proof and a fresh authoritative match after lease release. Completion never performs integration or records missing proof. Rejected proof leaves completion evidence, terminal run state and session binding unchanged; preserve legitimate lease reconciliation, Implement released-lease behavior and unmanaged completion. Evidence is point-in-time, not a fence against later external Git writes.
+- AC-016: TDD and final seals use one owner-defined Git whitespace message contract for creation, interrupted recovery and historical observation. Preserve full bodies, indentation, Unicode and comment lines independently of configured commit cleanup. Hooks remain enabled; a substantive message rewrite blocks seal publication while retaining the commit and exact journal intent. Recovery requires matching intent, direct parent, clean scope and the same commit; never amend, reset, create duplicate seals or rewrite historical evidence automatically.
 
 #### Negative Criteria
 
@@ -4137,9 +4140,11 @@ Workflow users need bounded scalable execution across ready features for safe, r
 #### Acceptance Criteria
 
 - AC-001: Validate dependency graphs iteratively for more than 2000 tasks independent of input ordering. Use indexed dependency lookups and dependency-scoped incoming evidence rather than all historical task output.
-- AC-002: Keep one root coordinator, one active delivery candidate, at most four active workers and four retained task worktrees by default. Integrate, validate and clean bounded batches before allocating successors. Each batch shares its frozen base; dependent batches start from the validated preceding integration tip.
+- AC-002: Keep one root coordinator, one active delivery candidate, configurable active-worker and wave limits, and a run-wide physical-worker-worktree budget. Integrate, validate and clean bounded batches before allocating successors. Each batch shares its frozen base; dependent batches start from the validated preceding integration tip.
 - AC-003: Admit tasks across ready features only within open phase/package barriers and frozen slice membership. Serialize shared files/contracts/runtime resources. Preserve quiescence, fences, deterministic integration, checkpoint recovery, repair budgets and explicit continuation.
 - AC-004: Preserve the original selected branch; after verified merge allocate the next slice from the current default. Partial slice completion does not satisfy the full feature. Unsupported old execution state remains preserved without automatic conversion.
+- AC-005: Freeze worker ceiling W (default 4), wave task limit B (default 2W), and physical worker-worktree budget P (default 2B) before planning. Refresh host/session-bound native capacity at launch/refill without rewriting frozen wave membership. Unknown native capacity limits concurrency to one; known zero admits none. CPU count is not native-agent capacity.
+- AC-006: Reserve the complete next wave before allocation and count current, retained, interrupted and uncertain resources across all executions. Preserve evidence at exhaustion; reconcile through existing owners without forced cleanup. Keep one active integration writer and explicitly resolve retained integration resources. Apply the shared host-memory policy independently.
 
 #### Negative Criteria
 
@@ -4536,16 +4541,20 @@ from clean application acceptance.
   through its existing 1 MiB bound while keeping profile/configuration files
   bounded at 64 KiB. Reject oversized, unsafe, stale or malformed state with
   the relevant diagnostic; never discard observations to fit a consumer.
-- AC-008: Read-only classifier phase observations may inspect expected unsealed
-  files only on the exact registered integration checkout while the bound native
-  coordinator is running classification. Preserve objective, basis, branch, HEAD,
-  ownership and ancestry checks. This observation exception never admits runtime
-  mutations, canonical inventory, build certification or application acceptance.
+- AC-008: Read-only classifier and TDD phase observations may inspect expected
+  unsealed files only on the exact registered integration checkout while the
+  bound native coordinator is running the matching phase. TDD observation also
+  admits its documented tests_red and tests_ready output checkpoints before the
+  owned seal. Preserve objective, basis, branch, HEAD, ownership and ancestry.
+  These observation purposes never admit runtime mutations, canonical inventory,
+  build certification or application acceptance; explicit clean requests prevail.
 - AC-009: Final historical validation retains the original admitted TDD receipt
   across owner-admitted appended corrective waves only when immutable plan bytes,
   preserved completed task definitions, original TDD seal, replan succession and
-  unchanged execution identity prove that lineage. This does not admit stale
-  acceptance evidence or allow replacement of failed or altered receipts.
+  unchanged execution identity prove that lineage. A pre-seal observation must
+  bind the seal through the owner intent and its exact direct-parent commit
+  relationship; the original first-wave base must match that seal. Arbitrary
+  ancestors, stale acceptance and replaced or altered receipts remain rejected.
 
 #### Negative Criteria
 
@@ -4735,6 +4744,293 @@ Audit real historical records read-only and report each disposition. Keep native
 model evaluations and real remote publication separate from local fixture evidence.
 
 <!-- /REQUIREMENT: REQ-069 -->
+
+<!-- REQUIREMENT: REQ-070 status=active priority=P1 type=feature -->
+### REQ-070: Preserve host memory headroom during agent work
+
+#### User Story
+
+Codex and Claude users need durable host memory policy and reusable workload
+monitoring so agent-started work protects operating-system and interactive-agent
+headroom without interfering with unrelated applications.
+
+#### Acceptance Criteria
+
+- AC-001: Global native instructions define a 4 GiB warning threshold
+  and a 2 GiB hard operational stop floor, using binary GiB. Check the execution
+  host before expensive work and monitor throughout owned workload lifetimes.
+- AC-002: At or below 4 GiB but above 2 GiB, show a warning and continue the
+  task, including otherwise authorized workload launches. At or below 2 GiB,
+  stop owned heavy work safely, report that host memory is running out, preserve evidence
+  and permit only lightweight diagnosis, communication and safe cleanup.
+- AC-003: Measure available/reclaimable memory using explicit platform semantics,
+  not process RSS or raw free memory alone. Unsupported or hidden host visibility
+  fails closed for new heavy work. Report estimates and sampling limitations;
+  do not claim physical reservation or control over unrelated allocations.
+- AC-004: A shared foreground supervisor checks admission, samples while running,
+  and stops only its owned process group. Bounded read-only watching supports
+  workflows with external resource owners. Docker/browser/remote services retain
+  their exact ownership cleanup boundaries; no broad process-name termination.
+- AC-005: config-codex and config-claude carry the same compact policy in their
+  native templates and focused validation. Selected memory-only setup patches
+  instructions with changed-file backups and preserves unrelated settings,
+  hooks, roles, integrations and existing instruction text. An aligned repeat
+  makes no writes or new backups.
+
+#### Negative Criteria
+
+- NC-001: No OS tuning, memory-pressure stress, privileged daemon, automatic
+  restart, unrelated process/container termination, hook bypass or new Stop owner.
+- NC-002: Policy and sampled supervision are not an absolute host reservation;
+  swap capacity is not additional physical headroom and unknown is not healthy.
+- NC-003: Memory interruption never becomes product PASS, resets repair budgets,
+  or silently changes a frozen live trial or its retained failure evidence.
+
+#### Validation Method
+
+Verify native discovery against official docs, shared threshold and platform
+semantics, exact source/installed parity and scoped local instruction convergence.
+
+#### Test Method
+
+Use synthetic threshold/pressure/unknown readings and tiny disposable subprocesses
+for admission, warning, stop, interruption, descendant cleanup, normal exit and
+unrelated-process preservation. Cover malformed native output, policy drift,
+symlinks, no-op convergence and both host setup contracts without memory stress.
+
+#### Evaluation Method
+
+Separate deterministic source and installed checks, real host sampling, native
+instruction discovery and sustained agent compliance. Never infer unobserved
+cross-platform or future model behavior from template parity.
+
+<!-- /REQUIREMENT: REQ-070 -->
+
+<!-- REQUIREMENT: REQ-071 status=satisfied priority=P1 type=constraint -->
+### REQ-071: Recover selector-format denials without redundant auth discovery
+
+#### User Story
+
+Agents need actionable auth-hook feedback that preserves a known task project
+and separates local preparation from selected cloud commands.
+
+#### Acceptance Criteria
+
+- AC-001: Selector-format denials explain the single leading selector contract,
+  splitting mixed payloads into separate calls, and one corrected retry.
+- AC-002: Feedback directs reuse of an authoritative selected project without
+  rediscovery or verification; absent or conflicting project evidence routes
+  to read-only diagnosis before retry.
+- AC-003: Local preparation stays unprefixed; a separately selected command
+  receives only its selected project's renewable auth context.
+
+#### Negative Criteria
+
+- NC-001: Recovery must not relax selector parsing, rewrite a denied payload,
+  invoke setup, modify credentials or IAM, or imply auth is broken.
+
+#### Validation Method
+
+Compare hook feedback, diagnosis instructions, process cases and runtime tests.
+
+#### Test Method
+
+Use isolated fixtures for local preparation followed by a selected script,
+separate-call controls and discovery guards; make no live cloud requests.
+
+#### Evaluation Method
+
+Verify installed parity separately from fresh-session loading and model behavior.
+
+<!-- /REQUIREMENT: REQ-071 -->
+
+<!-- REQUIREMENT: REQ-072 status=active priority=P0 type=feature -->
+### REQ-072: Verify worker completion and recover exact worktree effects
+
+#### User Story
+
+Users need recoverable parallel work and independently verified integration,
+including tasks already satisfied without changes.
+
+#### Acceptance Criteria
+
+- AC-001: Reconcile interrupted merge commits only against durable exact intent;
+  validate recorded integration ancestry and identities on every success replay;
+  retain ownership evidence until path, registration and local ref are absent.
+- AC-002: Require authoritative worker quiescence on success, failure, timeout
+  and cancellation before result admission, slot reuse, recovery or cleanup.
+  Direct process exit alone does not prove descendant termination.
+- AC-003: Complete waves only with immutable producer-admitted validation bound
+  to wave, execution basis, exact candidate SHA/tree, task results, evaluator,
+  required checks and relevant environment. Preserve final qualification gates.
+- AC-004: Support verified_no_change with independent acceptance evidence,
+  exact unchanged clean base, termination and released resources. Create no
+  synthetic commit/merge. Dependants wait for full-wave acceptance.
+- AC-005: Share contracts between Implement and SDLC. Preserve prior failures,
+  source changes, normal Git hooks and exact non-force cleanup. Unsupported old
+  contracts fail clearly without migration or compatibility aliases.
+
+#### Negative Criteria
+
+- NC-001: No success from model assertions, parent exit, empty diffs or stale
+  evidence. Never reclaim foreign resources or bypass workflow ownership.
+
+#### Validation Method
+
+Use focused real-Git, subprocess, receipt and scheduler regressions plus alignment.
+
+#### Test Method
+
+Inject failures at effect/receipt boundaries; cover no-change/mixed waves,
+forged evidence, surviving children, source drift and resource reconciliation.
+
+#### Evaluation Method
+
+Separate source, disposable installation, fresh native workers, application and
+hosted-scale qualification; missing evidence remains NOT_RUN or PARTIAL.
+
+<!-- /REQUIREMENT: REQ-072 -->
+
+<!-- REQUIREMENT: REQ-073 status=active priority=P1 type=feature -->
+### REQ-073: Align SDLC verification with current owners and complete fixture cleanup
+
+#### User Story
+
+Workflow maintainers need trustworthy deterministic and native qualification,
+clear failure attribution and complete cleanup of exactly owned test fixtures.
+
+#### Acceptance Criteria
+
+- AC-001: Deterministic fixtures consume current worker-result and coordinator
+  contracts without weakening production validation or inventing live evidence.
+- AC-002: One suite catalog owns commands, timeouts and capability dependencies.
+  Reports distinguish suite failures from dependent impacts, retain elapsed time
+  and completed results on interruption, and provide bounded execution progress.
+- AC-003: Standalone destroy covers validated lightweight and live fixtures,
+  preserves sanitized reports and cleanup records, and returns ALREADY_DESTROYED
+  only when both fixture classes are absent. Creation cleans previous owned state
+  before preflight; terminal automatic cleanup covers both unless keep is selected.
+- AC-004: Cleanup serializes mutations, validates ownership and writer quiescence,
+  checkpoints before removing ownership material and resumes exact interrupted
+  deletion. Missing profiles, foreign state or unsafe paths remain untouched.
+- AC-005: Source state-loader discovery, installed parity and actual native hook
+  activation have distinct evidence. Setup precedes the frozen live trial;
+  ordinary verification never silently repairs installations or trusts hooks.
+- AC-006: Qualification requires passing deterministic checks, one fresh native
+  Codex three-tier profile and verified absence of its owned resources. Missing
+  other live lanes remain PARTIAL and historical failures remain preserved.
+
+#### Negative Criteria
+
+- NC-001: Do not add an SDLC orchestrator, compatibility aliases, synthetic PASS,
+  ownership adoption, broad root deletion or source edits during a frozen trial.
+- NC-002: Do not delete unrelated state, alter ordinary credentials or hooks,
+  publish externally or infer native activation from source fixture execution.
+
+#### Validation Method
+
+Run focused fixture, suite-runner, lifecycle and evidence regressions, alignment,
+full deterministic preflight, source-installed parity and a fresh Codex trial.
+
+#### Test Method
+
+Cover timeout, launch failure, interruption, dependency attribution, complete and
+partial cleanup, replay, concurrency, unsafe paths, missing ownership, retained
+reports and distinct startup/native proof, using disposable local resources.
+
+#### Evaluation Method
+
+Separate source, installed, native application and cleanup evidence. Validate
+canonical live evidence before deletion; report unqualified lanes explicitly.
+
+<!-- /REQUIREMENT: REQ-073 -->
+
+<!-- REQUIREMENT: REQ-074 status=active priority=P1 type=feature -->
+### REQ-074: Portable software testing in disposable containers
+
+#### User Story
+
+Engineers need a public product-neutral skill for actual installation, testing,
+upgrade, patch and migration workflows in disposable containers, with reusable
+verified baselines and independently inspected evidence.
+
+#### Acceptance Criteria
+
+- AC-001: Provide test-software-in-container with source testing in the exact current
+  project as the default mode; explicit install/upgrade/patch/migration modes, and all-tests selecting applicable
+  lifecycle operations plus tests of their results. Standalone test-only coverage
+  in all-tests requires an explicitly declared preinstalled target.
+- AC-002: Use image as the single starting-image selector, defaulting to Ubuntu
+  24.04 for newly prepared bases. Installed-target testing requires an explicit image and never
+  installs missing software. Source tests use declared project targets, otherwise
+  the actual engine-native platform. Freeze image/platform and target identity.
+- AC-003: Use artifact/profile/engine instead of candidate/matrix/runtime; retain
+  platform, parallel, cache, output and upgrade-only release/path selectors.
+  Default to four stable predecessors, direct paths and at most two concurrent
+  cases. Reject irrelevant or conflicting explicit selectors and old aliases.
+- AC-004: Select source suites from compatible project defaults or one unambiguous
+  documented default; ask when unresolved. Lifecycle checks retain smoke and
+  explicitly configured compatible default suites. Freeze target/operation
+  applicability, assertions and justified exclusions;
+  missing required inputs, checks or suites cannot produce an aggregate pass.
+- AC-005: Support install without history, testing installed images, authentic
+  upgrades, same-version patch deltas and standalone state migration without
+  fabricated installed-product baselines. Follow product-owned entrypoints and
+  independently verify installation, required startup and state invariants.
+- AC-006: Preflight controller/runtime/product prerequisites before expensive
+  setup. Separate complete execution-bundle identity from baseline identity;
+  cache only quiescent verified predecessors and restore fresh writable state.
+- AC-007: Preserve failed/intervened evidence, classify failure ownership, bound
+  resources on the actual execution host, collect diagnostics before exact-owned
+  cleanup and report phase timing/cache reuse without unmeasured speed claims.
+- AC-008: Keep focused planning/evidence helpers offline and deterministic;
+  commands remain reviewed harness metadata. Use the renamed schema namespace
+  without compatibility parsers, while preserving historical evidence.
+- AC-009: Distinguish plan-only inspection from bounded preflight-only execution.
+  Neither may perform product installation, upgrading, patching or migration,
+  test collection or suite execution.
+- AC-010: Discover container-tests.json only within the selected project. Resolve
+  CLI/profile filesystem paths from that project; invalid profiles fail. Static
+  list-suites reports purpose, applicability, origin and defaults without imports
+  or execution. Document every public flag/default and suite category in README.
+- AC-011: Separate source campaigns from lifecycle campaigns; combined test and
+  lifecycle requires explicit installed target. Source tests require execution,
+  source-origin and selected-suite evidence, not invented installed checks.
+- AC-012: Freeze independent collection inventories before execution, runner and
+  selection identities, source/tests/harness/dependencies including directory
+  modes and symlink targets. Account for each test and phase; failures remain
+  FAIL and incomplete/skipped coverage cannot pass. Require an ordinary passing
+  test per suite/case; exemptions are exact and predeclared.
+- AC-013: Provide neutral receipts and an optional observational pytest reporter,
+  retaining partial and terminal evidence. Unsupported retry/distributed modes
+  block; no suite-count, exit-only or receipt-validity claim attests execution.
+
+#### Negative Criteria
+
+- NC-001: No provider/product dependency, universal runner, production mutation,
+  automatic host-runtime installation, cloud provisioning or publication.
+- NC-002: Container results certify only named observed assertions and suites,
+  never VM boot, target kernel/hardware equivalence, production connectivity or
+  release approval. No blanket privileged runtime or package-manager override.
+
+#### Validation Method
+
+Run focused helper tests, portable/native skill checks, disposable installation,
+plugin/spec checks and changed-scope alignment. Exercise synthetic disposable
+runtime fixtures when available; disclose missing runtime/quality evidence.
+
+#### Test Method
+
+Cover all operation selections, conflicting/irrelevant flags, absent history,
+image/artifact integrity, patch and migration state, suite applicability, cache
+identity drift, missing evidence, no-op/recovery assertions and bounded inputs.
+
+#### Evaluation Method
+
+Separate static checks, installation parity, fresh native triggering, output
+quality and actual container execution. Preserve explicit incomplete outcomes.
+
+<!-- /REQUIREMENT: REQ-074 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

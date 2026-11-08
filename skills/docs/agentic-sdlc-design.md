@@ -11,7 +11,7 @@ failed evidence and started task definitions remain unchanged. See
 The current document-program contract is defined in
 [document delivery](../worktree/references/document-delivery.md). It adds portable
 source snapshots and complete obligation coverage, immutable phase barriers and
-SLICE identities, cross-feature task membership, four active/four retained task
+SLICE identities, cross-feature task membership, configurable active and retained task
 worktrees, bounded dependency indexes and exact qualification. Requirements are
 extracted before reconciling supplied design; canonical publication remains with
 `maintain-project-specs`. Plan obligations up front and detail upcoming slices.
@@ -253,7 +253,7 @@ Dispatch, result admission, integration and promotion reject stale bases.
 Plans use stable task IDs, dependencies, exact/prefix write claims, conflict
 domains, focused validation, done criteria and stop conditions. Earliest-fit
 waves contain independent tasks only. Within each frozen wave, a deterministic
-ready queue fills up to four workers, capped by observed native host capacity,
+ready queue fills configured worker slots (default four), capped by fresh native host capacity,
 configured resource limits and ready tasks. Unknown native capacity uses one
 isolated worker. Reports distinguish declared tasks from observed concurrency.
 Overlapping paths, lockfiles, generated outputs, ports, databases and live targets
@@ -623,7 +623,7 @@ run, and steering checks have evidence.
 Dedicated deterministic capabilities require document obligation coverage,
 exact portable source admission, phase/slice ordering, immutable delivered
 slices, current completion evidence, 2,100-task graphs, indexed handoffs and
-the four-retained-worktree limit. Missing tests fail; skipped tests remain
+the configurable retained-worker-worktree budget. Missing tests fail; skipped tests remain
 partial. Shared semantic and delivery owners participate in installed parity.
 Dispatch and task-wave suites run once, outside the execution aggregate.
 Current live profiles do not qualify native multi-slice document delivery or
@@ -1671,3 +1671,37 @@ revalidation; another dispatch and over-limit state remain blocked.
 
 The classifier owns this policy; Implement and SDLC retain separate coordinators
 over the same Worktree execution engine. No new worker or retry engine is added.
+
+The shared [worker wave contract](../worktree/references/worker-waves.md)
+freezes worker/wave/physical-worktree limits, admits independently verified
+no-change results, and requires producer-owned combined-wave validation receipts.
+
+## Verifier Alignment And Evidence Boundaries
+
+The external verifier consumes the existing SDLC and Worktree owners. Shared
+deterministic fixtures use current result contracts and explicit coordinator
+identity. A private suite catalog owns commands, bounded execution and capability
+dependencies; reports retain elapsed time, progress and prerequisite attribution.
+
+A private workspace owner admits both fixture classes and delegates live-resource
+cleanup to the existing lifecycle. Aggregate destroy preserves sanitized reports
+and exact cleanup records, rejects incomplete ownership, proves writer quiescence
+and resumes only digest-bound admitted deletion. Source startup discovery is
+separate from actual native hook activation; native receipts correlate the owned
+session and naturally emitted hook events without copying message bodies.
+Initial observation uses an explicit native coordinator selector, validates its
+binding and invokes the source loader with that selector without changing outer
+identity. Native correlation binds actual command execution items to their thread,
+turn and hook event. Cleanup of incomplete startup independently validates product
+ownership, writer quiescence and released leases; it creates no acceptance receipt.
+
+The live lifecycle pins the physical installed catalog and runtime closure during
+preparation. Native launch, complete runtime operations and cleanup use that same
+catalog in fresh processes. Source code with matching bytes cannot replace the
+installed paths in an immutable execution basis. Aggregate source verification
+delegates semantic admission to the configured installed owner's read-only helper,
+then checks the canonical result digest; evidence never selects executable code.
+
+Qualification uses a frozen source/install snapshot, deterministic gates, a fresh
+Codex three-tier trial and independent cleanup verification. Seven-lane readiness
+remains partial when its other required live profiles have not been exercised.

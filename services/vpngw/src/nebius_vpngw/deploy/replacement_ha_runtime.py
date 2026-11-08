@@ -33,7 +33,13 @@ class Runtime:
         self.tx = journal.state["transaction"]
         self.index = self.tx["member"]
         self.key = f"ha-runtime-{self.index}"
-        self.record = self.tx["results"].setdefault(self.key, {})
+        # Terminal verification must not invent a runtime record for member 2
+        # after both members have completed. All mutation paths are pending.
+        self.record = (
+            self.tx["results"].get(self.key, {})
+            if self.tx.get("phase") == "complete"
+            else self.tx["results"].setdefault(self.key, {})
+        )
         self.operation = digest([self.tx["approval"], self.index, "ha-pair-apply"])
         self.artifact = VMHAAgentArtifact.from_wheel(ports.wheel, source="staged-replacement")
 
@@ -365,7 +371,7 @@ class Runtime:
                     binding,
                     lambda value: bool(
                         value.get("data_plane_mode") == "passive"
-                        and value.get("heartbeat", {}).get("peer_v5_fresh") is True
+                        and value.get("heartbeat", {}).get("peer_v6_fresh") is True
                         and cli._vm_ha_mtls_agent_evidence_matches(
                             mtls, str(value.get("node_id")), value
                         )

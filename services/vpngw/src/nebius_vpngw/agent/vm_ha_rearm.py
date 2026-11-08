@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -175,12 +175,34 @@ class RearmCloudPort(Protocol):
 class SDKRearmCloudPort:
     """Expose only read/start capabilities from the shared SDK adapter."""
 
-    def __init__(self, sdk: Any, *, journal: VMHACloudOperationJournal) -> None:
+    def __init__(
+        self,
+        sdk: Any,
+        *,
+        journal: VMHACloudOperationJournal,
+        binding: VMHARuntimeBinding | None = None,
+        state_dir: Path | None = None,
+    ) -> None:
         self.journal = journal
         self.calls = NebiusSDKCloudClient(sdk, operation_journal=journal)
+        self.binding = binding
+        self.state_dir = state_dir
 
     def observe_instance(self, instance_id: str) -> ComputeObservation:
-        return compute_observation(instance_id, self.calls.get_instance(instance_id))
+        from .vm_ha.attachment_continuity import observe_epoch
+
+        instance = self.calls.get_instance(instance_id)
+        observation = compute_observation(instance_id, instance)
+        if self.binding is not None and self.state_dir is not None:
+            observation = replace(
+                observation,
+                retained_ownership_epoch=observe_epoch(
+                    instance,
+                    state_dir=self.state_dir,
+                    binding=self.binding,
+                ),
+            )
+        return observation
 
     def observe_allocation(self, allocation_id: str) -> AllocationObservation:
         return allocation_observation(allocation_id, self.calls.get_allocation(allocation_id))
@@ -700,7 +722,7 @@ class RearmRuntime:
         if not (
             allocation.owner == exact_owner
             and owner.state is InstanceCloudState.RUNNING
-            and owner.resource_version == receipt.ownership_epoch
+            and owner.ownership_epoch == receipt.ownership_epoch
             and owner.has_alias_allocation(self.local.network_interface_name, receipt.allocation_id)
             and not target.has_alias_allocation(
                 self.peer.network_interface_name, receipt.allocation_id
@@ -1281,7 +1303,7 @@ def build_default_rearm_runtime(
         )
     try:
         journal = VMHACloudOperationJournal(state_dir / REARM_OPERATION_PATH.name)
-        cloud = SDKRearmCloudPort(sdk.client, journal=journal)
+        cloud = SDKRearmCloudPort(sdk.client, journal=journal, binding=binding, state_dir=state_dir)
         runtime = RearmRuntime(
             binding=binding,
             local=local,

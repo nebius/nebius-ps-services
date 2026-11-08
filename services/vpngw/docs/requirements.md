@@ -5,7 +5,7 @@
 
 #### User Story
 
-Maintain the existing Python package, CLI, test, build, and release contracts while applying conservative project hardening for current users. Constraints: Preserve supported public import paths, console scripts, CLI syntax and exit behavior, Python 3.10 through 3.12 support, configuration schemas and defaults, persisted formats, packaged systemd assets, SCM-derived versions, release tags, and upgrade paths, except for the explicitly approved VM-HA clean break in REQ-008 and the explicitly approved region-terminology and pre-adoption VM-HA command cleanup in REQ-015, customer-owned SSH filtering in REQ-024, and the approved operator, replacement and review repairs in REQ-030 through REQ-033. Keep one canonical implementation rather than adding compatibility shims. Non-goals: Replacing the established project scaffold, changing runtime cloud or networking behavior, raising the Python floor, adopting a new framework or build backend, or performing broad dependency upgrades.
+Maintain the existing Python package, CLI, test, build, and release contracts while applying conservative project hardening for current users. Constraints: Preserve supported public import paths, console scripts, CLI syntax and exit behavior, Python 3.10 through 3.12 support, configuration schemas and defaults, persisted formats, packaged systemd assets, SCM-derived versions, release tags, and upgrade paths, except for the explicitly approved VM-HA clean break in REQ-008 and the explicitly approved region-terminology and pre-adoption VM-HA command cleanup in REQ-015, customer-owned SSH filtering in REQ-024, and the approved operator, replacement and review repairs in REQ-030 through REQ-035. Keep one canonical implementation rather than adding compatibility shims. Non-goals: Replacing the established project scaffold, changing runtime cloud or networking behavior, raising the Python floor, adopting a new framework or build backend, or performing broad dependency upgrades.
 
 #### Acceptance Criteria
 
@@ -81,7 +81,7 @@ Make interactive `nebius-vpngw create-config CONFIG_FILE` use a guided wizard th
 
 #### Acceptance Criteria
 
-- The wizard never asks for SSH source CIDRs or detects an outgoing public address. Customer-owned initial Security Group references are optional.
+- The wizard never asks for SSH source CIDRs or detects an outgoing public address. Customer-owned desired Security Group references are optional.
 
 - The wizard guides project context, gateway/network/routing, repeatable connections and tunnels, and an optional advanced phase; invalid typed or cross-field values are explained and reprompted, and back/quit controls never write a partial candidate.
 - The completed in-memory candidate passes the existing Pydantic schema before an atomic file replacement. A hidden PSK answer matching the uppercase environment-name grammar is stored as `${NAME}`; any other value of at least eight characters is stored literally, while blank accepts the generated environment placeholder for later completion. Validation and failure output omit Pydantic input values and all PSK bytes, and interrupted or rejected overwrite attempts preserve the original file byte-for-byte.
@@ -673,7 +673,7 @@ When `VPNGW_SSH_KNOWN_HOSTS_FILE` is unset, resolve exact ordinary and VM-HA SSH
 - Every SSH operation whose configuration includes `ssh_public_key` resolves exactly that public identity from the explicit owner-only `ssh_private_key_path`, one matching `ssh-agent` key, or one matching owner-only supported default private key. Paramiko and OpenSSH disable unrelated-key discovery, password, keyboard-interactive, and prompt fallback. Zero, multiple, encrypted, insecure, or mismatched candidates fail without logging key material, fingerprints, or local key paths.
 - Every retained ordinary member's exact Compute ID, name, project, revision, management address, and cloud-init digest are bound during read-only discovery and rechecked for explicit, managed-receipt, managed-projection, default-file migration, and cloud-recovery trust before publication, cloud mutation, or later policy use. Apply's connectivity, cloud-init, ESP4, and package health probes use the configured management SSH username rather than a hard-coded image default.
 - Before ordinary-source conversion may prompt, publish a candidate, or reserve a passive allocation, `vm-ha` requires the ordinary managed receipt and directs the operator to actual ordinary `apply` when it is absent. During approved migration, apply imports the retained active's exact ordinary pin into the HA v2 receipt with `ordinary-migration-v1`, the ordinary predecessor receipt digest, and a freshly proved Compute-binding digest. That authority-bearing desired receipt digest is part of the public approval plan. After product-owned alias attachment and passive creation, apply must rediscover both exact members and rebuild the immutable SSH policy against their fresh Compute revisions while retaining the same managed pins before any staging SSH. An explicit candidate with no recoverable source path gives generic `<ordinary-source>` apply guidance and performs no migration effect.
-- `apply --dry-run` validates and reports a secret-free trust action without creating directories, private keys, receipts, or persistent pins; it may use an ephemeral preview identity for a genuinely fresh member or an eligible absent-non-owner rotation. When the named legacy ordinary enrollment is required, dry-run reports that exact action and exits nonzero without observing a network key. Actual apply may persist fresh-member default keys during preflight, verifies every retained present member, then publishes an owner-only authoritative receipt and derived projection with locked compare-and-swap and atomic per-file replacement before the first cloud mutation. For approved absent-non-owner rotation, the lifecycle journal first records the secret-free authorization, then stages one operation-derived retry-stable private key, binds its new fingerprint and successor receipt/projection digests, publishes the canonical key and managed trust, and marks publication complete before any replacement disk or Compute effect. The receipt is committed first, so an interruption can leave only a stale or missing reproducible projection, never partial authoritative receipt content; retries reuse the bound key and exact successor digests. Concurrent, symlink, hard-link, ownership, mode, predecessor-drift, or invalid existing-key failures block key preparation or publication without overwriting an existing foreign object.
+- `apply --dry-run` validates and reports a secret-free trust action without creating directories, private keys, receipts, or persistent pins; it may use an ephemeral preview identity for a genuinely fresh member or an eligible absent-non-owner rotation. When the named legacy ordinary enrollment is required, dry-run reports that exact action and exits nonzero without observing a network key. Actual apply defers fresh-member default-key persistence to explicit trust publication after approval, verifies every retained present member, then publishes an owner-only authoritative receipt and derived projection with locked compare-and-swap and atomic per-file replacement before the first cloud mutation. For approved absent-non-owner rotation, the lifecycle journal first records the secret-free authorization, then stages one operation-derived retry-stable private key, binds its new fingerprint and successor receipt/projection digests, publishes the canonical key and managed trust, and marks publication complete before any replacement disk or Compute effect. The receipt is committed first, so an interruption can leave only a stale or missing reproducible projection, never partial authoritative receipt content; retries reuse the bound key and exact successor digests. Concurrent, symlink, hard-link, ownership, mode, predecessor-drift, or invalid existing-key failures block key preparation or publication without overwriting an existing foreign object.
 - `status` and every non-apply ordinary or VM-HA command may consume an existing managed receipt through the same immutable snapshot policy but never create, import, repair, or persist trust. Missing trust remains isolated to the affected status member; mutating commands fail before authentication and direct the operator to `apply`.
 - An existing deployment may migrate without changing YAML or setting an environment variable when its exact current member pin already exists in the safe default user known-hosts file and the deployment binding remains authoritative. Otherwise it may migrate through an explicit trust file, retained original private host key, authenticated product cloud-init, or the named bounded ordinary enrollment. Ordinary `apply` is the sole writer for all four paths and must complete before `vm-ha` conversion. Older releases can consume the generated OpenSSH projection by explicitly pointing `VPNGW_SSH_KNOWN_HOSTS_FILE` to it; compatibility is verified against exact current address lookup rather than inferred from hostname-only content.
 
@@ -2957,8 +2957,8 @@ operation acceptance still requires its independently specified checks.
 #### User Story
 
 Remove the unreleased guest SSH source allowlist to avoid source-address lockout.
-Keep key-authenticated management and configured VPN-peer admission. Preserve
-customer Security Group attachments when replacing gateway VMs.
+Keep key-authenticated management and configured VPN-peer admission. Reconcile customer Security Group attachments from YAML across existing, new
+and replacement gateway VMs.
 
 #### Acceptance Criteria
 
@@ -2968,10 +2968,27 @@ customer Security Group attachments when replacing gateway VMs.
   distinguishes decrypted payload. It does not filter TCP/22 by source.
 - Preserve customer rules, fail2ban, host-key verification, fresh SSH/config/boot
   checks, atomic owned-table replacement, VPN boot ordering and HA fencing.
-- gateway_group.initial_security_group_ids references existing customer groups for
-  initial creation only. Replacement captures live per-NIC explicit/effective groups,
-  includes them in candidate creation, and independently verifies them. Drift blocks
-  cutover; implicit default-group semantics are preserved.
+- gateway_group.security_group_ids is the authoritative, order-independent list
+  of up to eight existing customer groups for every managed gateway NIC. Apply
+  attaches added IDs and detaches removed IDs on existing VMs; omission and []
+  remove all explicit references and restore the network default group. Reject
+  duplicates, invalid IDs and the renamed initial_security_group_ids field before
+  cloud effects, with a clear rename diagnostic and no compatibility alias.
+- Creation, staged replacement and missing/failed standby recovery consume that
+  same desired policy. Capture current explicit/effective memberships as approval
+  and drift evidence; never substitute stale initial inputs or silently preserve
+  attachments that conflict with current YAML. Independently verify every NIC.
+- Read-only preview validates all desired groups and network identities before
+  effects. Bind attachment changes to the normal disruption approval and durable
+  apply journal, serialize writers, preserve all unrelated Compute fields using
+  positive resource-version preconditions, and reconcile uncertain accepted
+  operations before retry. Resume the same approved intent after interruption.
+- Reconcile HA members non-owner-first under existing ownership inhibition;
+  independently verify cloud membership and management access before continuing.
+  No attachment-only change restarts VPN services or changes guest generation.
+  Status distinguishes desired, observed explicit/effective, drift and unknown.
+  Unchanged attachment policy performs no cloud mutation. The default group is
+  permissive; preview must explicitly identify a return to that policy.
 - The product never creates, modifies or deletes customer groups/rules or broadens
   them when SSH fails. Documentation explains that Nebius's default group allows all
   traffic and that customer cloud policy owns SSH source filtering.
@@ -2984,13 +3001,15 @@ customer Security Group attachments when replacing gateway VMs.
 #### Validation Method
 
 Test rejected removed fields/options, no SSH-owned nft rules, peer-only policy,
-customer-deny preservation, fresh SSH checks, create-time SG attachment and drift.
+customer-deny preservation, fresh SSH checks, desired SG attachment and drift,
+multiple IDs, omission, partial operations, replacements and standby recovery.
 Run focused schema/wizard/transport/packet tests and project gates.
 
 #### Test Method
 
 Test rejected removed fields/options, no SSH-owned nft rules, peer-only policy,
-customer-deny preservation, fresh SSH checks, create-time SG attachment and drift.
+customer-deny preservation, fresh SSH checks, desired SG attachment and drift,
+multiple IDs, omission, partial operations, replacements and standby recovery.
 Run focused schema/wizard/transport/packet tests and project gates.
 
 #### Evaluation Method
@@ -3594,5 +3613,236 @@ Report implemented source behavior and observed checks separately. Unexecuted
 Linux/cloud/workload qualification remains explicitly unverified.
 
 <!-- /REQUIREMENT: REQ-033 -->
+<!-- REQUIREMENT: REQ-034 status=active priority=P0 type=feature -->
+### REQ-034: Coordinated native IPsec recovery and apply runtime modernization
+
+#### User Story
+
+Operators upgrade SingleVM Static/BGP and VM-HA Static/BGP through normal
+`apply`, preserving customer YAML, CLI, credentials, VM/disk/IP identities,
+active/passive topology and unrelated routes. Ubuntu 24.04 ordinary releases
+0.6.0 through 0.6.3 and the retained HA predecessors supported by the existing
+upgrade workflow remain supported. This accepted modernization replaces the
+runtime, observation and recovery clauses of REQ-022, REQ-025, REQ-026 and
+REQ-033 where they conflict; their remaining safety obligations remain active.
+
+#### Acceptance Criteria
+
+- AC-001: Ubuntu-supported `charon-systemd` and `strongswan.service` replace
+  Starter. Keep swanctl/crypto plugins and independently hash-pin Python
+  `vici==6.0.3`. Add no persistent service. Align packaged/generated units,
+  installers, removal inventories, timers and recovery. Disable implicit start
+  and reload configuration loading; product owners retain loader authority.
+- AC-002: Shared typed bounded VICI inventories serve installed, streamed and
+  frozen clients. Separate event/request sessions; incomplete frames, timeout,
+  disconnect or ambiguous identity are unknown. Preserve rekey overlaps and
+  exact IKE/ESP CHILD/XFRM matching. Timeout never proves mutation cancellation.
+  Restrict the control socket to existing authorized service identities.
+- AC-003: Only authorized persistent connections use `dpd_action=restart`,
+  `keyingtries=0`, `start_action=trap|start`, `close_action=trap`, `unique=no`.
+  Retransmission uses 1s timeout, base 1.5, five retransmissions, 10% jitter and
+  no cap. Preserve DPD intervals, customer rekeying/native randomization and
+  IKEv2 MOBIKE. Cold, suspended and unselected Static paths have no retries or
+  traps. Switching removes authority before exact SA termination and teardown
+  verification. Explicit proactive refresh runs after recovery.
+- AC-004: Classify ownership/guard safety failures, proven local daemon/kernel
+  defects, peer/path or required-coverage loss, and unknown evidence separately.
+  Missing SAs, DPD, authentication rejection and BGP withdrawal alone cannot
+  prove VM failure. HA monitoring remains observational; the controller owns
+  repair and transfer. Preserve rearm as the sole standby Compute-start owner.
+  A complete VICI inventory missing currently authorized connection or shared-key
+  identifiers is a local daemon defect, including after automatic process
+  restart. The existing recovery owner may reload only exact current policy
+  under writer/ownership admission; unknown evidence and deliberate cold or
+  suspended connections never admit loading. Preserve bounded durable attempts.
+- AC-005: Confirmed required-coverage loss starts one persisted 30s episode,
+  shared across connection failures/restarts/native retries. Static candidates
+  retain 10s first, up to 5s subsequent, then restoration within the remainder.
+  Preserve healthy forwarding, two healthy confirmations and 60s continuous
+  health reset. Persist exhaustion/final selection and resume interrupted
+  restoration without a new budget. Path expiry alone never fences an owner.
+- AC-006: At path-episode expiry, transfer only with fresh candidate coverage
+  for every required destination, rechecked before transfer. Cold Static
+  readiness is insufficient. Without such proof keep the safe owner and native
+  retries. Genuine gateway failure and existing authorized transfer conditions
+  retain stopped-former-owner and confirmed shared-allocation gates.
+- AC-007: One new strict heartbeat version independently represents local
+  gateway health, authority and destination coverage. A fresh owner with bad
+  paths remains present. Missing/stale authority retains safety gates; no mixed
+  version runtime fallback. Initial systemd readiness means guard/bootstrap
+  ready, never waiting on VICI ordered after the controller.
+- AC-008: The HA dataplane owner persists nftables drop-only protection for
+  configured VPN destination intent and admitted BGP prefixes. Protected
+  destinations may leave only authorized XFRM interfaces. Preserve local/VPC
+  destinations and host control traffic. Withdrawals/restarts retain protection;
+  only authoritative configuration/route retirement removes it. Install before
+  forwarding/routes; uncertain ownership/protection retains the global fence.
+- AC-009: Apply hashes/stages wheel, pinned VICI and exact OS installation/removal
+  closure on both HA members before disruption. Bind effective units, plugins,
+  masks and startup policy. Persist inhibition of old/new daemons, package
+  autostarts, writers and timers while preserving operator policies. Prove
+  quiescence, replace only approved packages/assets, and journal partial dpkg
+  work. Reboot/process failure remains inhibited; same apply rolls forward the
+  same approved operation. No broad upgrade, autoremove, reboot or legacy rollback.
+- AC-010: Activate ordinary hosts through their owner and HA passive first with
+  reciprocal current-version heartbeat proof and independent owner release.
+  Verify exact runtime/artifact/loader/eligible SAs/routes/guards before release.
+  Native runtime properties participate in no-op detection. Preserve dry-run
+  and approve-disruption contracts and mutation-free second apply.
+
+- AC-011: Verify public `apply`, `status`, `vm-ha`, and VM/tunnel
+  `failover`/`failback` commands against the final candidate, including the
+  authorized existing Static and BGP non-production fixtures. Diagnose and
+  repair failures at their authoritative owner; separate command success from
+  independent bidirectional workload delivery.
+
+- AC-012: A failed release may accept a corrective artifact through normal
+  `apply` only after both earlier package operations completed, exact member,
+  credential and route authority is unchanged, and both hosts are independently
+  fenced under the previous locks. Preserve the failed transaction and complete
+  guest journals as immutable audit records. Create a new approved transaction
+  and fresh locks; inhibit startup and quiesce writers before replacement.
+  Interruptions resume the new approved operation without erasing the failed
+  trial. Incomplete package work continues to require its original artifact.
+
+#### Negative Criteria
+
+- No plaintext escape for failed prefixes, unrelated-route deletion, whole-FRR
+  restart for one tunnel, path-only fence fallthrough or renewed recovery budget.
+- Thirty seconds describes recovery after confirmed loss, not a detection SLA;
+  DPD timeout applies only to IKEv1. Calculated 20.8s retransmission maximum
+  requires native timing qualification and is not a workload guarantee.
+
+#### Validation Method
+
+Run source checks, authentic historical package upgrades in isolated Ubuntu 24.04
+containers, native Linux and final-artifact live qualification as distinct lanes.
+At qualification start, freeze the four latest published stable VPNGW releases
+and their wheel hashes (currently 0.6.0-0.6.3). Exercise supported ordinary/HA
+package and saved-state paths in Static/BGP from those artifacts to one frozen
+candidate. Verify exact installation, dependency consistency and partial-package
+recovery. Repeat the real package preparation with the identical selected request;
+require identical installed package payloads and service assets, dependency
+closure, configuration and retained recovery authority and startup inhibition.
+Reinstalling the same packages is permitted in this container convergence check;
+execution metadata may change and must be reported separately. Mutation-free
+full-apply checks remain mandatory on live VMs. Container trials do not establish
+connectivity or VM reboot behavior.
+Live upgrade qualification starts only from the latest published stable release
+(currently 0.6.3), covering SingleVM Static/BGP and VM-HA Static/BGP. Retain fresh
+installations in all four modes, migration, bounded repair, command, forwarding
+and recovery trials. This accepted split supersedes earlier all-predecessor live
+qualification clauses; supported upgrade behavior remains unchanged. Measure
+bidirectional workload traffic throughout all four live modes, require at most
+120s normal-upgrade interruption, unchanged identities and mutation-free reapply.
+Already-failed recovery is reported separately; missing live evidence blocks
+release qualification, not implementation work.
+
+#### Test Method
+
+Cover DPD, initial failure, peer DELETE, rekey overlap, permanent rejection,
+redundant/sole-path loss, shared outage, real daemon/VM failure; cold/suspended
+paths, stale candidates and maintenance; partial VICI/disconnect/event races,
+wrong IDs and bounded cancellation; reboot/restart/timers/rearm/package starts
+and monitor modes; every durable interruption boundary, partial dpkg and resume;
+withdrawal/default/overlapping prefixes, healthy forwarding and restoration.
+
+#### Evaluation Method
+
+Use independent traffic and authoritative identity/ownership/guard observations.
+No local, mocked, native, container or historical result substitutes for a
+different evidence lane. Release qualification requires the complete accepted
+combined final-artifact matrix; older releases have package qualification only
+unless separately measured live.
+
+<!-- /REQUIREMENT: REQ-034 -->
+
+<!-- REQUIREMENT: REQ-035 status=active priority=P0 type=reliability -->
+### REQ-035: One reviewed and resumable apply workflow
+
+#### User Story
+
+Customers use apply to converge gateway configuration and supported infrastructure,
+redeploy, upgrade, migrate and perform bounded repair within and between releases.
+Repeated invocation is safe and understandable. This explicitly approved refactor
+extends the existing owners rather than introducing another persistent service.
+Preserve supported CLI syntax, customer credentials, maintenance controls and
+resource identities except effects explicitly included in an approved plan.
+
+#### Acceptance Criteria
+
+- AC-001: Produce one typed outer plan and result across ordinary, HA, attachment,
+  route, replacement and supported recovery paths. Each effect names its owner,
+  exact scope, prerequisites, interruption impact, postconditions and resume identity.
+  Preserve existing execution owners and their authoritative effect receipts.
+- AC-002: Separate desired-state parity, local runtime readiness, ownership safety,
+  remote connectivity and unknown evidence. Remote outage alone never selects
+  reinstall, service restart or VM replacement. Report converged configuration
+  with degraded or unknown connectivity honestly. Unknown required authority blocks
+  effects; maintenance remains authoritative.
+- AC-003: Bind approval to the complete effect scope and persist metadata-only
+  command intent before effects. Resume only the original approved effects. A
+  pending attachment approval cannot authorize newly discovered guest work. A new
+  artifact or expanded repair scope requires a reviewed, archived successor;
+  supported original-artifact resume remains available after interruption.
+- AC-004: Distinguish unsubmitted, uncertain, accepted, successful and conclusively
+  rejected operations. Settle uncertain effects before retry or replan. A timeout
+  is not cancellation. Fresh planning after a definitive no-effect rejection must
+  preserve the old history and require approval for its new request identity.
+- AC-005: Reboot changes evidence, not desired intent or authorization. Resume
+  only after fresh exact cloud, host identity, configuration, binding, inhibition
+  and quiescence proofs. Never reuse an old boot observation as current authority.
+- AC-006: Include ordinary product-managed VPC routes in the reviewed apply flow.
+  Plan exact subnet/table/allocation identities and preserve unrelated routes.
+  Existing matching routes can satisfy coverage without becoming product-owned;
+  names alone never authorize adoption, modification or deletion. New route
+  ownership requires exact creation receipts and a durable ownership ledger.
+  Retire only exact owned routes after authoritative intent retirement, never on
+  BGP withdrawal or incomplete observation. Retain add-routes-local as a consumer
+  of the same canonical ordinary route implementation.
+- AC-007: For BGP, approval binds configured peers, destination policy, exact
+  infrastructure scope and route limits. Fresh post-activation evidence may select
+  destinations only within that frozen policy. Configuration changes, ambiguous
+  ownership or observations outside the approved policy require replanning.
+  Default-table conversion and subnet reassignment are distinct reviewed effects.
+- AC-008: Unchanged apply performs no package installation, config/route writes,
+  restart, cloud mutation or journal revision. Verify artifact files, dependencies,
+  native package/service/loader policy, attachments, owned routing and guards.
+- AC-009: Render a consistent outcome with completed and pending effects, separate
+  health dimensions, retained inhibition and one exact recovery command. Add an
+  explicit structured result mode without silently changing existing exit semantics.
+  Preserve dry-run purity and existing approval flags while composing their scope.
+- AC-010: Qualify public apply in all four topology/routing modes, same-release
+  reapply, authentic supported upgrades, migration, bounded repair, combinations
+  of guest/cloud changes, reboot, lost replies and every durable interruption
+  boundary. Retain REQ-034 final-artifact traffic and identity gates.
+
+#### Negative Criteria
+
+- No automatic access widening, credential replacement, maintenance override,
+legacy rollback, unrelated-route retirement or deletion/recreation disguised as
+healing. Every HA transfer retains former-owner Compute Stopped plus independently
+confirmed candidate allocation ownership. No new orchestration framework or daemon.
+
+#### Validation Method
+
+Use source-level counterexamples and public-command regression tests, then native
+Linux and independently measured authorized live workload trials. Report evidence
+separately and preserve failed or intervened trial history.
+
+#### Test Method
+
+Cover pending SG-only approval plus new guest drift, unstarted SG intent plus a
+corrective artifact, reboot during attachment apply, definitive CAS rejection,
+uncertain accepted mutations, remote-only loss, unknown authority, maintenance,
+foreign routes, dynamic BGP selection and a mutation-free second invocation.
+
+#### Evaluation Method
+
+The command must converge or give a precise safe blocked result without extending
+approved effects. A successful process exit alone never proves working VPN traffic.
+
+<!-- /REQUIREMENT: REQ-035 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

@@ -1,0 +1,183 @@
+{
+  "schema": "test-software-in-container.profile.v2",
+  "bundle_sha256": "0c4affb676ac45b5c51a99d5105c5cdb406809e5948f0255b1366c0815d40bcc",
+  "environments": [
+    {
+      "id": "package-service",
+      "image": "ubuntu:24.04",
+      "image_digest": "sha256:b59affc2839a20295e83ce65116418538d40d4c237b5528bbf0714080684c784",
+      "platform": "linux/amd64",
+      "profile_sha256": "ea63c817c093dd03b92ff74709be7e35bb686c9f56138e652fa32b27b4a6c8b1",
+      "fixture_sha256": "66344834a58ad7d34154095e1d7066c17d27b0b9c899ae89651a1307f53581ab",
+      "setup_sha256": "8853ab5a066e9771f1ac21e379ddb83912ab31949eb6ae37175cce80a2bd88e3",
+      "operations": {
+        "install": {
+          "checks": {
+            "packages": "packages",
+            "startup": "services"
+          },
+          "exclusions": {
+            "no_op": "Not applicable to this illustrative workflow.",
+            "recovery": "Not applicable to this illustrative workflow.",
+            "repeat": "Not applicable to this illustrative workflow."
+          }
+        },
+        "upgrade": {
+          "checks": {
+            "packages": "packages",
+            "startup": "services",
+            "repeat-upgrade": "repeat",
+            "unchanged": "no_op"
+          },
+          "exclusions": {},
+          "fault_points": [
+            "after-unpack"
+          ],
+          "entrypoint": [
+            "example-software",
+            "upgrade"
+          ]
+        },
+        "patch": {
+          "checks": {
+            "startup": "services"
+          },
+          "exclusions": {
+            "no_op": "Not applicable to this illustrative workflow.",
+            "packages": "Not applicable to this illustrative workflow.",
+            "recovery": "Not applicable to this illustrative workflow.",
+            "repeat": "Not applicable to this illustrative workflow."
+          },
+          "inputs": {
+            "source_state_sha256": "9f6277739652754b73821fa5881da2099093ad0fc27275b81177ba0bbe90e9e8",
+            "payload_sha256": "60ede7ba08edca54e3de5e7daa12ca448b4f3bd8be6e299a068b610e85b70bd4",
+            "workflow_sha256": "1873967e304725e2c2b450a5407db57a8fc70ed45cbc2c223c8946125f883627",
+            "postconditions_sha256": "0226d864b9afc17533524d01b850c65abb6cee4984c10d89ebdf7bbc4596f763"
+          },
+          "baseline": {
+            "image_digest": "sha256:0553f53706190fac60da25b2a1365abd4a72379b458bebf41474433a59217266",
+            "environment_sha256": "73a92675cea1f3f077aaa14f63ff678d5c312d5c8faf657bebaaffaf99ef5e3c",
+            "state_sha256": "9f6277739652754b73821fa5881da2099093ad0fc27275b81177ba0bbe90e9e8",
+            "verified": true
+          },
+          "entrypoint": [
+            "example-software",
+            "apply-config-patch"
+          ]
+        },
+        "migration": {
+          "not_applicable": "This example has no saved-state migration."
+        }
+      }
+    }
+  ],
+  "runtime_policy": {
+    "engine": "auto",
+    "parallel": 2,
+    "case_timeout_seconds": 900,
+    "startup_timeout_seconds": 60,
+    "stability_seconds": 10,
+    "cache": "reuse",
+    "retain_failed": false
+  },
+  "artifact": {
+    "version": "2.0.0",
+    "source_sha256": "d8452741e3649d8ae344c76a7aa903c5cabb5ae0463f1fdc76eaa0ae519762c4",
+    "artifacts": {
+      "linux/amd64": {
+        "sha256": "cbd4225bcc80fa699f7d692109945701a70ec05322bd735b0b206aec859e98d7"
+      }
+    }
+  },
+  "releases": [
+    {
+      "version": "1.0.0",
+      "source_sha256": "7fcd075834aea0c835b02fac26c98df38d723f8083cd4db761bcb225d6d0f3e4",
+      "artifacts": {
+        "linux/amd64": {
+          "sha256": "694afe43ca299e8927a8dc6402c55d97cd6c61b8c54bf9e32c3d6e2c0f1beb6d"
+        }
+      },
+      "stable": true
+    },
+    {
+      "version": "1.1.0",
+      "source_sha256": "c581845c764cc4edafa359e46d215e7f50445c7e87931fa733474127a6ebee53",
+      "artifacts": {
+        "linux/amd64": {
+          "sha256": "330122d8c06095245dbfefd3744b01e97d48ce48c02b49f550502e5f5fdf7060"
+        }
+      },
+      "stable": true
+    }
+  ],
+  "supported_paths": [
+    [
+      "1.0.0",
+      "2.0.0"
+    ],
+    [
+      "1.1.0",
+      "2.0.0"
+    ],
+    [
+      "1.0.0",
+      "1.1.0",
+      "2.0.0"
+    ]
+  ],
+  "baselines": {
+    "package-service": {
+      "1.0.0": {
+        "image_digest": "sha256:fe4bd4da57d9f6349d52a6a1a85e4c2e16f334e9042866fddef9fbc9d4b13421",
+        "dependencies_sha256": "b592a320b16882e53aa03dec202ea00c02c140fd1c667f3a02958e2c3afb865b",
+        "installed_artifact_sha256": "694afe43ca299e8927a8dc6402c55d97cd6c61b8c54bf9e32c3d6e2c0f1beb6d",
+        "environment_sha256": "73a92675cea1f3f077aaa14f63ff678d5c312d5c8faf657bebaaffaf99ef5e3c",
+        "verified": true,
+        "target_present": false
+      },
+      "1.1.0": {
+        "image_digest": "sha256:c27d796372fe92e12cc9fd616f2c022443863c9973bd28b617a3b2b5c31368c7",
+        "dependencies_sha256": "35e3ef44ef793ee5e54cef8279568ebd12fab2ef3372444c1675693008def77b",
+        "installed_artifact_sha256": "330122d8c06095245dbfefd3744b01e97d48ce48c02b49f550502e5f5fdf7060",
+        "environment_sha256": "73a92675cea1f3f077aaa14f63ff678d5c312d5c8faf657bebaaffaf99ef5e3c",
+        "verified": true,
+        "target_present": false
+      }
+    }
+  },
+  "suites": {
+    "cli": {
+      "kind": "functional",
+      "operations": [
+        "install",
+        "upgrade",
+        "patch"
+      ],
+      "sha256": "ea18c87e78c3b8d711d4d36b4aaf178913b934034d56613c4c2846a9a8415b4c",
+      "entrypoint": [
+        "project-test",
+        "cli"
+      ],
+      "purpose": "Illustrative cli assertions.",
+      "origin": "project suite cli",
+      "test_targets": [],
+      "inventory": {
+        "schema": "test-software-in-container.inventory.v2",
+        "suite_sha256": "ea18c87e78c3b8d711d4d36b4aaf178913b934034d56613c4c2846a9a8415b4c",
+        "input_sha256": "0c4affb676ac45b5c51a99d5105c5cdb406809e5948f0255b1366c0815d40bcc",
+        "selection_sha256": "3ed660350452780da5237c0e46164f45d38832e83a72539eb6b51206c34b768e",
+        "runner": {
+          "name": "example-runner",
+          "version": "1"
+        },
+        "selected": [
+          "cli::check"
+        ],
+        "deselected": [],
+        "complete": true,
+        "sha256": "76547e15f5102f1f85c10c59edfbf72b5d74ed0b5e8f23f1b6e66d7af628f8fa"
+      }
+    }
+  }
+}

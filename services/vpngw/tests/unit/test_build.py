@@ -16,7 +16,7 @@ VM_HA_COMPOSED_SUITES = (
 )
 
 VM_HA_SAFETY_NODES = (
-    "tests/unit/test_cli_helpers.py::test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key",
+    "tests/unit/test_cli_helpers.py::test_vm_ha_apply_failed_retained_trust_preflight_does_not_create_default_directory",
     "tests/unit/test_cli_helpers.py::test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes",
     "tests/unit/test_cli_helpers.py::"
     "test_vm_ha_apply_retains_lifecycle_identity_before_replacement",
@@ -56,7 +56,7 @@ def _ruff_roots(command: str, action: str) -> tuple[str, ...]:
 
 
 def test_build_binary_exits_when_pyinstaller_is_missing(monkeypatch) -> None:
-    monkeypatch.setattr(build.shutil, "which", lambda _: None)
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda _: None)
 
     with pytest.raises(SystemExit) as exc_info:
         build.build_binary()
@@ -66,7 +66,7 @@ def test_build_binary_exits_when_pyinstaller_is_missing(monkeypatch) -> None:
 
 def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypatch) -> None:
     run_mock = Mock(return_value=Mock(returncode=0))
-    monkeypatch.setattr(build.shutil, "which", lambda _: "/usr/bin/pyinstaller")
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda _: object())
     monkeypatch.setattr(build.subprocess, "run", run_mock)
     monkeypatch.chdir(tmp_path)
     dist_binary = tmp_path / "dist" / "nebius-vpngw"
@@ -76,7 +76,7 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     build.build_binary()
 
     cmd = run_mock.call_args[0][0]
-    assert cmd[0] == "pyinstaller"
+    assert cmd[:3] == [build.sys.executable, "-m", "PyInstaller"]
     assert "--onefile" in cmd
     assert "--add-data" in cmd
     assert str(build.Path(build.__file__).parent / "__main__.py") in cmd

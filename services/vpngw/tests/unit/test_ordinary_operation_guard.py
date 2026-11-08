@@ -25,6 +25,9 @@ class Manager:
     def unit_finished(self, effect):
         return self.unit_settled(effect)
 
+    def unit(self, name):
+        return {"Id": name, "Names": [name], "missing": False}
+
     def unit_settled(self, effect):
         return self.settled
 
@@ -33,6 +36,43 @@ class Manager:
 
     def network(self):
         return copy.deepcopy(self.network_value)
+
+
+@pytest.mark.parametrize("outcome", ["settles", "busy", "late", "new-operation"])
+def test_quiet_observation_keeps_one_deadline_and_rechecks_admission(monkeypatch, outcome):
+    from types import SimpleNamespace
+
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(ops.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ops.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+
+    def quiet(names):
+        assert names == (*ops.MANAGEMENT, *ops.DATAPLANE)
+        calls.append("observe")
+        if outcome == "late":
+            clock[0] = 101.1
+            return True
+        return outcome != "busy" and calls.count("observe") >= 2
+
+    def admission():
+        calls.append("admit")
+        if outcome == "new-operation" and calls.count("observe") == 2:
+            raise ops.OperationBlocked("ordinary_operation_in_progress")
+
+    manager = SimpleNamespace(deadline=101.0, quiet=quiet)
+    if outcome == "settles":
+        ops.wait_quiet(manager, admission)
+        assert calls == ["admit", "observe", "admit", "observe", "admit"]
+        assert 100 < clock[0] < 101
+    elif outcome == "new-operation":
+        with pytest.raises(ops.OperationBlocked, match="in_progress"):
+            ops.wait_quiet(manager, admission)
+    else:
+        with pytest.raises(TimeoutError, match="ordinary_manager_unresolved"):
+            ops.wait_quiet(manager, admission)
+        assert clock[0] >= manager.deadline
+    assert manager.deadline == 101.0
 
 
 @pytest.fixture
@@ -72,6 +112,121 @@ def abandon(store):
         effect["writer"]["pid"] = 999999
     store.write(value)
     return value
+
+
+def test_reboot_resume_keeps_unacknowledged_unit_intent_readable(store):
+    manager = Manager()
+    operation = begin(manager, store)
+    value = operation.value
+    value["effects"].append(
+        {
+            "kind": "unit",
+            "state": "intent",
+            "writer": dict(value["owner"]),
+            "unit": "strongswan.service",
+            "action": "stop",
+        }
+    )
+    store.write(value)
+    old = abandon(store)
+    ops.BOOT.write_text("22222222-2222-2222-2222-222222222222")
+    resumed = ops.Operation.begin(
+        request=old["id"],
+        config=old["config"],
+        artifact=old["artifact"],
+        predecessor=old["predecessor"],
+        manager=manager,
+        network=manager.network(),
+        previous=ops.digest(old),
+        journal=store,
+    )
+    assert store.read()["effects"][0]["state"] == "settled"
+    resumed.complete()
+    assert store.read()["state"] == "complete"
+
+
+def test_same_boot_handoff_stop_resume_round_trips_and_rechecks_settlement(store):
+    manager = Manager()
+    operation = ops.Operation.begin(
+        request="1" * 32,
+        config="2" * 64,
+        artifact="3" * 64,
+        predecessor="4" * 64,
+        manager=manager,
+        network=manager.network(),
+        journal=store,
+        purpose="ha-handoff",
+    )
+    operation.intent("unit", unit="strongswan-swanctl.service", action="stop")
+    operation.fail()
+    old = abandon(store)
+
+    def resume(value):
+        return ops.Operation.begin(
+            request=value["id"],
+            config=value["config"],
+            artifact=value["artifact"],
+            predecessor=value["predecessor"],
+            manager=manager,
+            network=manager.network(),
+            previous=ops.digest(value),
+            journal=store,
+            purpose="ha-handoff",
+            resume_inhibited_quiescence=True,
+        )
+
+    manager.settled = False
+    with pytest.raises(ops.OperationBlocked, match="unresolved"):
+        resume(old)
+    assert store.read() == old
+    manager.settled = True
+    resumed = resume(old)
+    retired = store.read()
+    assert retired["effects"][0]["state"] == "settled"
+    assert "jobs" not in retired["effects"][0]
+    assert retired["effects"][0]["writer"] != retired["owner"]
+    resumed.service("stop", "strongswan.service")
+    resumed.phase("install")
+    resumed.fail()
+    # Preserve the distinction between the original and successor writers.
+    current = store.read()
+    current["owner"]["pid"] = 999998
+    current["effects"][1]["writer"]["pid"] = 999998
+    store.write(current)
+    manager.settled = False
+    with pytest.raises(ops.OperationBlocked, match="unresolved"):
+        resume(current)
+    manager.settled = True
+    resumed = resume(current)
+    resumed.complete()
+    assert store.read()["state"] == "complete"
+
+
+@pytest.mark.parametrize("change", ["ordinary", "start", "same-writer", "accepted"])
+def test_receiptless_settled_stop_exception_is_narrow(store, change):
+    operation = begin(Manager(), store)
+    value = operation.value
+    value["purpose"] = "ha-handoff"
+    value["effects"] = [
+        {
+            "kind": "unit",
+            "state": "settled",
+            "action": "stop",
+            "unit": "strongswan.service",
+            "writer": {**value["owner"], "pid": 999999},
+        }
+    ]
+    if change == "ordinary":
+        value["purpose"] = "ordinary"
+    elif change == "start":
+        value["effects"][0]["action"] = "start"
+    elif change == "same-writer":
+        value["effects"][0]["writer"] = value["owner"]
+    else:
+        value["effects"][0]["state"] = "accepted"
+    store.write(value)
+    with pytest.raises(ops.OperationBlocked, match="corrupt"):
+        store.read()
 
 
 def test_guard_is_durable_before_submission_and_blocks_after_lock_release(store):

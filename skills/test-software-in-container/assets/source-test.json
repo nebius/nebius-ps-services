@@ -1,0 +1,82 @@
+{
+  "schema": "test-software-in-container.profile.v2",
+  "bundle_sha256": "004e9dbc24adf470e770e58f8debd5c96f345ed901d1d225559e91da7ecc269e",
+  "environments": [
+    {
+      "id": "source",
+      "image": "ubuntu:24.04",
+      "image_digest": "sha256:b59affc2839a20295e83ce65116418538d40d4c237b5528bbf0714080684c784",
+      "platform": "linux/amd64",
+      "profile_sha256": "3294f1f5467d0a728dc615742203f76b8e12472acb5fd74f42de1783a96ae30c",
+      "fixture_sha256": "6a634393a2b5ffc5345b18ddd4b24c2115ce4472235f951df91293aa496e57da",
+      "setup_sha256": "d68b4c5566c0e2c9316642242198d120767b84c97c741f3c8184e6cfe5d702dc",
+      "operations": {
+        "test": {
+          "target": "source",
+          "inputs": {
+            "source_sha256": "998d8634381fc3da9582219c25d9704c91cc4c2d4a02dc7b7e39020a0ff5a826",
+            "dependencies_sha256": "b9db00844b0683da8c534039916a8520feb01b434e1b734653349f3c11a44891",
+            "harness_sha256": "a419b28493372afc7342d2e762bfbb6d15dff0b84cef66eb47d8cf54a7b54ebc"
+          },
+          "entrypoint": [
+            "python",
+            "-m",
+            "pytest",
+            "tests"
+          ]
+        }
+      }
+    }
+  ],
+  "runtime_policy": {
+    "engine": "auto",
+    "parallel": 2,
+    "case_timeout_seconds": 900,
+    "startup_timeout_seconds": 60,
+    "stability_seconds": 10,
+    "cache": "reuse",
+    "retain_failed": false
+  },
+  "suites": {
+    "integration": {
+      "kind": "integration",
+      "purpose": "Exercise the current source through project integration tests.",
+      "origin": "tests/",
+      "operations": [
+        "test"
+      ],
+      "test_targets": [
+        "source"
+      ],
+      "sha256": "1b96a67085e0d67fcc55559f01238e9b07ab470e207496bb014b1d487fd2c516",
+      "entrypoint": [
+        "python",
+        "-m",
+        "pytest",
+        "tests"
+      ],
+      "exemptions": [],
+      "inventory": {
+        "schema": "test-software-in-container.inventory.v2",
+        "suite_sha256": "1b96a67085e0d67fcc55559f01238e9b07ab470e207496bb014b1d487fd2c516",
+        "input_sha256": "004e9dbc24adf470e770e58f8debd5c96f345ed901d1d225559e91da7ecc269e",
+        "selection_sha256": "af7f0b2bd342822f2fa8e6a9fda610570f911f30d3108379ea4184c0866727c3",
+        "runner": {
+          "name": "example-runner",
+          "version": "1"
+        },
+        "selected": [
+          "integration::works"
+        ],
+        "deselected": [],
+        "complete": true,
+        "sha256": "bf6afa43676e82529fff2501f31450a839181a28ae048481c5fecb84078b1760"
+      }
+    }
+  },
+  "default_suites": {
+    "source": [
+      "integration"
+    ]
+  }
+}

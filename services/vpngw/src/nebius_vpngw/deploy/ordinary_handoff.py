@@ -338,3 +338,25 @@ def reserve(
             if not holder.finished:
                 with contextlib.suppress(Exception):
                     stdin.channel.shutdown_write()
+
+
+def prepare_guarded(ssh: Any, plan: Any, local: dict, expected: dict | None) -> dict:
+    with _connection(ssh, plan.target, plan.instance, local) as client:
+        _stdin, stdout = _start(
+            client, {"action": "prepare-guarded", "package": plan.envelope, "expected": expected}
+        )
+        receipt = _receive(stdout)
+        if (
+            receipt.get("schema") != "nebius-vpngw/vm-ha-package-v1"
+            or receipt.get("artifact_sha256") != plan.manifest["wheel_sha256"]
+        ):
+            raise VMHAAgentPackageError("HA guarded package confirmation differs")
+        return receipt
+
+
+def corrective_action(ssh: Any, target: str, instance: Any, local: dict, request: dict) -> dict:
+    if request["action"] not in {"corrective-inspect", "corrective-reserve"}:
+        raise ValueError("unsupported corrective handoff action")
+    with _connection(ssh, target, instance, local) as client:
+        _stdin, stdout = _start(client, request)
+        return _receive(stdout)

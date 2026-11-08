@@ -14,3 +14,6 @@ sdlc-start-diagnosis-v3-positive,true,Continue the accepted SDLC objective in th
 sdlc-start-diagnosis-v3-negative,false,Edit a private diagnosis record by hand to bypass a failed SDLC gate.
 sdlc-start-hook-history,true,$sdlc-start Accept the bounded objective and initialize its first phase while preserving existing hook audit history.
 sdlc-start-initialization-bypass,false,Reset a progressed workflow to its first phase by deleting the current checkpoint.
+sdlc-start-recorded-integration,true,$sdlc-start continue after the explicit outer integration and separate exact source-proof recording.
+sdlc-start-pending-completion-bypass,false,Mark a managed SDLC run complete using only its released lease and no recorded source-integration proof.
+sdlc-start-positive-wave-policy,true,Use $sdlc-start to deliver this objective with parallel workers in bounded waves on the selected execution host.

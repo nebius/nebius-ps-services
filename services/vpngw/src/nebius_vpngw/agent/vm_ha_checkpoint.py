@@ -10,13 +10,14 @@ from .vm_ha_controller import (
     ActionKind,
     ControllerAction,
     ControllerCheckpoint,
+    DataPlaneMode,
     HAState,
     OwnershipContext,
     RepairAttempt,
     TransferContinuity,
 )
 
-_CHECKPOINT_SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v5"
+_CHECKPOINT_SCHEMA = "nebius-vpngw/vm-ha-controller-checkpoint-v7"
 
 
 def _digests_from_dict(payload: object) -> DigestSet:
@@ -52,6 +53,7 @@ def controller_checkpoint_to_dict(checkpoint: ControllerCheckpoint) -> dict[str,
             "takeover_fence_required": action.takeover_fence_required,
             "repair_deadline_at": action.repair_deadline_at,
             "repair_reasons": list(action.repair_reasons),
+            "repair_mode": action.repair_mode.value,
         }
     established = (
         asdict(checkpoint.established_ownership_context)
@@ -89,6 +91,7 @@ def controller_checkpoint_to_dict(checkpoint: ControllerCheckpoint) -> dict[str,
             "healthy_since": repair.healthy_since,
             "operation_id": repair.operation_id,
             "owner_node_id": repair.owner_node_id,
+            "repair_mode": repair.repair_mode.value,
             "ownership_epoch": repair.ownership_epoch,
             "ownership_incarnation": repair.ownership_incarnation,
             "started_at": repair.started_at,
@@ -106,6 +109,7 @@ def controller_checkpoint_to_dict(checkpoint: ControllerCheckpoint) -> dict[str,
         "ownership_incarnation": checkpoint.ownership_incarnation,
         "transfer_continuity": continuity_payload,
         "repair_attempt": repair_payload,
+        "path_transfer_destinations": list(checkpoint.path_transfer_destinations),
     }
 
 
@@ -126,9 +130,18 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
         raise ValueError("controller checkpoint has an invalid shape")
     if payload.get("schema") != _CHECKPOINT_SCHEMA:
         raise ValueError("unsupported controller checkpoint schema; run approved apply conversion")
-    if set(payload) != common | {"suspicion_boot_id", "transfer_continuity", "repair_attempt"}:
+    if set(payload) != common | {
+        "suspicion_boot_id",
+        "transfer_continuity",
+        "repair_attempt",
+        "path_transfer_destinations",
+    }:
         raise ValueError("controller checkpoint has an invalid shape")
 
+    if not isinstance(payload["path_transfer_destinations"], list) or not all(
+        isinstance(prefix, str) for prefix in payload["path_transfer_destinations"]
+    ):
+        raise ValueError("path transfer destinations have an invalid shape")
     pending_payload = payload["pending_action"]
     pending: ControllerAction | None = None
     if pending_payload is not None:
@@ -143,7 +156,9 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
             "digests",
             "ownership_incarnation",
         }
-        pending_expected.update({"takeover_fence_required", "repair_deadline_at", "repair_reasons"})
+        pending_expected.update(
+            {"takeover_fence_required", "repair_deadline_at", "repair_reasons", "repair_mode"}
+        )
         if not isinstance(pending_payload, dict) or set(pending_payload) != pending_expected:
             raise ValueError("pending controller action has an invalid shape")
         takeover_fence_required = pending_payload["takeover_fence_required"]
@@ -174,6 +189,7 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
             takeover_fence_required=takeover_fence_required,
             repair_deadline_at=repair_deadline_at,
             repair_reasons=tuple(repair_reasons_payload),
+            repair_mode=DataPlaneMode(pending_payload["repair_mode"]),
         )
 
     ownership_payload = payload["established_ownership_context"]
@@ -242,6 +258,7 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
         "healthy_since",
         "operation_id",
         "owner_node_id",
+        "repair_mode",
         "ownership_epoch",
         "ownership_incarnation",
         "started_at",
@@ -257,6 +274,7 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
         repair_attempt = RepairAttempt(
             operation_id=str(repair_payload["operation_id"]),
             owner_node_id=str(repair_payload["owner_node_id"]),
+            repair_mode=DataPlaneMode(repair_payload["repair_mode"]),
             allocation_id=str(repair_payload["allocation_id"]),
             ownership_epoch=str(repair_payload["ownership_epoch"]),
             ownership_incarnation=int(repair_payload["ownership_incarnation"]),
@@ -294,6 +312,7 @@ def controller_checkpoint_from_dict(payload: object) -> ControllerCheckpoint:
         ownership_incarnation=incarnation,
         transfer_continuity=continuity,
         repair_attempt=repair_attempt,
+        path_transfer_destinations=tuple(payload["path_transfer_destinations"]),
     )
 
 

@@ -10,7 +10,7 @@ private SDLC run directory. Later implementation workers receive separate
 branches and worktrees from that integration line; the project branch does not
 advance again until the final evidence-gated fast-forward promotion.
 
-Preparation writes `workflow/execution-coordinator-v2`. In unmanaged mode it resolves the actual
+Preparation writes `workflow/execution-coordinator-v3`. In unmanaged mode it resolves the actual
 `origin` default and creates the deterministic run promotion branch when the
 clean checkout is still on that default. In a managed `worktree` child it uses
 the exact local child branch and `HEAD` without fetching or resolving a remote
@@ -78,7 +78,7 @@ For a corrective assignment, `task-finish --oracle-evidence-json` must name
 the assignment's exact regression oracle, a `passed` outcome, and an evidence
 reference. The helper binds that proof to the diagnosis and the
 coordinator-created task commit in
-`workflow/worker-result-v3`; missing or mismatched proof fails closed. Each immutable assignment
+`workflow/worker-result-v4`; missing or mismatched proof fails closed. Each immutable assignment
 also binds the accepted root-intent digest and canonical project-spec receipt;
 worker results carry typed `spec_gaps` for root-coordinator reconciliation.
 Worker path inventories disable Git rename folding so protected source paths

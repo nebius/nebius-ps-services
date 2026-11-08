@@ -362,8 +362,12 @@ def test_replacement_accepted_operation_resumes_from_disk_with_real_effect_guard
 @pytest.mark.parametrize("oversized_cloud_init", [False, True])
 def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     oversized_cloud_init: bool,
 ) -> None:
+    spec = replace(_ha_spec(), security_group_ids=("sg-first", "sg-second"))
+    verify_groups = Mock()
+    monkeypatch.setattr("nebius_vpngw.deploy.security_groups.verify_desired", verify_groups)
     manager = VMManager(project_id="project-1", region="eu-north1")
     _journal, disk_name = _install_missing_standby_replacement_journal(manager, tmp_path)
     client = object()
@@ -380,6 +384,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
         disk_type="NETWORK_SSD",
         disk_block_bytes=4096,
         cloud_init="#cloud-config\n",
+        security_group_ids=spec.security_group_ids,
     )
     disk = SimpleNamespace(id="disk-new")
     compute = SimpleNamespace(id="compute-new")
@@ -439,7 +444,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
         if oversized_cloud_init:
             with pytest.raises(ValueError, match="cloud-init.*32768"):
                 manager.replace_missing_vm_ha_standby(
-                    _ha_spec(), ["10.0.0.0/8"], approval_digest="e" * 64
+                    spec, ["10.0.0.0/8"], approval_digest="e" * 64
                 )
             manager._begin_vm_ha_effect.assert_not_called()
             manager._submit_boot_disk_create.assert_not_called()
@@ -448,7 +453,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
             disk_client.delete.assert_not_called()
             return
         result = manager.replace_missing_vm_ha_standby(
-            _ha_spec(),
+            spec,
             ["10.0.0.0/8"],
             approval_digest="e" * 64,
         )
@@ -467,6 +472,8 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     assert not disk_client.delete.called
     assert isinstance(result, VMProvisioningResult)
     assert result.vm_ha_runtime_binding is runtime_binding
+    assert verify_groups.call_count == 1
+    assert verify_groups.call_args.args[2] == ("sg-first", "sg-second")
 
 
 def test_missing_standby_executor_rejects_foreign_disk_after_accepted_create(
@@ -520,7 +527,11 @@ def test_missing_standby_executor_rejects_foreign_disk_after_accepted_create(
 
 def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    spec = replace(_ha_spec(), security_group_ids=("sg-first", "sg-second"))
+    verify_groups = Mock()
+    monkeypatch.setattr("nebius_vpngw.deploy.security_groups.verify_desired", verify_groups)
     manager = VMManager(project_id="project-1", region="eu-north1")
     journal, _disk_name = _install_missing_standby_replacement_journal(manager, tmp_path)
     create_disk_effect = "replace-missing-gateway-1-create-boot-disk"
@@ -540,6 +551,7 @@ def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
         disk_type="NETWORK_SSD",
         disk_block_bytes=4096,
         cloud_init="#cloud-config\n",
+        security_group_ids=spec.security_group_ids,
     )
     client = object()
     allocation_client = object()
@@ -572,7 +584,7 @@ def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
     manager._build_vm_ha_runtime_binding = Mock(return_value=object())
 
     manager.replace_missing_vm_ha_standby(
-        _ha_spec(),
+        spec,
         ["10.0.0.0/8"],
         approval_digest="e" * 64,
     )
@@ -594,6 +606,8 @@ def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
     ]
     manager._begin_vm_ha_effect.assert_called_once_with(create_compute_effect)
     manager._create_instance_with_fallback.assert_not_called()
+    assert verify_groups.call_count == 1
+    assert verify_groups.call_args.args[2] == ("sg-first", "sg-second")
 
 
 def _public_allocation(

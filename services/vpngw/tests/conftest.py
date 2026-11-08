@@ -7,6 +7,60 @@ import pytest
 
 
 @pytest.fixture
+def runtime_migration_guest(monkeypatch, tmp_path):
+    """Isolated installed Ubuntu boundary for non-package unit tests.
+
+    Package effects, systemd policy and Unix permissions are exercised by the
+    disposable native fixture. These tests retain real artifact staging and
+    transaction state while supplying that external boundary explicitly.
+    """
+    from nebius_vpngw import runtime_migration as migration
+
+    root = tmp_path / "runtime"
+    monkeypatch.setattr(migration, "ROOT", root)
+    monkeypatch.setattr(migration, "STATE", root / "operation.json")
+    monkeypatch.setattr(migration, "TOKEN", root / "activation.json")
+    monkeypatch.setattr(migration, "POLICY", root / "policy-rc.d")
+    monkeypatch.setattr(migration, "COMMAND", None)
+    monkeypatch.setattr(migration, "CHECK", None)
+    packages = {k: ["fixture", "installed"] for k in migration.REQUIRED}
+    approved = {
+        "schema": migration.SCHEMA,
+        "before": packages,
+        "desired": packages,
+        "install": {},
+        "remove": [],
+        "archives": {},
+        "unit_policy": {},
+        "startup_policy": None,
+    }
+    monkeypatch.setattr(migration, "packages", lambda: packages)
+    monkeypatch.setattr(migration, "unit_policy", lambda: {})
+    monkeypatch.setattr(migration, "policy_snapshot", lambda: None)
+    monkeypatch.setattr(migration, "plan", lambda parent=None: approved)
+    monkeypatch.setattr(migration, "native", lambda: {"ready": True})
+
+    def write(path, raw, mode=0o600):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        path.chmod(mode)
+
+    monkeypatch.setattr(migration, "write", write)
+
+    def phase(value):
+        state = migration.state()
+        if state:
+            state["phase"] = value
+            migration.save(state)
+
+    monkeypatch.setattr(migration, "inhibit", lambda: phase("inhibited"))
+    monkeypatch.setattr(migration, "install", lambda: phase("installed"))
+    monkeypatch.setattr(migration, "activate", lambda: phase("activating"))
+    monkeypatch.setattr(migration, "release", lambda: phase("complete"))
+    return approved
+
+
+@pytest.fixture
 def ordinary_static_observer(monkeypatch, tmp_path):
     """Real ordinary verifier with isolated non-routing observations.
 

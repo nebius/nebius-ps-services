@@ -108,7 +108,7 @@ def _snapshot(**changes: object) -> ControllerSnapshot:
         peer_received_at=99.0,
         apply_locked=False,
         emergency_active_only=False,
-        readiness=LocalReadiness(True, True, True, True),
+        readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         cloud=_cloud(),
         guard_boot_id="local-boot",
         data_plane_mode=DataPlaneMode.PASSIVE,
@@ -288,7 +288,7 @@ def test_initial_owner_enters_passive_before_promotion_readiness(
             configured_role=ConfiguredRole.ACTIVE,
             cloud=_owned_cloud(),
             data_plane_mode=DataPlaneMode.BLOCKED,
-            readiness=LocalReadiness(False, False, False, False),
+            readiness=LocalReadiness(False, False, False, False, protection_ready=True),
         ),
         ControllerCheckpoint(),
     )
@@ -309,6 +309,7 @@ def test_static_cold_standby_can_enter_only_the_fenced_transfer_chain(
         False,
         candidate_preparation_required=True,
         cold_standby_ready=True,
+        protection_ready=True,
     )
     decision = policy.decide(
         _snapshot(
@@ -333,6 +334,7 @@ def test_static_candidate_prepares_tunnel_only_after_exact_transfer_confirmation
         False,
         candidate_preparation_required=True,
         cold_standby_ready=True,
+        protection_ready=True,
     )
     snapshot = _snapshot(
         cloud=_owned_cloud(),
@@ -351,7 +353,7 @@ def test_static_candidate_prepares_tunnel_only_after_exact_transfer_confirmation
 
     warmed = replace(
         snapshot,
-        readiness=LocalReadiness(True, True, True, True),
+        readiness=LocalReadiness(True, True, True, True, protection_ready=True),
     )
     routes = policy.decide(warmed, prepare.checkpoint)
 
@@ -370,6 +372,7 @@ def test_mtls_rotation_inhibition_retires_checkpointed_candidate_preparation(
         False,
         candidate_preparation_required=True,
         cold_standby_ready=True,
+        protection_ready=True,
     )
     snapshot = _snapshot(
         cloud=_owned_cloud(),
@@ -400,6 +403,7 @@ def test_standby_replacement_inhibition_replays_exact_owner_preparation(
         False,
         candidate_preparation_required=True,
         cold_standby_ready=True,
+        protection_ready=True,
     )
     owner = _snapshot(
         cloud=_owned_cloud(),
@@ -475,7 +479,7 @@ def test_timeout_boundary_begins_bounded_suspicion(policy: VMHAController) -> No
             "peer-configured-role-mismatch",
         ),
         (
-            {"readiness": LocalReadiness(True, True, False, True)},
+            {"readiness": LocalReadiness(True, True, False, True, protection_ready=True)},
             "bgp-not-ready",
         ),
     ],
@@ -650,7 +654,9 @@ def test_exact_owner_gets_one_bounded_local_repair_before_fencing(
         now=100.0,
         cloud=_owned_cloud(),
         data_plane_mode=DataPlaneMode.ACTIVE,
-        readiness=LocalReadiness(True, True, False, True),
+        readiness=LocalReadiness(
+            False, True, False, True, protection_ready=True, local_defects=("daemon-failed:frr",)
+        ),
     )
     checkpoint = _proven_transfer_checkpoint(owned)
     owned = replace(
@@ -665,7 +671,11 @@ def test_exact_owner_gets_one_bounded_local_repair_before_fencing(
     assert started.state is HAState.REPAIRING
     assert started.action is not None
     assert started.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
-    assert started.action.repair_reasons == ("bgp-not-ready",)
+    assert started.action.repair_reasons == (
+        "bgp-not-ready",
+        "daemon-failed:frr",
+        "local-service-unhealthy",
+    )
     assert started.action.repair_deadline_at == 105.0
     assert started.checkpoint.repair_attempt is not None
     assert started.checkpoint.repair_attempt.operation_id == started.action.operation_id
@@ -696,6 +706,59 @@ def test_exact_owner_gets_one_bounded_local_repair_before_fencing(
 
 
 @pytest.mark.parametrize(
+    "changed",
+    [
+        "route-epoch",
+        "route-generation",
+        "route-runtime",
+        "route-operation",
+        "guard",
+        "protection",
+        "apply",
+        "cloud",
+    ],
+)
+def test_deferred_repair_retained_authority_still_fences_changed_safety(
+    policy: VMHAController, changed: str
+) -> None:
+    owned = _snapshot(
+        cloud=_owned_cloud(),
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        readiness=LocalReadiness(
+            False,
+            False,
+            False,
+            False,
+            protection_ready=True,
+            local_defects=("daemon-configuration-missing:strongswan",),
+        ),
+    )
+    checkpoint = _proven_transfer_checkpoint(owned)
+    retained = _reconciled(owned, ownership_incarnation=checkpoint.ownership_incarnation)
+    owned = replace(owned, established_routes_context=retained)
+    started = policy.decide(owned, checkpoint)
+    assert started.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    if changed.startswith("route-"):
+        field, value = {
+            "route-epoch": ("ownership_epoch", "43"),
+            "route-generation": ("generation_id", "f" * 64),
+            "route-runtime": ("route_runtime_id", "other"),
+            "route-operation": ("operation_id", ""),
+        }[changed]
+        owned = replace(owned, established_routes_context=replace(retained, **{field: value}))
+    elif changed == "guard":
+        owned = replace(owned, guard_boot_id="previous-boot")
+    elif changed == "protection":
+        owned = replace(owned, readiness=replace(owned.readiness, protection_ready=False))
+    elif changed == "apply":
+        owned = replace(owned, apply_locked=True)
+    else:
+        owned = replace(owned, cloud=replace(owned.cloud, authoritative=False))
+    result = policy.decide(owned, started.checkpoint)
+    assert result.action.kind is ActionKind.DISABLE_ACTIVE
+
+
+@pytest.mark.parametrize(
     "mode", [DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE, DataPlaneMode.BLOCKED]
 )
 @pytest.mark.parametrize("remaining", [0.0, 1.0])
@@ -705,24 +768,33 @@ def test_exhausted_static_episode_cannot_start_another_owner_preparation_or_repa
     owned = _snapshot(
         cloud=_owned_cloud(),
         data_plane_mode=mode,
-        readiness=LocalReadiness(True, False, True, True, candidate_preparation_required=True),
+        readiness=LocalReadiness(
+            True, False, True, True, candidate_preparation_required=True, protection_ready=True
+        ),
         tunnel_recovery_remaining=remaining,
     )
     checkpoint = _proven_transfer_checkpoint(owned)
     owned = replace(owned, routes_reconciled_context=_reconciled(owned))
     result = policy.decide(owned, checkpoint)
-    assert result.state is HAState.REPAIR_EXHAUSTED
     assert result.checkpoint.repair_attempt is None
-    assert (result.action.kind if result.action else None) == (
-        ActionKind.DISABLE_ACTIVE if mode is DataPlaneMode.ACTIVE else None
-    )
+    if mode is DataPlaneMode.ACTIVE:
+        assert result.action is None
+        assert result.forwarding_enabled
+        assert result.state is (HAState.REPAIRING if remaining else HAState.DEGRADED_PATH)
+    else:
+        assert result.action.kind in {
+            ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+            ActionKind.ENTER_PASSIVE,
+        }
 
 
 def test_static_episode_allows_fenced_restart_preparation_only_within_original_budget(policy):
     owned = _snapshot(
         cloud=_owned_cloud(),
         data_plane_mode=DataPlaneMode.PASSIVE,
-        readiness=LocalReadiness(True, False, True, True, candidate_preparation_required=True),
+        readiness=LocalReadiness(
+            True, False, True, True, candidate_preparation_required=True, protection_ready=True
+        ),
         tunnel_recovery_remaining=20.0,
     )
     checkpoint = _proven_transfer_checkpoint(owned)
@@ -736,49 +808,29 @@ def test_static_episode_allows_fenced_restart_preparation_only_within_original_b
     assert waiting.checkpoint.repair_attempt is None
 
 
-def test_static_peer_grace_requires_fresh_heartbeat_and_exact_authoritative_owner(policy):
-    claim = {
-        "owner": {
-            "cluster": "cluster",
-            "owner": "node-a",
-            "allocation": "allocation",
-            "epoch": "owner-revision",
-            "incarnation": 3,
-        },
-        "started": 990.0,
-        "deadline": 1020.0,
-    }
+def test_degraded_owner_presence_requires_fresh_independent_authority(policy):
     peer = replace(
         _peer(),
-        evidence=HeartbeatEvidence(state="unknown"),
-        health_valid_until=None,
-        tunnel_capability=True,
-        tunnel_recovery=claim,
+        evidence=HeartbeatEvidence(state="unknown", cloud_status="complete", cloud_age_seconds=1),
+        authority_ready=True,
+        observation_valid_until=104,
+        authority_valid_until=104,
         route_ready=False,
         promotion_ready=False,
     )
     snapshot = _snapshot(
         peer_heartbeat=peer,
-        wall_time=1000.0,
-        cloud=replace(_cloud(), observed_owner_epoch="owner-revision"),
+        cloud=replace(_cloud(), former_attachment_exact=True, candidate_attachment_absent=True),
     )
     assert policy._peer_fresh(snapshot)
     for changes in (
-        {"peer_heartbeat": None},
-        {"peer_received_at": None},
-        {"peer_received_at": 80.0},
-        {"wall_time": 1019.0},
-        {"wall_time": 989.0},
-        {"peer_heartbeat": replace(peer, tunnel_capability=False)},
+        {"peer_received_at": 80},
+        {"now": 104},
         {"peer_heartbeat": replace(peer, service_healthy=False)},
-        {"peer_heartbeat": replace(peer, service_valid_until=None)},
-        {"peer_heartbeat": replace(peer, service_valid_until=snapshot.now)},
-        {"cloud": replace(snapshot.cloud, observed_owner_epoch="different-revision")},
+        {"peer_heartbeat": replace(peer, authority_ready=False)},
         {"cloud": replace(snapshot.cloud, authoritative=False)},
-        {"cloud": replace(snapshot.cloud, allocation_id="different-allocation")},
-        {"cloud": replace(snapshot.cloud, observed_owner_node_id="node-b")},
     ):
-        assert not policy._peer_fresh(replace(snapshot, **changes)), changes
+        assert not policy._peer_fresh(replace(snapshot, **changes))
 
 
 def test_unhealthy_fresh_owner_heartbeat_starts_suspicion_without_skipping_stop(
@@ -810,7 +862,9 @@ def test_repair_success_requires_two_observations_and_keeps_attempt_consumed(
     owned = _snapshot(
         cloud=_owned_cloud(),
         data_plane_mode=DataPlaneMode.ACTIVE,
-        readiness=LocalReadiness(True, True, False, True),
+        readiness=LocalReadiness(
+            False, True, False, True, protection_ready=True, local_defects=("daemon-failed:frr",)
+        ),
     )
     checkpoint = _proven_transfer_checkpoint(owned)
     owned = replace(
@@ -824,7 +878,7 @@ def test_repair_success_requires_two_observations_and_keeps_attempt_consumed(
     healthy = replace(
         owned,
         now=101.0,
-        readiness=LocalReadiness(True, True, True, True),
+        readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         completed_effect_operation_id=started.action.operation_id,
     )
 
@@ -842,13 +896,17 @@ def test_repair_success_requires_two_observations_and_keeps_attempt_consumed(
         replace(
             owned,
             now=102.0,
-            readiness=LocalReadiness(False, True, False, True),
+            readiness=LocalReadiness(False, True, False, True, protection_ready=True),
         ),
         second.checkpoint,
     )
     assert flapped.checkpoint.repair_attempt is not None
     assert flapped.checkpoint.repair_attempt.deadline_at == 105.0
-    assert flapped.checkpoint.repair_attempt.failure_fingerprint == ("bgp-not-ready",)
+    assert flapped.checkpoint.repair_attempt.failure_fingerprint == (
+        "bgp-not-ready",
+        "daemon-failed:frr",
+        "local-service-unhealthy",
+    )
     assert flapped.checkpoint.repair_attempt.healthy_observations == 0
     assert flapped.checkpoint.repair_attempt.healthy_since is None
 
@@ -870,6 +928,7 @@ def test_redundant_path_degradation_keeps_exact_owner_forwarding_without_repair(
             True,
             path_degraded=True,
             degraded_reasons=("redundant-bgp-session-unavailable",),
+            protection_ready=True,
         ),
     )
     checkpoint = _proven_transfer_checkpoint(owned)
@@ -894,7 +953,9 @@ def test_repaired_backup_coverage_resets_consumed_attempt_after_continuous_healt
     owned = _snapshot(
         cloud=_owned_cloud(),
         data_plane_mode=DataPlaneMode.ACTIVE,
-        readiness=LocalReadiness(True, True, False, True),
+        readiness=LocalReadiness(
+            False, True, False, True, protection_ready=True, local_defects=("daemon-failed:frr",)
+        ),
     )
     checkpoint = _proven_transfer_checkpoint(owned)
     owned = replace(
@@ -914,6 +975,7 @@ def test_repaired_backup_coverage_resets_consumed_attempt_after_continuous_healt
             True,
             path_degraded=True,
             degraded_reasons=("redundant-bgp-session-unavailable",),
+            protection_ready=True,
         ),
         completed_effect_operation_id=started.action.operation_id,
     )
@@ -2615,7 +2677,7 @@ def test_apply_locked_active_owner_fences_then_materializes_passive(
         apply_locked=True,
         apply_owner_adoption=True,
         data_plane_mode=DataPlaneMode.ACTIVE,
-        readiness=LocalReadiness(True, True, False, True),
+        readiness=LocalReadiness(True, True, False, True, protection_ready=True),
     )
     active = replace(active, routes_reconciled_context=_reconciled(active))
     checkpoint = ControllerCheckpoint(
@@ -2642,7 +2704,7 @@ def test_apply_locked_active_owner_fences_then_materializes_passive(
         replace(
             active,
             data_plane_mode=DataPlaneMode.PASSIVE,
-            readiness=LocalReadiness(True, True, True, True),
+            readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         ),
         materializing.checkpoint,
     )
@@ -2657,7 +2719,7 @@ def test_apply_locked_active_owner_fences_then_materializes_passive(
             active,
             apply_locked=False,
             data_plane_mode=DataPlaneMode.PASSIVE,
-            readiness=LocalReadiness(True, True, True, True),
+            readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         ),
         locked_passive.checkpoint,
     )
@@ -2678,7 +2740,7 @@ def test_apply_locked_owner_retires_exhausted_repair_before_materialization(
         apply_locked=True,
         apply_owner_adoption=True,
         data_plane_mode=DataPlaneMode.BLOCKED,
-        readiness=LocalReadiness(True, True, False, True),
+        readiness=LocalReadiness(True, True, False, True, protection_ready=True),
     )
     locked = replace(locked, routes_reconciled_context=_reconciled(locked))
     checkpoint = ControllerCheckpoint(
@@ -2714,7 +2776,9 @@ def test_apply_lock_cancels_checkpointed_owner_repair_before_replay(
             former_owner_compute_state=ComputeState.RUNNING,
         ),
         data_plane_mode=DataPlaneMode.ACTIVE,
-        readiness=LocalReadiness(True, True, False, True),
+        readiness=LocalReadiness(
+            False, True, False, True, protection_ready=True, local_defects=("daemon-failed:frr",)
+        ),
     )
     active = replace(active, routes_reconciled_context=_reconciled(active))
     checkpoint = ControllerCheckpoint(
@@ -3000,6 +3064,7 @@ def test_independent_serving_evidence_prevents_false_failover_during_cloud_wait(
             replace(
                 _peer(),
                 evidence=evidence,
+                authority_ready=True,
                 promotion_ready=False,
                 service_healthy=local.service_healthy,
                 route_ready=local.transfer_ready,
@@ -3007,13 +3072,16 @@ def test_independent_serving_evidence_prevents_false_failover_during_cloud_wait(
         )
 
     publisher = HeartbeatPublisher(
-        sample=lambda deadline: LocalReadiness(True, True, True, True, serving_ready=True),
+        sample=lambda deadline: LocalReadiness(
+            True, True, True, True, serving_ready=True, protection_ready=True
+        ),
         identity=lambda: "current-owner-guard-policy",
         service_identity=lambda: "current-boot-configuration",
         build=build,
         send=lambda heartbeat, remaining: received.append(receiver.accept(heartbeat)),
         clock=lambda: now[0],
     )
+    publisher.observed(None)
     entered, release = threading.Event(), threading.Event()
 
     def cloud_observation():
@@ -3097,11 +3165,14 @@ def test_selection_churn_does_not_defeat_bounded_static_recovery_grace():
         },
         "started": 100.0,
         "deadline": 130.0,
+        "exhausted": False,
     }
 
     def sample(deadline):
         path[0] += 1  # A selector phase changes while healthy daemons are observed.
-        return LocalReadiness(True, False, False, False, sample_complete=False)
+        return LocalReadiness(
+            True, False, False, False, sample_complete=False, protection_ready=True
+        )
 
     publisher = HeartbeatPublisher(
         sample=sample,
@@ -3109,6 +3180,7 @@ def test_selection_churn_does_not_defeat_bounded_static_recovery_grace():
         service_identity=lambda: "same-boot-and-config",
         build=lambda snapshot, local, evidence: replace(
             _peer(),
+            authority_ready=True,
             service_healthy=bool(local and local.service_healthy),
             route_ready=False,
             promotion_ready=False,
@@ -3120,6 +3192,7 @@ def test_selection_churn_does_not_defeat_bounded_static_recovery_grace():
         send=lambda heartbeat, remaining: received.append(proof.accept(heartbeat)),
         clock=lambda: now[0],
     )
+    publisher.observed(None)
     cloud = replace(
         _cloud(),
         observed_owner_epoch="owner-epoch",
@@ -3148,8 +3221,10 @@ def test_selection_churn_does_not_defeat_bounded_static_recovery_grace():
         )
         assert result.state is HAState.NORMAL and result.action is None
         checkpoint = result.checkpoint
-    # A fresh service sample cannot renew the original recovery deadline.
+    # Exhaustion alone cannot condemn a healthy owner; refresh independent cloud authority.
     now[0] = 130
+    claim["exhausted"] = True
+    publisher.observed(None)
     publisher.collect()
     publisher.publish()
     result = policy.decide(
@@ -3162,7 +3237,7 @@ def test_selection_churn_does_not_defeat_bounded_static_recovery_grace():
         ),
         checkpoint,
     )
-    assert result.state is HAState.SUSPECT
+    assert result.state is HAState.NORMAL and result.action is None
 
 
 def test_pending_acceptance_is_settled_before_observation_or_checkpoint_acknowledgment():

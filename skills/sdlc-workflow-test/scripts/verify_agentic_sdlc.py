@@ -136,6 +136,9 @@ from agent_runtime import agent_home, agent_name, installed_skills_dir, runtime_
 # The verifier is also loaded by file location from outside its scripts directory.
 # Resolve the semantic validator's sibling modules from this exact catalog copy.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import verification_workspace as workspace  # noqa: E402
+import verification_suites as suite_checks  # noqa: E402
+
 SEMANTICS_PATH = Path(__file__).resolve().with_name("three_tier_semantics.py")
 SEMANTICS_SPEC = importlib.util.spec_from_file_location(
     "sdlc_workflow_test_three_tier_semantics", SEMANTICS_PATH
@@ -186,6 +189,7 @@ SOURCE_PARITY_SKILLS = (
     # Shared semantic/advisory/delivery owners are installed dependencies, not
     # additional golden-path phases or project-lifecycle admission gates.
     "maintain-project-specs",
+    "implement",
     "global-context-management",
     "design",
     "research",
@@ -198,17 +202,6 @@ SOURCE_PARITY_SKILLS = (
     "merge-pr",
     "sdlc-workflow-test",
 )
-DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS = 120
-CAPABILITY_SUITE_TIMEOUT_SECONDS = {
-    "worktree": 900,
-    "execution": 900,
-    "three-tier": 900,
-    "task-waves": 900,
-    # Real owned-origin setup measured 259s for the verifier aggregate.
-    "verifier": 600,
-    # Complete both-host hook regression run measured 214s.
-    "hooks": 600,
-}
 
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
 LEGACY_SPEC_OWNER_TERMS = (
@@ -613,6 +606,11 @@ class Context:
     live_evidence_path: Path
     agent: str = field(default_factory=agent_name)
     checks: list[Check] = field(default_factory=list)
+    suite_results: list[suite_checks.SuiteResult] = field(default_factory=list)
+    report_path: Path | None = None
+    progress: bool = False
+    interrupted: bool = False
+    in_progress: bool = False
 
     def add(
         self,
@@ -702,33 +700,36 @@ def validated_three_tier_claims(
     ]) != 1:
         return None
     try:
-        # The lifecycle owner validates markers, paths, native host and exact
-        # generation. This status action is read-only and performs no recovery.
+        # Execute only the caller-configured installation, never a code path
+        # supplied by evidence. A fresh process keeps source module caches out
+        # of the exact installed execution-basis and semantic validation.
+        catalog = ctx.global_skills_dir
+        helper = catalog / "sdlc-workflow-test/scripts/three_tier_lifecycle.py"
+        if catalog.resolve() != catalog or has_symlink_component(helper, catalog) or not helper.is_file():
+            return None
         result = run(
-            [sys.executable, str(Path(__file__).with_name("three_tier_lifecycle.py")),
-             "--verification-root", str(root), "status"],
-            env=runtime_environment(ctx.agent), timeout=30,
+            [sys.executable, "-B", str(helper), "--verification-root", str(root),
+             "--expected-verification-id", source_identity, "validate-results"],
+            env=runtime_environment(ctx.agent),
+            timeout=suite_checks.CAPABILITY_SUITE_TIMEOUT_SECONDS["three-tier"],
         )
         if result.returncode != 0:
             return None
-        state = json.loads(result.stdout)
-        if state.get("environment", {}).get("headless_browser") != "PASS":
-            return None
-        baseline = state["git"]["baseline_sha"]
-        promoted = state["git"]["promoted_sha"]
+        admission = json.loads(result.stdout)
         if (
-            state.get("run_root") != str(run_root)
-            or state.get("verification_id") != source_identity
-            or not isinstance(promoted, str) or SHA_RE.fullmatch(promoted) is None
-            or promoted == baseline
+            not isinstance(admission, dict)
+            or set(admission) != {"status", "verification_id", "canonical_sha256",
+                                  "catalog_root", "baseline_sha", "promoted_sha"}
+            or admission["status"] != "PASS"
+            or admission["verification_id"] != source_identity
+            or admission["catalog_root"] != str(catalog)
+            or admission["canonical_sha256"] != canonical_digest
+            or file_sha256(canonical) != canonical_digest
+            or any(not isinstance(admission[key], str) or SHA_RE.fullmatch(admission[key]) is None
+                   for key in ("baseline_sha", "promoted_sha"))
+            or admission["baseline_sha"] == admission["promoted_sha"]
         ):
             return None
-        project = run_root / "project"
-        owned_git_origin.validate(project, run_root, source_identity, baseline=baseline, require_clean=True)
-        if git_output(project, "rev-parse", "HEAD") != promoted:
-            return None
-        keep = state.get("cleanup", {}).get("status") == "KEPT"
-        three_tier_semantics.validate_semantic_results(state, keep=keep)
     except (
         AttributeError,
         KeyError,
@@ -1059,12 +1060,10 @@ def prepare_verification_root(ctx: Context, requested_root: Path) -> str | None:
     problem = verification_root_problem(ctx, requested_root)
     if problem:
         return problem
-    ensure_private_directory(ctx.verification_root)
-    marker = ctx.verification_root / VERIFICATION_ROOT_MARKER
-    if marker.is_symlink():
-        return "Verification-root ownership marker must not be a symlink."
-    if not marker.exists():
-        write_private_json(marker, {"schema": VERIFICATION_ROOT_MARKER_SCHEMA})
+    try:
+        workspace.admit_root(requested_root, create=True, source_root=ctx.repo_root, host_home=ctx.host_home)
+    except (workspace.WorkspaceError, OSError) as error:
+        return str(error)
     return None
 
 
@@ -1525,7 +1524,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
             / "execution-plane.md",
             [
                 "Dispatch fresh task workers into ready slots",
-                "Unobserved capacity means one isolated worker",
+                "unknown permits one total worker",
                 "task-recover",
                 "task-arm",
                 "task-requeue",
@@ -1534,7 +1533,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "replan-future",
                 "explicit merge commits",
                 "fast-forward the unchanged clean",
-                "workflow/execution-coordinator-v2",
+                "workflow/execution-coordinator-v3",
             ],
         ),
         "locked plan task graph": (
@@ -1560,6 +1559,8 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "one direct-child commit",
                 "task-admit",
                 "wave-refill",
+                "verified_no_change",
+                "validate-target",
             ],
         ),
         "shared sequential native fallback": (
@@ -1570,7 +1571,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 '"state_version": 2',
-                "workflow/execution-coordinator-v2",
+                "workflow/execution-coordinator-v3",
                 "sdlc-prepare-execution",
                 "execution/FEAT-001/coordinator.json",
                 "bindings/<native-session-sha256>.json",
@@ -1665,7 +1666,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "DOCUMENTATION_DRIFT",
                 "PR_HEAD_DRIFT",
                 "`agentic-sdlc/execution-coordinator-v1` through `v7`",
-                "workflow/execution-coordinator-v2",
+                "workflow/execution-coordinator-v3",
                 "sdlc-update-documents, then align",
             ],
         ),
@@ -2294,6 +2295,7 @@ def valid_verification_context(ctx: Context, value: Any, *, current_head: str) -
     return ancestry.returncode == 0
 
 
+@workspace.fixture_setup
 def setup_disposable_project(ctx: Context) -> bool:
     first_check = len(ctx.checks)
     project = ctx.disposable_project
@@ -2626,862 +2628,50 @@ def check_direct_objectives(ctx: Context) -> None:
             'Missing: ' + ', '.join(missing) if missing else 'Shared direct intake, immutable basis and continuation contracts are present.')
 
 
-def parse_unittest_results(output: str) -> tuple[set[str], set[str]]:
-    passed: set[str] = set()
-    skipped: set[str] = set()
-    pattern = re.compile(r"^(test_[A-Za-z0-9_]+).*\.\.\.\s+(ok|skipped\b.*)$")
-    ansi_escape = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-    for line in output.splitlines():
-        match = pattern.match(ansi_escape.sub("", line).strip())
-        if not match:
-            continue
-        name, outcome = match.groups()
-        if outcome == "ok":
-            passed.add(name)
-        else:
-            skipped.add(name)
-    return passed, skipped
-
-
 def check_capability_regressions(ctx: Context) -> None:
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHON_COLORS"] = "0"
-    suites = {
-        "protected-merge": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "discover",
-                "-v",
-                "-s",
-                str(ctx.skills_root / "merge-pr/scripts"),
-                "-p",
-                "test_merge*.py",
-            ],
-            ctx.skills_root,
-        ),
-        "project-specs": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "discover",
-                "-v",
-                "-s",
-                str(ctx.skills_root / "maintain-project-specs" / "scripts"),
-                "-p",
-                "test_project_specs*.py",
-            ],
-            ctx.skills_root,
-        ),
-        "objective": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "discover",
-                "-v",
-                "-s",
-                str(ctx.skills_root / "sdlc-start/scripts"),
-                "-p",
-                "test_*.py",
-            ],
-            ctx.skills_root,
-        ),
-        "execution": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "-v",
-                # Dispatch and task-wave contracts have their own suites below.
-                # Do not run those expensive real-Git suites twice.
-                *(
-                    str(ctx.skills_root / "worktree/scripts" / name)
-                    for name in (
-                        "test_workflow_execution.py",
-                        "test_workflow_design_revision.py",
-                        "test_workflow_objectives.py",
-                        "test_workflow_spec_bootstrap.py",
-                        "test_workflow_program.py",
-                        "test_workflow_qualification.py",
-                        "test_workflow_delivery.py",
-                        "test_workflow_handoffs.py",
-                        "test_workflow_security.py",
-                        "test_workflow_fixture.py",
-                    )
-                ),
-            ],
-            ctx.skills_root,
-        ),
-        "dispatch": (
-            [sys.executable, "worktree/scripts/test_workflow_dispatch.py", "-v"],
-            ctx.skills_root,
-        ),
-        "worktree": (
-            [sys.executable, "scripts/test-worktree-manager.py", "-v"],
-            ctx.skills_root / "worktree",
-        ),
-        "git-promotion": (
-            [sys.executable, "scripts/test-git-promotion.py", "-v"],
-            ctx.skills_root / "worktree",
-        ),
-        "implement": (
-            [sys.executable, "implement/scripts/test_implement_contract.py", "-v"],
-            ctx.skills_root,
-        ),
-        "task-waves": (
-            [sys.executable, "worktree/scripts/test_workflow_contracts.py", "-v"],
-            ctx.skills_root,
-        ),
-        "hooks": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "sdlc-start"
-                    / "assets"
-                    / "hooks"
-                    / "tests"
-                    / "test_sdlc_hooks.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
-        "observability": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "sdlc-evaluate"
-                    / "scripts"
-                    / "test_observability_contract.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
-        "repair-control": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "sdlc-classify-failure"
-                    / "scripts"
-                    / "test_repair_control.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
-        "evaluation-failure": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "sdlc-evaluate"
-                    / "scripts"
-                    / "test_failure_contract.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
-        "corrective-plan": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "sdlc-create-plan"
-                    / "scripts"
-                    / "test_corrective_plan_contract.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
-        "troubleshoot-contract": (
-            [
-                sys.executable,
-                str(
-                    ctx.skills_root
-                    / "troubleshoot"
-                    / "scripts"
-                    / "test_skill_contract.py"
-                ),
-                "-v",
-            ],
-            ctx.skills_root,
-        ),
-        "verifier": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "-v",
-                str(
-                    ctx.skills_root
-                    / "sdlc-workflow-test"
-                    / "scripts"
-                    / "test_verify_agentic_sdlc.py"
-                ),
-                str(
-                    ctx.skills_root
-                    / "sdlc-workflow-test"
-                    / "scripts"
-                    / "test_collect_live_evidence.py"
-                ),
-            ],
-            ctx.skills_root,
-        ),
-        "three-tier": (
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "-v",
-                "sdlc-workflow-test/scripts/test_three_tier_objective.py",
-                "sdlc-workflow-test/scripts/test_three_tier_browser.py",
-                "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
-                "sdlc-workflow-test/scripts/test_three_tier_runtime.py",
-                "sdlc-workflow-test/scripts/test_three_tier_recovery.py",
-                "sdlc-workflow-test/scripts/test_owned_git_origin.py",
-                "sdlc-workflow-test/scripts/test_git_environment.py",
-                "sdlc-workflow-test/scripts/test_three_tier_target.py",
-            ],
-            ctx.skills_root,
-        ),
-    }
-    results: dict[str, tuple[subprocess.CompletedProcess[str], set[str], set[str]]] = {}
-    for suite, (command, cwd) in suites.items():
-        timeout = CAPABILITY_SUITE_TIMEOUT_SECONDS.get(
-            suite, DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS
-        )
-        result = run(command, cwd=cwd, env=env, timeout=timeout)
-        passed, skipped = parse_unittest_results(result.stderr + result.stdout)
-        results[suite] = (result, passed, skipped)
-
-    capabilities: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
-        "source.obligations": (
-            "Complete document-package obligation coverage",
-            tuple(("execution", test) for test in (
-                "test_large_package_has_complete_canonical_coverage",
-                "test_missing_catalog_id_is_not_compressed_away",
-                "test_cannot_opt_out_of_catalog_extraction",
-                "test_source_drift_conflicts_and_missing_references_fail",
-                "test_malformed_and_unmapped_dispositions_fail",
-            )),
-        ),
-        "program.phase-slices": (
-            "Phase barriers and cross-feature delivery slices",
-            tuple(("execution", test) for test in (
-                "test_external_phase_and_full_obligation_plan",
-                "test_future_slice_and_phase_dependencies_rejected",
-                "test_all_source_obligations_remain_scheduled",
-                "test_phase_only_exit_without_a_runner_route_is_rejected",
-            )),
-        ),
-        "program.source-admission": (
-            "Exact portable source and canonical pair admission",
-            tuple(("execution", test) for test in (
-                "test_fresh_input_admission_stages_exact_snapshot_and_pair",
-                "test_initial_pair_is_committed_once_before_execution",
-                "test_document_program_contract_includes_exact_admitted_bundle",
-                "test_contract_recovers_commit_before_state_write",
-                "test_managed_commit_recovery_records_head_before_reconciliation",
-                "test_managed_intake_owns_source_before_authoring",
-                "test_publication_race_cannot_commit_unpublished_bytes",
-                "test_clean_unjournaled_contract_commit_is_rejected",
-            )),
-        ),
-        "program.completion-freshness": (
-            "Immutable delivered slices and current obligation evidence",
-            tuple(("execution", test) for test in (
-                "test_completed_slice_cannot_acquire_new_obligations_or_move",
-                "test_full_completion_requires_current_evidence_beyond_phase_exit_subset",
-                "test_transitive_phase_barrier_and_changed_source_invalidate_exit",
-            )),
-        ),
-        "execution.bounded-scale": (
-            "Large task graphs and bounded cross-feature batches",
-            tuple(("execution", test) for test in (
-                "test_more_than_two_thousand_tasks_in_both_chain_orders",
-                "test_fanout_fanin_bounded_batches_and_cross_feature_mapping",
-                "test_cycles_and_conflicting_claims",
-                "test_four_retained_worktrees_then_next_batch_uses_validated_tip",
-                "test_large_fan_in_is_indexed_and_tampering_is_not_repaired",
-            )),
-        ),
-        "three-tier.harness": (
-            "Three-tier objective and lifecycle harness",
-            (
-                ("three-tier", "test_aggregate_profile_resolves_its_owned_lifecycle_and_independent_identity"),
-                ("three-tier", "test_cleanup_signals_only_owned_runner_and_chrome"),
-                ("three-tier", "test_cleanup_refuses_reused_pid"),
-                ("three-tier", "test_recovery_preserves_interrupted_attempt_and_is_idempotent"),
-                ("three-tier", "test_browser_stages_reject_out_of_order_and_failed_trial"),
-                ("three-tier", "test_fresh_post_restart_capture_may_match_persisted_pixels"),
-                ("three-tier", "test_browser_checkpoint_correlates_api_and_database"),
-                ("three-tier", "test_browser_stage_rejects_stale_deployment_before_launch"),
-                ("three-tier", "test_deployment_rechecks_running_image_mounts_and_endpoint"),
-                ("three-tier", "test_owned_build_records_image_and_rejects_failed_rebuild"),
-                ("three-tier", "test_owned_restart_refreshes_dynamic_port_before_deployment_check"),
-                ("three-tier", "test_restart_endpoint_refresh_rejects_unowned_or_public_binding"),
-                ("three-tier", "test_build_model_rejects_external_context_and_web_mounts"),
-                ("three-tier", "test_fresh_specs_admit_without_early_commit_and_target_real_integration"),
-                ("three-tier", "test_target_rejects_foreign_checkpoint_and_unregistered_worktree"),
-                ("three-tier", "test_completed_execution_targets_exact_promoted_checkout"),
-                ("three-tier", "test_owned_origin_is_idempotent_and_remains_frozen_after_project_commit"),
-                ("three-tier", "test_remote_and_hook_configuration_tampering_is_rejected"),
-                ("three-tier", "test_inherited_filter_is_isolated_before_baseline_and_origin_mutation"),
-                ("three-tier", "test_inherited_transport_is_isolated_and_environment_overrides_are_rejected"),
-                ("three-tier", "test_interrupted_receipt_publication_is_not_adopted"),
-                ("three-tier", "test_preparation_isolates_inherited_git_filters"),
-                ("three-tier", "test_profile_tampering_and_missing_files_fail_closed"),
-                ("three-tier", "test_caller_overrides_are_not_masked_by_a_valid_profile"),
-                ("three-tier", "test_local_executable_and_inactive_include_configuration_is_rejected"),
-                ("three-tier", "test_workflow_worker_scope_and_runtime_propagation"),
-                ("three-tier", "test_commit_owner_and_hook_admit_only_the_owned_scope"),
-                ("three-tier", "test_native_launcher_validates_and_passes_profile_to_fresh_process"),
-                ("three-tier", "test_tampering_blocks_cleanup_before_resource_operations"),
-                ("three-tier", "test_nested_foreign_bare_repository_is_not_owned_scope"),
-                ("three-tier", "test_disabled_origin_guard_blocks_project_worker_and_origin_commands"),
-                ("three-tier", "test_removed_origin_blocks_sealed_profile_admission"),
-                ("three-tier", "test_common_directory_redirects_and_borrowed_storage_are_rejected"),
-                ("three-tier", "test_nested_common_directory_without_objects_is_not_owned_scope"),
-                ("three-tier", "test_global_attributes_do_not_enter_owned_checkout"),
-                ("three-tier", "test_promotion_owner_revalidates_profile_before_git"),
-                ("three-tier", "test_sdlc_hook_git_reads_reject_tampered_profile"),
-                (
-                    "three-tier",
-                    "test_rendered_objective_has_no_managed_frontmatter",
-                ),
-                ("three-tier", "test_renderer_rejects_compose_identity_drift"),
-                (
-                    "three-tier",
-                    "test_prepare_public_images_uses_private_config_and_fixed_images",
-                ),
-                (
-                    "three-tier",
-                    "test_named_product_failures",
-                ),
-                ("three-tier", "test_inspection_failures_are_distinct_and_bounded"),
-                ("three-tier", "test_unexpected_observer_exception_never_leaks_exception_text"),
-                ("three-tier", "test_worker_observations_are_development_only_and_unknown_failure_stays_blocked"),
-                ("three-tier", "test_failed_receipt_orphan_is_reconciled_before_retry_and_cleanup"),
-                ("three-tier", "test_cleanup_resumes_after_raw_observation_was_deleted"),
-                ("three-tier", "test_tampered_observation_blocks_admission_and_cleanup"),
-                (
-                    "three-tier",
-                    "test_phase_record_cannot_overwrite_browser_failure",
-                ),
-                (
-                    "three-tier",
-                    "test_headless_browser_contract_is_mirrored",
-                ),
-                ("three-tier", "test_semantic_rejects_out_of_order_gui_steps"),
-                (
-                    "three-tier",
-                    "test_semantic_rejects_duplicate_test_evidence_content",
-                ),
-            ),
-        ),
-        "evaluation.observability-contract": (
-            "Bounded observability evaluation contract",
-            (
-                (
-                    "observability",
-                    "test_observability_is_limited_to_predefined_operational_criteria",
-                ),
-                (
-                    "observability",
-                    "test_production_read_and_experiment_boundaries_are_distinct",
-                ),
-                (
-                    "observability",
-                    "test_inconclusive_is_a_first_class_criterion_result",
-                ),
-                (
-                    "observability",
-                    "test_template_records_bounded_observability_provenance",
-                ),
-                (
-                    "observability",
-                    "test_eval_cases_require_zero_call_admission_and_sequential_queries",
-                ),
-            ),
-        ),
-        "repair.control-contract": (
-            "Evidence-guided repair-control contract",
-            (
-                (
-                    "execution",
-                    "test_integrated_failed_wave_correction_preserves_failure_and_blocks_bypass",
-                ),
-                (
-                    "execution",
-                    "test_failed_wave_cleanup_refusal_and_retry_preserve_original_evidence",
-                ),
-                (
-                    "execution",
-                    "test_failed_wave_rejects_inactive_or_tampered_dispatch_without_cleanup",
-                ),
-                (
-                    "repair-control",
-                    "test_ambiguous_evaluation_routes_to_troubleshoot_exactly_once",
-                ),
-                (
-                    "repair-control",
-                    "test_failed_direct_repair_requires_troubleshooting_before_attempt_two",
-                ),
-                (
-                    "repair-control",
-                    "test_no_bug_found_remains_unresolved_never_design",
-                ),
-                (
-                    "repair-control",
-                    "test_design_requires_positive_system_contract_proof",
-                ),
-                (
-                    "evaluation-failure",
-                    "test_ambiguous_failure_requires_diagnosis",
-                ),
-                (
-                    "corrective-plan",
-                    "test_valid_corrective_plan_preserves_history_and_appends_task",
-                ),
-                (
-                    "troubleshoot-contract",
-                    "test_sdlc_handoff_and_live_proof_stay_owned",
-                ),
-            ),
-        ),
-        "public.interface": ('Direct objective public entry points', (('objective', 'test_public_interface_is_mirrored'), ('implement', 'test_public_interface_and_policy'), ('implement', 'test_retired_private_commands_fail_before_mutation'))),
-        "objective.intake": ('Direct objective intake', (('execution', 'test_accept_persists_only_normalized_objective'), ('execution', 'test_current_plan_has_explicit_provenance'), ('execution', 'test_detached_and_unborn_git_are_rejected'))),
-        "spec.validation-receipt": ('Owner-issued specification validation and no-impact outcomes', (('objective', 'test_valid_specs_emit_current_advisory_snapshot'), ('objective', 'test_ready_feature_with_placeholder_is_rejected'), ('objective', 'test_unknown_requirement_mapping_is_rejected'), ('objective', 'test_foreign_owner_marker_is_rejected'), ('task-waves', 'test_no_impact_needs_no_spec_documents'), ('project-specs', 'test_bootstrap_missing_specs_publishes_pending_pair_and_preserves_counterpart'))),
-        "objective.revisions": ('Normalized objective revisions', (('execution', 'test_raw_history_keys_are_rejected'), ('execution', 'test_snapshot_tampering_is_rejected'), ('execution', 'test_other_objectives_are_not_queued'))),
-        "objective.binding": ('Explicit native session binding', (('execution', 'test_new_session_does_not_infer_sole_active_run'), ('execution', 'test_restore_binding_is_read_only'), ('execution', 'test_cross_session_requires_explicit_continue'))),
-        "objective.lifecycle": (
-            "Coordinator initialization, steering and cancellation",
-            (
-                ("execution", "test_same_session_continues_without_new_revision"),
-                ("execution", "test_steering_fences_dispatch_before_replanning"),
-                ("execution", "test_cancellation_fences_without_git_rollback"),
-                ("execution", "test_old_run_schema_is_rejected_without_conversion"),
-                ("objective", "test_hook_only_history_is_preserved_by_fresh_cli"),
-                ("objective", "test_concurrent_initialization_has_one_authoritative_snapshot"),
-                ("objective", "test_interrupted_initial_publication_uses_new_snapshot"),
-                ("objective", "test_partial_initial_history_is_preserved_and_recovered"),
-                ("objective", "test_progressed_state_is_never_reset"),
-                ("objective", "test_active_ownership_disagreement_has_no_effect"),
-                ("objective", "test_managed_intake_requires_exact_active_outer_lease"),
-                ("objective", "test_externally_released_outer_lease_cannot_initialize"),
-            ),
-        ),
-        "execution.scope": (
-            "Exact initialized-folder scope",
-            (
-                ("execution", "test_nested_project_scope_is_persisted_and_enforced"),
-                (
-                    "execution",
-                    "test_tdd_seal_rejects_changes_outside_nested_project_scope",
-                ),
-                (
-                    "execution",
-                    "test_claim_outside_nested_project_scope_fails_before_resources",
-                ),
-                (
-                    "execution",
-                    "test_claim_crossing_gitlink_fails_before_resources",
-                ),
-                (
-                    "execution",
-                    "test_prefix_claim_containing_tracked_symlink_fails_before_resources",
-                ),
-            ),
-        ),
-        "execution.sessions-recovery": (
-            "Worker sessions and interrupted recovery",
-            (
-                (
-                    "execution",
-                    "test_interrupted_worker_recovery_transfers_claimed_dirty_state",
-                ),
-                ("execution", "test_interrupted_worker_recovery_accepts_clean_base"),
-                (
-                    "execution",
-                    "test_interrupted_worker_recovery_rejects_worker_created_commit",
-                ),
-                ("execution", "test_one_worker_session_cannot_own_two_tasks"),
-                ("execution", "test_parallel_session_claim_is_atomic"),
-                (
-                    "execution",
-                    "test_session_claim_is_complete_before_atomic_publication",
-                ),
-                (
-                    "execution",
-                    "test_failed_session_claim_publication_leaves_no_partial_claim",
-                ),
-                (
-                    "execution",
-                    "test_task_finish_recovers_commit_before_result_write",
-                ),
-                (
-                    "execution",
-                    "test_task_finish_recovers_result_before_task_state_write",
-                ),
-            ),
-        ),
-        "execution.replan": (
-            "Resource-free future-wave replan",
-            (
-                (
-                    "execution",
-                    "test_future_replan_replaces_only_resource_free_planned_waves",
-                ),
-            ),
-        ),
-        "execution.secret-gate": (
-            "Secret-safe result persistence",
-            (
-                (
-                    "execution",
-                    "test_finish_rejects_sensitive_staged_content_without_leaking",
-                ),
-            ),
-        ),
-        "execution.sequential-fallback": (
-            "Sequential ephemeral Codex fallback",
-            (
-                ("dispatch", "test_dispatches_fresh_ephemeral_workers_sequentially"),
-                (
-                    "dispatch",
-                    "test_first_failure_stops_later_dispatch_and_retains_concise_error",
-                ),
-                ("dispatch", "test_missing_codex_is_environment_blocker"),
-                ("dispatch", "test_terminal_watch_interrupts_worker"),
-                ("dispatch", "test_legacy_assignment_requires_upgrade"),
-                ("dispatch", "test_watch_failure_stops_worker_process_group"),
-            ),
-        ),
-        "execution.worker-liveness": (
-            "Armed and monitored Agentic worker lifecycle",
-            (
-                ("execution", "test_worker_must_be_armed_before_start"),
-                ("execution", "test_arm_start_heartbeat_and_watch_liveness"),
-                ("execution", "test_prestart_mutation_and_timeout_fail_closed"),
-                (
-                    "execution",
-                    "test_confirmed_prestart_requeue_allows_a_fresh_arm",
-                ),
-                (
-                    "execution",
-                    "test_prestart_scope_violations_use_scope_error",
-                ),
-                ("execution", "test_progress_does_not_bypass_maximum_runtime"),
-                ("dispatch", "test_terminal_watch_interrupts_worker"),
-            ),
-        ),
-        "git.promotion-safety": (
-            "Verified remote-default, local-source, and exact promotion safety",
-            (
-                (
-                    "git-promotion",
-                    "test_resolves_symbolic_remote_default_without_name_guessing",
-                ),
-                (
-                    "git-promotion",
-                    "test_recorded_remote_default_head_drift_is_rejected",
-                ),
-                (
-                    "git-promotion",
-                    "test_ff_only_promotion_and_exact_branch_deletion",
-                ),
-                (
-                    "git-promotion",
-                    "test_promotion_lock_regular_file_fails_with_structured_error",
-                ),
-                (
-                    "worktree",
-                    "test_add_uses_clean_local_source_branch_and_exact_head",
-                ),
-            ),
-        ),
-        "interop.outer-lease-v4": (
-            "Managed outer-worktree lease lifecycle",
-            (
-                (
-                    "worktree",
-                    "test_add_serializes_lifecycle_selection_and_activation",
-                ),
-                (
-                    "worktree",
-                    "test_concurrent_directory_bootstrap_revalidates_winner",
-                ),
-                (
-                    "worktree",
-                    "test_task_lease_blocks_integration_until_release",
-                ),
-                (
-                    "worktree",
-                    "test_old_manifest_and_reservation_schemas_fail_closed",
-                ),
-                (
-                    "worktree",
-                    "test_remove_deletes_terminal_lease_receipt",
-                ),
-                (
-                    "worktree",
-                    "test_remove_retry_deletes_terminal_receipt_after_git_cleanup",
-                ),
-                (
-                    "worktree",
-                    "test_internal_coordinators_do_not_call_public_lifecycle_actions",
-                ),
-                (
-                    "execution",
-                    "test_managed_outer_execution_releases_to_local_source_integration",
-                ),
-                (
-                    "execution",
-                    "test_private_interop_rejects_public_lifecycle_before_subprocess",
-                ),
-                (
-                    "hooks",
-                    "test_stop_does_not_continue_worktree_integration",
-                ),
-                (
-                    "hooks",
-                    "test_stop_does_not_continue_worktree_next_skill",
-                ),
-            ),
-        ),
-        "interop.shared-execution": ('Shared Worktree execution and assignment runtime ownership', (('execution', 'test_managed_outer_execution_releases_to_local_source_integration'), ('execution', 'test_private_interop_rejects_public_lifecycle_before_subprocess'), ('task-waves', 'test_refill_waits_for_admission_and_does_not_wait_for_peer'), ('task-waves', 'test_runtime_lease_requires_exact_worker_and_exclusive_identity'))),
-        "interop.implement-promotion": ('Automatic Implement delivery and exact cleanup', (('task-waves', 'test_clean_nondefault_delivery_and_completion'), ('task-waves', 'test_unknown_default_delivers_feature_checkout'), ('task-waves', 'test_dirty_source_requires_dependencies_and_preserves_unrelated_content'), ('task-waves', 'test_cancellation_drains_writers_without_admitting_results'))),
-        "steering.continuation": (
-            "Objective-bound steering continuation",
-            (
-                ("hooks", "test_stop_continues_running_next_skill"),
-                ("hooks", "test_completed_features_do_not_override_coordinator_slice_route"),
-                ("hooks", "test_stop_continues_for_pause_steering"),
-                ("hooks", "test_stop_reconstructs_explicit_project_continuation"),
-            ),
-        ),
-        "publication.authorization": (
-            "Exact Agentic SDLC publication authorization",
-            (
-                (
-                    "hooks",
-                    "test_pretool_allows_push_with_exact_create_pr_authorization",
-                ),
-                (
-                    "hooks",
-                    "test_pretool_denies_authorized_push_with_extra_refs_or_tags",
-                ),
-                ("hooks", "test_pretool_denies_wrapped_authorized_push"),
-                ("hooks", "test_pretool_allows_gh_pr_create_with_exact_authorization"),
-                (
-                    "hooks",
-                    "test_pretool_denies_gh_pr_create_without_explicit_head",
-                ),
-                (
-                    "hooks",
-                    "test_pretool_denies_gh_pr_create_without_exact_base",
-                ),
-                (
-                    "hooks",
-                    "test_pretool_denies_gh_pr_create_when_remote_default_head_advanced",
-                ),
-                ("hooks", "test_pretool_denies_compound_gh_pr_create"),
-                ("hooks", "test_pretool_guards_only_github_pr_creation_writes"),
-            ),
-        ),
-        "merge.authorization": (
-            "Protected SDLC qualification, admission and merge recovery",
-            (
-                ("execution", "test_labels_skips_wrong_artifacts_and_intervention_cannot_pass"),
-                ("execution", "test_forged_receipt_recomputed_hash_is_not_producer_admitted"),
-                ("execution", "test_revoked_authority_prevents_runner_launch"),
-                ("execution", "test_locked_plan_drift_and_missing_criteria_block"),
-                ("execution", "test_failed_trial_cannot_be_reused_as_clean_evidence"),
-                ("execution", "test_revoked_authority_blocks_final_effect"),
-                ("execution", "test_two_slices_and_all_supported_merge_methods"),
-                ("execution", "test_ambiguous_submission_reconciles_without_second_effect"),
-                ("execution", "test_failed_result_verification_does_not_repeat_merge"),
-                ("execution", "test_queue_and_base_drift_block_before_dispatch"),
-                ("protected-merge", "test_intent_uses_the_review_validated_by_its_snapshot"),
-                ("protected-merge", "test_sdlc_evidence_change_after_approval_blocks_merge"),
-                ("hooks", "test_pretool_denies_gh_pr_merge_without_authorization"),
-                ("hooks", "test_pretool_denies_label_authorized_gh_pr_merge"),
-                (
-                    "hooks",
-                    "test_pretool_denies_merge_when_remote_default_head_advanced",
-                ),
-                (
-                    "hooks",
-                    "test_pretool_denies_label_authorized_merge_queue_command",
-                ),
-                ("hooks", "test_pretool_denies_label_authorized_pr_url_merge"),
-                ("hooks", "test_pretool_denies_merge_without_exact_head_guard"),
-                (
-                    "hooks",
-                    "test_pretool_denies_merge_command_outside_exact_authorization",
-                ),
-                (
-                    "hooks",
-                    "test_pretool_denies_merge_without_explicit_pr_target",
-                ),
-                (
-                    "hooks",
-                    "test_pretool_denies_wrapped_or_prepended_gh_pr_merge",
-                ),
-                ("hooks", "test_pretool_denies_nested_shell_gh_pr_merge"),
-                ("hooks", "test_pretool_denies_merge_admin_bypass"),
-                ("hooks", "test_pretool_denies_merge_branch_deletion"),
-                ("hooks", "test_pretool_denies_compound_merge_command"),
-                ("hooks", "test_pretool_denies_merge_pr_scope_mismatch"),
-                ("hooks", "test_pretool_denies_merge_without_passing_readiness"),
-                ("hooks", "test_pretool_denies_github_merge_mcp_in_active_sdlc"),
-            ),
-        ),
-        "verifier.self-tests": (
-            "Verifier contract self-tests",
-            (
-                ("verifier", "test_live_evidence_is_the_only_public_evidence_option"),
-                ("verifier", "test_prompt_routing_check_ignores_only_the_owned_home_prefix"),
-                ("verifier", "test_hook_fixture_seed_isolates_a_distinct_source_catalog"),
-                ("verifier", "test_failed_hook_fixture_seed_becomes_sanitized_report_failure"),
-                ("verifier", "test_public_live_action_is_renamed_without_a_legacy_alias"),
-                ("verifier", "test_any_deterministic_failure_forces_fail"),
-                ("verifier", "test_source_phase_contract_rejects_bad_source_prefix"),
-                ("verifier", "test_source_catalog_validation_rejects_missing_reference"),
-                ("verifier", "test_spec_ownership_contract_accepts_canonical_sources"),
-                ("verifier", "test_spec_ownership_contract_rejects_legacy_owner"),
-                ("verifier", "test_spec_ownership_contract_rejects_missing_owner_dependency"),
-                ("verifier", "test_spec_ownership_contract_rejects_missing_phase_invariant"),
-                ("verifier", "test_spec_ownership_contract_rejects_unsafe_readme_boundary"),
-                ("verifier", "test_spec_ownership_contract_rejects_missing_template_envelope"),
-                ("verifier", "test_missing_live_evidence_is_partial"),
-                ("verifier", "test_valid_live_evidence_is_accepted"),
-                (
-                    "verifier",
-                    "test_generic_digest_backed_evidence_cannot_reach_pass",
-                ),
-                ("verifier", "test_no_change_all_pass_manifest_fails_closed"),
-                ("verifier", "test_stale_live_evidence_fails_closed"),
-                ("verifier", "test_alternate_live_baseline_fails_closed"),
-                ("verifier", "test_out_of_scope_committed_change_fails_closed"),
-                ("verifier", "test_committed_private_state_fails_closed"),
-                ("verifier", "test_deleted_out_of_scope_history_fails_closed"),
-                ("verifier", "test_deleted_private_state_history_fails_closed"),
-                ("verifier", "test_symlinked_live_manifest_fails_closed"),
-                ("verifier", "test_invalid_utf8_live_manifest_fails_closed"),
-                ("verifier", "test_invalid_utf8_context_fails_closed"),
-                (
-                    "verifier",
-                    "test_invalid_utf8_context_during_setup_writes_fail_report",
-                ),
-                ("verifier", "test_capability_matrix_isolates_unrelated_warnings"),
-                ("verifier", "test_report_is_private"),
-                ("verifier", "test_verification_root_is_private"),
-                ("verifier", "test_flat_fixture_is_rejected_without_conversion"),
-                ("verifier", "test_dirty_fixture_fails_without_mutation"),
-                (
-                    "verifier",
-                    "test_symlinked_disposable_project_fails_without_target_mutation",
-                ),
-                (
-                    "verifier",
-                    "test_symlinked_services_component_fails_without_target_mutation",
-                ),
-                (
-                    "verifier",
-                    "test_regular_file_fixture_parent_fails_without_mutation",
-                ),
-                ("verifier", "test_run_timeout_becomes_failure_result"),
-                ("verifier", "test_tree_digest_ignores_install_provenance"),
-                ("verifier", "test_tree_digest_rejects_symlinks"),
-                ("verifier", "test_tree_digest_rejects_symlinked_root"),
-                (
-                    "verifier",
-                    "test_file_digest_rejects_symlinked_hook_payload",
-                ),
-                (
-                    "verifier",
-                    "test_report_path_must_stay_under_verification_root",
-                ),
-                ("verifier", "test_report_path_rejects_symlinked_parent"),
-                ("verifier", "test_report_path_rejects_symlinked_file"),
-                (
-                    "verifier",
-                    "test_capability_requirements_resolve_to_declared_tests",
-                ),
-                (
-                    "verifier",
-                    "test_golden_path_intake_precedes_coordinator_only_requirements",
-                ),
-                ("verifier", "test_collects_every_required_skill_owner"),
-                ("verifier", "test_support_skill_outside_evidence_matrix_is_rejected"),
-                ("verifier", "test_design_contract_accepts_current_canonical_source"),
-                ("verifier", "test_vertical_slice_contract_accepts_current_canonical_sources"),
-                ("verifier", "test_vertical_slice_contract_normalizes_whitespace"),
-                ("verifier", "test_vertical_slice_contract_rejects_missing_operational_clauses"),
-                ("verifier", "test_readiness_matrix_reports_canonical_owner_receipt_result"),
-                ("verifier", "test_shared_owner_drift_and_missing_installation_fail_parity"),
-                ("verifier", "test_document_program_tests_are_required_and_cannot_be_skipped"),
-                ("verifier", "test_merge_checklist_uses_protected_delivery_authority"),
-            ),
-        ),
-    }
+    suites = suite_checks.suite_catalog(ctx.skills_root)
+    capabilities = suite_checks.capability_catalog()
+    if any(suite not in suites for _, requirements in capabilities.values() for suite, _ in requirements):
+        ctx.add("Suite execution results", "Suite catalog", "FAIL", "Capability references an unknown suite.")
+        return
+    results = {}
+    for index, (name, spec) in enumerate(suites.items(), 1):
+        if ctx.progress:
+            print(f"Suite {index}/{len(suites)}: {name} (limit {spec.timeout}s)", flush=True)
+        result = suite_checks.execute(spec, env)
+        results[name] = result
+        ctx.suite_results.append(result)
+        ctx.add("Suite execution results", name, "PASS" if result.returncode == 0 else "WARN" if result.returncode == 130 else "FAIL", result.detail)
+        if ctx.progress:
+            print(result.detail, flush=True)
+        if ctx.report_path is not None:
+            write_report(ctx, ctx.report_path)
+        if result.returncode in {125, 130}:
+            ctx.interrupted = result.returncode == 130
+            break
     for capability_id, (name, requirements) in capabilities.items():
-        failed_suites = sorted(
-            {suite for suite, _ in requirements if results[suite][0].returncode != 0}
-        )
-        missing = [
-            test
-            for suite, test in requirements
-            if test not in results[suite][1] and test not in results[suite][2]
-        ]
-        skipped = [test for suite, test in requirements if test in results[suite][2]]
-        status = "FAIL" if failed_suites or missing else "WARN" if skipped else "PASS"
+        failed_suites = sorted({suite for suite, _ in requirements
+                                if suite in results and results[suite].returncode not in {0, 130}})
+        incomplete = sorted({suite for suite, _ in requirements
+                             if suite not in results or results[suite].returncode == 130})
+        missing = [test for suite, test in requirements if suite in results
+                   and test not in results[suite].passed and test not in results[suite].skipped]
+        skipped = [test for suite, test in requirements if suite in results and test in results[suite].skipped]
+        status = "FAIL" if failed_suites or missing and not incomplete else "WARN" if incomplete or skipped else "PASS"
         if failed_suites:
-            summaries = []
-            for suite in failed_suites:
-                result = results[suite][0]
-                # Retain actionable identifiers, never exception bodies or raw
-                # stdout, which can contain fixture values or private paths.
-                names = sorted(set(re.findall(
-                    r"^(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,120})(?:\s|$)",
-                    result.stderr + result.stdout, re.MULTILINE,
-                )))
-                summary = f"{suite} (exit {result.returncode}"
-                if names:
-                    summary += "; failing tests: " + ", ".join(names[:20])
-                    if len(names) > 20:
-                        summary += f"; {len(names) - 20} more"
-                summaries.append(summary + ")")
-            detail = "Required regression suite failed: " + ", ".join(summaries)
+            detail = "Blocked by failed required suite(s): " + ", ".join(failed_suites) + ". See suite execution results."
+        elif incomplete:
+            detail = "Incomplete after interruption; required suites: " + ", ".join(incomplete)
         elif missing:
-            detail = "Required regression tests were not executed: " + ", ".join(
-                missing
-            )
+            detail = "Required regression tests were not executed: " + ", ".join(missing)
         elif skipped:
-            detail = (
-                "Required platform-specific regression tests were skipped: "
-                + ", ".join(skipped)
-            )
+            detail = "Required platform-specific regression tests were skipped: " + ", ".join(skipped)
         else:
             detail = f"Executed {len(requirements)} required regression test(s)."
-        ctx.add(
-            "Capability regression results",
-            name,
-            status,
-            detail,
-            capability_id=capability_id,
-        )
+        ctx.add("Capability regression results", name, status, detail, capability_id=capability_id)
 
 
 def run_hook(
@@ -4514,7 +3704,7 @@ def add_agent_required_sections(ctx: Context) -> None:
 def final_status(ctx: Context) -> str:
     if any(check.status == "FAIL" for check in ctx.checks):
         return "FAIL"
-    if any(check.status == "WARN" for check in ctx.checks):
+    if ctx.in_progress or ctx.interrupted or any(check.status == "WARN" for check in ctx.checks):
         return "PARTIAL"
     return "PASS"
 
@@ -4640,6 +3830,7 @@ def report(ctx: Context) -> str:
     lines.append("")
     for section in [
         "Environment checked",
+        "Suite execution results",
         "Capability regression results",
         "Skill discovery results",
         "Hook configuration results",
@@ -4722,6 +3913,22 @@ def report(ctx: Context) -> str:
     return "\n".join(lines)
 
 
+def archive_report(path: Path) -> None:
+    """Preserve the prior report once before replacing the current run report."""
+    if not path.exists():
+        return
+    content = workspace._read(path, private=True)
+    archive = path.parent / (path.name + ".history")
+    archive.mkdir(mode=0o700, exist_ok=True)
+    workspace._canonical(archive)
+    workspace._identity(archive)
+    fd, name = tempfile.mkstemp(prefix="report-", suffix=".md", dir=archive)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def write_report(ctx: Context, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = report(ctx)
@@ -4759,39 +3966,70 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        workspace._report_allowed(ctx.verification_root, report_path)
+    except workspace.WorkspaceError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     root_problem = prepare_verification_root(ctx, requested_root)
     if root_problem:
         print(root_problem, file=sys.stderr)
         return 2
-    check_design(ctx)
-    check_source_phase_contract(ctx)
-    check_source_catalog_validation(ctx)
-    check_spec_ownership_contract(ctx)
-    check_vertical_slice_contract(ctx)
-    check_execution_plane_contract(ctx)
-    check_repair_loop_contract(ctx)
-    check_skill_discovery(ctx)
-    check_hook_config(ctx)
-    fixture_admitted = setup_disposable_project(ctx)
-    check_direct_objectives(ctx)
-    check_capability_regressions(ctx)
-    if fixture_admitted:
-        check_hooks_with_fixtures(ctx)
-    else:
-        for section in ("PreToolUse safety test results", "Stop continuation test results"):
-            ctx.add(
-                section, "Hook fixture prerequisite", "FAIL",
-                "Disposable fixture admission failed; hook fixtures were not created or executed.",
-            )
-    add_agent_required_sections(ctx)
-    write_report(ctx, report_path)
-    print(f"Report path: {report_path}")
-    print(f"Final readiness status: {final_status(ctx)}")
-    failures = [check for check in ctx.checks if check.status == "FAIL"]
-    warnings = [check for check in ctx.checks if check.status == "WARN"]
-    print(f"Failures: {len(failures)}")
-    print(f"Warnings: {len(warnings)}")
-    return 1 if failures else 0
+    try:
+        with workspace.operation(ctx.verification_root):
+            archive_report(report_path)
+            ctx.in_progress = True
+            ctx.report_path = report_path
+            write_report(ctx, report_path)
+            check_design(ctx)
+            check_source_phase_contract(ctx)
+            check_source_catalog_validation(ctx)
+            check_spec_ownership_contract(ctx)
+            check_vertical_slice_contract(ctx)
+            check_execution_plane_contract(ctx)
+            check_repair_loop_contract(ctx)
+            check_skill_discovery(ctx)
+            check_hook_config(ctx)
+            ctx.report_path = report_path
+            fixture_admitted = setup_disposable_project(ctx)
+            check_direct_objectives(ctx)
+            ctx.report_path = report_path
+            ctx.progress = True
+            check_capability_regressions(ctx)
+            execution_stopped = ctx.interrupted or any(result.returncode == 125 for result in ctx.suite_results)
+            if fixture_admitted and not execution_stopped:
+                check_hooks_with_fixtures(ctx)
+            elif not fixture_admitted:
+                for section in ("PreToolUse safety test results", "Stop continuation test results"):
+                    ctx.add(
+                        section, "Hook fixture prerequisite", "FAIL",
+                        "Disposable fixture admission failed; hook fixtures were not created or executed.",
+                    )
+            else:
+                ctx.add("PreToolUse safety test results", "Hook fixture execution", "WARN",
+                        "Suite execution stopped before hook fixtures; no hook result claimed.")
+            add_agent_required_sections(ctx)
+            ctx.in_progress = False
+            write_report(ctx, report_path)
+            print(f"Report path: {report_path}")
+            print(f"Final readiness status: {final_status(ctx)}")
+            failures = [check for check in ctx.checks if check.status == "FAIL"]
+            warnings = [check for check in ctx.checks if check.status == "WARN"]
+            print(f"Failures: {len(failures)}")
+            print(f"Warnings: {len(warnings)}")
+            return 130 if ctx.interrupted else 1 if failures else 0
+
+    except KeyboardInterrupt:
+        ctx.interrupted = True
+        ctx.add("Suite execution results", "Verification interrupted", "WARN",
+                "Run interrupted; completed observations are retained and readiness is partial.")
+        with workspace.operation(ctx.verification_root):
+            write_report(ctx, report_path)
+        print(f"Interrupted; partial report: {report_path}", file=sys.stderr)
+        return 130
+    except (workspace.WorkspaceError, OSError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

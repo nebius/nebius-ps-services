@@ -105,8 +105,8 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    integration tip. After `replan-future`, prepare its appended wave directly;
    do not reseal TDD or reopen a completed wave.
 3. For the next dependency wave, run `wave-prepare`. Use its deterministic
-   ready queue and at most four native worker slots, capped by observed host
-   capacity, configured limits and independent tasks. Unknown native capacity
+   ready queue and configurable worker/wave/worktree limits (defaults 4/8/16),
+   with whole-wave reservations and fresh native capacity. Zero waits. Unknown native capacity
    selects one isolated worker. Every task receives a fresh native agent and
    exact assigned cwd; report observed concurrency, never declared task count.
    Use the shared `worktree/scripts/workflow_dispatch.py` for sequential native
@@ -128,7 +128,7 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    Never extend a live assignment or use recovery just to renew its clock.
    After a native worker terminates, persist the exact coordinator-owned termination
    observation and ingest the complete result through `task-result --result
-   <private-json> --termination <observation>`. Only an implemented receipt may
+   <private-json> --termination <observation>`. Only a successful `implemented` or independently validated `verified_no_change` receipt may
    enter `task-finish --receipt <receipt_path>` and then `task-admit`. Only then may
    `wave-refill` allocate the freed slot while independent peers continue.
    Every worker in this wave uses its frozen base; integration waits for the
@@ -203,10 +203,12 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
 5. The coordinator does not edit product files while workers run. It verifies
    every result and its immutable admission, then runs `wave-integrate`; merges occur in stable task order
    with retained coordinator-created task commits and explicit merge commits.
+   Verified no-change tasks record disposition without a commit or merge.
 6. Run combined validation/tests at the exact integration tip. For corrective
    work, run the original failed oracle, the counterfactual or affected-boundary
-   check, and then validation plus unit/integration tests. Pass evidence to
-   `wave-complete`, which removes only clean, reachable, registered worker
+   check, and then validation plus unit/integration tests. Freeze these checks in
+   the plan validation sidecar. Run the independent `validate-target` producer and
+   pass its exact receipt to `wave-complete --receipt`, which removes only clean, reachable, registered worker
    resources using non-force Git operations.
    If combined checks fail after integration, preserve the failed tip and use
    `sdlc-classify-failure` with lifecycle `integrated_wave`. After its proven
@@ -274,6 +276,14 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
   conflict domain.
 - Let workers mutate coordinator/wave shared state except through the private
   transition helper, or use force, reset, rebase, squash, cherry-pick, or prune.
+
+## Worker wave contract
+
+Follow the shared worker wave and acceptance contract in the required sibling
+`../worktree/references/worker-waves.md`.
+Before preparation, freeze execution policy and the executable `<plan>.validation.json`
+sidecar covering every task and combined checks. No-change results require independent
+acceptance; all waves require a producer receipt before cleanup and dependency release.
 
 ## Completion Criteria
 

@@ -366,7 +366,7 @@ keep preserves the application and evidence but closes browser processes and rep
 the exact Chrome process identity, then both Docker ownership labels for every
 alias, canonicalizes and deduplicates Docker identities, preserves a cumulative
 retry ledger, retains sanitized reports/lifecycle history, and returns
-`ALREADY_DESTROYED` when no active application exists. Existing Chrome
+`ALREADY_DESTROYED` only when both live and lightweight fixtures are absent. Existing Chrome
 instances are never cleanup targets.
 
 ## Deterministic Capability Lanes
@@ -564,3 +564,29 @@ pre-restart UI states and one capture from the fresh post-restart stage. The
 post-restart pixels may match the completed state when persistence works.
 Require separate owned stage receipts and capture observations; never fabricate
 visual changes, copy an earlier screenshot, or weaken the four-state check.
+
+## Verifier Alignment Gates
+
+- Current worker-result fields propagate through fan-in; wrong coordinator
+  identity and altered handoffs remain rejected by their production owners.
+- Suite catalog commands/dependencies agree; timeouts retain completed identifiers,
+  progress is bounded, and interruptions cannot qualify incomplete capabilities.
+  Cleanup drain timeouts still attempt process-group absence verification, retain
+  earlier results and stop later suites with sanitized `EXECUTION_UNPROVEN`.
+- Destroy covers both fixture types and the exact context-bound manifest, retains
+  reports, rejects missing ownership, and resumes checkpoint/journal interruptions.
+- Replay rejects expanded targets, replaced parents and changed file bytes; custom
+  report paths cannot overwrite ownership or raw state. Concurrent writers block.
+- Source startup v3 is separate from native activation. Native correlation requires
+  the exact supported host session, installed hook parity and matching natural
+  turn/tool events; hook-only, source-only, altered or foreign evidence cannot pass.
+  Check every loader-declared helper and the complete entrypoint bytes. Missing
+  helpers, unterminated changes and coordinated source/private-helper drift fail;
+  the existing native receipt hashes continue to describe the entrypoint only.
+- An outer observer uses an explicit native startup selector, leaving its own
+  session identity unchanged. Missing/foreign selectors, dirty baselines and
+  later selector overrides fail. Native command-item IDs, not enclosing model
+  calls, correlate with hook events. Incomplete startup cleanup independently
+  validates product ownership and quiescence without creating acceptance proof.
+- Fresh Codex three-tier acceptance and verified cleanup are separate from the
+  aggregate seven-lane qualification; unexecuted lanes remain PARTIAL.

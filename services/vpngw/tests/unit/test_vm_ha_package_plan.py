@@ -11,6 +11,8 @@ from nebius_vpngw.deploy import ordinary_remote
 from nebius_vpngw.deploy.ordinary_handoff import Handoff
 from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
 
+pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
+
 
 @pytest.mark.parametrize(
     ("fault", "reason"),

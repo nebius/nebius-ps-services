@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import three_tier_target
+import three_tier_native
 import three_tier_browser
 import three_tier_tests
 import three_tier_runtime
@@ -269,7 +270,8 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         ) from error
     try:
         three_tier_target.validate_startup_receipt(state)
-    except three_tier_target.TargetError as error:
+        three_tier_native.validate(state, skills_root=Path(__file__).resolve().parents[2])
+    except (three_tier_target.TargetError, three_tier_native.NativeEvidenceError) as error:
         raise SemanticEvidenceError(str(error)) from error
     if value.get("verification_id") != state["verification_id"]:
         raise SemanticEvidenceError(

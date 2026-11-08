@@ -24,7 +24,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
     _runtime_config,
 )
 
-from nebius_vpngw.agent import frr_renderer, main
+from nebius_vpngw.agent import frr_renderer, main, strongswan_renderer
 from nebius_vpngw.agent.vm_ha import tunnel_runtime
 from nebius_vpngw.agent.vm_ha.models import DigestSet
 from nebius_vpngw.agent.vm_ha.runtime import (
@@ -33,7 +33,12 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     build_runtime_ports,
 )
 from nebius_vpngw.agent.vm_ha.tunnels import Authority, TunnelController, read_state
-from nebius_vpngw.agent.vm_ha_controller import ActionKind, ConfiguredRole, DataPlaneMode
+from nebius_vpngw.agent.vm_ha_controller import (
+    ActionKind,
+    ConfiguredRole,
+    DataPlaneMode,
+    LocalReadiness,
+)
 from nebius_vpngw.deploy.vm_ha_routes import (
     ManagedRouteKind,
     ManagedRouteOwnership,
@@ -51,6 +56,8 @@ class NativeCommands:
         self.retain_stale_routes = False
         self.peers = {"169.254.1.2": "Established", "169.254.2.2": "Established"}
         self.trace = []
+        self.nft = []
+        self.loaded_connections = ["preferred", "backup"]
         first = observation()
         second = observation()
         for key in ("sas", "states", "policies"):
@@ -58,17 +65,21 @@ class NativeCommands:
                 second[key]
                 .replace("preferred", "backup")
                 .replace("192.0.2.1", "192.0.2.3")
-                .replace("reqid=1", "reqid=2")
+                .replace('"reqid":"1"', '"reqid":"2"')
                 .replace("reqid 1", "reqid 2")
-                .replace("uniqueid=1", "uniqueid=2")
+                .replace('"uniqueid":"1"', '"uniqueid":"2"')
                 .replace("0x64", "0x65")
+                .replace('"if-id-in":"00000064"', '"if-id-in":"00000065"')
+                .replace('"if-id-out":"00000064"', '"if-id-out":"00000065"')
                 .replace("00000001", "00000003")
                 .replace("00000002", "00000004")
                 .replace("spi 0x1", "spi 0x3")
                 .replace("spi 0x2", "spi 0x4")
             )
         self.evidence = {key: first[key] + second[key] for key in ("sas", "states", "policies")}
-        self.evidence["sas"] = first["sas"].replace("list-sas reply {}\n", "") + second["sas"]
+        sas = json.loads(first["sas"])
+        sas["sas"].extend(json.loads(second["sas"])["sas"])
+        self.evidence["sas"] = json.dumps(sas)
         self.links = first["links"] + [
             {
                 "ifname": "xfrm1",
@@ -91,7 +102,23 @@ class NativeCommands:
                 self.trace.append(("forward", self.forwarding))
             return str(int(self.forwarding))
         if argv[0] == "systemctl":
-            return ""
+            return "active" if "show" in argv else ""
+        if argv[:3] == ("python3", "-m", "nebius_vpngw.ipsec_observation"):
+            if argv[3:] == ("--configuration",):
+                return json.dumps(
+                    {
+                        "connections": self.loaded_connections,
+                        "shared_keys": ["ike-psk-1", "ike-psk-2"],
+                    }
+                )
+            if argv[3:] == ("--connections",):
+                return json.dumps(self.loaded_connections)
+            return self.evidence["sas"]
+        if argv[0] == "nft":
+            if "-f" in argv and "--check" not in argv:
+                batch = json.loads(Path(argv[-1]).read_text())["nftables"]
+                self.nft = [item["add"] for item in batch[2:]]
+            return json.dumps({"nftables": self.nft})
         if argv == ("python3", "-m", "nebius_vpngw.agent.main", "--vm-ha-materialized"):
             return ""
         if argv == ("vtysh", "-b"):
@@ -177,6 +204,12 @@ def composed(tmp_path, monkeypatch, *, advertise=True):
     state_dir.mkdir()
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(cfg))
+    swanctl_path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", swanctl_path)
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", swanctl_path)
+    rendered = {}
+    strongswan_renderer.StrongSwanRenderer().render_and_apply(cfg, rendered_files=rendered)
+    strongswan_renderer._write_secret_file(swanctl_path, rendered[swanctl_path])
     frr_path = tmp_path / "frr.conf"
     native = NativeCommands(frr_path)
     now = [100.0]
@@ -241,7 +274,10 @@ def composed(tmp_path, monkeypatch, *, advertise=True):
     )
     ports.cloud.observe = lambda: cloud
     digests = DigestSet("a" * 64, vm["runtime_binding"]["static_routes_digest"], digest)
-    snapshots = SimpleNamespace(last_snapshot=None)
+    snapshots = SimpleNamespace(
+        last_snapshot=None,
+        providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
+    )
 
     def observe():
         snapshot = _snapshot(
@@ -305,6 +341,7 @@ def composed(tmp_path, monkeypatch, *, advertise=True):
     )
     main._prepare_vm_ha_blocked_bgp(config_path)
     native.command(("vtysh", "-b"))
+    ports.data_plane.destination_protection.install()
     native.trace.clear()
     return runtime, tunnels, native, selector, now, ports
 
@@ -343,6 +380,126 @@ def test_fenced_restart_activates_before_tunnel_completion(
     assert native.trace.index(("vm", ActionKind.ENABLE_ACTIVE)) < forwarding_index
     tunnels.close()
     ports.close()
+
+
+@pytest.mark.parametrize("routes_retained", [True, False])
+@pytest.mark.parametrize("loss_timing", ["before-readiness", "after-readiness"])
+def test_production_factory_retains_route_authority_for_missing_daemon_configuration(
+    tmp_path, monkeypatch, routes_retained, loss_timing
+):
+    runtime, tunnels, native, selector, now, ports = composed(tmp_path, monkeypatch)
+    selector.state["operation"].update(phase="succeeded", successes=2)
+    selector._save()
+    for _ in range(8):
+        runtime.step()
+        now[0] += 1
+    assert native.forwarding and ports.routes.readiness().promotion_ready
+    assert ports.routes.receipt_context() is not None
+    checkpoint = runtime.controller.checkpoints.load()
+    peer = runtime.snapshots.observe().peer_heartbeat
+    tunnels.close()
+
+    # Exercise production provider wiring with real route receipts/ledger and
+    # the same complete empty VICI inventory as an auto-restarted daemon.
+    monkeypatch.setattr(main, "build_runtime_ports", lambda *a, **kw: ports)
+    ports.peer_runtime.observe = lambda: (peer, now[0])
+    production = main.build_default_vm_ha_controller_runtime(
+        config_path=tmp_path / "config.yaml",
+        state_dir=tmp_path / "state",
+        clock=lambda: now[0],
+        boot_id=lambda: "local-boot",
+    )
+    try:
+        if loss_timing == "after-readiness":
+            providers = production.controller.snapshots.providers
+
+            def crash_after_readiness():
+                readiness = providers.readiness()
+                native.loaded_connections = []
+                return readiness
+
+            production.controller.snapshots.providers = replace(
+                providers, readiness=crash_after_readiness
+            )
+        else:
+            native.loaded_connections = []
+        if not routes_retained:
+            ports.routes.backend.list_routes = lambda *a: ()
+        snapshot = production.controller.snapshots.observe()
+        if loss_timing == "after-readiness":
+            assert snapshot.readiness.promotion_ready
+            assert snapshot.routes_reconciled_context is None
+            mixed = production.controller.controller.policy.decide(snapshot, checkpoint)
+            if routes_retained:
+                assert mixed.action is None, mixed.reasons
+                assert mixed.forwarding_enabled and mixed.state.value == "degraded"
+                assert mixed.reasons == ("local-evidence-unknown",)
+                assert mixed.checkpoint.repair_attempt is None
+                production.controller.snapshots.last_snapshot = snapshot
+                assert not production.controller._write_status(mixed)["promotion_ready"]
+            else:
+                assert mixed.action.kind is ActionKind.DISABLE_ACTIVE
+            production.controller.snapshots.providers = providers
+            snapshot = production.controller.snapshots.observe()
+        assert snapshot.readiness.local_defects == ("daemon-configuration-missing:strongswan",)
+        assert snapshot.routes_reconciled_context is None
+        result = production.controller.controller.policy.decide(snapshot, checkpoint)
+        assert result.action is not None
+        assert result.action.kind is (
+            ActionKind.REPAIR_LOCAL_DATAPLANE if routes_retained else ActionKind.DISABLE_ACTIVE
+        ), result.reasons
+        assert (snapshot.established_routes_context is not None) is routes_retained
+        assert native.forwarding
+        if routes_retained:
+            # Writer contention may defer dispatch. Replay uses the same exact
+            # retained route authority that admitted the original repair.
+            replay = production.controller.controller.policy.decide(snapshot, result.checkpoint)
+            assert replay.action == result.action
+            for readiness in (
+                LocalReadiness(False, False, False, False, sample_complete=False),
+                LocalReadiness(True, False, False, False),
+                LocalReadiness(True, True, True, True),
+            ):
+                no_defect = replace(snapshot, readiness=replace(readiness, protection_ready=True))
+                retired = production.controller.controller.policy.decide(
+                    no_defect, result.checkpoint
+                )
+                assert retired.action is None and retired.forwarding_enabled
+                assert retired.checkpoint.pending_action is None
+                assert retired.checkpoint.repair_attempt == result.checkpoint.repair_attempt
+
+            # After the bounded reload, one healthy sample retains forwarding
+            # while verification waits for the second. It must not dispatch an
+            # Agent reload that the current-boot writer gate would reject/fence.
+            native.loaded_connections = ["preferred", "backup"]
+            healed = replace(
+                production.controller.snapshots.observe(),
+                completed_effect_operation_id=result.action.operation_id,
+            )
+            first = production.controller.controller.policy.decide(healed, result.checkpoint)
+            assert first.state.value == "repairing" and first.forwarding_enabled
+            production.controller.snapshots.last_snapshot = healed
+            status = production.controller._write_status(first)
+            assert status["promotion_ready"] is False
+            assert status["controller_ready_boot_id"] is None
+            assert native.forwarding
+
+            now[0] += 1
+            healed = production.controller.snapshots.observe()
+            second = production.controller.controller.policy.decide(healed, first.checkpoint)
+            assert second.forwarding_enabled and second.state.value == "active"
+            status = production.controller._write_status(second)
+            assert status["promotion_ready"] is True
+            boot = tmp_path / "boot-id"
+            boot.write_text("local-boot")
+            main.require_vm_ha_current_boot_ready(
+                {"vm_ha": {}},
+                status_path=production.controller.status_path,
+                boot_id_path=boot,
+                guard_path=ports.data_plane.guard_path,
+            )
+    finally:
+        production.close(restore_guard=False)
 
 
 def test_unknown_selected_peer_stays_fenced_despite_healthy_backup_coverage(tmp_path, monkeypatch):

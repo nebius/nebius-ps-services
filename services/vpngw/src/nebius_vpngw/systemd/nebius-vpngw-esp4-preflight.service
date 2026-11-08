@@ -1,0 +1,12 @@
+[Unit]
+Description=Nebius VPNGW ESP4 kernel module readiness preflight
+After=local-fs.target systemd-modules-load.service
+Before=strongswan.service frr.service nebius-vpngw-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nebius-vpngw-esp4-preflight.sh --verify
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

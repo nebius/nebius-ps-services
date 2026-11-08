@@ -134,7 +134,7 @@ def _marker(value: dict, *, bootstrap: bool) -> None:
                 or project != root / "project" or root.name != value["owner_id"]
                 or root.parent.name != "runs"):
             _fail("three-tier fixture identity changed")
-        expected = {"schema": "agentic-sdlc/three-tier-lifecycle-v7", "verification_id": value["owner_id"]}
+        expected = {"schema": "agentic-sdlc/three-tier-lifecycle-v8", "verification_id": value["owner_id"]}
         if _json(root / ".agentic-sdlc-three-tier-run.json") != expected:
             _fail("three-tier generation marker changed")
         if _json(project / ".sdlc-workflow-test-project.json", private=False) != {

@@ -274,22 +274,22 @@ class VerifierContractTests(unittest.TestCase):
         self.assertIn("--create-live-test", (root / "agents/openai.yaml").read_text())
 
     def test_slow_aggregate_suites_have_measured_timeout_headroom(self) -> None:
-        self.assertEqual(verifier.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
+        self.assertEqual(verifier.suite_checks.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
         self.assertEqual(
-            verifier.CAPABILITY_SUITE_TIMEOUT_SECONDS,
-            {"worktree": 900, "execution": 900, "three-tier": 900, "task-waves": 900, "verifier": 600, "hooks": 600},
+            verifier.suite_checks.CAPABILITY_SUITE_TIMEOUT_SECONDS,
+            {"worktree": 900, "execution": 900, "three-tier": 900, "task-waves": 900, "verifier": 600, "hooks": 600, "dispatch": 600},
         )
 
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with mock.patch.object(verifier, "run", return_value=completed) as runner:
+        with mock.patch.object(verifier.suite_checks, "run_command", return_value=completed) as runner:
             verifier.check_capability_regressions(self.ctx)
 
         self.assertEqual(len(runner.call_args_list), 17)
         for call in runner.call_args_list:
             command = " ".join(str(value) for value in call.args[0])
-            if any(name in command for name in ("test-worktree-manager.py", "test_workflow_execution.py", "test_workflow_contracts.py", "test_three_tier", "-s " + str(self.ctx.skills_root / "worktree/scripts"), "-s " + str(self.ctx.skills_root / "sdlc-workflow-test/scripts"))):
+            if any(name in command for name in ("test-worktree-manager.py", "test_workflow_execution.py", "test_workflow_contracts.py", "test_three_tier_target.py", "-s " + str(self.ctx.skills_root / "worktree/scripts"), "-s " + str(self.ctx.skills_root / "sdlc-workflow-test/scripts"))):
                 expected = 900
-            elif any(name in command for name in ("test_verify_agentic_sdlc.py", "test_sdlc_hooks.py")):
+            elif any(name in command for name in ("test_verify_agentic_sdlc.py", "test_sdlc_hooks.py", "test_workflow_dispatch.py")):
                 expected = 600
             else:
                 expected = 120
@@ -301,7 +301,7 @@ class VerifierContractTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             [], 0, stdout="\n".join(name + " ... ok" for name in names), stderr="",
         )
-        with mock.patch.object(verifier, "run", return_value=completed):
+        with mock.patch.object(verifier.suite_checks, "run_command", return_value=completed):
             verifier.check_capability_regressions(self.ctx)
         merge = next(c for c in self.ctx.checks if c.capability_id == "merge.authorization")
         self.assertEqual(merge.status, "FAIL")
@@ -345,7 +345,7 @@ class VerifierContractTests(unittest.TestCase):
                         output += f"\n{omitted} ... skipped 'unavailable'"
                     completed = subprocess.CompletedProcess([], 0, stdout=output, stderr="")
                     ctx = replace(self.ctx, checks=[])
-                    with mock.patch.object(verifier, "run", return_value=completed):
+                    with mock.patch.object(verifier.suite_checks, "run_command", return_value=completed):
                         verifier.check_capability_regressions(ctx)
                     checks = {c.capability_id: c for c in ctx.checks if c.capability_id in required}
                     self.assertEqual(set(checks), required)
@@ -367,7 +367,7 @@ class VerifierContractTests(unittest.TestCase):
             [], 1, stdout="private diagnostic body\n",
             stderr="FAIL: test_example (module.Case.test_example)\nAssertionError: private value\n",
         )
-        with mock.patch.object(verifier, "run", return_value=failed):
+        with mock.patch.object(verifier.suite_checks, "run_command", return_value=failed):
             verifier.check_capability_regressions(self.ctx)
         details = "\n".join(check.detail for check in self.ctx.checks)
         self.assertIn("exit 1", details)
@@ -439,7 +439,7 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_direct_intake_capability_suite_imports_from_its_own_root(self) -> None:
         ctx = self.source_contract_context()
-        original = verifier.run
+        original = verifier.suite_checks.run_command
         results = []
         def selected_run(command, **kwargs):
             if any("sdlc-start/scripts" in str(part) for part in command):
@@ -447,11 +447,11 @@ class VerifierContractTests(unittest.TestCase):
                 results.append(result)
                 return result
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        with mock.patch.object(verifier, "run", side_effect=selected_run):
+        with mock.patch.object(verifier.suite_checks, "run_command", side_effect=selected_run):
             verifier.check_capability_regressions(ctx)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].returncode, 0, "direct intake suite failed to execute")
-        passed, _skipped = verifier.parse_unittest_results(results[0].stdout + results[0].stderr)
+        passed, _skipped = verifier.suite_checks.parse_unittest_results(results[0].stdout + results[0].stderr)
         self.assertIn("test_public_interface_is_mirrored", passed)
         self.assertIn("test_valid_specs_emit_current_advisory_snapshot", passed)
 
@@ -1250,7 +1250,7 @@ class VerifierContractTests(unittest.TestCase):
     def test_critical_capabilities_require_crash_and_history_regressions(
         self,
     ) -> None:
-        source = inspect.getsource(verifier.check_capability_regressions)
+        source = inspect.getsource(verifier.suite_checks.capability_catalog)
         startup = source.split('"objective.lifecycle":', 1)[1].split('"execution.scope":', 1)[0]
         for name in (
             "test_hook_only_history_is_preserved_by_fresh_cli",
@@ -1288,7 +1288,7 @@ class VerifierContractTests(unittest.TestCase):
         )
 
     def test_capability_requirements_resolve_to_declared_tests(self) -> None:
-        source = inspect.getsource(verifier.check_capability_regressions)
+        source = inspect.getsource(verifier.suite_checks.capability_catalog)
         required = set(re.findall(r'"(test_[A-Za-z0-9_]+)"', source))
         declared: set[str] = set()
         for path in MODULE_PATH.parents[2].rglob("*.py"):
@@ -2031,7 +2031,7 @@ class VerifierContractTests(unittest.TestCase):
                 )
 
     def test_unittest_result_parser_does_not_count_skips_as_passes(self) -> None:
-        passed, skipped = verifier.parse_unittest_results(
+        passed, skipped = verifier.suite_checks.parse_unittest_results(
             "\x1b[32mtest_pass\x1b[0m (Suite.test_pass) ... \x1b[32mok\x1b[0m\n"
             "test_skip (Suite.test_skip) ... skipped 'POSIX only'\n"
         )

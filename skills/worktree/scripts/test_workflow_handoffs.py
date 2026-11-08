@@ -25,6 +25,10 @@ class HandoffTests(unittest.TestCase):
                 "assignment_digest": assignment["assignment_digest"],
                 "summary": "x" * 3000,
                 "commit": "a" * 40,
+                "status": "implemented",
+                "head": "a" * 40,
+                "tree": "b" * 40,
+                "acceptance_receipt_sha256": None,
             }
             result["result_digest"] = execution.sha256_json(result)
             original = execution.read_json
@@ -70,6 +74,8 @@ class HandoffTests(unittest.TestCase):
 
                 handoff = build(True)
                 self.assertLess(len(json.dumps(handoff).encode()), 64 * 1024)
+                for key in ("status", "head", "tree", "commit", "acceptance_receipt_sha256"):
+                    self.assertEqual(handoff["predecessors"][0][key], result[key])
                 self.assertEqual(len(handoff["predecessors"]), 16)
                 self.assertEqual(len(handoff["predecessors"][0]["summary"]), 512)
                 self.assertEqual(handoff["dependency_index"]["count"], 2100)

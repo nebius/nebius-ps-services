@@ -115,9 +115,11 @@ and create fresh assignments; recovery cannot be used merely to renew a clock.
 `workflow_transition.py prepare` uses one run integration checkout for Implement
 and SDLC's single active feature integration checkout. Workers receive fresh task
 worktrees. The deterministic ready queue operates inside each frozen dependency
-wave. Capacity is at most four, capped by native host observation, configured
-limits and available independent tasks. Without an established native capacity,
-use one isolated worker and report serial execution.
+wave. Freeze independent worker, wave-task and retained-worker-worktree limits
+before allocating resources (defaults 4, 8 and 16). Larger hosts may configure
+higher limits. Fresh native observations constrain launches; zero waits, while
+unknown capacity permits at most one worker including existing active workers.
+See [wave policy and acceptance](worker-waves.md) for the canonical contract.
 
 `wave-prepare` allocates free slots. `task-arm` returns a canonical `launch`
 envelope from `workflow_worker_contract.py`: assignment/basis, exact cwd,
@@ -154,10 +156,12 @@ observation and the complete result in bounded owner-private JSON files. Invoke
 run/execution/wave/task. The shared owner validates every field, identity, basis
 and attempt before writing an immutable `workflow/worker-result-receipt-v1`.
 Its response supplies `receipt_path`, `receipt_sha256` and `worker_status`.
-Only an implemented receipt may enter `task-finish --receipt <receipt_path>
---termination <observation> --message <message>`; projected summary/validation/
-review flags are unsupported. Finish derives those fields from the receipt and
-binds its digest into the exact commit intent and `workflow/worker-result-v3`.
+An implemented receipt enters `task-finish --receipt <receipt_path>
+--termination <observation> --message <message>`. A `verified_no_change` proposal
+first requires independent `validate-target --task <task>` acceptance at its exact
+clean base; finish creates no commit and needs no message. Projected summary,
+validation and review flags are unsupported. Finish binds the native receipt and
+Git proof into the tagged `workflow/worker-result-v4`.
 Then use `task-admit` and `wave-refill`. A result file, Git worktree lock or an
 agent's own “done” statement does not prove writer quiescence or test success.
 
@@ -203,7 +207,7 @@ See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-fi
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 The worker result schema uses the native provider's supported output subset.
-Local validation remains authoritative: implemented and blocked results require
+Local validation remains authoritative: implemented, verified_no_change and blocked results require
 no spec gaps, replan results require at least one, and each requirement/design ID list must be
 typed and unique. Unsupported conditional and uniqueness schema keywords are
 not sent to the provider. A failed native process preserves its nonzero exit;
@@ -290,8 +294,20 @@ Report deterministic tests, installed hooks, fresh native-agent execution and li
 application evidence separately. Unavailable runtime checks remain NOT_RUN/PARTIAL;
 fixture intervention cannot establish a workflow pass.
 
+The read-only `observe_pending_revision` helper validates an existing pending
+design revision for independent classifier evidence. It checks current objective,
+plan/basis, active counted design authority, immutable preparation and retained
+termination/reconciliation proofs, exact integration registration and quiescence.
+It never adopts a coordinator session or writes workflow state. Mutating prepare,
+seal and reconciliation owners continue to require the bound coordinator.
+
 ## Document programs
 
 Use [document delivery](document-delivery.md) for portable source coverage,
 phase barriers, slice identity, bounded retention and conditional protected merge.
 The same execution primitives serve ordinary singleton Implement and SDLC slices.
+
+Combined-wave success requires the producer receipt from `validate-target`,
+passed to `wave-complete --receipt`. Free-form success evidence is rejected.
+Changed and no-change results share the full-wave admission, validation and
+non-forced cleanup barrier. Historical completion verifies its original receipt.

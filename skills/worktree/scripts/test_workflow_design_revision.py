@@ -16,6 +16,8 @@ import test_workflow_execution as fixtures
 git = fixtures.git
 
 
+from test_workflow_fixture import replan_future as fixture_replan_future  # noqa: E402
+
 class DesignRevisionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.GitLifecycleTests()
@@ -155,7 +157,7 @@ class DesignRevisionTests(unittest.TestCase):
         replacement.write_text(original.replace("Plan v1", "Plan v2") + "### TASK-002" +
                                original.split("### TASK-001", 1)[1].replace("src/a.py", "src/new.py").replace("code:a", "code:new"))
         replacement.with_suffix(".md.lock").write_text("locked\n")
-        engine.replan_future(self.run_dir, "FEAT-001", replacement, 1)
+        fixture_replan_future(self.run_dir, "FEAT-001", replacement, 1)
         fresh = engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
         self.assertEqual(fresh["base_head"], git(self.integration, "rev-parse", "HEAD"))
         self.assertNotEqual(fresh["basis_sha256"], self.old_basis)
@@ -176,6 +178,30 @@ class DesignRevisionTests(unittest.TestCase):
                                                   dispatch, [self.termination], self.session)
                 self.assertEqual(read(engine.coordinator_path(self.run_dir, "FEAT-001")), original)
 
+    def test_pending_observer_preserves_coordinator_authority(self):
+        from workflow_state import WorkflowError, write
+        from workflow_reconcile import termination
+        import workflow_design_revision as owner
+        prepared = self.prepare_revision()
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+            self.assertEqual(owner.observe_pending_revision(self.run_dir, "FEAT-001"), prepared)
+            with self.assertRaises(WorkflowError):
+                termination(self.run_dir, "FEAT-001", "WAVE-001", "TASK-001",
+                            self.termination, "independent-observer")
+            with self.assertRaisesRegex(engine.ExecutionError, "bound native coordinator"):
+                owner.seal_design_revision(self.run_dir, "FEAT-001", self.dispatch["dispatch_id"],
+                                           "test-design-correction", "Unauthorized seal", "independent-observer")
+        path = self.run_dir / "run.json"
+        value = read(path)
+        write(path, {**value, "fence": {"reason": "test-only fence"}})
+        with self.assertRaises(WorkflowError):
+            owner.observe_pending_revision(self.run_dir, "FEAT-001")
+        write(path, value)
+        self.repair.complete_remediation(self.run_dir, "FEAT-001", self.dispatch["dispatch_id"],
+                                         "succeeded", "evidence/deterministic-completion.json")
+        with self.assertRaisesRegex(engine.ExecutionError, "dispatch is not active"):
+            owner.observe_pending_revision(self.run_dir, "FEAT-001")
+
     def test_prepare_rejects_wrong_head_dirty_checkout_live_writer_and_partial_merge(self):
         from workflow_state import write
         owner = importlib.import_module("workflow_design_revision")
@@ -190,7 +216,7 @@ class DesignRevisionTests(unittest.TestCase):
                                           self.dispatch["dispatch_id"], [], self.session)
         wave_path = engine.wave_path(self.run_dir, "FEAT-001", "WAVE-001")
         wave = read(wave_path)
-        write(wave_path, {**wave, "merged_task_ids": ["TASK-001"]})
+        write(wave_path, {**wave, "integrated_task_ids": ["TASK-001"]})
         with self.assertRaises(engine.ExecutionError):
             self.prepare_revision()
         write(wave_path, wave)
@@ -322,7 +348,7 @@ class DesignRevisionTests(unittest.TestCase):
         from workflow_state import write
         self.prepare_revision()
         with self.assertRaises(engine.ExecutionError):
-            engine.replan_future(self.run_dir, "FEAT-001", self.fixture.plan, 1)
+            fixture_replan_future(self.run_dir, "FEAT-001", self.fixture.plan, 1)
         self.publish_correction()
         self.seal()
         path = engine.coordinator_path(self.run_dir, "FEAT-001")

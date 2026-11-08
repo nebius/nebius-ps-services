@@ -359,7 +359,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "workflow/execution-coordinator-v2",
+                    "schema": "workflow/execution-coordinator-v3",
                 "owner": "agentic-sdlc",
                     "status": "done",
                     "base_branch": "main",
@@ -455,7 +455,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "workflow/execution-coordinator-v2",
+                "schema": "workflow/execution-coordinator-v3",
                 "owner": "agentic-sdlc",
                 "execution_id": "FEAT-001",
                 "project_root": str(self.project),

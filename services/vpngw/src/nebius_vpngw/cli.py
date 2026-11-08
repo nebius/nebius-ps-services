@@ -71,6 +71,8 @@ from .config_wizard import (
     WizardValidationError,
     run_config_wizard,
 )
+from .deploy.apply_result import ApplyReport
+from .deploy.apply_result import OutputFormat as ApplyOutputFormat
 from .deploy.destroy import DestroyFailure, execute_destroy
 from .deploy.route_manager import (
     NebiusSDKRouteBackend,
@@ -1447,6 +1449,7 @@ def _vm_ha_desired_approval_state(plan: ResolvedDeploymentPlan) -> dict[str, obj
         ),
         "cluster_id": vm_ha.cluster_id,
         "gateway_name": gateway.name,
+        "security_group_ids": list(gateway.security_group_ids),
         "generation": {
             "bgp_policy_digest": generation.digests.bgp_policy,
             "configuration_digest": generation.digests.configuration,
@@ -3348,6 +3351,99 @@ def _prepare_vm_ha_agent_package(
         ) from error
 
 
+def _prepare_stopped_vm_ha_packages(
+    *,
+    staged: list[tuple[t.Any, str, t.Any]],
+    ssh_policy: SSHTrustPolicy,
+    local: dict,
+    artifact: VMHAAgentArtifact,
+    operation_id: str,
+    cluster_id: str,
+) -> None:
+    """Prepare two independently fenced members; never mutate host journals here.
+
+    The caller owns the complete two-member lock/quiescence/stopped-writer
+    barrier. Both workers settle before return or propagation of any failure;
+    activation and lock release remain serial in that caller. Fresh SSH evidence
+    stays on the command thread that owns its cloud client and lifecycle journal.
+    """
+    import threading
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from queue import Empty, Queue
+
+    from .deploy.checkpoint_conversion import context as checkpoint_context
+
+    if len(staged) != 2 or len({item[0].hostname for item in staged}) != 2:
+        raise RuntimeError("Coordinated package preparation requires two exact members")
+    authentication_lock = threading.Lock()
+    evidence_requests: Queue[Future[None]] = Queue()
+    outstanding: set[Future[None]] = set()
+    evidence_lock = threading.Lock()
+    evidence_stopped = False
+
+    def assert_evidence_on_command_thread() -> None:
+        request: Future[None] = Future()
+        with evidence_lock:
+            if evidence_stopped:
+                raise RuntimeError("Command stopped before SSH evidence validation")
+            outstanding.add(request)
+            evidence_requests.put(request)
+        try:
+            request.result()
+        finally:
+            with evidence_lock:
+                outstanding.discard(request)
+
+    # Keep the exact pins and file checks; dispatch every evidence check afresh.
+    # The shared synchronous SDK's event loop must never move into these workers.
+    worker_policy = replace(ssh_policy, _evidence_checks=(assert_evidence_on_command_thread,))
+
+    def prepare(entry: tuple[t.Any, str, t.Any]) -> None:
+        instance, target, _receipt = entry
+        worker = SSHPush(ssh_policy=worker_policy, authentication_lock=authentication_lock)
+        _prepare_vm_ha_agent_package(
+            worker,
+            target,
+            instance,
+            local,
+            artifact=artifact,
+            checkpoint_conversion=checkpoint_context(instance, operation_id, cluster_id=cluster_id),
+        )
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="vpngw-package") as workers:
+        try:
+            futures = [
+                workers.submit(contextvars.copy_context().run, prepare, entry) for entry in staged
+            ]
+            while not all(future.done() for future in futures):
+                try:
+                    request = evidence_requests.get(timeout=0.05)
+                except Empty:
+                    continue
+                try:
+                    ssh_policy.assert_current()
+                except BaseException as error:
+                    request.set_exception(error)
+                    if not isinstance(error, Exception):
+                        raise
+                else:
+                    request.set_result(None)
+        finally:
+            # Never leave a worker waiting for an owner that has exited, even if
+            # submission or the command thread itself is interrupted. The lock
+            # makes closing the queue atomic with future worker submissions.
+            with evidence_lock:
+                evidence_stopped = True
+                # Include requests removed from the queue immediately before an
+                # interruption prevented the owner from receiving the result.
+                for pending in outstanding:
+                    if not pending.done():
+                        pending.set_exception(RuntimeError("Command stopped before SSH evidence"))
+        for entry, future in zip(staged, futures, strict=True):
+            future.result()
+            print(f"[green]✓ Prepared {entry[0].vm_ha_node.node_id} agent package[/green]")
+
+
 def _validate_vm_ha_agent_status(
     payload: dict[str, t.Any],
     *,
@@ -4103,9 +4199,14 @@ def _wait_for_vm_ha_agent_status(
 ) -> dict[str, t.Any]:
     deadline = time.monotonic() + timeout_seconds
     last_error: Exception | None = None
-    while time.monotonic() < deadline:
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            payload = _fetch_vm_ha_agent_status(**fetch_kwargs)
+            payload = _fetch_vm_ha_agent_status(
+                timeout_seconds=min(15.0, remaining), **fetch_kwargs
+            )
+            if time.monotonic() >= deadline:
+                last_error = _VMHAAgentStatusStale("VM-HA status arrived after the deadline")
+                break
             if predicate(payload):
                 return payload
             last_error = _VMHAAgentStatusStale("VM-HA agent has not reached the required state")
@@ -4116,7 +4217,10 @@ def _wait_for_vm_ha_agent_status(
             _VMHAAgentStatusStale,
         ) as error:
             last_error = error
-        time.sleep(poll_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_seconds, remaining))
         if progress_callback is not None:
             progress_callback()
     raise RuntimeError(f"VM-HA status verification timed out: {last_error}") from last_error
@@ -4703,43 +4807,61 @@ def _serialize_explicit_vm_ha_apply(function: t.Callable[..., t.Any]):
     @functools.wraps(function)
     def wrapped(*args: t.Any, **kwargs: t.Any) -> t.Any:
         arguments = signature.bind_partial(*args, **kwargs)
-        configured_path = arguments.arguments.get("local_config_file")
-        config_path = _resolve_local_config(
-            configured_path,
-            create_if_missing=True,
-            exit_after_create=True,
-        )
+        structured = arguments.arguments.get("output_format") == ApplyOutputFormat.JSON
         try:
-            config = load_local_config(config_path)
-        except IngressPolicyError as error:
-            typer.echo(f"Configuration error: {error}")
-            raise typer.Exit(code=1) from None
-        except MissingEnvironmentVariablesError as error:
-            print(f"[red]Configuration error: {error}[/red]")
-            print(
-                "[yellow]Load or export the listed variables in the shell that runs "
-                "nebius-vpngw, then retry apply.[/yellow]"
-            )
-            raise typer.Exit(code=1) from None
-        plan = merge_with_peer_configs(config, [])
-        project_override = arguments.arguments.get("project_id")
-        canonical_project = project_override or str(config.get("project_id") or "").strip()
-        gateway_group = getattr(plan, "gateway_group", None)
-        gateway_name = str(getattr(gateway_group, "name", "") or "").strip()
-        requires_lock = bool(
-            not arguments.arguments.get("dry_run", False) and canonical_project and gateway_name
-        )
-        if not requires_lock:
+            with contextlib.redirect_stdout(sys.stderr) if structured else contextlib.nullcontext():
+                configured_path = arguments.arguments.get("local_config_file")
+                config_path = _resolve_local_config(
+                    configured_path,
+                    create_if_missing=True,
+                    exit_after_create=True,
+                )
+                try:
+                    config = load_local_config(config_path)
+                except IngressPolicyError as error:
+                    typer.echo(f"Configuration error: {error}")
+                    raise typer.Exit(code=1) from None
+                except MissingEnvironmentVariablesError as error:
+                    print(f"[red]Configuration error: {error}[/red]")
+                    print(
+                        "[yellow]Load or export the listed variables in the shell that runs "
+                        "nebius-vpngw, then retry apply.[/yellow]"
+                    )
+                    raise typer.Exit(code=1) from None
+                plan = merge_with_peer_configs(config, [])
+                project_override = arguments.arguments.get("project_id")
+                canonical_project = project_override or str(config.get("project_id") or "").strip()
+                gateway_group = getattr(plan, "gateway_group", None)
+                gateway_name = str(getattr(gateway_group, "name", "") or "").strip()
+                requires_lock = bool(
+                    not arguments.arguments.get("dry_run", False)
+                    and canonical_project
+                    and gateway_name
+                )
+                lock = None
+                if requires_lock:
+                    lock = VMHAApplyLock(
+                        project_id=canonical_project,
+                        gateway_name=gateway_name,
+                    )
+                    try:
+                        lock.__enter__()
+                    except RuntimeError as error:
+                        print(
+                            f"[red]Gateway apply is already owned by another writer:[/red] {error}"
+                        )
+                        raise typer.Exit(code=1) from error
+        except Exception:
+            if structured:
+                typer.echo(
+                    json.dumps(
+                        ApplyReport(dry_run=bool(arguments.arguments.get("dry_run"))).mapping(),
+                        sort_keys=True,
+                    )
+                )
+            raise
+        if lock is None:
             return function(*args, **kwargs)
-        lock = VMHAApplyLock(
-            project_id=canonical_project,
-            gateway_name=gateway_name,
-        )
-        try:
-            lock.__enter__()
-        except RuntimeError as error:
-            print(f"[red]Gateway apply is already owned by another writer:[/red] {error}")
-            raise typer.Exit(code=1) from error
         try:
             with _suppress_vm_ha_sdk_retry_diagnostics():
                 return function(*args, **kwargs)
@@ -4749,29 +4871,38 @@ def _serialize_explicit_vm_ha_apply(function: t.Callable[..., t.Any]):
             if _vm_ha_error_chain_has_sdk_code(
                 error, "UNAUTHENTICATED"
             ) or error_chain_has_cli_authentication_failure(error):
+                diagnostic_stream = sys.stderr if structured else sys.stdout
                 label = "VM-HA" if plan.vm_ha is not None else "Gateway"
                 print(
-                    f"[red]{label} apply stopped: Nebius cloud authentication was rejected.[/red]"
+                    f"[red]{label} apply stopped: Nebius cloud authentication was rejected.[/red]",
+                    file=diagnostic_stream,
                 )
                 print(
                     "[yellow]Refresh the Nebius CLI profile or replace NEBIUS_IAM_TOKEN, "
-                    "then rerun apply.[/yellow]"
+                    "then rerun apply.[/yellow]",
+                    file=diagnostic_stream,
                 )
                 raise typer.Exit(code=1) from None
             if not _vm_ha_error_chain_has_sdk_code(error, "DEADLINE_EXCEEDED"):
                 raise
+            diagnostic_stream = sys.stderr if structured else sys.stdout
             label = "VM-HA" if plan.vm_ha is not None else "Gateway"
             print(
                 f"[red]{label} apply stopped: Nebius cloud request timed out "
-                "after bounded retries.[/red]"
+                "after bounded retries.[/red]",
+                file=diagnostic_stream,
             )
             if plan.vm_ha is not None:
                 print(
                     "[yellow]Run 'nebius-vpngw vm-ha --local-config-file <file>' "
-                    "to inspect and resume.[/yellow]"
+                    "to inspect and resume.[/yellow]",
+                    file=diagnostic_stream,
                 )
             else:
-                print("[yellow]Run 'nebius-vpngw apply -c <file>' to inspect and resume.[/yellow]")
+                print(
+                    "[yellow]Run 'nebius-vpngw apply -c <file>' to inspect and resume.[/yellow]",
+                    file=diagnostic_stream,
+                )
             raise typer.Exit(code=1) from None
         finally:
             lock.__exit__(None, None, None)
@@ -4880,14 +5011,14 @@ def _vm_ha_missing_standby_owner_refresh_required(
         if not (
             missing_peer_guarded
             and status.get("reasons") == ["controller-step-failed", "runtime-identity-blocked"]
-            and "independent-heartbeat-v5" in status.get("controller_capabilities", [])
+            and "independent-heartbeat-v6" in status.get("controller_capabilities", [])
         ):
             raise RuntimeError("VM-HA missing standby owner is not serving exactly")
         remaining = identity_deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError("VM-HA owner runtime identity preflight did not complete")
         time.sleep(min(1.0, remaining))
-    if "independent-heartbeat-v5" not in status.get("controller_capabilities", []):
+    if "independent-heartbeat-v6" not in status.get("controller_capabilities", []):
         raise RuntimeError(
             "Missing-standby replacement requires a v5 owner; restore the prior "
             "compatible pair before a coordinated two-member heartbeat upgrade"
@@ -5011,6 +5142,18 @@ def _vm_ha_apply_plan_impact(
             resource_creation=True,
         )
     impacts = {
+        "security-groups": VMHACommandImpact(
+            summary="Changes cloud firewall attachments; may interrupt management or VPN traffic without restarting VPN services",
+            destructive=False,
+            vpn_traffic_interruption=True,
+            resource_creation=False,
+        ),
+        "corrective-release": VMHACommandImpact(
+            summary="Repairs an already failed release under fresh apply locks; retains resources and credentials",
+            destructive=False,
+            vpn_traffic_interruption=True,
+            resource_creation=False,
+        ),
         "migration": VMHACommandImpact(
             summary=(
                 "May briefly interrupt VPN traffic during VM-HA activation; "
@@ -5653,6 +5796,7 @@ def _unchanged_vm_ha_apply(
     ssh_policy: SSHTrustPolicy | None,
     artifact: VMHAAgentArtifact,
     region: str | None,
+    attachment_resume: bool = False,
 ) -> bool:
     """Prove an HA no-op without assuming package version implies installed parity."""
     from .deploy.ordinary_apply import artifact as describe_artifact
@@ -5687,7 +5831,9 @@ def _unchanged_vm_ha_apply(
             desired = yaml.safe_load(instance.config_yaml)
             desired["vm_ha"].pop("runtime_binding", None)
             if (
-                observed["files"] != manifest["files"]
+                not observed["runtime"]["ready"]
+                or observed.get("runtime_pending") is not None
+                or observed["files"] != manifest["files"]
                 or observed["assets"]
                 != {path: item["sha256"] for path, item in manifest["assets"].items()}
                 or observed["asset_modes"]
@@ -5697,12 +5843,24 @@ def _unchanged_vm_ha_apply(
             ):
                 return False
             observations.append((instance, manifest, observed))
-    # Existing strict status owns cloud allocation, generation, fencing, local
-    # readiness and peer agreement. Require two agreeing fresh observations.
-    first = _inspect_vm_ha_status_with_region(config_path, region=region)
-    if first.snapshot.view.overall != "HEALTHY":
-        return False
-    _confirm_vm_ha_healthy(config_path, first, region=region)
+    # Connectivity never independently selects a package/service transaction.
+    # Keep existing promotion and configuration-writer readiness gates separate.
+    if not attachment_resume:
+        from .deploy.apply_health import ha_convergence
+        from .deploy.apply_plan import Evidence
+
+        first = _inspect_vm_ha_status_with_region(config_path, region=region)
+        before = ha_convergence(first.snapshot)
+        second = _inspect_vm_ha_status_with_region(config_path, region=region)
+        after = ha_convergence(second.snapshot)
+        if before.identity != after.identity:
+            raise RuntimeError("HA convergence evidence changed; no deployment is admitted")
+        if after.local_runtime is Evidence.DEGRADED:
+            return False
+        if after.connectivity is not Evidence.READY:
+            print(
+                f"[yellow]Local HA configuration is converged; VPN connectivity is {after.connectivity.value}.[/yellow]"
+            )
     for instance, manifest, previous in observations:
         current = remote(
             ssh,
@@ -5731,6 +5889,60 @@ def _unchanged_vm_ha_apply(
     return True
 
 
+def _verify_vm_ha_prepared(
+    config_path: Path,
+    *,
+    instances: tuple,
+    local: dict,
+    targets: dict,
+    ssh_policy: SSHTrustPolicy | None,
+    artifact: VMHAAgentArtifact,
+    region: str | None,
+    lifecycle: VMHALifecycleState,
+) -> None:
+    """Prove the prepared checkpoint without running the activation owner again."""
+    from .deploy import ha_preparation
+
+    if not _unchanged_vm_ha_apply(
+        config_path,
+        instances=instances,
+        local=local,
+        targets=targets,
+        ssh_policy=ssh_policy,
+        artifact=artifact,
+        region=region,
+        attachment_resume=True,
+    ):
+        raise RuntimeError("Prepared HA runtime drift requires a separately reviewed repair")
+    prepared = ha_preparation.receipt(lifecycle)
+    if prepared is None:
+        raise RuntimeError("HA preparation has no successful lifecycle receipt")
+    vm_spec = (local.get("gateway_group") or {}).get("vm_spec") or {}
+    raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+    key_path = Path(raw_key).expanduser() if raw_key else None
+    client_auth = _gateway_ssh_client_auth(local)
+    for _ in range(2):
+        statuses = {
+            instance.vm_ha_node.node_id: _wait_for_vm_ha_agent_status(
+                predicate=lambda status: status.get("data_plane_mode") == "passive",
+                target=targets[instance.hostname],
+                hostname=instance.hostname,
+                username=vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
+                key_path=key_path,
+                client_auth=client_auth,
+                ssh_policy=t.cast(SSHTrustPolicy, ssh_policy),
+                inst_cfg=instance,
+                runtime_binding=_vm_ha_lifecycle_runtime_binding(lifecycle),
+                expected_apply_locked=True,
+                expected_operation_id=prepared["lock_operation"],
+            )
+            for instance in instances
+        }
+        ha_preparation.verify_statuses(
+            lifecycle, statuses, lock_operation=prepared["lock_operation"]
+        )
+
+
 def _plan_vm_ha_package_dependencies(
     artifact: VMHAAgentArtifact,
     *,
@@ -5740,6 +5952,8 @@ def _plan_vm_ha_package_dependencies(
     local: dict,
     ssh_policy: SSHTrustPolicy | None,
     target_identities: dict[str, str] | None = None,
+    resume_parent: str | None = None,
+    resume_manifests: dict | None = None,
 ) -> VMHAAgentArtifact:
     from .deploy.vm_ha_package import inspect_plan
 
@@ -5761,6 +5975,10 @@ def _plan_vm_ha_package_dependencies(
             instance,
             local,
             target_identity=(target_identities or {}).get(instance.hostname, instance.hostname),
+            resume_parent=resume_parent,
+            resume_manifest=resume_manifests[instance.hostname]
+            if resume_manifests is not None
+            else None,
         )
         lifetimes = _VM_MANAGER_LIFETIMES.get()
         assert lifetimes is not None
@@ -5769,6 +5987,54 @@ def _plan_vm_ha_package_dependencies(
         for dependency in item.dependency_paths:
             print(f"  - {instance.hostname}: required dependency {dependency.name}")
     return replace(artifact, dependency_plans=tuple(prepared))
+
+
+def _vm_ha_command_approval_scope(
+    artifact: VMHAAgentArtifact, local: dict, *, intent: dict | None = None
+) -> dict:
+    from .apply_approval import manifest_identity
+
+    return {
+        "artifact": artifact.sha256,
+        "desired": local,
+        "intent": intent or {},
+        "packages": {
+            name: {
+                "target": package.target_identity,
+                "transport": package.target,
+                "manifest": manifest_identity(package.manifest),
+            }
+            for name, package in artifact.dependency_plans
+        },
+    }
+
+
+def _review_attachment_request_retry(
+    manager: t.Any,
+    command_journal: t.Any,
+    attachment_pending: dict | None,
+    *,
+    supplied: str | None,
+    dry_run: bool,
+    result_report: t.Any,
+) -> tuple[dict | None, str | None]:
+    from .deploy import attachment_retry
+
+    proposal = attachment_retry.plan(manager, command_journal, attachment_pending)
+    if proposal is None:
+        return None, supplied
+    approval = _canonical_digest(proposal)
+    result_report.bind(command_journal, resumed=True)
+    pending = command_journal.pending()
+    assert pending is not None and attachment_pending is not None
+    result_report.plan(tuple(pending["progress"]), approval=attachment_pending["approval"])
+    result_report.review_approval = approval
+    print(
+        "[yellow]Review a new cloud request after the prior attachment request was rejected; "
+        "original desired state and HA inhibition remain in force.[/yellow]"
+    )
+    _approve_disruption(approval, supplied=supplied, dry_run=dry_run)
+    return proposal, attachment_pending["approval"]
 
 
 def _prepare_ordinary_apply(
@@ -5780,16 +6046,53 @@ def _prepare_ordinary_apply(
     supplied: str | None,
     dry_run: bool,
     recreate: bool,
-) -> tuple[dict, dict, bool]:
-    from .deploy.ordinary_apply import digest, inspect_plan
+    attachments: dict | None = None,
+    attachment_pending: dict | None = None,
+    command_journal: t.Any,
+    artifact_sha256: str,
+    attachment_completed: dict | None = None,
+    deployment: ResolvedDeploymentPlan | None = None,
+) -> tuple[dict, dict, bool, t.Any]:
+    from . import apply_approval
+    from .deploy import provisioning_command
+    from .deploy.ordinary_apply import inspect_plan
+    from .deploy.ordinary_command import inspect as inspect_command
+    from .deploy.ordinary_command import package_manifests
 
-    targets = manager.inspect_ordinary_targets(item.hostname for item in instances)
+    fresh_pending = provisioning_command.pending(command_journal, local, artifact_sha256)
+    original_new = provisioning_command.original_guests(fresh_pending) if fresh_pending else set()
+    # Pending creations are settled by their operation owner, even while a
+    # Compute object is visible without a ready public transport.
+    targets = manager.inspect_ordinary_targets(
+        item.hostname for item in instances if item.hostname not in original_new
+    )
+    fresh_names = (
+        original_new if fresh_pending else {item.hostname for item in instances} - set(targets)
+    )
+    manifests = (
+        provisioning_command.package_manifests(fresh_pending)
+        if fresh_pending
+        else package_manifests(
+            command_journal, local=local, targets=targets, artifact=artifact_sha256
+        )
+    )
     plans = {}
     for instance in instances:
-        if instance.hostname not in targets or recreate:
+        if instance.hostname not in targets or instance.hostname in fresh_names or recreate:
             continue
         identity, target = targets[instance.hostname]
-        prepared = inspect_plan(ssh, target, instance, local, target_identity=identity)
+        prepared = inspect_plan(
+            ssh,
+            target,
+            instance,
+            local,
+            target_identity=identity,
+            **(
+                {"resume_manifest": manifests[instance.hostname]}
+                if instance.hostname in manifests
+                else {}
+            ),
+        )
         lifetimes = _VM_MANAGER_LIFETIMES.get()
         assert lifetimes is not None
         lifetimes.callback(prepared.close)
@@ -5799,20 +6102,72 @@ def _prepare_ordinary_apply(
             "verify unchanged local configuration; no deployment effects"
         ]:
             print(f"  - {effect}")
-    approved = False
-    if any(not item.noop for item in plans.values()):
-        plan_digest = digest(
-            {
-                "targets": targets,
-                "plans": {name: item.digest for name, item in plans.items()},
-                "desired": local,
-                "recreate": recreate,
-            }
+    routes = None
+    if (
+        not fresh_names
+        and deployment is not None
+        and set(targets) == {instance.hostname for instance in instances}
+        and not recreate
+    ):
+        from .deploy.ordinary_route_command import prepare as prepare_routes
+
+        routes = prepare_routes(
+            manager,
+            deployment,
+            local,
+            ssh_policy=ssh._ssh_policy,
+            runtime_changes=any(not item.noop for item in plans.values()),
         )
-        approved = _approve_disruption(plan_digest, supplied=supplied, dry_run=dry_run)
+        if routes is not None and routes.required:
+            from rich.markup import escape
+
+            for line in routes.review_lines():
+                print("  - " + escape(line))
+    command: t.Any
+    if fresh_names and deployment is not None and not recreate:
+        command = provisioning_command.inspect(
+            command_journal,
+            manager=manager,
+            deployment=deployment,
+            local=local,
+            targets=targets,
+            plans=plans,
+            artifact=artifact_sha256,
+            ssh_policy=ssh._ssh_policy,
+            trust_scope=_ordinary_ssh_trust_scope(local, deployment, project_id=manager.project_id),
+            attachments=attachments,
+            attachment_pending=attachment_pending,
+        )
+        for child_effect in command.plan.effects:
+            print(f"  - {child_effect.action} {child_effect.key} through {child_effect.owner}")
+    else:
+        command = inspect_command(
+            command_journal,
+            local=local,
+            targets=targets,
+            plans=plans,
+            attachments=attachments,
+            attachment_pending=attachment_pending,
+            artifact_sha256=artifact_sha256,
+            attachment_completed=attachment_completed,
+            routes=routes,
+        )
+    approved = False
+    if command.plan.effects:
+        if command.resumed:
+            if supplied is not None and supplied != command.approval:
+                raise RuntimeError("Disruption approval differs from the pending apply command")
+            approved = not dry_run
+        else:
+            approved = _approve_disruption(command.approval, supplied=supplied, dry_run=dry_run)
+        if approved:
+            for item in plans.values():
+                item.manifest["command_approval"] = apply_approval.bind(
+                    command.approval, command.plan.mapping()
+                )
     elif supplied is not None and not recreate:
         raise RuntimeError("No matching disruption plan requires this approval")
-    return plans, targets, approved
+    return plans, targets, approved, command
 
 
 def _execute_gateway_replacement(
@@ -5827,8 +6182,19 @@ def _execute_gateway_replacement(
     approval: str | None,
     config_path: Path,
     resume: Path | None = None,
+    result_report: ApplyReport | None = None,
 ) -> None:
+    from .deploy.apply_command import CommandJournal, begin_replacement, require_replacement_scope
     from .deploy.replacement import Journal, digest, run
+    from .deploy.security_group_apply import AttachmentJournal
+
+    if (
+        manager.project_id
+        and AttachmentJournal(manager.project_id, plan.gateway_group.name).pending() is not None
+    ):
+        raise RuntimeError(
+            "Resume pending Security Group apply before replacing gateway infrastructure"
+        )
     from .deploy.replacement_ordinary import OrdinaryReplacement
     from .deploy.replacement_trust import resolve as resolve_replacement_trust
 
@@ -5855,7 +6221,7 @@ def _execute_gateway_replacement(
         print(
             "  - One temporary candidate VM, boot disk and public management allocation at a time; additional quota is required."
         )
-        print("  - Preserve the live Security Groups, operator keys and public addresses.")
+        print("  - Apply desired Security Groups; preserve operator keys and public addresses.")
         print(
             "  - Stop the former VM before address transfer; verify service before retiring its exact resources."
         )
@@ -5874,12 +6240,14 @@ def _execute_gateway_replacement(
                 f"  - {member.logical_name}: replace Compute {member.compute_id}; {disposition} {member.disk_id}"
             )
         for route in inspected.routes:
-            label = (
-                "rebind approved product route"
-                if route["managed"]
-                else "customer route requires attention"
+            print(
+                f"  - Recreate exact owned route with the candidate next hop: {route['id']} ({route['destination']})"
             )
-            print(f"  - {label}: {route['id']} ({route['destination']})")
+        require_replacement_scope(
+            CommandJournal(manager.project_id, plan.gateway_group.name), inspected.mapping()
+        )
+        if result_report is not None:
+            result_report.plan(("replacement",), approval=digest(inspected.mapping()))
         approved = _approve_disruption(
             digest(inspected.mapping()), supplied=approval, dry_run=dry_run
         )
@@ -5896,14 +6264,26 @@ def _execute_gateway_replacement(
 
     # Mutating apply entrypoints already hold the canonical gateway writer lock.
     # Reopening that non-reentrant lock would reject our own replacement.
-    with Journal(manager.project_id, plan.gateway_group.name) as journal:
+    envelope = CommandJournal(manager.project_id, plan.gateway_group.name)
+    if result_report is not None:
+        result_report.bind(envelope, resumed=resume is not None or envelope.pending() is not None)
+        result_report.plan(("replacement",))
+        result_report.started = True
+    with envelope, Journal(manager.project_id, plan.gateway_group.name) as journal:
         if resume is not None:
             # The option documents the operator's prior-writer-quiescence
             # assertion. A local flock alone is not a distributed fence.
-            journal.import_bundle(resume)
+            journal.import_bundle(
+                resume,
+                admit=lambda candidate: require_replacement_scope(
+                    envelope, candidate["transaction"]["plan"]
+                ),
+            )
         else:
             assert inspected is not None
+            require_replacement_scope(envelope, inspected.mapping())
             journal.start(inspected, digest(inspected.mapping()))
+        begin_replacement(envelope, journal.state["transaction"])
         print(f"Replacement recovery bundle: {journal.bundle.absolute()}")
         print(
             "Keep this private metadata bundle. Stop this writer before resuming it on another machine."
@@ -5918,6 +6298,10 @@ def _execute_gateway_replacement(
             ssh._ssh_policy = policy
             ports = replacement_ports()
             run(journal, ports, checkpoint=lambda step: print(f"  Replacement checkpoint: {step}"))
+            envelope.verified("replacement", ports.terminal_receipt(journal))
+            envelope.complete()
+            if result_report is not None:
+                result_report.verified(changed=True)
         except Exception:
             print(
                 "[red]Replacement is incomplete; retained resources and the recovery bundle must be preserved.[/red]"
@@ -5984,6 +6368,7 @@ def _apply_impl(
     vm_ha_progress_sink: _VMHAProgressSink | None = None,
     stop_after_vm_ha_plan: bool = False,
     expected_vm_ha_plan: _VMHAApplyPlanReport | None = None,
+    result_report: ApplyReport | None = None,
 ):
     """Reconcile desired state in Nebius and on the gateway VMs.
 
@@ -5991,6 +6376,7 @@ def _apply_impl(
     and matching IP allocations are reused when they already match the config.
     Use --recreate-gw only when infrastructure changes require VM recreation.
     """
+    result_report = result_report or ApplyReport(dry_run=bool(dry_run))
     local_config_was_explicit = local_config_file is not None
     local_config_file = _resolve_local_config(
         local_config_file,
@@ -6119,6 +6505,7 @@ def _apply_impl(
             approval=None,
             config_path=local_config_file,
             resume=resume_replacement,
+            result_report=result_report,
         )
         return
     if plan.vm_ha is not None and sa is not None:
@@ -6127,13 +6514,37 @@ def _apply_impl(
             "--sa is supported only for ordinary gateways.[/red]"
         )
         raise typer.Exit(code=1)
+    lifecycle_store = VMHALifecycleStore(local_config_file)
+    try:
+        lifecycle_state = lifecycle_store.read(
+            expected_project_id=proj_id,
+            expected_gateway_name=gateway_name,
+        )
+    except ValueError as error:
+        print("[red]VM-HA lifecycle state is invalid; apply is blocked before cloud access:[/red]")
+        print(f"[yellow]  - {error}[/yellow]")
+        raise typer.Exit(code=1) from error
     vm_ha_credentials: VMHACredentialSet | None = None
     vm_ha_credential_plan: VMHAManagedCredentialPlan | None = None
     vm_ha_credential_error: Exception | None = None
+    from .deploy import credential_enrollment
+    from .deploy import ha_command as ha_commands
+    from .deploy.apply_command import CommandJournal
+
+    ha_pending_prerequisites = None
+    ha_enrollment = None
     if plan.vm_ha is not None:
         if not proj_id:
             print("[red]VM-HA runtime credential verification requires an exact project ID.[/red]")
             raise typer.Exit(code=1)
+        command_journal = CommandJournal(proj_id, gateway_name)
+        ha_pending_prerequisites = ha_commands.pending_prerequisites(
+            command_journal,
+            preparation=prepare_vm_ha_peer_rotation,
+            lifecycle=lifecycle_state,
+        )
+        if ha_pending_prerequisites and "credentials" in ha_pending_prerequisites["bindings"]:
+            ha_enrollment = credential_enrollment.EnrollmentJournal(proj_id, gateway_name)
         print("[bold]Inspecting managed VM-HA runtime credentials...[/bold]")
         with _vm_ha_progress_step(
             vm_ha_progress_sink,
@@ -6146,7 +6557,20 @@ def _apply_impl(
                     node_ids=vm_ha_node_ids,
                     tenant_id=tenant_id,
                     region_id=region_id,
+                    **t.cast(
+                        dict[str, t.Any],
+                        {"enrollment": ha_enrollment} if ha_enrollment is not None else {},
+                    ),
                 )
+                if ha_enrollment is not None:
+                    assert ha_pending_prerequisites is not None
+                    parent = ha_pending_prerequisites["transaction"]
+                    vm_ha_credential_plan = ha_enrollment.bind_observation(
+                        vm_ha_credential_plan,
+                        intent=ha_pending_prerequisites["bindings"]["credentials"],
+                        approval=parent["approval"],
+                        execution_id=parent["execution_id"],
+                    )
                 vm_ha_credentials = vm_ha_credential_plan.credentials
             except (VMHACredentialIdentityError, VMHAManagedCredentialError) as error:
                 if (
@@ -6166,16 +6590,6 @@ def _apply_impl(
             print(
                 "[yellow]Managed VM-HA runtime credentials will be created after the exact plan is approved.[/yellow]"
             )
-    lifecycle_store = VMHALifecycleStore(local_config_file)
-    try:
-        lifecycle_state = lifecycle_store.read(
-            expected_project_id=proj_id,
-            expected_gateway_name=gateway_name,
-        )
-    except ValueError as error:
-        print("[red]VM-HA lifecycle state is invalid; apply is blocked before cloud access:[/red]")
-        print(f"[yellow]  - {error}[/yellow]")
-        raise typer.Exit(code=1) from error
     if (
         lifecycle_state is not None
         and lifecycle_state.transaction is not None
@@ -6411,7 +6825,22 @@ def _apply_impl(
                 enrollment_hosts.add(vm_ha_passive_replacement[0])
             if vm_ha_missing_standby_replacement is not None:
                 enrollment_hosts.add(vm_ha_missing_standby_replacement.target_instance_name)
+            if ha_pending_prerequisites is not None:
+                original_members = ha_pending_prerequisites["bindings"]["runtime"].get("members")
+                if original_members is not None:
+                    enrollment_hosts = {
+                        name
+                        for name, member in original_members.items()
+                        if member["kind"] in {"created", "replacement"}
+                    }
+            original_ssh = (
+                ha_pending_prerequisites["bindings"].get("ssh")
+                if ha_pending_prerequisites
+                else None
+            )
             retained_hosts = set(existing_members) | lifecycle_retained_hosts
+            if ha_pending_prerequisites is not None:
+                retained_hosts -= enrollment_hosts
             if vm_ha_missing_standby_replacement is not None:
                 retained_hosts.discard(vm_ha_missing_standby_replacement.target_instance_name)
             trust_targets: list[tuple[str, str]] = []
@@ -6509,15 +6938,18 @@ def _apply_impl(
             def resolve_ssh_policy(
                 *,
                 rotation_hosts: tuple[str, ...] = (),
+                allow_repair: bool = True,
             ) -> SSHTrustPolicy:
                 return require_vm_ha_ssh_policy(
-                    tuple(trust_targets),
+                    tuple(sorted(original_ssh["targets"].items()))
+                    if original_ssh is not None
+                    else tuple(trust_targets),
                     enrollment_hosts=enrollment_hosts,
                     management_key_path=management_key_path,
                     management_public_key=vm_spec.get("ssh_public_key"),
                     require_management_key=True,
                     trust_scope=vm_ha_ssh_trust_scope,
-                    allow_managed_repair=True,
+                    allow_managed_repair=allow_repair,
                     persist_default_host_keys=(
                         not dry_run
                         and not rotation_hosts
@@ -6719,21 +7151,39 @@ def _apply_impl(
             )
         )
         try:
-            ssh_policy = discovery_manager.prepare_ordinary_ssh_policy(
-                plan.gateway_group,
-                planned_instances,
-                trust_scope=_ordinary_ssh_trust_scope(
-                    local_cfg,
-                    plan,
-                    project_id=proj_id,
-                ),
-                recreate=recreate_gw,
-                management_public_key=vm_spec.get("ssh_public_key"),
-                dry_run=dry_run,
-                username=(
-                    vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
-                ),
+            from .deploy import provisioning_command
+            from .deploy.apply_command import CommandJournal
+
+            provisioning_resume = (
+                provisioning_command.pending(
+                    CommandJournal(proj_id, plan.gateway_group.name), local_cfg
+                )
+                if proj_id and not recreate_gw
+                else None
             )
+            if provisioning_resume is not None:
+                ssh_policy = provisioning_command.policy(
+                    discovery_manager,
+                    plan,
+                    _ordinary_ssh_trust_scope(local_cfg, plan, project_id=proj_id),
+                    provisioning_resume["bindings"]["ssh"],
+                )
+            else:
+                ssh_policy = discovery_manager.prepare_ordinary_ssh_policy(
+                    plan.gateway_group,
+                    planned_instances,
+                    trust_scope=_ordinary_ssh_trust_scope(
+                        local_cfg,
+                        plan,
+                        project_id=proj_id,
+                    ),
+                    recreate=recreate_gw,
+                    management_public_key=vm_spec.get("ssh_public_key"),
+                    dry_run=dry_run,
+                    username=(
+                        vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
+                    ),
+                )
         except LegacyOrdinarySSHEnrollmentRequired as error:
             ordinary_enrollment_required = error.hostnames
         except (RuntimeError, ValueError) as error:
@@ -6808,6 +7258,7 @@ def _apply_impl(
             recreate=recreate_gw,
             approval=approve_disruption,
             config_path=local_config_file,
+            result_report=result_report,
         )
         return
 
@@ -6841,8 +7292,168 @@ def _apply_impl(
             recreate=recreate_gw,
             approval=approve_disruption,
             config_path=local_config_file,
+            result_report=result_report,
         )
         return
+
+    from .deploy import security_group_apply as sg_apply
+
+    if not proj_id:
+        raise RuntimeError("Security Group apply requires an exact project ID")
+    from .deploy.apply_command import CommandJournal
+
+    if plan.vm_ha is None:
+        command_journal = CommandJournal(proj_id, plan.gateway_group.name)
+    ordinary_command = None
+    fresh_command = None
+    ha_command = None
+    peer_continuation = None
+    ha_predecessor = None
+    ha_successor = None
+    attachment_journal = sg_apply.AttachmentJournal(proj_id, plan.gateway_group.name)
+    attachment_pending = attachment_journal.pending()
+    attachment_request_retry, approve_disruption = _review_attachment_request_retry(
+        discovery_manager,
+        command_journal,
+        attachment_pending,
+        supplied=approve_disruption,
+        dry_run=dry_run or stop_after_vm_ha_plan,
+        result_report=result_report,
+    )
+    from .deploy import provisioning_command
+
+    provisioning_resume = (
+        provisioning_command.pending(command_journal, local_cfg) if plan.vm_ha is None else None
+    )
+    created_names = (
+        provisioning_command.original_guests(provisioning_resume) if provisioning_resume else set()
+    )
+    attachment_plan = sg_apply.inspect_plan(
+        discovery_manager,
+        tuple(item.hostname for item in planned_instances if item.hostname not in created_names),
+        plan.gateway_group.security_group_ids,
+    )
+    attachment_scope = ""
+    attachment_approval: str | None = None
+    attachment_corrective: dict | None = None
+    attachment_scope_changed = False
+    if plan.vm_ha is None:
+        assert ordinary_agent_wheel is not None
+        attachment_scope = _canonical_digest(
+            {
+                "desired": local_cfg,
+                "artifact": hashlib.sha256(ordinary_agent_wheel.read_bytes()).hexdigest(),
+                "project": proj_id,
+            }
+        )
+        if attachment_pending is not None:
+            attachment_plan = sg_apply.resume_plan(
+                attachment_plan, attachment_pending, scope=attachment_scope
+            )
+    for name, member in attachment_plan["members"].items():
+        if member["before"] != member["desired"]:
+            print(f"[yellow]{name}: reconcile Security Group attachments[/yellow]")
+            for before, desired in zip(member["before"], member["desired"], strict=True):
+                print(
+                    f"  - {before['name']}: {before['explicit_ids']} -> {desired['explicit_ids']}"
+                )
+            if not attachment_plan["desired_ids"]:
+                print(
+                    "  - Remove explicit attachments and restore the permissive network default group"
+                )
+
+    def refresh_attachment_ssh_policy() -> SSHTrustPolicy:
+        """Reobserve cloud evidence; the attachment owner retains the exact pins."""
+        assert discovery_manager is not None
+        scope = _gateway_ssh_trust_scope(local_cfg, plan, project_id=proj_id)
+        if plan.vm_ha is not None:
+            targets = discovery_manager.inspect_ordinary_targets(
+                item.hostname for item in planned_instances
+            )
+            return _refresh_vm_ha_ssh_policy_after_compute(
+                plan=plan,
+                vm_manager=discovery_manager,
+                vm_ips={name: target for name, (_identity, target) in targets.items()},
+                trust_scope=scope,
+                management_key_path=management_key_path,
+                management_public_key=vm_spec.get("ssh_public_key"),
+                ordinary_migration_hosts=ordinary_migration_hosts,
+                lifecycle_snapshot_loader=lifecycle_snapshot_loader,
+            )
+        return discovery_manager.prepare_ordinary_ssh_policy(
+            plan.gateway_group,
+            planned_instances,
+            trust_scope=scope,
+            recreate=False,
+            management_public_key=vm_spec.get("ssh_public_key"),
+            dry_run=True,
+            username=vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
+        )
+
+    def finish_attachments() -> None:
+        if ha_command is not None:
+            assert lifecycle_state is not None
+            ha_command.verify_runtime(lifecycle_state)
+        if fresh_command is not None:
+            fresh_command.finish_routes()
+        elif ordinary_command is not None and ordinary_command.routes is not None:
+            routes = ordinary_command.routes
+            if routes.required:
+                command_journal.started("routes")
+            receipt = routes.finish(ordinary_command.approval)
+            if routes.required:
+                command_journal.verified("routes", receipt)
+            if routes.connectivity_unknown:
+                print(
+                    "[yellow]BGP destination evidence is unknown; admitted routes were retained.[/yellow]"
+                )
+        if attachment_approval is None:
+            sg_apply.require_plan(discovery_manager, attachment_plan)
+            if (
+                ordinary_command is not None
+                and ordinary_command.plan.effects
+                or ha_command is not None
+            ):
+                command_journal.complete()
+            return
+
+        def verify_ha() -> None:
+            observed = _inspect_vm_ha_status_with_region(local_config_file, region=effective_region)
+            _confirm_vm_ha_healthy(local_config_file, observed, region=effective_region)
+
+        if ordinary_command is not None or ha_command is not None:
+            command_journal.started("attachments")
+        sg_apply.execute(
+            vm_mgr,
+            ssh,
+            attachment_plan,
+            local_cfg,
+            planned_instances,
+            attachment_journal,
+            scope=attachment_scope,
+            approval=attachment_approval,
+            verify_ha=verify_ha if plan.vm_ha is not None else None,
+            operation_id=(
+                command_journal.state["transaction"]["execution_id"]
+                if ordinary_command is not None or ha_command is not None
+                else None
+            ),
+            request_retry=attachment_request_retry,
+            command_journal=command_journal,
+            refresh_ssh_policy=refresh_attachment_ssh_policy,
+        )
+        if ordinary_command is not None:
+            command_journal.verified("attachments", {"approval": attachment_approval})
+            command_journal.complete()
+        if ha_command is not None:
+            ha_command.finish_attachments(
+                attachment_journal.read_transaction(),
+                sg_apply.inspect_plan(
+                    discovery_manager,
+                    tuple(attachment_plan["members"]),
+                    tuple(attachment_plan["desired_ids"]),
+                ),
+            )
 
     if vm_ha_credential_error is not None:
         print("[red]Managed VM-HA runtime credential inspection failed.[/red]")
@@ -7082,9 +7693,14 @@ def _apply_impl(
 
     apply_report: _VMHAApplyPlanReport | None = None
     upgrade_recovery: _VMHAUpgradeRecoveryContext | None = None
+    corrective_recovery: _VMHACorrectiveContext | None = None
     if plan.vm_ha is not None and migration_plan_digest is not None:
         assert vm_ha_credential_plan is not None
         managed_ssh_action = str(getattr(ssh_policy, "managed_action", "") or "").strip() or None
+        if ha_pending_prerequisites and "ssh" in ha_pending_prerequisites["bindings"]:
+            managed_ssh_action = ha_pending_prerequisites["bindings"]["runtime"]["report"][
+                "managed_ssh_action"
+            ]
         plan_effects: tuple[str, ...]
         owner_refresh_required = False
         if vm_ha_missing_standby_replacement is not None:
@@ -7185,18 +7801,119 @@ def _apply_impl(
             plan_effects = (*plan_effects, "publish-managed-ssh-trust")
         plan_effects = (
             *plan_effects,
-            f"{vm_ha_credential_plan.action}-managed-vm-ha-runtime-credential",
+            f"{vm_ha_credential_plan.command_action}-managed-vm-ha-runtime-credential",
         )
         artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
+        attachment_scope = _canonical_digest(
+            {"desired": local_cfg, "artifact": artifact.sha256, "project": proj_id}
+        )
+        if attachment_pending is not None:
+            attachment_scope_changed = attachment_pending["scope"] != attachment_scope
+            if not attachment_scope_changed:
+                attachment_plan = sg_apply.resume_plan(
+                    attachment_plan, attachment_pending, scope=attachment_scope
+                )
+                attachment_corrective = attachment_pending.get("corrective_successor")
+        from .deploy import ha_command as ha_commands
+
+        if prepare_vm_ha_peer_rotation and (
+            sg_apply.changed(attachment_plan) or attachment_pending is not None
+        ):
+            raise RuntimeError(
+                "Reconcile Security Group attachments before preparing peer rotation"
+            )
+
+        ha_intent = {
+            "recreate": recreate_gw,
+            "prepare_peer_rotation": prepare_vm_ha_peer_rotation,
+            "destructive": has_destructive,
+            "managed_ssh": managed_ssh_action,
+            "managed_credentials": vm_ha_credential_plan.command_action,
+        }
+        ha_targets = (
+            tuple(sorted(member.compute_id for member in lifecycle_state.members))
+            if lifecycle_state
+            else ()
+        )
+        from .deploy import ha_members, provisioning_trust
+
+        ha_member_intent = None
+        if ha_pending_prerequisites is not None:
+            ha_member_intent = ha_pending_prerequisites["bindings"]["runtime"].get("members")
+        elif (
+            plan_kind
+            in {"provisioning", "migration", "active-standby-replacement", "resume-transaction"}
+            and vm_ha_passive_replacement is None
+        ):
+            assert vm_ha_approval_observation is not None
+            ha_member_intent = ha_members.intent(
+                _vm_ha_provisioning_members(plan, vm_ha_approval_observation),
+                created=enrollment_hosts,
+                replacement=vm_ha_missing_standby_replacement,
+            )
+        if ha_member_intent is not None:
+            ha_targets = ha_members.targets(ha_member_intent)
+        pending_command = command_journal.snapshot()
+        pending_transaction = pending_command["transaction"] if pending_command else None
+        if (
+            pending_transaction
+            and pending_transaction["phase"] == "pending"
+            and any(
+                effect["key"] == "runtime" and effect["owner"] == "ha-lifecycle"
+                for effect in pending_transaction["plan"]["effects"]
+            )
+            and pending_transaction["plan"]["artifact_sha256"] != artifact.sha256
+        ):
+            # Read-only classification. Only the existing guarded recovery owners
+            # below may admit a separately reviewed successor.
+            ha_predecessor = pending_command
+        else:
+            ha_command = ha_commands.resume(
+                command_journal,
+                scope=attachment_scope,
+                artifact=artifact.sha256,
+                action_scope=_canonical_digest(ha_intent),
+                targets=ha_targets,
+                preparation=prepare_vm_ha_peer_rotation,
+                lifecycle=lifecycle_state,
+            )
+        if ha_command is not None:
+            result_report.bind(command_journal, resumed=True)
+            selected_attachments = ha_command.attachment_plan(
+                attachment_plan,
+                attachment_journal.read_transaction(),
+            )
+            if selected_attachments is not None:
+                attachment_plan = selected_attachments
+
+        from .deploy.vm_ha_upgrade_recovery import pending_authority
+
+        recovery_record = pending_authority(lifecycle_state)
         require_replay_window_capability(local_cfg, artifact.capabilities)
         if (
             plan_kind == "apply-convergence"
+            and not prepare_vm_ha_peer_rotation
+            and not attachment_scope_changed
             and has_no_change
             and not recreate_gw
-            and not stop_after_vm_ha_plan
-            and expected_vm_ha_plan is None
+            and (
+                not stop_after_vm_ha_plan
+                or sg_apply.changed(attachment_plan)
+                or attachment_pending is not None
+                or command_journal.pending() is not None
+            )
+            and (
+                expected_vm_ha_plan is None
+                or expected_vm_ha_plan.kind == "security-groups"
+                or ha_command is not None
+            )
             and managed_ssh_action is None
             and vm_ha_credential_plan.action == "reuse"
+            and (
+                ha_command is None
+                or lifecycle_state is not None
+                and ha_command.terminal_runtime(lifecycle_state)
+            )
             and _unchanged_vm_ha_apply(
                 local_config_file,
                 instances=planned_instances,
@@ -7205,10 +7922,162 @@ def _apply_impl(
                 ssh_policy=ssh_policy,
                 artifact=artifact,
                 region=effective_region,
+                attachment_resume=attachment_pending is not None,
             )
         ):
-            print("[green]Both HA gateways are verified unchanged; no deployment effects.[/green]")
+            if ha_command is not None:
+                saved_report = ha_command.intent["report"]
+                resumed_report = _VMHAApplyPlanReport(
+                    **{**saved_report, "effects": tuple(saved_report["effects"])},
+                    digest=ha_command.approval,
+                    authorization_persisted=True,
+                    artifact_sha256=artifact.sha256,
+                    artifact=artifact,
+                    impact=_vm_ha_apply_plan_impact(
+                        saved_report["kind"], has_destructive_changes=False
+                    ),
+                )
+                _validate_vm_ha_expected_apply_plan(resumed_report, expected_vm_ha_plan)
+                if vm_ha_plan_sink is not None:
+                    vm_ha_plan_sink(resumed_report)
+                if stop_after_vm_ha_plan:
+                    raise _VMHAApplyPlanCaptured(resumed_report)
+                if approve_disruption is not None and approve_disruption != ha_command.approval:
+                    raise RuntimeError("Disruption approval differs from pending HA command")
+                if not dry_run:
+                    assert lifecycle_state is not None
+                    result_report.started = True
+
+                    def verify_completed_ha() -> None:
+                        observed = _inspect_vm_ha_status_with_region(
+                            local_config_file, region=effective_region
+                        )
+                        _confirm_vm_ha_healthy(local_config_file, observed, region=effective_region)
+
+                    ha_command.execute_attachments(
+                        discovery_manager,
+                        SSHPush(ssh_policy=ssh_policy),
+                        local_cfg,
+                        planned_instances,
+                        attachment_journal,
+                        lifecycle=lifecycle_state,
+                        verify_ha=verify_completed_ha,
+                        observed=attachment_plan,
+                        request_retry=attachment_request_retry,
+                        refresh_ssh_policy=refresh_attachment_ssh_policy,
+                    )
+                    result_report.verified(changed=True)
+                print(
+                    "[green]Original HA apply resumed and verified.[/green]"
+                    if not dry_run
+                    else "[green]Dry-run complete; no state changed.[/green]"
+                )
+                return
+            from .deploy.attachment_command import inspect as inspect_attachment_command
+
+            attachment_command = inspect_attachment_command(
+                command_journal,
+                observed=attachment_plan,
+                child=attachment_journal.read_transaction(),
+                scope=attachment_scope,
+                artifact=artifact.sha256,
+            )
+            if attachment_command is not None:
+                result_report.bind(command_journal, resumed=attachment_command.resumed)
+                result_report.plan(("attachments",), approval=attachment_command.approval)
+                attachment_approval = attachment_command.approval
+                attachment_plan = attachment_command.attachments
+                attachment_report = _VMHAApplyPlanReport(
+                    kind="security-groups",
+                    digest=attachment_approval,
+                    engine_digest=attachment_approval,
+                    effects=(
+                        "reconcile-cloud-security-group-attachments-non-owner-first",
+                        "verify-management-and-ha-health",
+                    ),
+                    has_destructive_changes=False,
+                    managed_ssh_action=None,
+                    managed_credential_action="reuse",
+                    authorization_persisted=attachment_command.resumed,
+                    artifact_sha256=artifact.sha256,
+                    artifact=artifact,
+                    impact=_vm_ha_apply_plan_impact(
+                        "security-groups", has_destructive_changes=False
+                    ),
+                )
+                _validate_vm_ha_expected_apply_plan(attachment_report, expected_vm_ha_plan)
+                if vm_ha_plan_sink is not None:
+                    vm_ha_plan_sink(attachment_report)
+                if stop_after_vm_ha_plan:
+                    raise _VMHAApplyPlanCaptured(attachment_report)
+                print(
+                    "[yellow]Security Group attachments may affect management and VPN connectivity; no VPN service restart.[/yellow]"
+                )
+                if not attachment_command.resumed and expected_vm_ha_plan is None:
+                    _approve_disruption(
+                        attachment_approval, supplied=approve_disruption, dry_run=dry_run
+                    )
+                elif approve_disruption is not None and approve_disruption != attachment_approval:
+                    raise RuntimeError(
+                        "Disruption approval differs from pending attachment operation"
+                    )
+                if not dry_run:
+                    result_report.started = True
+
+                    def verify_attachment_ha() -> None:
+                        observed = _inspect_vm_ha_status_with_region(
+                            local_config_file, region=effective_region
+                        )
+                        _confirm_vm_ha_healthy(local_config_file, observed, region=effective_region)
+
+                    attachment_command.execute(
+                        discovery_manager,
+                        SSHPush(ssh_policy=ssh_policy),
+                        local_cfg,
+                        planned_instances,
+                        attachment_journal,
+                        verify_ha=verify_attachment_ha,
+                        request_retry=attachment_request_retry,
+                        refresh_ssh_policy=refresh_attachment_ssh_policy,
+                    )
+                    result_report.verified(changed=True)
+                print(
+                    "[green]Security Group attachment apply verified.[/green]"
+                    if not dry_run
+                    else "[green]Dry-run complete; no state changed.[/green]"
+                )
+            else:
+                sg_apply.require_plan(discovery_manager, attachment_plan)
+                result_report.verified(changed=False)
+                print(
+                    "[green]Both HA gateways are verified unchanged; no deployment effects.[/green]"
+                )
             return
+        corrective_recovery = _plan_vm_ha_corrective(
+            state=lifecycle_state,
+            artifact=artifact,
+            plan=plan,
+            observation=vm_ha_approval_observation or {},
+            credentials=vm_ha_credentials,
+            local=local_cfg,
+            targets=vm_ha_existing_members,
+            ssh_policy=ssh_policy,
+        )
+        if corrective_recovery is not None:
+            recovery_record = None
+            if (
+                recreate_gw
+                or prepare_vm_ha_peer_rotation
+                or has_destructive
+                or managed_ssh_action is not None
+                or vm_ha_credential_plan.action != "reuse"
+            ):
+                raise ValueError("corrective release cannot change infrastructure or credentials")
+        retained_package_intent = (
+            ha_command.package_resume(lifecycle_state) if ha_command is not None else None
+        )
+        from .deploy.ha_created_packages import saved_manifests as saved_ha_package_manifests
+
         artifact = _plan_vm_ha_package_dependencies(
             artifact,
             instances=planned_instances,
@@ -7223,20 +8092,93 @@ def _apply_impl(
                 )
                 if member.get("compute_id")
             },
+            resume_parent=(
+                retained_package_intent[0]
+                if retained_package_intent is not None
+                else corrective_recovery.record["operation"]
+                if corrective_recovery is not None
+                else lifecycle_state.transaction.operation_id
+                if lifecycle_state is not None
+                and lifecycle_state.transaction is not None
+                and lifecycle_state.status
+                in {VMHALifecycleStatus.PROVISIONING, VMHALifecycleStatus.ACTIVATING}
+                else None
+            ),
+            resume_manifests=(
+                retained_package_intent[1]
+                if retained_package_intent is not None
+                else saved_ha_package_manifests(lifecycle_state)
+                if lifecycle_state is not None
+                and lifecycle_state.status is VMHALifecycleStatus.ACTIVATING
+                and lifecycle_state.transaction is not None
+                and artifact.sha256
+                in (
+                    dict(lifecycle_state.transaction.resource_bindings).get(key)
+                    for key in ("heartbeat-upgrade-artifact", "heartbeat-initial-artifact")
+                )
+                and "runtime-package-manifests"
+                in dict(lifecycle_state.transaction.resource_bindings)
+                and recovery_record is None
+                else None
+            ),
         )
-        upgrade_recovery = _plan_vm_ha_upgrade_recovery(
-            state=lifecycle_state,
-            artifact=artifact,
-            plan=plan,
-            observation=vm_ha_approval_observation or {},
-            credentials=vm_ha_credentials,
-            local=local_cfg,
-            targets=vm_ha_existing_members,
-            ssh_policy=ssh_policy,
+        upgrade_recovery = (
+            None
+            if corrective_recovery is not None
+            else _plan_vm_ha_upgrade_recovery(
+                state=lifecycle_state,
+                artifact=artifact,
+                plan=plan,
+                observation=vm_ha_approval_observation or {},
+                credentials=vm_ha_credentials,
+                local=local_cfg,
+                targets=vm_ha_existing_members,
+                ssh_policy=ssh_policy,
+            )
         )
+        if attachment_scope_changed:
+            if (
+                attachment_pending is None
+                or corrective_recovery is None
+                and upgrade_recovery is None
+            ):
+                raise RuntimeError(
+                    "Pending attachments require their original artifact or admitted guarded recovery"
+                )
+            if corrective_recovery is not None:
+                attachment_recovery_record = corrective_recovery.record
+            else:
+                from .deploy.vm_ha_upgrade_recovery import recovery_authority
+
+                assert lifecycle_state is not None and lifecycle_state.transaction is not None
+                retained_recovery = recovery_authority(lifecycle_state)
+                attachment_recovery_record = retained_recovery or {
+                    "prior_record": lifecycle_state.record_sha256,
+                    "prior_artifact": dict(lifecycle_state.transaction.resource_bindings)[
+                        "heartbeat-upgrade-artifact"
+                    ],
+                    "artifact": artifact.sha256,
+                }
+            attachment_corrective = sg_apply.corrective_prelude(
+                attachment_plan,
+                attachment_pending,
+                corrective=attachment_recovery_record,
+                local=local_cfg,
+                project=proj_id,
+            )
+        if corrective_recovery is not None:
+            plan_kind = "corrective-release"
+            plan_effects = (
+                "archive-failed-release",
+                "reserve-both-new-apply-locks",
+                "inhibit-and-quiesce-both-members",
+                "repeat-canonical-guarded-activation",
+            )
         if upgrade_recovery is not None:
             if (
-                has_destructive
+                recreate_gw
+                or prepare_vm_ha_peer_rotation
+                or has_destructive
                 or managed_ssh_action is not None
                 or vm_ha_credential_plan.action != "reuse"
             ):
@@ -7294,18 +8236,43 @@ def _apply_impl(
             has_destructive_changes=has_destructive,
             owner_refresh_required=owner_refresh_required,
         )
+        if ha_predecessor is not None:
+            if corrective_recovery is None and upgrade_recovery is None:
+                raise RuntimeError(
+                    "Pending HA apply artifact changed without admitted guarded recovery"
+                )
+            assert lifecycle_state is not None
+            ha_successor = ha_commands.reviewed_successor(
+                ha_predecessor,
+                lifecycle=lifecycle_state,
+                kind=plan_kind,
+                old_scope=_canonical_digest(
+                    {
+                        "desired": local_cfg,
+                        "artifact": ha_predecessor["transaction"]["plan"]["artifact_sha256"],
+                        "project": proj_id,
+                    }
+                ),
+                action_scope=_canonical_digest(ha_intent),
+                targets=ha_targets,
+                attachment_child=attachment_journal.read_transaction(),
+            )
         public_digest = _canonical_digest(
             {
                 "domain": "nebius-vpngw/vm-ha-command-approval-v3",
+                "command_successor": ha_successor,
+                "attachments": attachment_plan,
+                "attachment_corrective": attachment_corrective,
                 "engine_digest": engine_digest,
                 "kind": plan_kind,
+                "prepare_peer_rotation": prepare_vm_ha_peer_rotation,
                 "effects": plan_effects,
                 "has_destructive_changes": has_destructive,
                 "managed_ssh_action": managed_ssh_action,
-                "managed_ssh_approval_sha256": (
-                    getattr(ssh_policy, "fresh_identity_approval_sha256", None)
-                    if plan_kind == "migration"
-                    else None
+                # Absent members approve exact generation intent, not ephemeral
+                # key bytes that planning deliberately does not publish.
+                "managed_ssh_approval_sha256": getattr(
+                    ssh_policy, "fresh_identity_approval_sha256", None
                 )
                 or getattr(ssh_policy, "managed_receipt_sha256", None),
                 "managed_credential": vm_ha_credential_plan.approval_record(),
@@ -7316,6 +8283,9 @@ def _apply_impl(
                     name: item[3] for name, item in handoff_repair_peers.items()
                 },
                 "impact": impact.to_dict(),
+                "corrective_release": None
+                if corrective_recovery is None
+                else corrective_recovery.record,
                 **(
                     {"upgrade_recovery": upgrade_recovery.approval_state}
                     if upgrade_recovery is not None
@@ -7323,6 +8293,106 @@ def _apply_impl(
                 ),
             }
         )
+        runtime_approval_resumed = False
+        if recovery_record is not None:
+            from .deploy.vm_ha_upgrade_recovery import (
+                resume_command_approval as resume_recovery_approval,
+            )
+
+            assert lifecycle_state is not None and lifecycle_state.transaction is not None
+            public_digest = resume_recovery_approval(
+                lifecycle_state,
+                artifact,
+                desired_state_digest=_canonical_digest(_vm_ha_desired_approval_state(plan)),
+                ssh_trust=ssh_policy.known_hosts_sha256 if ssh_policy is not None else None,
+                cloud_identity_matches=_vm_ha_observation_matches_bindings(
+                    vm_ha_approval_observation or {},
+                    dict(lifecycle_state.transaction.resource_bindings),
+                    credential_bindings=(
+                        vm_ha_credentials.resource_bindings()
+                        if vm_ha_credentials is not None
+                        else {}
+                    ),
+                ),
+                changes_requested=bool(
+                    recreate_gw
+                    or prepare_vm_ha_peer_rotation
+                    or has_destructive
+                    or managed_ssh_action is not None
+                    or vm_ha_credential_plan.action != "reuse"
+                ),
+                supplied=approve_disruption,
+            )
+            validate_retained_route_scope(lifecycle_state, vm_ha_approval_observation or {})
+            runtime_approval_resumed = True
+        elif (
+            lifecycle_state is not None
+            and lifecycle_state.status is VMHALifecycleStatus.ACTIVATING
+            and lifecycle_state.transaction is not None
+            and upgrade_recovery is None
+            and (corrective_recovery is None or corrective_recovery.resumed)
+            and artifact.sha256
+            in (
+                dict(lifecycle_state.transaction.resource_bindings).get(key)
+                for key in ("heartbeat-upgrade-artifact", "heartbeat-initial-artifact")
+            )
+        ):
+            saved = dict(lifecycle_state.transaction.resource_bindings).get(
+                "runtime-command-approval"
+            )
+            if saved is not None:
+                from .apply_approval import resume as resume_command_approval
+                from .deploy import ha_preparation
+
+                continuation_scope = _vm_ha_command_approval_scope(
+                    artifact, local_cfg, intent=ha_intent
+                )
+                peer_continuation = (
+                    ha_preparation.continuation(
+                        lifecycle_state, artifact=artifact.sha256, scope=continuation_scope
+                    )
+                    if not prepare_vm_ha_peer_rotation
+                    else None
+                )
+                if peer_continuation is not None:
+                    public_digest = peer_continuation[0]["approval"]
+                else:
+                    public_digest = resume_command_approval(
+                        json.loads(saved),
+                        _vm_ha_command_approval_scope(
+                            artifact,
+                            local_cfg,
+                            intent={
+                                "recreate": recreate_gw,
+                                "prepare_peer_rotation": prepare_vm_ha_peer_rotation,
+                                "destructive": has_destructive,
+                                "managed_ssh": managed_ssh_action,
+                                "managed_credentials": vm_ha_credential_plan.command_action,
+                            },
+                        ),
+                    )
+                if approve_disruption is not None and approve_disruption != public_digest:
+                    raise RuntimeError(
+                        "Disruption approval does not match the interrupted operation"
+                    )
+                runtime_approval_resumed = peer_continuation is None or peer_continuation[1]
+        if ha_command is not None:
+            ha_commands.require_runtime_scope(
+                ha_command,
+                _canonical_digest(
+                    _vm_ha_command_approval_scope(artifact, local_cfg, intent=ha_intent)
+                ),
+            )
+            public_digest = ha_command.approval
+            if approve_disruption is not None and approve_disruption != public_digest:
+                raise RuntimeError("Disruption approval differs from pending HA command")
+            runtime_approval_resumed = True
+        if (
+            attachment_pending is not None
+            and not attachment_scope_changed
+            and public_digest != attachment_pending["approval"]
+        ):
+            raise RuntimeError("Pending attachments do not authorize a different HA apply scope")
         apply_report = _VMHAApplyPlanReport(
             kind=plan_kind,
             digest=public_digest,
@@ -7330,9 +8400,12 @@ def _apply_impl(
             effects=plan_effects,
             has_destructive_changes=has_destructive,
             managed_ssh_action=managed_ssh_action,
-            managed_credential_action=vm_ha_credential_plan.action,
+            managed_credential_action=vm_ha_credential_plan.command_action,
             authorization_persisted=bool(
-                vm_ha_missing_standby_replacement is not None
+                runtime_approval_resumed
+                or attachment_pending is not None
+                and not attachment_scope_changed
+                or vm_ha_missing_standby_replacement is not None
                 and vm_ha_missing_standby_replacement.authorization_persisted
                 or upgrade_recovery is not None
                 and upgrade_recovery.authorization_persisted
@@ -7342,6 +8415,97 @@ def _apply_impl(
             artifact=artifact,
             impact=impact,
         )
+        if command_journal.pending() is not None and ha_command is None and ha_successor is None:
+            raise RuntimeError(
+                "Resume the original pending apply command before planning HA runtime changes"
+            )
+        if ha_command is not None:
+            saved_report = ha_command.intent["report"]
+            apply_report = replace(
+                apply_report, **{**saved_report, "effects": tuple(saved_report["effects"])}
+            )
+        elif ha_successor is not None or (
+            (
+                plan_kind
+                in {
+                    "apply-convergence",
+                    "provisioning",
+                    "migration",
+                    "active-standby-replacement",
+                    "resume-transaction",
+                }
+                or peer_continuation is not None
+            )
+            and ha_targets
+            and not recreate_gw
+            and not has_destructive
+            and corrective_recovery is None
+            and upgrade_recovery is None
+            and vm_ha_passive_replacement is None
+        ):
+            ha_command = ha_commands.create(
+                command_journal,
+                scope=attachment_scope,
+                artifact=artifact.sha256,
+                action_scope=_canonical_digest(ha_intent),
+                targets=ha_targets,
+                approval=apply_report.digest,
+                runtime_scope=_canonical_digest(
+                    _vm_ha_command_approval_scope(artifact, local_cfg, intent=ha_intent)
+                ),
+                report={
+                    "kind": apply_report.kind,
+                    "engine_digest": apply_report.engine_digest,
+                    "effects": list(apply_report.effects),
+                    "has_destructive_changes": False,
+                    "managed_ssh_action": managed_ssh_action,
+                    "managed_credential_action": vm_ha_credential_plan.command_action,
+                    "owner_refresh_required": apply_report.owner_refresh_required,
+                },
+                attachment_plan=attachment_plan
+                if sg_apply.changed(attachment_plan) or attachment_pending is not None
+                else None,
+                successor=ha_successor,
+                packages=ha_commands.package_intent(
+                    lifecycle_state,
+                    migration_plan_digest,
+                    {name: package.manifest for name, package in artifact.dependency_plans},
+                    operation=vm_ha_missing_standby_replacement.operation_id
+                    if vm_ha_missing_standby_replacement is not None
+                    else None,
+                )
+                if ha_successor is None
+                else None,
+                preparation=prepare_vm_ha_peer_rotation,
+                continuation=ha_commands.continuation_intent(
+                    command_journal, lifecycle_state, peer_continuation[0]
+                )
+                if peer_continuation is not None and lifecycle_state is not None
+                else None,
+                credentials=vm_ha_credential_plan.approval_record()
+                if vm_ha_credential_plan.command_action != "reuse"
+                else None,
+                node_ids=tuple(vm_ha_node_ids),
+                ssh=provisioning_trust.intent(
+                    t.cast(SSHTrustPolicy, ssh_policy),
+                    tuple(sorted(enrollment_hosts or set(vm_ha_existing_members))),
+                )
+                if managed_ssh_action is not None and managed_ssh_action != "rotate"
+                else None,
+                members=ha_member_intent,
+                artifact_key=(
+                    "heartbeat-initial-artifact"
+                    if ha_member_intent is not None
+                    and (
+                        plan_kind != "resume-transaction"
+                        or lifecycle_state is not None
+                        and lifecycle_state.transaction is not None
+                        and "heartbeat-initial-artifact"
+                        in dict(lifecycle_state.transaction.resource_bindings)
+                    )
+                    else "heartbeat-upgrade-artifact"
+                ),
+            )
         with _vm_ha_progress_step(
             vm_ha_progress_sink,
             _VMHAProgressPhase.VERIFY_ENGINE_PLAN,
@@ -7349,6 +8513,46 @@ def _apply_impl(
             _validate_vm_ha_expected_apply_plan(apply_report, expected_vm_ha_plan)
         if vm_ha_plan_sink is not None:
             vm_ha_plan_sink(apply_report)
+        result_report.plan(tuple(apply_report.effects), approval=apply_report.digest)
+        if ha_command is not None:
+            result_report.bind(command_journal, resumed=ha_command.resumed)
+        if (
+            prepare_vm_ha_peer_rotation
+            and ha_command is not None
+            and lifecycle_state is not None
+            and lifecycle_state.transaction is not None
+            and "runtime-peer-preparation" in dict(lifecycle_state.transaction.resource_bindings)
+        ):
+            ha_command.prepared_receipt(lifecycle_state)
+            if not _vm_ha_observation_matches_bindings(
+                vm_ha_approval_observation or {},
+                dict(lifecycle_state.transaction.resource_bindings),
+                credential_bindings=vm_ha_credentials.resource_bindings()
+                if vm_ha_credentials is not None
+                else {},
+            ):
+                raise RuntimeError("Prepared HA cloud authority changed; no no-op is admitted")
+            _verify_vm_ha_prepared(
+                local_config_file,
+                instances=planned_instances,
+                local=local_cfg,
+                targets=vm_ha_existing_members,
+                ssh_policy=ssh_policy,
+                artifact=artifact,
+                region=effective_region,
+                lifecycle=lifecycle_state,
+            )
+            if stop_after_vm_ha_plan:
+                raise _VMHAApplyPlanCaptured(apply_report)
+            completing = command_journal.pending() is not None
+            if completing and not dry_run:
+                with command_journal:
+                    ha_command.finish_preparation(lifecycle_state)
+            result_report.verified(changed=completing, inhibition_retained=True)
+            print(
+                "[green]Exact peer preparation remains verified; both members stay fenced.[/green]"
+            )
+            return
         if stop_after_vm_ha_plan:
             raise _VMHAApplyPlanCaptured(apply_report)
     else:
@@ -7363,19 +8567,35 @@ def _apply_impl(
     ordinary_approved = False
     ordinary_ssh: SSHPush | None = None
     if plan.vm_ha is None and (not former_vm_ha_members or ordinary_agent_wheel is not None):
+        assert ordinary_agent_wheel is not None
         ordinary_ssh = SSHPush(ssh_policy=ssh_policy)
         if ordinary_agent_wheel is not None:
             ordinary_ssh._wheel_path = ordinary_agent_wheel
             ordinary_ssh._wheel_is_installed_fallback = False
         if not former_vm_ha_members:
-            ordinary_plans, ordinary_targets, ordinary_approved = _prepare_ordinary_apply(
-                discovery_manager,
-                ordinary_ssh,
-                planned_instances,
-                local_cfg,
-                supplied=approve_disruption,
-                dry_run=dry_run,
-                recreate=recreate_gw,
+            ordinary_plans, ordinary_targets, ordinary_approved, ordinary_command = (
+                _prepare_ordinary_apply(
+                    discovery_manager,
+                    ordinary_ssh,
+                    planned_instances,
+                    local_cfg,
+                    supplied=approve_disruption,
+                    dry_run=dry_run,
+                    recreate=recreate_gw,
+                    attachments=attachment_plan,
+                    attachment_pending=attachment_pending,
+                    command_journal=command_journal,
+                    deployment=plan,
+                    artifact_sha256=hashlib.sha256(ordinary_agent_wheel.read_bytes()).hexdigest(),
+                    attachment_completed=attachment_journal.read_transaction(),
+                )
+            )
+            if isinstance(ordinary_command, provisioning_command.ProvisioningCommand):
+                fresh_command = ordinary_command
+            result_report.bind(command_journal, resumed=ordinary_command.resumed)
+            result_report.plan(
+                tuple(effect.key for effect in ordinary_command.plan.effects),
+                approval=ordinary_command.approval if ordinary_command.plan.effects else None,
             )
     elif plan.vm_ha is not None and apply_report is not None:
         # The vm-ha facade already approved this exact artifact/effect digest.
@@ -7391,6 +8611,13 @@ def _apply_impl(
             _approve_disruption(apply_report.digest, supplied=approve_disruption, dry_run=dry_run)
 
     if dry_run:
+        if (
+            ordinary_command is not None
+            and not ordinary_command.plan.effects
+            and has_no_change
+            and not former_vm_ha_members
+        ):
+            result_report.verified(changed=False)
         if ssh_policy is not None and getattr(ssh_policy, "managed_action", None):
             print(
                 "[dim]Dry-run: apply would "
@@ -7516,6 +8743,54 @@ def _apply_impl(
             "\n[yellow]Proceeding with VM recreation for safe changes (--recreate-gw flag provided)...[/yellow]"
         )
 
+    result_report.started = bool(
+        apply_report is not None
+        or ordinary_command is not None
+        and ordinary_command.plan.effects
+        or not has_no_change
+        or former_vm_ha_members
+    )
+    if ha_command is not None:
+        lifetimes = _VM_MANAGER_LIFETIMES.get()
+        assert lifetimes is not None
+        lifetimes.enter_context(command_journal)
+        ha_command.begin()
+
+    if ordinary_command is not None and ordinary_command.plan.effects:
+        lifetimes = _VM_MANAGER_LIFETIMES.get()
+        assert lifetimes is not None
+        lifetimes.enter_context(command_journal)
+        ordinary_command.begin()
+
+    if sg_apply.changed(attachment_plan) or attachment_pending is not None:
+        if apply_report is not None:
+            attachment_approval = apply_report.digest
+        elif ordinary_command is not None:
+            attachment_approval = ordinary_command.approval
+        else:
+            raise RuntimeError("Attachment changes require their original composed apply authority")
+        sg_apply.require_plan(
+            discovery_manager, attachment_plan, allow_desired=attachment_pending is not None
+        )
+        with attachment_journal:
+            if attachment_scope_changed:
+                assert attachment_corrective is not None
+                attachment_journal.replace_unstarted(
+                    attachment_corrective,
+                    approval=attachment_approval,
+                    operation_id=ha_command.execution_id if ha_command is not None else None,
+                )
+            attachment_journal.begin(
+                attachment_plan,
+                scope=attachment_scope,
+                approval=attachment_approval,
+                operation_id=(
+                    command_journal.state["transaction"]["execution_id"]
+                    if ordinary_command is not None or ha_command is not None
+                    else None
+                ),
+            )
+
     managed_vm_ha_auth_token: str | None = None
     if plan.vm_ha is not None:
         assert vm_ha_credential_plan is not None
@@ -7534,69 +8809,25 @@ def _apply_impl(
             f"[bold]{vm_ha_credential_plan.action.title()} managed VM-HA runtime "
             "credentials...[/bold]"
         )
-        if ordinary_handoff_observations:
-            from .deploy import ordinary_handoff
-
-            assert (
-                migration_plan_digest is not None
-                and apply_report is not None
-                and apply_report.artifact is not None
-            )
-            lifetimes = _VM_MANAGER_LIFETIMES.get()
-            assert lifetimes is not None
-            for instance in planned_instances:
-                admission_observed = ordinary_handoff_observations.get(instance.hostname)
-                if admission_observed is not None:
-                    package = dict(apply_report.artifact.dependency_plans).get(instance.hostname)
-                    if (
-                        admission_observed.get("mode") == "ha"
-                        and instance.hostname not in handoff_repair_peers
-                    ):
-                        continue
-                    peer_context = handoff_repair_peers.get(instance.hostname)
-                    peer_observer = None
-                    activation_peer_observer = None
-                    if peer_context is not None:
-
-                        def peer_observer(context=peer_context, *, activation=False):
-                            peer_instance, peer_target, expected, _previous = context
-                            return ordinary_handoff.inspect_repair(
-                                SSHPush(ssh_policy=ssh_policy),
-                                peer_target,
-                                peer_instance,
-                                local_cfg,
-                                expected=expected,
-                                activation=activation,
-                            )
-
-                        activation_peer_observer = functools.partial(peer_observer, activation=True)
-
-                    ordinary_handoffs[instance.hostname] = lifetimes.enter_context(
-                        ordinary_handoff.reserve(
-                            SSHPush(ssh_policy=ssh_policy),
-                            vm_ha_existing_members[instance.hostname],
-                            instance,
-                            local_cfg,
-                            observed=admission_observed,
-                            approval=migration_plan_digest,
-                            artifact=apply_report.artifact.sha256,
-                            package=package,
-                            peer_observer=peer_observer,
-                            activation_peer_observer=activation_peer_observer,
-                            peer=None if peer_context is None else peer_context[3],
-                        )
-                    )
-                    if peer_context is not None:
-                        repair_holder = ordinary_handoffs[instance.hostname]
-                        repair_holder.prepare_package(package)
-                        repair_holder.checkpoint_repair()
         try:
-            managed_result = ensure_managed_vm_ha_credentials(
-                vm_ha_credential_plan,
-                node_ids=vm_ha_node_ids,
-                tenant_id=tenant_id,
-                region_id=region_id,
-            )
+            if ha_command is not None and "credentials" in ha_command.bindings:
+                ha_command.start_prerequisite("credentials")
+                managed_result = credential_enrollment.execute(
+                    command_journal,
+                    credential_enrollment.EnrollmentJournal(proj_id, gateway_name),
+                    vm_ha_credential_plan,
+                    node_ids=tuple(vm_ha_node_ids),
+                    tenant_id=tenant_id,
+                    region_id=region_id,
+                    ensure=ensure_managed_vm_ha_credentials,
+                )
+            else:
+                managed_result = ensure_managed_vm_ha_credentials(
+                    vm_ha_credential_plan,
+                    node_ids=vm_ha_node_ids,
+                    tenant_id=tenant_id,
+                    region_id=region_id,
+                )
         except (VMHACredentialIdentityError, VMHAManagedCredentialError, RuntimeError) as error:
             reason = getattr(error, "reason", str(error))
             print("[red]Managed VM-HA runtime credential reconciliation failed.[/red]")
@@ -7606,8 +8837,26 @@ def _apply_impl(
         managed_vm_ha_auth_token = managed_result.token_identity.token
         print("[green]✓ Managed VM-HA runtime credentials are ready[/green]")
 
+    if fresh_command is not None:
+        ssh_policy = fresh_command.publish_trust()
+        assert ordinary_ssh is not None
+        ordinary_ssh._ssh_policy = ssh_policy
+
+    if ha_command is not None and "ssh" in ha_command.bindings:
+        ha_command.start_prerequisite("ssh")
+        ha_trust_receipt = provisioning_trust.publish(
+            command_journal,
+            provisioning_trust.TrustJournal(proj_id, gateway_name),
+            ha_command.bindings["ssh"],
+            resolve_ssh_policy,
+        )
+        command_journal.verified("ssh", ha_trust_receipt)
+        ssh_policy = resolve_ssh_policy(allow_repair=False)
+
     if (
-        ssh_policy is not None
+        fresh_command is None
+        and not (ha_command is not None and "ssh" in ha_command.bindings)
+        and ssh_policy is not None
         and getattr(ssh_policy, "managed_action", None)
         and ssh_policy.managed_action != "rotate"
     ):
@@ -7618,6 +8867,97 @@ def _apply_impl(
             print(f"[yellow]  - {error}[/yellow]")
             raise typer.Exit(code=1) from error
         print(f"[green]Per-deployment SSH trust {ssh_policy.managed_action} completed.[/green]")
+
+    if ha_command is not None:
+        ha_command.start_runtime()
+
+    if peer_continuation is not None:
+        from .deploy import ha_preparation
+
+        assert (
+            lifecycle_state is not None
+            and apply_report is not None
+            and apply_report.artifact is not None
+        )
+        continuation_journal = VMHALifecycleJournal(lifecycle_store, lifecycle_state)
+        ha_preparation.authorize(
+            continuation_journal,
+            peer_continuation[0],
+            artifact=apply_report.artifact.sha256,
+            scope=_vm_ha_command_approval_scope(apply_report.artifact, local_cfg, intent=ha_intent),
+            execution=ha_command.execution_id if ha_command is not None else None,
+            previous_execution=ha_command.intent["continuation"]["previous_execution"]
+            if ha_command is not None
+            else None,
+        )
+        lifecycle_state = continuation_journal.state
+
+    if plan.vm_ha is not None and apply_report is not None and apply_report.artifact is not None:
+        from .deploy.vm_ha_package import stage as stage_ha_package
+
+        staging_ssh = SSHPush(ssh_policy=ssh_policy)
+        # Every existing member stages before the first disruptive action.
+        for _name, staged_package_plan in apply_report.artifact.dependency_plans:
+            stage_ha_package(
+                staging_ssh, staged_package_plan, local_cfg, artifact=apply_report.artifact
+            )
+
+    if ordinary_handoff_observations:
+        from .deploy import ordinary_handoff
+
+        assert (
+            migration_plan_digest is not None
+            and apply_report is not None
+            and apply_report.artifact is not None
+        )
+        lifetimes = _VM_MANAGER_LIFETIMES.get()
+        assert lifetimes is not None
+        for instance in planned_instances:
+            admission_observed = ordinary_handoff_observations.get(instance.hostname)
+            if admission_observed is not None:
+                package = dict(apply_report.artifact.dependency_plans).get(instance.hostname)
+                if (
+                    admission_observed.get("mode") == "ha"
+                    and instance.hostname not in handoff_repair_peers
+                ):
+                    continue
+                peer_context = handoff_repair_peers.get(instance.hostname)
+                peer_observer = None
+                activation_peer_observer = None
+                if peer_context is not None:
+
+                    def peer_observer(context=peer_context, *, activation=False):
+                        peer_instance, peer_target, expected, _previous = context
+                        return ordinary_handoff.inspect_repair(
+                            SSHPush(ssh_policy=ssh_policy),
+                            peer_target,
+                            peer_instance,
+                            local_cfg,
+                            expected=expected,
+                            activation=activation,
+                        )
+
+                    activation_peer_observer = functools.partial(peer_observer, activation=True)
+
+                ordinary_handoffs[instance.hostname] = lifetimes.enter_context(
+                    ordinary_handoff.reserve(
+                        SSHPush(ssh_policy=ssh_policy),
+                        vm_ha_existing_members[instance.hostname],
+                        instance,
+                        local_cfg,
+                        observed=admission_observed,
+                        approval=migration_plan_digest,
+                        artifact=apply_report.artifact.sha256,
+                        package=package,
+                        peer_observer=peer_observer,
+                        activation_peer_observer=activation_peer_observer,
+                        peer=None if peer_context is None else peer_context[3],
+                    )
+                )
+                if peer_context is not None:
+                    repair_holder = ordinary_handoffs[instance.hostname]
+                    repair_holder.prepare_package(package)
+                    repair_holder.checkpoint_repair()
 
     if former_vm_ha_members:
         assert discovery_manager is not None
@@ -7854,6 +9194,9 @@ def _apply_impl(
                     ),
                     current_observation=fresh_observation,
                     artifact_sha256=apply_report.artifact.sha256,
+                    command_bindings=ha_command.lifecycle_bindings()
+                    if ha_command is not None
+                    else None,
                     ssh_identity_rotation=(
                         None
                         if fresh_missing.ssh_identity_rotation is None
@@ -7892,6 +9235,34 @@ def _apply_impl(
                 if recorded_cycle is None:
                     print("[red]Failed-passive replacement approval became stale.[/red]")
                     raise typer.Exit(code=1)
+        if corrective_recovery is not None:
+            assert lifecycle_state is not None and ssh_policy is not None
+            if not callable(observer):
+                raise ValueError("corrective release requires independent cloud observation")
+            lifecycle_journal = VMHALifecycleJournal(lifecycle_store, lifecycle_state)
+            lifecycle_state = _execute_vm_ha_corrective(
+                corrective_recovery,
+                approved=apply_report,
+                journal=lifecycle_journal,
+                plan=plan,
+                local=local_cfg,
+                targets=vm_ha_existing_members,
+                credentials=vm_ha_credentials,
+                ssh_policy=ssh_policy,
+                observe=lambda: observer(plan.gateway_group, plan.gateway.get("local_prefixes")),
+                command_scope=_vm_ha_command_approval_scope(
+                    apply_report.artifact,
+                    local_cfg,
+                    intent={
+                        "recreate": recreate_gw,
+                        "prepare_peer_rotation": prepare_vm_ha_peer_rotation,
+                        "destructive": has_destructive,
+                        "managed_ssh": managed_ssh_action,
+                        "managed_credentials": vm_ha_credential_plan.command_action,
+                    },
+                ),
+            )
+            fresh_observation = observer(plan.gateway_group, plan.gateway.get("local_prefixes"))
         if upgrade_recovery is not None:
             assert lifecycle_state is not None and ssh_policy is not None
             if not callable(observer):
@@ -7926,6 +9297,14 @@ def _apply_impl(
             for key in ("heartbeat-upgrade-artifact", "heartbeat-initial-artifact"):
                 if key in previous_bindings:
                     initial_bindings[key] = previous_bindings[key]
+            if upgrade_recovery is None:
+                for key in (
+                    "runtime-command-approval",
+                    "runtime-package-manifests",
+                    "runtime-command-execution",
+                ):
+                    if key in previous_bindings:
+                        initial_bindings[key] = previous_bindings[key]
         if lifecycle_state is None or lifecycle_state.status in {
             VMHALifecycleStatus.ACTIVE,
             VMHALifecycleStatus.REMOVED,
@@ -7946,6 +9325,33 @@ def _apply_impl(
             # Bind intent in the first durable successor, before any bootstrap read
             # can fail. A fresh pair must never be inferred from a missing marker.
             initial_bindings[artifact_key] = apply_report.artifact.sha256
+            if retained_upgrade or ha_command is not None:
+                from .apply_approval import bind as bind_command_approval
+
+                initial_bindings["runtime-command-approval"] = json.dumps(
+                    bind_command_approval(
+                        apply_report.digest,
+                        _vm_ha_command_approval_scope(
+                            apply_report.artifact,
+                            local_cfg,
+                            intent={
+                                "recreate": recreate_gw,
+                                "prepare_peer_rotation": prepare_vm_ha_peer_rotation,
+                                "destructive": has_destructive,
+                                "managed_ssh": managed_ssh_action,
+                                "managed_credentials": vm_ha_credential_plan.command_action,
+                            },
+                        ),
+                    ),
+                    sort_keys=True,
+                )
+                initial_bindings["runtime-package-manifests"] = json.dumps(
+                    {
+                        name: package.manifest
+                        for name, package in apply_report.artifact.dependency_plans
+                    },
+                    sort_keys=True,
+                )
         else:
             for key in ("heartbeat-upgrade-artifact", "heartbeat-initial-artifact"):
                 if (
@@ -7953,6 +9359,18 @@ def _apply_impl(
                     and initial_bindings[key] != apply_report.artifact.sha256
                 ):
                     raise RuntimeError("heartbeat artifact changed during interrupted apply")
+        if ha_command is not None and not ha_command.intent.get("successor"):
+            if ha_command.intent.get("continuation"):
+                from .deploy.ha_preparation import command_authority
+
+                assert lifecycle_state is not None
+                if command_authority(lifecycle_state)[0] != ha_command.execution_id:
+                    raise RuntimeError("Lifecycle belongs to another peer continuation execution")
+            else:
+                previous_execution = initial_bindings.get("runtime-command-execution")
+                if previous_execution is not None and previous_execution != ha_command.execution_id:
+                    raise RuntimeError("Lifecycle belongs to another apply command execution")
+                initial_bindings["runtime-command-execution"] = ha_command.execution_id
         if lifecycle_state is not None and lifecycle_state.status is VMHALifecycleStatus.DESTROYED:
             retained_public = vm_ha_destroyed_retained_public_bindings(lifecycle_state)
             if any(
@@ -8117,17 +9535,32 @@ def _apply_impl(
             if fresh_digest != migration_plan_digest:
                 print("[red]VM-HA approval became stale before durable intent was written.[/red]")
                 raise typer.Exit(code=1)
-            operation_identity = {
-                "approval_digest": migration_plan_digest,
-                "domain": "nebius-vpngw/vm-ha-operation-v1",
-            }
-            if lifecycle_state is not None and lifecycle_state.status in {
-                VMHALifecycleStatus.ACTIVE,
-                VMHALifecycleStatus.REMOVED,
-                VMHALifecycleStatus.DESTROYED,
-            }:
-                operation_identity["predecessor_sha256"] = lifecycle_state.record_sha256
-            operation_id = _canonical_digest(operation_identity)
+            from .deploy.vm_ha_lifecycle import provisioning_operation_id
+
+            predecessor = (
+                lifecycle_state.record_sha256
+                if lifecycle_state is not None
+                and lifecycle_state.status
+                in {
+                    VMHALifecycleStatus.ACTIVE,
+                    VMHALifecycleStatus.REMOVED,
+                    VMHALifecycleStatus.DESTROYED,
+                }
+                else None
+            )
+            operation_id = provisioning_operation_id(migration_plan_digest, predecessor)
+            if (
+                ha_command is not None
+                and ha_command.intent.get("packages") is not None
+                and operation_id != ha_command.intent["packages"]["parent"]
+            ):
+                raise RuntimeError("HA lifecycle operation differs from approved package intent")
+            if (
+                lifecycle_state is not None
+                and lifecycle_state.transaction is not None
+                and "apply-lock-cycle" in dict(lifecycle_state.transaction.resource_bindings)
+            ):
+                initial_bindings["apply-lock-cycle"] = operation_id
             current_digest = _canonical_digest(
                 _vm_ha_approval_state_with_credentials(
                     fresh_observation,
@@ -8403,7 +9836,13 @@ def _apply_impl(
                 approval_digest=replace_failed_vm_ha_passive,
             )
 
-        if replacement_provisioning is not None:
+        if fresh_command is not None:
+            vm_ips = fresh_command.provision(ssh_policy)
+            ssh_policy = fresh_command.bind_policy(ssh_policy, vm_ips)
+            ssh._ssh_policy = ssh_policy
+            vm_mgr._ssh_policy = ssh_policy
+            show_add_routes_hint = False
+        elif replacement_provisioning is not None:
             vm_ips = replacement_provisioning
         elif activating_resume:
             resume_activation = getattr(vm_mgr, "resume_vm_ha_activation", None)
@@ -8652,7 +10091,10 @@ def _apply_impl(
                 lifecycle_journal.transition(lifecycle_state)
 
     if plan.vm_ha is None:
-        from .deploy.ordinary_apply import execute_plan, inspect_plan
+        from .deploy.ordinary_apply import execute_plan, inspect_plan, stage_plan
+
+        if fresh_command is not None:
+            fresh_command.bind_routes(ssh_policy)
 
         print("[bold]Applying and verifying per-VM configurations...[/bold]")
         completed: list[str] = []
@@ -8666,7 +10108,13 @@ def _apply_impl(
                 identity, exact_target = identities[inst_cfg.hostname]
                 prepared = ordinary_plans.get(inst_cfg.hostname)
                 approved = ordinary_approved
-                if prepared is None:
+                if fresh_command is not None and inst_cfg.hostname in fresh_command.guests:
+                    prepared = fresh_command.prepare_guest(ssh, inst_cfg)
+                    lifetimes = _VM_MANAGER_LIFETIMES.get()
+                    assert lifetimes is not None
+                    lifetimes.callback(prepared.close)
+                    approved = ordinary_approved
+                elif prepared is None:
                     prepared = inspect_plan(
                         ssh, target, inst_cfg, local_cfg, target_identity=identity
                     )
@@ -8704,11 +10152,39 @@ def _apply_impl(
         # before the first guest transaction can perform effects.
         for prepared, approved in ready_plans:
             hostname = prepared.instance.hostname
+            exact = vm_mgr.inspect_ordinary_targets([hostname]).get(hostname)
+            if exact != (prepared.target_identity, prepared.target):
+                raise RuntimeError("Gateway identity changed before package staging")
+            from .deploy.ordinary_command import guest_key
+
+            key = guest_key(hostname)
+            if (
+                not prepared.noop
+                and ordinary_command is not None
+                and any(effect.key == key for effect in ordinary_command.plan.effects)
+            ):
+                command_journal.started(key)
+            stage_plan(ssh, prepared, local_cfg, approved=approved)
+        # Complete durable downloads on every member before disrupting any one.
+        for prepared, approved in ready_plans:
+            hostname = prepared.instance.hostname
             try:
                 exact = vm_mgr.inspect_ordinary_targets([hostname]).get(hostname)
                 if exact != (prepared.target_identity, prepared.target):
                     raise RuntimeError("Gateway identity changed before deployment")
-                execute_plan(ssh, prepared, local_cfg, approved=approved)
+                from .deploy.ordinary_command import guest_key
+
+                key = guest_key(hostname)
+                recorded = ordinary_command is not None and any(
+                    effect.key == key for effect in ordinary_command.plan.effects
+                )
+                if recorded and not prepared.noop:
+                    command_journal.started(key)
+                result = execute_plan(ssh, prepared, local_cfg, approved=approved)
+                if recorded:
+                    if fresh_command is not None and hostname in fresh_command.guests:
+                        result = fresh_command.complete_guest(ssh, prepared.instance)
+                    command_journal.verified(key, result)
                 completed.append(hostname)
             except Exception:
                 unattempted = [
@@ -8855,6 +10331,9 @@ def _apply_impl(
             if set(statuses) != {node.node_id for node in vm_ha_runtime_binding.nodes}:
                 raise RuntimeError("VM-HA standby replacement terminal status is incomplete")
             _commit_missing_vm_ha_standby_replacement_active(lifecycle_journal)
+            lifecycle_state = lifecycle_journal.state
+            finish_attachments()
+            result_report.verified(changed=True)
             print("[green]Apply completed successfully.[/green]")
             return
         print("[bold]Staging VM-HA configs non-owner-first without activation...[/bold]")
@@ -8916,7 +10395,8 @@ def _apply_impl(
         transaction_bindings = dict(activation_transaction.resource_bindings)
         operation_id = (
             activation_transaction.operation_id
-            if any(key.startswith("standby-replacement-") for key in transaction_bindings)
+            if "apply-lock-cycle" in transaction_bindings
+            or any(key.startswith("standby-replacement-") for key in transaction_bindings)
             else _vm_ha_apply_operation_id(vm_ha_runtime_binding)
         )
 
@@ -8938,9 +10418,15 @@ def _apply_impl(
         if apply_report is None or apply_report.artifact is None:
             raise RuntimeError("VM-HA apply has no approved agent artifact")
         approved_agent_artifact = apply_report.artifact
+        for _name, package in approved_agent_artifact.dependency_plans:
+            package.manifest["ha_parent"] = activation_transaction.operation_id
         from .deploy.vm_ha_upgrade_recovery import READY as UPGRADE_RECOVERY_READY
         from .deploy.vm_ha_upgrade_recovery import release_started as upgrade_release_started
 
+        corrective_barrier = (
+            "corrective-release-reserved" in transaction_bindings
+            and not upgrade_release_started(activation_entry_state)
+        )
         prepared_upgrade_recovery = UPGRADE_RECOVERY_READY in transaction_bindings
         prepared_recovery_barrier = prepared_upgrade_recovery and not upgrade_release_started(
             activation_entry_state
@@ -8948,8 +10434,10 @@ def _apply_impl(
 
         from .deploy.checkpoint_conversion import context as checkpoint_context
 
-        def prepare_agent_packages() -> None:
-            print("[bold]Preparing exact VM-HA agent packages non-owner-first...[/bold]")
+        def prepare_agent_packages(*, stopped_pair: bool = False) -> None:
+            nonlocal approved_agent_artifact
+            preparing_instance = None
+            print("[bold]Preparing exact VM-HA agent packages...[/bold]")
             try:
                 if upgrade_recovery is not None or prepared_upgrade_recovery:
                     from .deploy.vm_ha_package import verify_prepared
@@ -8959,6 +10447,7 @@ def _apply_impl(
                     # pre-install observation to authorize another install.
                     for _name, package in approved_agent_artifact.dependency_plans:
                         inst_cfg = package.instance
+                        preparing_instance = inst_cfg
                         verify_prepared(
                             ssh,
                             package,
@@ -8972,7 +10461,30 @@ def _apply_impl(
                     vm_ha_progress_sink,
                     _VMHAProgressPhase.PREPARE_AGENT_PACKAGES,
                 ):
+                    if ha_command is not None:
+                        from .deploy.ha_created_packages import prepare as prepare_created_packages
+
+                        approved_agent_artifact = prepare_created_packages(
+                            command=ha_command,
+                            journal=lifecycle_journal,
+                            artifact=approved_agent_artifact,
+                            ssh=ssh,
+                            local=local_cfg,
+                            staged=staged,
+                            resources=_VM_MANAGER_LIFETIMES.get(),
+                        )
+                    if stopped_pair:
+                        _prepare_stopped_vm_ha_packages(
+                            staged=staged,
+                            ssh_policy=t.cast(SSHTrustPolicy, ssh_policy),
+                            local=local_cfg,
+                            artifact=approved_agent_artifact,
+                            operation_id=operation_id,
+                            cluster_id=vm_ha_runtime_binding.cluster_id,
+                        )
+                        return
                     for inst_cfg, target, _receipt in staged:
+                        preparing_instance = inst_cfg
                         if (
                             vm_ha_missing_standby_replacement is not None
                             and inst_cfg.vm_ha_node.node_id == current_owner_node_id
@@ -9001,7 +10513,9 @@ def _apply_impl(
                     typer.echo(str(error))
                 else:
                     typer.echo(
-                        f"Package preparation failed on member {inst_cfg.instance_index + 1}."
+                        f"Package preparation failed on member {preparing_instance.instance_index + 1}."
+                        if preparing_instance is not None
+                        else "Package selection failed before installation."
                     )
                     typer.echo(f"Reason: {_vm_ha_package_failure_reason(error)}")
                 print(
@@ -9091,7 +10605,7 @@ def _apply_impl(
                     local=local_cfg,
                     require_stopped=False,
                 )
-            else:
+            elif not corrective_barrier:
                 for inst_cfg, target, _receipt, _lock in locked:
                     ssh.verify_vm_ha_apply_inhibition_quiescent(
                         target,
@@ -9114,7 +10628,7 @@ def _apply_impl(
                     targets={item[0].hostname: item[1] for item in locked},
                     local=local_cfg,
                 )
-            prepare_agent_packages()
+            prepare_agent_packages(stopped_pair=True)
         else:
             # Fresh hosts have no installed predecessor agent; ordinary conversion
             # already holds its product-owned stopped-writer handoff reservation.
@@ -9141,12 +10655,24 @@ def _apply_impl(
                 ):
                     lifecycle_journal.rewind_host_activation_for_owner_adoption(adoption_effect)
                     lifecycle_journal.begin(adoption_effect)
+                    from .deploy.vm_ha_corrective import authority as corrective_authority
+
+                    prior_adoption = corrective_authority(lifecycle_journal.state)
                     ssh.install_vm_ha_apply_owner_adoption(
                         owner_target,
                         owner_cfg,
                         local_cfg,
                         runtime_binding=vm_ha_runtime_binding,
                         lock_receipt=owner_lock_receipt,
+                        **(
+                            {
+                                "predecessor_operation_id": prior_adoption["locks"][
+                                    current_owner_node_id
+                                ]["operation_id"]
+                            }
+                            if prior_adoption is not None
+                            else {}
+                        ),
                     )
                     lifecycle_journal.complete(adoption_effect)
                 print(
@@ -9290,11 +10816,11 @@ def _apply_impl(
                     ) -> bool:
                         return bool(
                             payload.get("data_plane_mode") == ("active" if owner else "passive")
-                            and "independent-heartbeat-v5"
+                            and "independent-heartbeat-v6"
                             in payload.get("controller_capabilities", [])
                             and isinstance(payload.get("heartbeat"), dict)
-                            and payload["heartbeat"].get("schema_version") == 5
-                            and payload["heartbeat"].get("peer_v5_fresh") is True
+                            and payload["heartbeat"].get("schema_version") == 6
+                            and payload["heartbeat"].get("peer_v6_fresh") is True
                             and payload.get("promotion_ready") is owner
                             and (
                                 not owner
@@ -9322,6 +10848,18 @@ def _apply_impl(
                         expected_apply_locked=not owner_replacement_entry,
                         expected_operation_id=operation_id,
                         progress_callback=wait_fenced_progress.update,
+                    )
+                    from .deploy.ordinary_apply import remote as runtime_remote
+
+                    runtime_remote(
+                        ssh,
+                        target,
+                        inst_cfg,
+                        local_cfg,
+                        {
+                            "action": "release-runtime",
+                            "artifact": approved_agent_artifact.sha256,
+                        },
                     )
                     handoff = ordinary_handoffs.get(inst_cfg.hostname)
                     if handoff is not None and not handoff.finished:
@@ -9396,6 +10934,31 @@ def _apply_impl(
                     lifecycle_journal.complete(peer_binding_effect)
 
             if prepare_vm_ha_peer_rotation:
+                from .deploy import ha_preparation
+
+                ha_preparation.publish(
+                    lifecycle_journal,
+                    artifact=approved_agent_artifact.sha256,
+                    preparation_scope=_vm_ha_command_approval_scope(
+                        apply_report.artifact, local_cfg, intent=ha_intent
+                    ),
+                    continuation_scope=_vm_ha_command_approval_scope(
+                        approved_agent_artifact,
+                        local_cfg,
+                        intent={
+                            **ha_intent,
+                            "prepare_peer_rotation": False,
+                            "managed_ssh": None,
+                            "managed_credentials": "reuse",
+                        },
+                    ),
+                    statuses=activated_agent_statuses,
+                    lock_operation=operation_id,
+                )
+                lifecycle_state = lifecycle_journal.state
+                if ha_command is not None:
+                    ha_command.finish_preparation(lifecycle_state)
+                result_report.verified(changed=True, inhibition_retained=True)
                 print("[green]VM-HA peer-rotation preparation completed successfully.[/green]")
                 print(
                     "[yellow]Both members remain passively fenced under the exact-generation "
@@ -9528,6 +11091,9 @@ def _apply_impl(
                         expected_operation_id=operation_id,
                     )
                 _commit_missing_vm_ha_standby_replacement_active(lifecycle_journal)
+                lifecycle_state = lifecycle_journal.state
+                finish_attachments()
+                result_report.verified(changed=True)
                 print("[green]Apply completed successfully.[/green]")
                 return
 
@@ -9825,6 +11391,8 @@ def _apply_impl(
             failure.__cause__ = error
             raise typer.Exit(code=1) from failure
 
+    finish_attachments()
+    result_report.verified(changed=result_report.started)
     print("[green]Apply completed successfully.[/green]")
     if show_add_routes_hint:
         print("")
@@ -9894,6 +11462,11 @@ def apply(
         metavar="DIGEST",
         help="Recover only the exact interrupted two-VM VM-HA migration digest",
     ),
+    output_format: ApplyOutputFormat = typer.Option(
+        ApplyOutputFormat.TEXT,
+        "--output-format",
+        help="Output format: human-readable text or structured JSON with separate health evidence",
+    ),
     replace_failed_vm_ha_passive: str | None = typer.Option(
         None,
         "--replace-failed-vm-ha-passive",
@@ -9911,28 +11484,52 @@ def apply(
     Use --recreate-gw only when infrastructure changes require VM recreation.
     """
 
+    report = ApplyReport(dry_run=dry_run)
+    structured = output_format == ApplyOutputFormat.JSON
     try:
-        _apply_impl(
-            local_config_file=local_config_file,
-            recreate_gw=recreate_gw,
-            sa=sa,
-            project_id=project_id,
-            region=region,
-            dry_run=dry_run,
-            approve_disruption=approve_disruption,
-            resume_replacement=resume_replacement,
-            prepare_vm_ha_peer_rotation=prepare_vm_ha_peer_rotation,
-            approve_vm_ha_migration=approve_vm_ha_migration,
-            recover_vm_ha_migration=recover_vm_ha_migration,
-            replace_failed_vm_ha_passive=replace_failed_vm_ha_passive,
-        )
-    except IngressCapabilityError as error:
-        typer.echo(str(error))
-        raise typer.Exit(code=1) from None
-    except _VMHAAgentPackagePreparationFailed as error:
+        with contextlib.redirect_stdout(sys.stderr) if structured else contextlib.nullcontext():
+            _run_apply_reported(
+                report,
+                local_config_file=local_config_file,
+                recreate_gw=recreate_gw,
+                sa=sa,
+                project_id=project_id,
+                region=region,
+                dry_run=dry_run,
+                approve_disruption=approve_disruption,
+                resume_replacement=resume_replacement,
+                prepare_vm_ha_peer_rotation=prepare_vm_ha_peer_rotation,
+                approve_vm_ha_migration=approve_vm_ha_migration,
+                recover_vm_ha_migration=recover_vm_ha_migration,
+                replace_failed_vm_ha_passive=replace_failed_vm_ha_passive,
+            )
+    finally:
+        if structured:
+            # Failure may need a separately reviewed recovery owner. Recommend
+            # observation instead of inventing replay/cancellation authority.
+            report.next_command = shlex.join(
+                ["nebius-vpngw", "status"]
+                + (["--local-config-file", str(local_config_file)] if local_config_file else [])
+                + (["--region", region] if region else [])
+            )
+            typer.echo(json.dumps(report.mapping(), sort_keys=True))
+            if report.projection_failed and sys.exc_info()[0] is None:
+                raise typer.Exit(code=1)
+
+
+def _run_apply_reported(report: ApplyReport, **kwargs: t.Any) -> None:
+    try:
+        _apply_impl(**kwargs, result_report=report)
+    except typer.Exit as error:
+        if error.exit_code != 0:
+            report.failed()
+        raise
+    except (IngressCapabilityError, _VMHAAgentPackagePreparationFailed) as error:
+        report.failed()
         typer.echo(str(error))
         raise typer.Exit(code=1) from None
     except ReplayWindowCapabilityError:
+        report.failed()
         print("[red]Apply stopped: replay_window requires a matching agent wheel.[/red]")
         print(
             "[yellow]For a source checkout, rebuild with "
@@ -9940,6 +11537,9 @@ def apply(
             "Select the matching wheel with VPNGW_AGENT_WHEEL, then rerun apply.[/yellow]"
         )
         raise typer.Exit(code=1) from None
+    except Exception:
+        report.failed()
+        raise
 
 
 @app.command(
@@ -11342,6 +12942,8 @@ class _VMHACloudAuthority:
     observation_digest: str = ""
     member_compute_states: tuple[tuple[str, str], ...] = ()
     unavailable_member_node_ids: tuple[str, ...] = ()
+    ownership_condition: str = "unknown"
+    ownership_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -11361,6 +12963,7 @@ class _VMHAStatusView:
     member_rows: tuple[tuple[str, str, str, str], ...]
     action: str = "inspect"
     reasons: tuple[str, ...] = ()
+    security_groups: dict[str, dict] | None = None
 
 
 @dataclass(frozen=True)
@@ -11644,6 +13247,10 @@ def _vm_ha_cloud_authority(
             route_next_hops_exact = False
 
     required_prefix_sets = tuple(managed_prefixes_by_table.values())
+    prefix_sets_equal = bool(
+        required_prefix_sets
+        and not any(prefixes != required_prefix_sets[0] for prefixes in required_prefix_sets[1:])
+    )
     route_prefixes_exact = bool(
         required_prefix_sets
         and required_prefix_sets[0]
@@ -11671,6 +13278,16 @@ def _vm_ha_cloud_authority(
     else:
         condition = "exact"
         reasons = ()
+    ownership_blocked = [
+        reason
+        for reason in blocked
+        if reason != "route-prefixes-not-exact" or not prefix_sets_equal
+    ]
+    ownership_transitioning = [
+        reason
+        for reason in transitioning
+        if reason != "route-prefixes-not-exact" or not prefix_sets_equal
+    ]
     return _VMHACloudAuthority(
         lifecycle=state.status.value,
         condition=condition,
@@ -11681,6 +13298,16 @@ def _vm_ha_cloud_authority(
         observation_digest=_canonical_digest(observation),
         member_compute_states=tuple(sorted(member_compute_states)),
         unavailable_member_node_ids=tuple(sorted(unavailable_member_node_ids)),
+        ownership_condition=(
+            "blocked"
+            if ownership_blocked
+            else "transitioning"
+            if ownership_transitioning
+            else "exact"
+        ),
+        ownership_digest=_canonical_digest(
+            {key: value for key, value in observation.items() if key != "routes"}
+        ),
     )
 
 
@@ -12469,6 +14096,14 @@ def _collect_vm_ha_status_snapshot(
             local_config_file,
         ),
     )
+    from .deploy.security_group_apply import status as attachment_status
+
+    attachment_rows = attachment_status(
+        vm_manager,
+        tuple(item.hostname for item in plan.iter_instance_configs()),
+        plan.gateway_group.security_group_ids,
+    )
+    view = replace(view, security_groups=attachment_rows)
     return _VMHAStatusSnapshot(
         view=view,
         lifecycle_state=lifecycle_state,
@@ -12602,6 +14237,8 @@ def _render_vm_ha_status(console: t.Any, view: _VMHAStatusView) -> None:
             ),
         )
     console.print(member_table)
+    if view.security_groups is not None:
+        _render_security_group_status(console, view.security_groups)
 
     public_summary = {
         label: (value, detail)
@@ -12633,6 +14270,36 @@ def _render_vm_ha_status(console: t.Any, view: _VMHAStatusView) -> None:
         Text.assemble(("Action", "bold cyan"), "  ", (action, "white")),
         soft_wrap=True,
     )
+
+
+def _render_security_group_status(console: t.Any, evidence: dict[str, dict]) -> None:
+    from rich.table import Table
+    from rich.text import Text
+
+    table = Table(title="Security Group attachments")
+    for column in (
+        "Gateway / NIC",
+        "Desired explicit",
+        "Observed explicit",
+        "Effective (resolved)",
+        "State",
+    ):
+        table.add_column(column)
+    for name, record in evidence.items():
+        desired = ", ".join(record["desired_ids"]) or "network default"
+        observed = record["observed"]
+        if observed is None:
+            table.add_row(Text(name), Text(desired), "unknown", "unknown", "unknown")
+        else:
+            for nic in observed:
+                table.add_row(
+                    Text(name + " / " + nic["name"]),
+                    Text(desired),
+                    Text(", ".join(nic["explicit_ids"]) or "network default"),
+                    Text(", ".join(nic["effective_ids"])),
+                    Text(record["state"]),
+                )
+    console.print(table)
 
 
 def _vpn_gateway_status_table() -> t.Any:
@@ -12756,25 +14423,19 @@ def _tunnel_probe_retry_has_established_sa(
 ) -> bool:
     """Require recognizable established-SA evidence before clearing an error."""
 
-    if not probe_command or not output.strip():
+    from .ipsec_observation import Inventory
+
+    try:
+        inventory = Inventory.from_json(output)
+        return any(
+            sa.state == "ESTABLISHED"
+            and any(
+                c.state == "INSTALLED" and c.fields.get("protocol") == "ESP" for c in sa.children
+            )
+            for sa in inventory.sas
+        )
+    except ValueError:
         return False
-    remote_command = str(probe_command[-1])
-    if "swanctl --list-sas" in remote_command:
-        return bool(
-            re.search(
-                r"(?im)^\s*\S+?:\s+#\d+,.*\bESTABLISHED\b",
-                output,
-            )
-        )
-    if "ipsec statusall" in remote_command:
-        return bool(
-            re.search(
-                r"(?im)^\s*\S+\[\d+\]:\s+ESTABLISHED\s+.+?,\s+"
-                r"[\d.]+\[[\d.]+\]\.\.\.(?:\d+\.){3}\d+\[",
-                output,
-            )
-        )
-    return False
 
 
 def _mark_service_probe_recovered(
@@ -12949,6 +14610,18 @@ def status(
         )
     )
 
+    if plan.vm_ha is None:
+        from .deploy.security_group_apply import status as attachment_status
+
+        _render_security_group_status(
+            console,
+            attachment_status(
+                vm_mgr,
+                tuple(item.hostname for item in plan.iter_instance_configs()),
+                plan.gateway_group.security_group_ids,
+            ),
+        )
+
     # Quick check: verify at least one gateway VM exists before attempting SSH
     print("[bold]Checking for gateway VMs...[/bold]")
     client = vm_mgr._get_client()
@@ -12999,6 +14672,7 @@ def status(
     table = _vpn_gateway_status_table()
     status_notes: list[str] = []
     failed_tunnel_probes: dict[str, list[str]] = {}
+    vici_responsive_hosts: set[str] = set()
     vm_ha_snapshot: _VMHAStatusSnapshot | None = None
 
     # Build mapping of tunnel -> BGP peer IP, remote public IP, and ha_role per instance
@@ -13304,322 +14978,92 @@ def status(
         except Exception:
             pass
 
-        # Run swanctl status command (preferred for VICI-based configs)
+        # Stream the same bounded observer and pinned upstream client to older guests.
         try:
+            from .ipsec_observation import Inventory
+            from .observation_bundle import remote_command as observation_remote_command
+            from .tunnel_state import collect_tunnel_state
+
             last_tunnel_probe_command = _status_ssh_target_command(
                 status_ssh_context,
                 hostname=inst_cfg.hostname,
                 target=target,
-            ) + ["sudo swanctl --list-sas"]
+            ) + [observation_remote_command()]
             result = subprocess.run(
-                last_tunnel_probe_command,
-                capture_output=True,
-                text=True,
-                timeout=15,
+                last_tunnel_probe_command, capture_output=True, text=True, timeout=15
             )
-
-            output = result.stdout if result.returncode == 0 else ""
-            if output:
-                tunnel_statuses: dict[str, str] = {}
-                tunnel_uptime: dict[str, str] = {}
-                tunnel_uptime_seconds: dict[str, int] = {}
-                tunnel_encryption: dict[str, list[str]] = {}
-                tunnel_ike_encryption: dict[str, list[str]] = {}
-                tunnel_order: list[str] = []
-                current_tunnel: str | None = None
-                header_pattern = re.compile(r"^(\S+?):\s+#\d+,", re.IGNORECASE)
-                status_pattern = re.compile(r"\b(ESTABLISHED|CONNECTING)\b", re.IGNORECASE)
-                uptime_pattern = re.compile(r"established\s+(\S+)\s+ago", re.IGNORECASE)
-                esp_pattern = re.compile(r"\bESP:([^,]+)", re.IGNORECASE)
-                for line in output.splitlines():
-                    header_match = header_pattern.match(line)
-                    if header_match:
-                        name = header_match.group(1)
-                        status_match = status_pattern.search(line)
-                        status = status_match.group(1).upper() if status_match else "CONNECTING"
-                        if name not in tunnel_statuses:
-                            tunnel_statuses[name] = status
-                            tunnel_order.append(name)
-                        elif tunnel_statuses[name] != "ESTABLISHED" and status == "ESTABLISHED":
-                            tunnel_statuses[name] = status
-                        current_tunnel = name
-                        continue
-
-                    if not current_tunnel:
-                        continue
-
-                    uptime_match = uptime_pattern.search(line)
-                    if uptime_match:
-                        uptime_token = uptime_match.group(1)
-                        uptime_display = parse_strongswan_uptime(uptime_token)
-                        uptime_seconds = _uptime_seconds(uptime_token)
-                        if uptime_seconds is None:
-                            if current_tunnel not in tunnel_uptime:
-                                tunnel_uptime[current_tunnel] = uptime_display
-                        else:
-                            prev = tunnel_uptime_seconds.get(current_tunnel)
-                            if prev is None or uptime_seconds < prev:
-                                tunnel_uptime_seconds[current_tunnel] = uptime_seconds
-                                tunnel_uptime[current_tunnel] = uptime_display
-
-                    esp_match = esp_pattern.search(line)
-                    if esp_match:
-                        algo = esp_match.group(1).strip()
-                        if algo:
-                            algos = tunnel_encryption.setdefault(current_tunnel, [])
-                            if algo not in algos:
-                                algos.append(algo)
-
-                    if line.startswith("  "):
-                        algo_line = line.strip()
-                        if "PRF_" in algo_line and "MODP_" in algo_line and "/" in algo_line:
-                            ike_algos = tunnel_ike_encryption.setdefault(current_tunnel, [])
-                            if algo_line not in ike_algos:
-                                ike_algos.append(algo_line)
-
-                if tunnel_statuses:
-                    role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
-                        inst_cfg.hostname,
-                        tunnel_order,
-                        tunnel_statuses,
-                        bgp_states,
-                        tunnel_bgp_map,
-                        tunnel_role_map,
-                        tunnel_connection_map,
+            if result.returncode:
+                raise ValueError("IPsec inventory unavailable")
+            inventory = Inventory.from_json(result.stdout)
+            vici_responsive_hosts.add(inst_cfg.hostname)
+            configured, _, _ = collect_tunnel_state(
+                yaml.safe_load(inst_cfg.config_yaml), log=lambda _: None
+            )
+            ids = {tun["name"]: tun["if_id"] for tun in configured}
+            names = list(dict.fromkeys(sa.name for sa in inventory.sas))
+            statuses = {
+                name: "ESTABLISHED"
+                if name in ids and inventory.ready(name, ids[name])
+                else "CONNECTING"
+                if any(sa.name == name and sa.state == "CONNECTING" for sa in inventory.sas)
+                else "DOWN"
+                for name in names
+            }
+            role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
+                inst_cfg.hostname,
+                names,
+                statuses,
+                bgp_states,
+                tunnel_bgp_map,
+                tunnel_role_map,
+                tunnel_connection_map,
+            )
+            for name in _configured_and_runtime_tunnel_names(
+                inst_cfg.hostname, tunnel_role_map, names
+            ):
+                if name not in statuses:
+                    _add_configured_tunnel_without_runtime_row(
+                        table, inst_cfg.hostname, name, tunnel_role_map, tunnel_peer_map
                     )
-                    render_order = _configured_and_runtime_tunnel_names(
-                        inst_cfg.hostname,
-                        tunnel_role_map,
-                        tunnel_order,
-                    )
-                    for tunnel_name in render_order:
-                        if tunnel_name not in tunnel_statuses:
-                            _add_configured_tunnel_without_runtime_row(
-                                table,
-                                inst_cfg.hostname,
-                                tunnel_name,
-                                tunnel_role_map,
-                                tunnel_peer_map,
-                            )
-                            continue
-
-                        status_text = tunnel_statuses[tunnel_name]
-                        if status_text == "ESTABLISHED":
-                            status_display = "[green]Established[/green]"
-                        elif status_text == "CONNECTING":
-                            status_display = "[yellow]Connecting[/yellow]"
-                        else:
-                            status_display = f"[red]{status_text.capitalize()}[/red]"
-
-                        peer_cfg_ip = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(tunnel_name)
-                        if peer_cfg_ip and peer_cfg_ip in bgp_states:
-                            bgp_status = bgp_states[peer_cfg_ip]
-                        else:
-                            bgp_status = "-"
-
-                        bgp_display = format_bgp_status(bgp_status)
-
-                        peer_display = (
-                            tunnel_peer_map.get(inst_cfg.hostname, {}).get(tunnel_name) or "-"
-                        )
-                        role = _format_configured_tunnel_role(
-                            tunnel_role_map.get(inst_cfg.hostname, {}).get(tunnel_name)
-                        )
-                        enc_algos = tunnel_encryption.get(tunnel_name) or []
-                        if not enc_algos:
-                            enc_algos = tunnel_ike_encryption.get(tunnel_name) or []
-                        encryption_display = ", ".join(enc_algos) if enc_algos else "n/a"
-                        uptime_display = _gateway_tunnel_uptime(
-                            bgp_peer_ip=peer_cfg_ip,
-                            bgp_uptime=bgp_uptime,
-                            ipsec_uptime=tunnel_uptime.get(tunnel_name),
-                        )
-
-                        table.add_row(
-                            tunnel_name,
-                            role,
-                            inst_cfg.hostname,
-                            status_display,
-                            bgp_display,
-                            peer_display,
-                            encryption_display,
-                            uptime_display,
-                        )
-
                     continue
-
-            # Fall back to ipsec statusall if swanctl is unavailable
-            last_tunnel_probe_command = _status_ssh_target_command(
-                status_ssh_context,
-                hostname=inst_cfg.hostname,
-                target=target,
-            ) + ["sudo ipsec statusall"]
-            result = subprocess.run(
-                last_tunnel_probe_command,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-
-            if result.returncode != 0:
-                table.add_row(
-                    "All tunnels",
-                    "-",
-                    inst_cfg.hostname,
-                    "[red]ERROR[/red]",
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                )
-                status_notes.append(
-                    f"{inst_cfg.hostname}: {_safe_status_probe_detail(result.stderr)}"
-                )
-                failed_tunnel_probes[inst_cfg.hostname] = last_tunnel_probe_command
-                continue
-
-            output = result.stdout
-
-            # Parse IPsec status output
-            # Look for patterns like: "gcp-classic-tunnel-0[202]: ESTABLISHED 8 minutes ago, 10.48.0.13[10.48.0.13]...34.155.169.244[34.155.169.244]"
-            tunnel_pattern = re.compile(
-                r"(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.(\d+\.\d+\.\d+\.\d+)\["
-            )
-
-            tunnels = {}
-            for match in tunnel_pattern.finditer(output):
-                tunnel_name = match.group(1)
-                status = match.group(2)
-                raw_uptime = match.group(3)
-                formatted_uptime = parse_strongswan_uptime(raw_uptime)
-                peer_ip = match.group(4)
-                tunnels[tunnel_name] = {
-                    "status": status,
-                    "uptime": formatted_uptime,
-                    "peer_ip": peer_ip,
-                    "encryption": "Unknown",
-                    "bgp": "-",
-                    "role": _format_configured_tunnel_role(
-                        tunnel_role_map.get(inst_cfg.hostname, {}).get(tunnel_name)
-                    ),
-                }
-
-            # Parse encryption from IKE proposal lines
-            # Pattern: "IKE proposal: AES_GCM_16_128/PRF_AES128_XCBC/MODP_2048"
-            ike_pattern = re.compile(r"(\S+)\[\d+\]:.*?IKE proposal:\s+(\S+)")
-            for match in ike_pattern.finditer(output):
-                tunnel_name = match.group(1)
-                encryption = match.group(2)
-                if tunnel_name in tunnels:
-                    tunnels[tunnel_name]["encryption"] = encryption
-
-            # Fallback: parse simplified connection lines if no SAs matched yet
-            # Example: "gcp-ha-tunnel-1:  %any...34.157.15.187  IKEv2, dpddelay=30s"
-            if not tunnels:
-                conn_line_pattern = re.compile(
-                    r"^(\S+):\s+%any\.\.\.(\d+\.\d+\.\d+\.\d+)", re.MULTILINE
-                )
-                for match in conn_line_pattern.finditer(output):
-                    tunnels[match.group(1)] = {
-                        "status": "CONNECTING",
-                        "uptime": "-",
-                        "peer_ip": match.group(2),
-                        "encryption": "Unknown",
-                        "bgp": "-",
-                        "role": _format_configured_tunnel_role(
-                            tunnel_role_map.get(inst_cfg.hostname, {}).get(match.group(1))
-                        ),
+                sas = [sa for sa in inventory.sas if sa.name == name]
+                seconds = [
+                    int(sa.fields["established"])
+                    for sa in sas
+                    if str(sa.fields.get("established", "")).isdigit()
+                ]
+                algorithms = sorted(
+                    {
+                        str(c.fields.get("encr-alg"))
+                        for sa in sas
+                        for c in sa.children
+                        if c.fields.get("encr-alg")
                     }
-
-            # Attach BGP states where we know the peer IP from config
-            for tname, tinfo in tunnels.items():
-                peer_cfg_ip = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(tname)
-                if peer_cfg_ip and peer_cfg_ip in bgp_states:
-                    tinfo["bgp"] = bgp_states[peer_cfg_ip]
-
-            # Add rows to table
-            if tunnels:
-                tunnel_statuses = {
-                    name: str(info.get("status", "")).upper() for name, info in tunnels.items()
-                }
-                role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
-                    inst_cfg.hostname,
-                    list(tunnels.keys()),
-                    tunnel_statuses,
-                    bgp_states,
-                    tunnel_bgp_map,
-                    tunnel_role_map,
-                    tunnel_connection_map,
                 )
-                render_order = _configured_and_runtime_tunnel_names(
-                    inst_cfg.hostname,
-                    tunnel_role_map,
-                    tunnels,
+                peer = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(name)
+                uptime = _gateway_tunnel_uptime(
+                    bgp_peer_ip=peer,
+                    bgp_uptime=bgp_uptime,
+                    ipsec_uptime=parse_strongswan_uptime(f"{min(seconds)} seconds ago")
+                    if seconds
+                    else None,
                 )
-                for tunnel_name in render_order:
-                    info = tunnels.get(tunnel_name)
-                    if info is None:
-                        _add_configured_tunnel_without_runtime_row(
-                            table,
-                            inst_cfg.hostname,
-                            tunnel_name,
-                            tunnel_role_map,
-                            tunnel_peer_map,
-                        )
-                        continue
-
-                    status_text = info["status"]
-                    if status_text == "ESTABLISHED":
-                        status_display = "[green]Established[/green]"
-                    elif status_text == "CONNECTING":
-                        status_display = "[yellow]Connecting[/yellow]"
-                    else:
-                        status_display = f"[red]{status_text.capitalize()}[/red]"
-
-                    # Format BGP status with colors
-                    bgp_status = info.get("bgp", "-")
-                    bgp_display = format_bgp_status(bgp_status)
-
-                    peer_cfg_ip = tunnel_bgp_map.get(inst_cfg.hostname, {}).get(tunnel_name)
-                    info["uptime"] = _gateway_tunnel_uptime(
-                        bgp_peer_ip=peer_cfg_ip,
-                        bgp_uptime=bgp_uptime,
-                        ipsec_uptime=str(info.get("uptime") or "") or None,
-                    )
-
-                    table.add_row(
-                        tunnel_name,
-                        info.get("role", "-"),
-                        inst_cfg.hostname,
-                        status_display,
-                        bgp_display,
-                        info["peer_ip"],
-                        info["encryption"],
-                        info["uptime"],
-                    )
-            else:
-                # No runtime tunnels found in output
-                if _ipsec_status_reports_no_active_tunnels(output):
-                    _add_configured_no_active_tunnel_rows(
-                        table,
-                        inst_cfg.hostname,
-                        tunnel_role_map,
-                        tunnel_peer_map,
-                    )
-                else:
-                    table.add_row(
-                        "Unknown",
-                        "-",
-                        inst_cfg.hostname,
-                        "[red]PARSE ERROR[/red]",
-                        "-",
-                        "-",
-                        "-",
-                        "-",
-                    )
-                    status_notes.append(
-                        f"{inst_cfg.hostname}: gateway IPsec status output was not recognized"
-                    )
+                table.add_row(
+                    name,
+                    _format_configured_tunnel_role(
+                        tunnel_role_map.get(inst_cfg.hostname, {}).get(name)
+                    ),
+                    inst_cfg.hostname,
+                    "[green]Established[/green]"
+                    if statuses[name] == "ESTABLISHED"
+                    else "[yellow]Connecting[/yellow]"
+                    if statuses[name] == "CONNECTING"
+                    else "[red]Down[/red]",
+                    format_bgp_status(bgp_states.get(peer) if peer else None),
+                    tunnel_peer_map.get(inst_cfg.hostname, {}).get(name) or "-",
+                    ", ".join(algorithms) or "n/a",
+                    uptime,
+                )
 
         except subprocess.TimeoutExpired:
             if last_tunnel_probe_command is not None:
@@ -13740,7 +15184,7 @@ def status(
     service_table = Table(show_header=True, header_style="bold cyan")
     service_table.add_column("Gateway VM", style="white")
     service_table.add_column("Agent", style="white")
-    service_table.add_column("StrongSwan", style="white")
+    service_table.add_column("StrongSwan (VICI)", style="white")
     service_table.add_column("FRR", style="white")
     service_rows: list[tuple[str, dict[str, str]]] = []
     service_rows_by_host: dict[str, dict[str, str]] = {}
@@ -13755,18 +15199,21 @@ def status(
 
         services = {
             "nebius-vpngw-agent": "Unknown",
-            "strongswan": "Unknown",  # Check process, not systemd service
+            "strongswan": "Unknown",  # The shared completed VICI observation
             "frr": "Unknown",
         }
 
         for service_name in services:
+            if service_name == "strongswan":
+                services[service_name] = (
+                    "[green]active[/green]"
+                    if inst_cfg.hostname in vici_responsive_hosts
+                    else "[yellow]unknown[/yellow]"
+                )
+                continue
             service_probe_command: list[str] | None = None
             try:
-                # Special handling for strongSwan - check if charon daemon is running
-                if service_name == "strongswan":
-                    remote_command = "pgrep -x charon >/dev/null && echo active || echo inactive"
-                else:
-                    remote_command = f"systemctl is-active {service_name}"
+                remote_command = f"systemctl is-active {service_name}"
                 service_probe_command = _status_ssh_target_command(
                     status_ssh_context,
                     hostname=inst_cfg.hostname,
@@ -13791,8 +15238,6 @@ def status(
                     # Fetch last few lines of systemctl status for context
                     try:
                         detail_cmd = f"systemctl status {service_name} --no-pager -n 20"
-                        if service_name == "strongswan":
-                            detail_cmd = "systemctl status strongswan-starter --no-pager -n 20 || systemctl status strongswan --no-pager -n 20"
                         detail = subprocess.run(
                             _status_ssh_target_command(
                                 status_ssh_context,
@@ -14358,7 +15803,7 @@ def add_routes_local(
         "--swap-route-table",
         help=(
             "Build a fresh custom route table per selected subnet, copy preserved "
-            "non-vpngw routes, rebuild managed VPN routes from the current YAML, "
+            "external routes, rebuild exact owned VPN routes from the current YAML, "
             "validate the replacement table, then attach the subnet to the new "
             "table and print a rollback command."
         ),
@@ -14387,7 +15832,7 @@ def add_routes_local(
 
     On ordinary gateways, optional `--swap-route-table` performs a blue/green
     route-table cutover:
-    it builds a fresh custom route table, copies preserved non-vpngw routes,
+    it builds a fresh custom route table, copies preserved external routes,
     rebuilds managed VPN routes from the current YAML, validates the
     replacement, then attaches the subnet to the new table and prints a
     rollback command.
@@ -14431,7 +15876,7 @@ def add_routes_local(
             "[yellow]  • A fresh custom route table will be created for each selected workload subnet[/yellow]"
         )
         print(
-            "[yellow]  • Existing non-vpngw routes will be copied from the currently attached table[/yellow]"
+            "[yellow]  • Routes without exact product ownership will be copied from the currently attached table[/yellow]"
         )
         print(
             "[yellow]  • Managed VPN routes will be rebuilt from the current YAML and then the subnet will be reattached to the new table[/yellow]"
@@ -19706,8 +21151,8 @@ def _execute_vm_ha_artifact_standby_recovery(
         raise RuntimeError("artifact standby recovery has no exact approved artifact")
     artifact.verify_current()
     if (
-        "independent-heartbeat-v5" in artifact.capabilities
-        and "independent-heartbeat-v5"
+        "independent-heartbeat-v6" in artifact.capabilities
+        and "independent-heartbeat-v6"
         not in context.owner_record.get("controller_capabilities", [])
     ):
         raise RuntimeError(
@@ -19779,7 +21224,7 @@ def _execute_vm_ha_artifact_standby_recovery(
     )
     if preparation.outcome != "standby-ssh-ready":
         raise RuntimeError("artifact standby recovery did not reach exact standby SSH")
-    ssh.require_vm_ha_heartbeat_v5(
+    ssh.require_vm_ha_heartbeat_v6(
         context.standby_target,
         context.standby_instance,
         context.local_config,
@@ -19811,6 +21256,294 @@ def _execute_vm_ha_artifact_standby_recovery(
         region=region,
         progress_sink=progress_sink,
     )
+
+
+@dataclass(frozen=True)
+class _VMHACorrectiveContext:
+    lifecycle: VMHALifecycleState
+    instances: tuple[t.Any, ...]
+    generations: dict[str, t.Any]
+    record: dict[str, t.Any]
+    resumed: bool
+
+
+def _plan_vm_ha_corrective(
+    *,
+    state: VMHALifecycleState | None,
+    artifact: VMHAAgentArtifact,
+    plan: ResolvedDeploymentPlan,
+    observation: dict,
+    credentials: VMHACredentialSet | None,
+    local: dict,
+    targets: dict,
+    ssh_policy: SSHTrustPolicy | None,
+) -> _VMHACorrectiveContext | None:
+    from .deploy import ordinary_handoff
+    from .deploy import vm_ha_corrective as corrective
+    from .deploy.vm_ha_upgrade_recovery import (
+        ARTIFACT,
+        host_digest,
+        release_started,
+        validate_host_evidence,
+    )
+
+    if (
+        state is None
+        or state.transaction is None
+        or state.status is not VMHALifecycleStatus.ACTIVATING
+    ):
+        return None
+    tx = state.transaction
+    bindings = dict(tx.resource_bindings)
+    if (
+        state.record_version != 4
+        or ARTIFACT not in bindings
+        or "heartbeat-initial-artifact" in bindings
+        or any(key.startswith(("standby-replacement-", "passive-replacement-")) for key in bindings)
+    ):
+        # Fresh activation and passive replacement keep their existing owners.
+        return None
+    retained = corrective.authority(state)
+    resumed = retained is not None and retained["artifact"] == artifact.sha256
+    if resumed and corrective.OBSERVED_EFFECT in tx.completed_effects:
+        return None
+    if not resumed:
+        if bindings.get(ARTIFACT) == artifact.sha256 or not (
+            release_started(state) or corrective.unused_prelude(state)
+        ):
+            return None
+        corrective.validate_checkpoint(state)
+    if credentials is None or ssh_policy is None or not ssh_policy.known_hosts_sha256:
+        raise ValueError("corrective release requires exact retained credentials and SSH trust")
+    if tx.desired_state_digest != _canonical_digest(
+        _vm_ha_desired_approval_state(plan)
+    ) or not _vm_ha_observation_matches_bindings(
+        observation, bindings, credential_bindings=credentials.resource_bindings()
+    ):
+        raise ValueError("corrective release desired state or cloud identity changed")
+    validate_retained_route_scope(state, observation)
+    if len(observation.get("members", [])) != 2 or any(
+        not m.get("present") or m.get("state") != "running" for m in observation["members"]
+    ):
+        raise ValueError("corrective release requires both retained running members")
+    owner = next(
+        (
+            m.node_id
+            for m in state.members
+            if m.compute_id == bindings.get("shared-allocation-owner-compute")
+            and m.network_interface_name == bindings.get("shared-allocation-owner-nic")
+        ),
+        None,
+    )
+    if owner is None:
+        raise ValueError("corrective release has no exact current owner")
+    instances = tuple(_vm_ha_apply_order_for_owner(plan, owner))
+    if set(targets) != {m.instance_name for m in state.members} or {
+        i.hostname for i in instances
+    } != set(targets):
+        raise ValueError("corrective release member identities differ")
+    generations = {
+        i.vm_ha_node.node_id: (
+            i.vm_ha_generation.generation_id,
+            {
+                "configuration": i.vm_ha_generation.digests.configuration,
+                "static_routes": i.vm_ha_generation.digests.static_routes,
+                "bgp_policy": i.vm_ha_generation.digests.bgp_policy,
+            },
+        )
+        for i in instances
+    }
+    if resumed:
+        assert retained is not None
+        operation = retained["operation"]
+    else:
+        operation = corrective.operation_id(state, artifact.sha256)
+    ssh = SSHPush(ssh_policy=ssh_policy)
+    evidence = _upgrade_recovery_host_evidence(ssh, instances, local, targets)
+    locks = {node: item["apply_lock"] for node, item in evidence.items()}
+    expected_operations = {}
+    children = {}
+    for instance in instances:
+        node = instance.vm_ha_node.node_id
+        item = evidence[node]
+        if item["controller"].get("pending_action") is not None:
+            raise ValueError("corrective release requires terminal controller intent")
+        if (
+            item["forwarding"] != "0"
+            or not item["boot_id"]
+            or not isinstance(item["guard"], dict)
+            or item["guard"].get("guard_boot_id") != item["boot_id"]
+            or item["guard"].get("data_plane_mode") not in {"blocked", "passive"}
+        ):
+            raise ValueError("corrective release current-boot forwarding fence is absent")
+        observed = ordinary_handoff.corrective_action(
+            ssh,
+            targets[instance.hostname],
+            instance,
+            local,
+            {"action": "corrective-inspect", "operation": operation},
+        )
+        if resumed:
+            assert retained is not None
+            prior_lock = retained["locks"][node]
+            if locks[node] not in (prior_lock, {**prior_lock, "operation_id": operation}):
+                raise ValueError("corrective release lock authority changed")
+            reservation = observed["reservation"]
+            if reservation is None:
+                if observed["children"] != retained["children"][node]:
+                    raise ValueError("corrective release predecessor changed before reservation")
+            elif (
+                reservation["key"]["operation"] != operation
+                or reservation["key"]["previous_lock"] != prior_lock
+                or reservation["key"]["children"] != retained["children"][node]
+            ):
+                raise ValueError("corrective release reservation differs")
+        else:
+            if corrective.unused_prelude(state):
+                assert retained is not None
+                previous_reservation = ordinary_handoff.corrective_action(
+                    ssh,
+                    targets[instance.hostname],
+                    instance,
+                    local,
+                    {"action": "corrective-inspect", "operation": retained["operation"]},
+                )
+                if (
+                    previous_reservation["reservation"] is not None
+                    or observed["children"] != retained["children"][node]
+                    or locks[node] != retained["locks"][node]
+                    or host_digest(evidence) != retained["hosts"]
+                ):
+                    raise ValueError("corrective prelude already changed guest authority")
+                baseline = retained["children"][node]["runtime"]
+                corrective.completed_children(
+                    observed["children"], parent=baseline["parent"], artifact=baseline["artifact"]
+                )
+            else:
+                corrective.completed_children(
+                    observed["children"], parent=tx.operation_id, artifact=bindings[ARTIFACT]
+                )
+            if observed["reservation"] is not None:
+                raise ValueError("unpublished corrective reservation exists")
+        children[node] = observed["children"]
+        expected_operations[node] = locks[node]["operation_id"]
+    validate_host_evidence(state, evidence, generations, lock_operations=expected_operations)
+    if resumed:
+        assert retained is not None
+        if retained["ssh_trust"] != ssh_policy.known_hosts_sha256 or retained["owner"] != owner:
+            raise ValueError("corrective release retained authority changed")
+        record = retained
+    else:
+        record = {
+            "prior_record": state.record_sha256,
+            "prior_parent": tx.operation_id,
+            "prior_artifact": bindings[ARTIFACT],
+            "artifact": artifact.sha256,
+            "owner": owner,
+            "hosts": host_digest(evidence),
+            "children": children,
+            "locks": locks,
+            "operation": operation,
+            "ssh_trust": ssh_policy.known_hosts_sha256,
+            "cloud": _canonical_digest(observation),
+        }
+    return _VMHACorrectiveContext(state, instances, generations, record, resumed)
+
+
+def _execute_vm_ha_corrective(
+    context: _VMHACorrectiveContext,
+    *,
+    approved: _VMHAApplyPlanReport,
+    journal: VMHALifecycleJournal,
+    plan: ResolvedDeploymentPlan,
+    local: dict,
+    targets: dict,
+    credentials: VMHACredentialSet,
+    ssh_policy: SSHTrustPolicy,
+    observe: t.Callable[[], dict],
+    command_scope: dict,
+) -> VMHALifecycleState:
+    from .apply_approval import bind
+    from .deploy import ordinary_handoff
+    from .deploy import vm_ha_corrective as corrective
+    from .deploy.vm_ha_upgrade_recovery import validate_host_evidence
+
+    artifact = approved.artifact
+    assert artifact is not None
+    fresh = _plan_vm_ha_corrective(
+        state=journal.state,
+        artifact=artifact,
+        plan=plan,
+        observation=observe(),
+        credentials=credentials,
+        local=local,
+        targets=targets,
+        ssh_policy=ssh_policy,
+    )
+    if fresh is None or fresh != context:
+        raise ValueError("corrective release approval became stale")
+    record = {**context.record, "approval": approved.digest}
+    if not context.resumed:
+        state = corrective.successor(
+            journal.state,
+            record,
+            bindings={
+                "runtime-command-approval": json.dumps(
+                    bind(approved.digest, command_scope), sort_keys=True
+                ),
+                "runtime-package-manifests": json.dumps(
+                    {name: item.manifest for name, item in artifact.dependency_plans},
+                    sort_keys=True,
+                ),
+            },
+        )
+        journal.store.write_verified(state, predecessor_sha256=journal.state.record_sha256)
+        journal.state = state
+    elif record != context.record:
+        raise ValueError("corrective release original approval changed")
+    ssh = SSHPush(ssh_policy=ssh_policy)
+    packages = dict(artifact.dependency_plans)
+    for instance in context.instances:
+        assert journal.state.transaction is not None
+        if not _vm_ha_observation_matches_bindings(
+            observe(),
+            dict(journal.state.transaction.resource_bindings),
+            credential_bindings=credentials.resource_bindings(),
+        ):
+            raise ValueError("corrective release cloud authority changed before reservation")
+        node = instance.vm_ha_node.node_id
+        effect = "reserve-corrective-" + node
+        journal.begin(effect)
+        result = ordinary_handoff.corrective_action(
+            ssh,
+            targets[instance.hostname],
+            instance,
+            local,
+            {
+                "action": "corrective-reserve",
+                "operation": record["operation"],
+                "previous_lock": record["locks"][node],
+                "children": record["children"][node],
+                "package": packages[instance.hostname].envelope,
+            },
+        )
+        if result["phase"] != "quiescent":
+            raise RuntimeError("corrective reservation is not quiescent")
+        journal.complete(effect)
+    evidence = _upgrade_recovery_host_evidence(ssh, context.instances, local, targets)
+    validate_host_evidence(
+        journal.state,
+        evidence,
+        context.generations,
+        require_stopped=True,
+        lock_operations={m.node_id: record["operation"] for m in journal.state.members},
+    )
+    journal.begin("reserve-corrective-pair")
+    journal.complete(
+        "reserve-corrective-pair", resource_updates={corrective.RESERVED_KEY: record["operation"]}
+    )
+    corrective.bind_cloud_observation(journal, observe)
+    return journal.state
 
 
 @dataclass(frozen=True)
@@ -21006,6 +22739,69 @@ def _vm_ha_auto_healing_is_terminal(
     )
 
 
+def _vm_ha_auto_healing_pending_recovery_policy(
+    statuses: list[dict[str, t.Any]],
+    *,
+    desired: StandbyAutoHealing,
+    owner_node_id: str | None,
+) -> bool:
+    """Distinguish completed Compute recovery from completed policy agreement."""
+
+    if desired is not StandbyAutoHealing.ENABLED or len(statuses) != 2:
+        return False
+    records = [AutoHealingPolicyRecord.from_mapping(status.get("record")) for status in statuses]
+    if all(
+        record.desired is StandbyAutoHealing.ENABLED
+        and record.phase is AutoHealingPolicyPhase.COMMITTED
+        for record in records
+    ):
+        return False
+    transaction = _vm_ha_auto_healing_transaction(desired=desired, statuses=statuses)
+    completed = []
+    for status, record in zip(statuses, records, strict=True):
+        disabled_predecessor = bool(
+            record.desired is StandbyAutoHealing.DISABLED
+            and record.phase is AutoHealingPolicyPhase.COMMITTED
+            and record.peer_ack_digest == record.decision_digest == transaction.predecessor_digest
+        )
+        enabled_successor = bool(
+            record.desired is StandbyAutoHealing.ENABLED
+            and record.operation_id == transaction.operation_id
+            and record.predecessor_digest == transaction.predecessor_digest
+        )
+        if not (
+            (disabled_predecessor or enabled_successor)
+            and status.get("node_id") == record.node_id
+            and status.get("generation_id") == record.generation_id
+            and status.get("desired") == record.desired.value
+            and status.get("phase") == record.phase.value
+            and status.get("operation_id") == record.operation_id
+            and status.get("decision_digest") == record.decision_digest
+            and status.get("accepted_start") is False
+        ):
+            return False
+        if status.get("recovery_phase") is None and status.get("recovery") is None:
+            continue
+        recovery = AutoHealingRecoveryRecord.from_mapping(status.get("recovery"))
+        if not (
+            status.get("recovery_phase") == recovery.phase.value
+            and recovery.phase is AutoHealingRecoveryPhase.COMPLETED
+            and recovery.node_id == record.node_id == owner_node_id
+            and recovery.target_node_id == record.peer_node_id
+            and recovery.cluster_id == record.cluster_id
+            and recovery.generation_id == record.generation_id
+            and recovery.desired is desired
+            and recovery.operation_id == transaction.operation_id
+            and recovery.predecessor_digest == transaction.predecessor_digest
+            and recovery.policy_digest in {record.decision_digest, transaction.predecessor_digest}
+        ):
+            return False
+        completed.append(recovery)
+    return len(completed) == 1 and {record.node_id for record in records} == set(
+        transaction.member_node_ids
+    )
+
+
 def _exact_completed_vm_ha_auto_healing_recovery(
     statuses: list[dict[str, t.Any]],
 ) -> tuple[tuple[AutoHealingPolicyRecord, AutoHealingRecoveryRecord], ...] | None:
@@ -21296,6 +23092,58 @@ def _vm_ha_auto_healing_cleanup_noop_plan_result(
             ),
         ),
         next_action="rerun without --dry-run; this plan does not require approval",
+    )
+
+
+def _vm_ha_auto_healing_recovery_progress_is_exact(
+    *,
+    recovery_status: dict[str, t.Any],
+    recovery_owner_node_id: str,
+    transaction: _VMHAAutoHealingTransaction,
+    approval_digest: str,
+) -> bool:
+    """Recognize only the approval-bound recovery already accepted by rearm."""
+
+    if recovery_status.get("recovery_phase") not in {
+        AutoHealingRecoveryPhase.CONSUMED.value,
+        AutoHealingRecoveryPhase.COMPLETED.value,
+    }:
+        return False
+    record = AutoHealingPolicyRecord.from_mapping(recovery_status.get("record"))
+    recovery = AutoHealingRecoveryRecord.from_mapping(recovery_status.get("recovery"))
+    # Recovery precedes policy enable: a jointly acknowledged disabled policy
+    # remains authoritative until the restored peer can join the transaction.
+    terminal_disabled = bool(
+        record.phase is AutoHealingPolicyPhase.COMMITTED
+        and record.desired is StandbyAutoHealing.DISABLED
+        and record.peer_ack_digest == record.decision_digest
+        and recovery.predecessor_digest == record.decision_digest
+        and _vm_ha_auto_healing_transaction(
+            desired=StandbyAutoHealing.ENABLED, statuses=[recovery_status]
+        )
+        == transaction
+    )
+    partial_same_operation = bool(
+        record.operation_id == transaction.operation_id
+        and record.desired is StandbyAutoHealing.ENABLED
+        and record.phase in {AutoHealingPolicyPhase.PREPARED, AutoHealingPolicyPhase.COMMITTED}
+        and recovery.predecessor_digest == record.predecessor_digest
+    )
+    return bool(
+        (terminal_disabled or partial_same_operation)
+        and recovery_status.get("node_id") == record.node_id == recovery_owner_node_id
+        and recovery_status.get("generation_id") == record.generation_id
+        and recovery_status.get("recovery_phase") == recovery.phase.value
+        and {record.node_id, record.peer_node_id} == set(transaction.member_node_ids)
+        and recovery.node_id == recovery_owner_node_id
+        and recovery.target_node_id == record.peer_node_id
+        and recovery.cluster_id == record.cluster_id
+        and recovery.generation_id == record.generation_id
+        and recovery.desired is StandbyAutoHealing.ENABLED
+        and recovery.operation_id == transaction.operation_id
+        and recovery.approval_digest == approval_digest
+        and recovery.policy_digest == record.decision_digest
+        and recovery.predecessor_digest == transaction.predecessor_digest
     )
 
 
@@ -21648,9 +23496,17 @@ def vm_ha(
                 completed_recoveries: (
                     tuple[tuple[AutoHealingPolicyRecord, AutoHealingRecoveryRecord], ...] | None
                 ) = None
-                if len(policy_statuses) == 2 and any(
-                    status.get("recovery_phase") == AutoHealingRecoveryPhase.COMPLETED.value
-                    for status in policy_statuses
+                if (
+                    len(policy_statuses) == 2
+                    and any(
+                        status.get("recovery_phase") == AutoHealingRecoveryPhase.COMPLETED.value
+                        for status in policy_statuses
+                    )
+                    and not _vm_ha_auto_healing_pending_recovery_policy(
+                        policy_statuses,
+                        desired=standby_auto_healing,
+                        owner_node_id=inspection.snapshot.authority.owner_node_id,
+                    )
                 ):
                     try:
                         completed_recoveries = _exact_completed_vm_ha_auto_healing_recovery(
@@ -22043,29 +23899,11 @@ def vm_ha(
                                     if len(recovery_statuses) != 1:
                                         return False
                                     recovery_status = recovery_statuses[0]
-                                    if recovery_status.get("recovery_phase") not in {
-                                        AutoHealingRecoveryPhase.CONSUMED.value,
-                                        AutoHealingRecoveryPhase.COMPLETED.value,
-                                    }:
-                                        return False
-                                    record = AutoHealingPolicyRecord.from_mapping(
-                                        recovery_status.get("record")
-                                    )
-                                    recovery = AutoHealingRecoveryRecord.from_mapping(
-                                        recovery_status.get("recovery")
-                                    )
-                                    return bool(
-                                        recovery_status.get("node_id") == recovery_owner_node_id
-                                        and record.operation_id == transaction.operation_id
-                                        and record.desired is StandbyAutoHealing.ENABLED
-                                        and recovery.node_id == recovery_owner_node_id
-                                        and recovery.target_node_id in transaction.member_node_ids
-                                        and recovery.target_node_id != recovery_owner_node_id
-                                        and recovery.desired is StandbyAutoHealing.ENABLED
-                                        and recovery.operation_id == transaction.operation_id
-                                        and recovery.approval_digest == approval_digest
-                                        and recovery.policy_digest == record.decision_digest
-                                        and recovery.predecessor_digest == record.predecessor_digest
+                                    return _vm_ha_auto_healing_recovery_progress_is_exact(
+                                        recovery_status=recovery_status,
+                                        recovery_owner_node_id=recovery_owner_node_id,
+                                        transaction=transaction,
+                                        approval_digest=approval_digest,
                                     )
 
                                 _prepare_vm_ha_planned_target(
@@ -22150,13 +23988,20 @@ def vm_ha(
                                 initial_statuses=current_statuses,
                                 authority_guard=require_policy_authority,
                             )
-                            if recovery_owner_node_id is not None:
+                            if recovery_owner_node_id is not None or any(
+                                status.get("recovery_phase")
+                                == AutoHealingRecoveryPhase.COMPLETED.value
+                                for status in current_statuses
+                            ):
                                 exact_recoveries = _exact_completed_vm_ha_auto_healing_recovery(
                                     terminal_statuses
                                 )
-                                if exact_recoveries is None or not any(
-                                    record.node_id == recovery_owner_node_id
-                                    for record, _ in exact_recoveries
+                                if exact_recoveries is None or (
+                                    recovery_owner_node_id is not None
+                                    and not any(
+                                        record.node_id == recovery_owner_node_id
+                                        for record, _ in exact_recoveries
+                                    )
                                 ):
                                     raise RuntimeError(
                                         "completed standby recovery owner changed before cleanup"

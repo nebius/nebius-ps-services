@@ -10,6 +10,8 @@ import pytest
 
 from nebius_vpngw.deploy.ordinary_handoff import Handoff
 
+pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
+
 
 def test_handoff_release_requires_exact_locked_passive_status():
     expected = {"cluster_id": "cluster", "node_id": "node", "generation_id": "generation"}
@@ -193,8 +195,7 @@ def test_package_install_is_journal_bound_after_admission(
         events.append("predecessor")
         return predecessor
 
-    def apt(args, **kwargs):
-        assert args == ["apt-get", "install", "-y", "nftables"]
+    def package_install():
         assert guest.remote.OPERATION is operation
         assert ops.Journal().read()["phase"] == "install"
         assert "locked" in events and "predecessor" in events
@@ -219,7 +220,132 @@ def test_package_install_is_journal_bound_after_admission(
     )
     monkeypatch.setattr(guest, "package_observation", predecessor_read)
     monkeypatch.setattr(guest.repair, "verified_file", lambda *args: b"")
-    monkeypatch.setattr(guest.remote, "command", apt)
+    monkeypatch.setattr(guest.remote.migration, "install", package_install)
     with pytest.raises(AptFailed):
         holder.prepare({"plan_digest": ops.digest(plan)})
     assert guest.remote.OPERATION is None
+
+
+@pytest.mark.parametrize(
+    "layout", ["absent", "partial", "unsafe", "symlink", "checkpoint", "status", "dangling-marker"]
+)
+def test_fresh_guarded_packages_own_lock_layout_before_install(
+    monkeypatch, tmp_path, runtime_migration_guest, ordinary_operation_guest, layout
+):
+    """A brand new VM has no controller or mTLS state before package preparation."""
+    import fcntl
+    import os
+    from pathlib import Path
+
+    from nebius_vpngw import runtime_migration as migration
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    class InstallReached(Exception):
+        pass
+
+    state = tmp_path / "ha"
+    if layout != "absent":
+        state.mkdir(mode=0o755)
+    if layout == "unsafe":
+        state.chmod(0o777)
+    elif layout == "symlink":
+        target = tmp_path / "unrelated"
+        target.mkdir(mode=0o700)
+        (state / "mtls").symlink_to(target, target_is_directory=True)
+    elif layout == "checkpoint":
+        (state / "controller-checkpoint.json").write_bytes(b"retained checkpoint")
+    elif layout == "status":
+        (state / "status.json").write_bytes(b"retained status")
+    marker = tmp_path / "marker"
+    if layout == "dangling-marker":
+        marker.symlink_to(tmp_path / "absent-marker-target")
+    manifest = dict(
+        runtime_plan=runtime_migration_guest,
+        ha_parent="a" * 64,
+        config_sha256="b" * 64,
+        package_identity="c" * 64,
+    )
+    staged = migration.stage(runtime_migration_guest) / "payload"
+    migration.write(staged / "manifest.json", json.dumps(manifest).encode())
+    monkeypatch.setattr(guest, "MARKER", marker)
+    monkeypatch.setattr(guest.repair, "STATE", state)
+    monkeypatch.setattr(guest.remote, "LOCK", tmp_path / "deployment.lock")
+    monkeypatch.setattr(guest, "package_observation", lambda _: {})
+    monkeypatch.setattr(guest.ops, "install_startup_guard", lambda **_: None)
+    monkeypatch.setattr(guest.ops, "alive", lambda _: True)
+    observed_stops = []
+    monkeypatch.setattr(ordinary_operation_guest, "unit", lambda *_: {"missing": True})
+
+    def stopped(_manager, name):
+        observed_stops.append(name)
+        return True
+
+    monkeypatch.setattr(ordinary_operation_guest, "stopped", stopped)
+    original_locks = guest.repair.writer_locks
+    monkeypatch.setattr(
+        guest.repair, "writer_locks", lambda **kw: original_locks(state_dir=state, **kw)
+    )
+    routing = tmp_path / "routing.lock"
+    monkeypatch.setattr(
+        guest.repair,
+        "Path",
+        lambda value: routing if str(value) == "/run/nebius-vpngw/fix-routes.lock" else Path(value),
+    )
+
+    def install():
+        assert set((*guest.ops.HA_WRITERS, *guest.ops.MANAGEMENT)).issubset(observed_stops)
+        assert migration.state()["phase"] == "inhibited"
+        assert guest.ops.Journal().read()["phase"] == "install"
+        for path in (state / "rearm.lock", state / "mtls/writer.lock", routing):
+            fd = os.open(path, os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+        assert not marker.exists()
+        assert not (state / "controller-checkpoint.json").exists()
+        assert not (state / "status.json").exists()
+        assert not (state / "mtls/active.json").exists()
+        assert not list((state / "mtls/identities").iterdir())
+        raise InstallReached
+
+    monkeypatch.setattr(migration, "install", install)
+    if layout in {"absent", "partial"}:
+        with pytest.raises(InstallReached):
+            guest.prepare_guarded({"package": {"desired": manifest, "predecessor": {}}})
+        assert (state / "mtls").stat().st_mode & 0o777 == 0o700
+    else:
+        with pytest.raises((RuntimeError, ValueError)):
+            guest.prepare_guarded({"package": {"desired": manifest, "predecessor": {}}})
+        if layout == "symlink":
+            assert not list(target.iterdir())
+        if layout == "checkpoint":
+            assert (state / "controller-checkpoint.json").read_bytes() == b"retained checkpoint"
+    assert guest.remote.OPERATION is None
+
+
+def test_streamed_unstarted_lock_layout_without_installed_package(tmp_path):
+    import subprocess
+    import sys
+
+    from nebius_vpngw.handoff_bootstrap import streamed_source
+
+    code = (
+        streamed_source()
+        + "\n"
+        + (
+            "from pathlib import Path\n"
+            "import _vpngw_handoff_remote as guest\n"
+            f"guest.repair.STATE=Path({str(tmp_path / 'ha')!r})\n"
+            f"guest.MARKER=Path({str(tmp_path / 'marker')!r})\n"
+            "guest.initialize_unstarted_writer_layout()\n"
+            "assert (guest.repair.STATE/'mtls/writer.lock').is_file()\n"
+            "assert not (guest.repair.STATE/'controller-checkpoint.json').exists()\n"
+            "assert not (guest.repair.STATE/'mtls/active.json').exists()\n"
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-"], input=code, capture_output=True, text=True, timeout=15
+    )
+    assert result.returncode == 0, result.stderr

@@ -74,7 +74,7 @@ Only the coordinator can create or replace that binding. Session observation is
 read-only and never starts work. A new session uses explicit `continue` after
 writer quiescence. Obsolete schemas fail without conversion or deletion.
 
-Execution coordinators use `workflow/execution-coordinator-v2`, state version 1.
+Execution coordinators use `workflow/execution-coordinator-v3`, state version 1.
 Waves use ready, active and admitted task IDs with one frozen base and a full-wave
 integration barrier. Assignments and results bind immutable basis and plan
 identities. Termination permits slot reuse only after independent coordinator
@@ -177,7 +177,7 @@ writes, so inspect retained artifacts before any retry.
   },
   "repair": null,
   "execution": {
-    "schema": "workflow/execution-coordinator-v2",
+    "schema": "workflow/execution-coordinator-v3",
     "execution_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
@@ -241,10 +241,10 @@ while the pending projection becomes empty. Other pending invalidations reject
 recovery. It preserves budgets. This exception cannot
 clear a code-repair cursor, a policy/human block, or a failed verifier trial.
 
-Shared `workflow/execution-coordinator-v2` binds the selected folder through
+Shared `workflow/execution-coordinator-v3` binds the selected folder through
 `git_root`, `selected_project_root`, `project_scope` and `scope_cwd`.
-`workflow/execution-wave-v2` owns ordered ready, active and admitted task IDs;
-there is no batch cursor. Shared task/assignment/result v1 records carry the
+`workflow/execution-wave-v3` owns ordered ready, active and admitted task IDs;
+there is no batch cursor. Shared task v3, assignment v2 and result v4 records carry the
 immutable basis digest, native session history, attempt, direct heartbeat,
 claims, structured evidence and specification gaps. The coordinator records
 exact termination before result admission or slot reuse. Recovery needs an
@@ -325,7 +325,7 @@ without conversation history.
 
 The `execution` member above is an informational checkpoint projection. The
 execution owner's authoritative state is `execution/<FEAT-ID>/coordinator.json`,
-using `workflow/execution-coordinator-v2` with `state_version: 1`. Retired
+using `workflow/execution-coordinator-v3` with `state_version: 1`. Retired
 `agentic-sdlc/execution-coordinator-v1` through
 `agentic-sdlc/execution-coordinator-v7` records stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate their
@@ -537,3 +537,7 @@ active run it must still block secret-bearing payloads, dangerous shell
 patterns, and guarded Git or GitHub actions without valid short-lived
 authorization. Use the explicit hook installer option for deliberate runtime
 sync instead of editing installed hook artifacts directly.
+
+The shared [worker wave contract](../../worktree/references/worker-waves.md)
+freezes worker/wave/physical-worktree limits, admits independently verified
+no-change results, and requires producer-owned combined-wave validation receipts.

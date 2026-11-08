@@ -93,6 +93,10 @@ def ingest_result(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
         else:
             if state["status"] != "running":
                 raise WorkflowError("RESULT_INVALID", "only a running worker can return a new result")
+            if payload["status"] == "verified_no_change":
+                guard = engine._worker_guard_status(assignment, state, clock=engine._system_clock)
+                if guard["status"] != "ACTIVE":
+                    raise WorkflowError(str(guard["status"]), "no-change proposal exceeded its worker budget")
             wave = read(engine.wave_path(run_dir, execution_id, wave_id))
             if task_id not in wave["active_task_ids"]:
                 raise WorkflowError("RESULT_INVALID", "worker result has no active slot")
@@ -115,12 +119,12 @@ def ingest_result(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
                 "worker_status": receipt["worker_result"]["status"], "attempt": receipt["attempt"]}
 
 
-def implemented_result(assignment: dict, state: dict, supplied_path: Path) -> dict:
+def successful_result(assignment: dict, state: dict, supplied_path: Path) -> dict:
     expected = receipt_path(assignment, state["attempt"])
     if supplied_path.absolute() != expected:
         raise WorkflowError("RESULT_INVALID", "task finish requires its canonical current result receipt")
     _, receipt = read_receipt(assignment, state)
-    if receipt["worker_result"]["status"] != "implemented":
+    if receipt["worker_result"]["status"] not in {"implemented", "verified_no_change"}:
         raise WorkflowError("WORKER_RESULT_INCOMPLETE", "blocked or replan work cannot finish")
     return receipt
 

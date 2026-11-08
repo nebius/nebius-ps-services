@@ -24,7 +24,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest):
+def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_migration_guest):
     root = tmp_path / "guest"
     root.mkdir()
     config = root / "resolved.yaml"
@@ -263,16 +263,12 @@ def run_protocol(monkeypatch, requests):
 
 
 def test_failed_system_package_install_retains_unresolved_handoff(migration_guest, monkeypatch):
-    original = ordinary_remote.command
+    def fail_install():
+        assert ordinary_remote.OPERATION is not None
+        assert ops.Journal().read()["phase"] == "install"
+        raise RuntimeError("injected system package failure")
 
-    def fail_apt(args, **kwargs):
-        if args[0] == "apt-get":
-            assert ordinary_remote.OPERATION is not None
-            assert ops.Journal().read()["phase"] == "install"
-            raise RuntimeError("injected system package failure")
-        return original(args, **kwargs)
-
-    monkeypatch.setattr(ordinary_remote, "command", fail_apt)
+    monkeypatch.setattr(ordinary_remote.migration, "install", fail_install)
     with pytest.raises(RuntimeError, match="injected system package failure"):
         run_protocol(monkeypatch, requests(migration_guest))
     assert ops.Journal().read()["state"] == "unresolved"

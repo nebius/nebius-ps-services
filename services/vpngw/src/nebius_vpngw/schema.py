@@ -1146,23 +1146,33 @@ class GatewayGroup(BaseModel):
             "list maps to NICs)"
         ),
     )
-    initial_security_group_ids: list[str] = Field(
+    security_group_ids: list[str] = Field(
         default_factory=list,
         max_length=8,
-        description="Customer-owned Security Groups attached only when creating new gateways",
+        description="Desired customer-owned Security Groups for every gateway NIC; empty uses the network default",
     )
 
-    @field_validator("initial_security_group_ids", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def validate_initial_security_groups(cls, value: object) -> list[str]:
+    def reject_initial_security_groups(cls, value: object) -> object:
+        if isinstance(value, dict) and "initial_security_group_ids" in value:
+            raise ValueError(
+                "gateway_group.initial_security_group_ids was renamed to "
+                "gateway_group.security_group_ids; apply now reconciles existing attachments"
+            )
+        return value
+
+    @field_validator("security_group_ids", mode="before")
+    @classmethod
+    def validate_security_groups(cls, value: object) -> list[str]:
         if not isinstance(value, list) or any(
             not isinstance(item, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]{0,127}", item)
             for item in value
         ):
-            raise ValueError("initial_security_group_ids must be a list of resource IDs")
+            raise ValueError("security_group_ids must be a list of resource IDs")
         if len(set(value)) != len(value):
-            raise ValueError("initial_security_group_ids must not contain duplicates")
-        return value
+            raise ValueError("security_group_ids must not contain duplicates")
+        return sorted(value)
 
     network_id: str | None = Field(
         default=None,

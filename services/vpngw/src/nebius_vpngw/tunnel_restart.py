@@ -132,14 +132,11 @@ class Restart:
         self.sleep(min(seconds, remaining))
 
     def sas(self, end: float, name: str | None = None) -> str:
-        args = ["swanctl", "--list-sas", "--raw"]
-        if name is not None:
-            args += ["--ike", name]
-        value = self.run(args, end, 5)
-        if value.returncode:
-            raise ValueError("IPsec observation unavailable")
-        observation.parse_sas(value.stdout)
-        return str(value.stdout)
+        value = observation.snapshot(
+            max(0.0, min(5, end - self.clock(), self.deadline - self.clock()))
+        )
+        value.require_complete()
+        return value.json()
 
     def wait(self, target: dict[str, Any], end: float, *, terminated: bool = False) -> bool:
         while self.clock() < min(end, self.deadline):
@@ -175,21 +172,31 @@ class Restart:
 
     def restart_ipsec(self, target: dict[str, Any]) -> bool:
         name = target["name"]
-        if self.run(["swanctl", "--load-all"], self.end(15), 15).returncode:
+        # Unload first so daemon retries and traps cannot recreate an SA while
+        # the exact administrative restart is proving teardown.
+        try:
+            observation.unload_connection(name, max(0.001, min(5, self.deadline - self.clock())))
+        except Exception:
             return False
         termination = self.end(20)
-        try:
-            self.run(["swanctl", "--terminate", "--ike", name, "--timeout", "15"], termination, 15)
-        except (TimeoutError, subprocess.TimeoutExpired):
-            pass
+        for sa_name, sa in observation.parse_sas(self.sas(termination)):
+            if sa_name != name:
+                continue
+            try:
+                self.run(
+                    ["swanctl", "--terminate", "--ike-id", sa["uniqueid"], "--force"],
+                    termination,
+                    15,
+                )
+            except (TimeoutError, subprocess.TimeoutExpired):
+                pass
         if not self.wait(target, termination, terminated=True):
             return False
-        self.pause(2, self.end(2))
+        # The canonical eligible configuration restores trap|start authority.
+        # Its native start action is the sole initiation; do not submit a second.
         try:
-            # Native timeout detaches; it never authorizes a second submission.
-            self.run(
-                ["swanctl", "--initiate", "--child", name, "--timeout", "20"], self.end(25), 25
-            )
+            if self.run(["swanctl", "--load-conns"], self.end(15), 15).returncode:
+                return False
         except (TimeoutError, subprocess.TimeoutExpired):
             pass
         return self.wait(target, self.end(60))
@@ -295,9 +302,10 @@ def streamed_source() -> str:
     import base64
 
     root = Path(__file__).parent
-    result = ops.streamed_bootstrap() + "\nimport base64,sys,types\n"
+    from .observation_bundle import streamed_bootstrap
+
+    result = ops.streamed_bootstrap() + "\n" + streamed_bootstrap()
     for name, relative in (
-        ("_vpngw_ipsec_observation", "ipsec_observation.py"),
         ("_vpngw_tunnel_iterator", "agent/tunnel_iterator.py"),
         ("_vpngw_tunnel_restart", "tunnel_restart.py"),
     ):

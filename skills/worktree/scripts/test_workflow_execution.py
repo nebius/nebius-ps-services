@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from test_workflow_fixture import complete_wave, prepare_execution, replan_future, seed_validation  # noqa: E402
 import workflow_execution as execution_core  # noqa: E402
 import workflow_interop as execution_interop  # noqa: E402
 from workflow_security import contains_sensitive  # noqa: E402
@@ -33,7 +34,7 @@ from workflow_execution import (  # noqa: E402
     assignment_path,
     append_journal,
     build_dependency_waves,
-    complete_wave,
+    complete_wave as product_complete_wave,
     coordinator_path,
     finish_task as product_finish_task,
     heartbeat_task,
@@ -41,11 +42,9 @@ from workflow_execution import (  # noqa: E402
     journal_path,
     local_branch_exists,
     parse_locked_plan,
-    prepare_execution,
     prepare_wave,
     promote_feature,
     recover_task as product_recover_task,
-    replan_future,
     requeue_task,
     seal_feature,
     seal_tdd_base,
@@ -309,6 +308,15 @@ def git(cwd: Path, *args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
+def capacity_fixture(run_dir, slots):
+    from workflow_capacity import _host
+    run = json.loads((run_dir / "run.json").read_text())
+    return {"schema": "workflow/host-capacity-v2", "native_slots": slots,
+            "host_sha256": _host(), "coordinator_session_sha256": run["coordinator_session_sha256"],
+            "run_id": run_dir.name, "observed_at": datetime.now(timezone.utc).isoformat(),
+            "evidence_sha256": "a" * 64, "semantics": "total-workflow-slots"}
+
+
 def write_private(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text(
@@ -338,8 +346,7 @@ def seed_objective_impact(run_dir: Path, selected_project: Path) -> None:
         "coordinator_session_sha256": session_hash("deterministic-coordinator"),
         "status": "accepted", "fence": None,
     })
-    write_private(run_dir / "host-capacity.json", {"schema": "workflow/host-capacity-v1",
-                  "native_slots": 2, "evidence": "deterministic fixture; not native execution proof"})
+    write_private(run_dir / "host-capacity.json", capacity_fixture(run_dir, 2))
     requirements_bytes = (selected_project / "docs" / "requirements.md").read_bytes()
     design_bytes = (selected_project / "docs" / "design.md").read_bytes()
     impact_receipt = {
@@ -384,7 +391,7 @@ def seed_objective_impact(run_dir: Path, selected_project: Path) -> None:
 
 def finish_task(run_dir, execution_id, wave_id, task_id, validation, review, message, *,
                 summary, decisions=(), open_risks=(),
-                coordinator_identity="deterministic-coordinator", **kwargs):
+                coordinator_identity="deterministic-coordinator", status="implemented", **kwargs):
     """Synthetic native observation/result fixture; never evidence of live execution."""
     from workflow_worker_results import ingest_result
     assignment = json.loads(assignment_path(run_dir, execution_id, wave_id, task_id).read_text())
@@ -398,10 +405,13 @@ def finish_task(run_dir, execution_id, wave_id, task_id, validation, review, mes
         "native_handle": "deterministic-test-stub", "observation": "synthetic fixture; not native proof",
         "observer_session_hash": run["coordinator_session_sha256"]})
     payload = {"task_id": task_id, "assignment_digest": assignment["assignment_digest"],
-               "status": "implemented", "summary": summary, "decisions": list(decisions),
+               "status": status, "summary": summary, "decisions": list(decisions),
                "open_risks": list(open_risks), "spec_gaps": [], "validation": validation, "review": review}
     result = execution_core._impact("synthetic native result ingestion", ingest_result,
         run_dir, execution_id, wave_id, task_id, payload, termination, coordinator_identity)
+    if status == "verified_no_change":
+        from workflow_validation import produce
+        produce(run_dir, execution_id, wave_id, task_id, session=coordinator_identity)
     value = product_finish_task(run_dir, execution_id, wave_id, task_id,
         Path(result["receipt_path"]), message, termination=termination,
         session_identity=coordinator_identity, **kwargs)
@@ -568,6 +578,53 @@ from test_worker_result_cases import WorkerResultContractCases  # noqa: E402
 
 
 class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
+    def test_all_no_change_wave_has_no_commits_and_unblocks_dependencies_after_validation(self):
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test: base")
+        assignments = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        original = assignments[0]["base_head"]
+        for assignment in assignments:
+            self.start_assignment(assignment, "WAVE-001")
+            result = finish_task(self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+                "already accepted", "review passed", "", summary="Existing behavior passes",
+                status="verified_no_change")
+            self.assertIsNone(result["commit"])
+            self.assertEqual(result["head"], original)
+        integrated = integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        self.assertEqual(integrated["integration_head"], original)
+        with self.assertRaises(ExecutionError):
+            prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "independent checks", session='deterministic-coordinator')
+        self.assertEqual(prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]["base_head"], original)
+
+    def test_no_change_rejects_dirty_tree_and_failed_independent_check(self):
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test: base")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.start_assignment(assignment, "WAVE-001")
+        dirty = Path(assignment["worktree"]) / "src/a.py"
+        dirty.parent.mkdir(exist_ok=True)
+        dirty.write_text("VALUE = 4\n")
+        with self.assertRaisesRegex(Exception, "exact clean base"):
+            finish_task(self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+                "already accepted", "review passed", "", summary="Existing behavior passes",
+                status="verified_no_change")
+        self.assertFalse(execution_core.result_path(self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"]).exists())
+
+    def test_wave_completion_rejects_free_form_success(self):
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test: base")
+        for assignment in prepare_wave(self.run_dir, "FEAT-001", "WAVE-001"):
+            self.start_assignment(assignment, "WAVE-001")
+            finish_task(self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+                "already accepted", "review passed", "", summary="Existing behavior passes",
+                status="verified_no_change")
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
+        with self.assertRaises(ExecutionError):
+            product_complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "tests passed")
+        wave = json.loads(wave_path(self.run_dir, "FEAT-001", "WAVE-001").read_text())
+        self.assertEqual(wave["status"], "integrated")
+
     def integrated_failure_fixture(self):
         self.complete_first_wave()
         assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
@@ -602,7 +659,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         self.assertFalse(Path(assignment["worktree"]).exists())
         self.assertEqual(execution_core.fail_wave(*fail_args), failed)
         with self.assertRaises(ExecutionError):
-            complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "pretend passed")
+            complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "pretend passed", session='deterministic-coordinator')
         with self.assertRaises(ExecutionError):
             seal_feature(self.run_dir, "FEAT-001", "cannot pass", "feat: blocked")
         addition = """
@@ -640,7 +697,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
                         "evidence_reference": "evidence/original-oracle.md",
                     })
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-003")
-        complete_wave(self.run_dir, "FEAT-001", "WAVE-003", "combined oracle passed at corrected tip")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-003", "combined oracle passed at corrected tip", session='deterministic-coordinator')
         resolved_path = wave_path(self.run_dir, "FEAT-001", "WAVE-002")
         resolved = json.loads(resolved_path.read_text())
         self.assertEqual(resolved["status"], "failed")
@@ -648,7 +705,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         self.assertEqual(resolved["integration_head"], integrated["integration_head"])
         coordinator_before = coordinator_path(self.run_dir, "FEAT-001").read_bytes()
         execution_core.fail_wave(*fail_args)
-        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "old success replay")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "old success replay", session='deterministic-coordinator')
         self.assertEqual(coordinator_path(self.run_dir, "FEAT-001").read_bytes(), coordinator_before)
         corrupted = json.loads(resolved_path.read_text())
         corrupted["failure_resolution"]["integration_head"] = "f" * 40
@@ -764,14 +821,15 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         )
 
     def test_four_retained_worktrees_then_next_batch_uses_validated_tip(self):
+        from workflow_capacity import configure
+        configure(self.run_dir, 4, 4, 8, "deterministic-coordinator")
         blocks = []
         for i, name in enumerate("abcde", 1):
             blocks.append(PLAN.split("### TASK-001", 1)[1].split("### TASK-002", 1)[0]
                           .replace("src/a.py", f"src/{name}.py").replace("code:a", f"code:{name}"))
         self.plan.write_text("# FEAT-001 Plan v1\n\n## Task Graph\n\n" + "".join(
             f"### TASK-{i:03d}" + body for i, body in enumerate(blocks, 1)))
-        write_private(self.run_dir / "host-capacity.json", {"schema": "workflow/host-capacity-v1",
-                      "native_slots": 4, "evidence": "fixture capacity; not native worker qualification"})
+        write_private(self.run_dir / "host-capacity.json", capacity_fixture(self.run_dir, 4))
         prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, capacity=4)
         seal_tdd_base(self.run_dir, "FEAT-001", "test: frozen batch base")
         first = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")
@@ -785,7 +843,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             finish_task(self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
                         "test passed", "review passed", "feat: batch task", summary="completed")
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
-        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed", session='deterministic-coordinator')
         second = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")
         self.assertEqual(len(second), 1)
         self.assertTrue(all(not Path(a["worktree"]).exists() for a in first))
@@ -845,7 +903,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
                 summary=f"completed {assignment['task_id']}",
             )
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
-        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed", session='deterministic-coordinator')
 
     def append_objective_revision(self) -> None:
         from workflow_objectives import _revision
@@ -951,7 +1009,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         with self.assertRaises(ExecutionError) as completion:
             complete_wave(
                 self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed"
-            )
+            , session='deterministic-coordinator')
         self.assertEqual(completion.exception.code, "OBJECTIVE_IMPACT_REQUIRED")
         wave = json.loads(
             wave_path(self.run_dir, "FEAT-001", "WAVE-001").read_text(
@@ -1934,7 +1992,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
 
         def fail_committed_state_once(path: Path, value: dict) -> None:
             nonlocal failed
-            if path == task_file and value.get("status") == "committed" and not failed:
+            if path == task_file and value.get("status") == "finished" and not failed:
                 failed = True
                 raise OSError("simulated task state publication crash")
             original_write(path, value)
@@ -1975,7 +2033,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         self.assertEqual(result_file.read_bytes(), before)
         self.assertEqual(recovered["commit"], git(worker, "rev-parse", "HEAD"))
         persisted = json.loads(task_file.read_text(encoding="utf-8"))
-        self.assertEqual(persisted["status"], "committed")
+        self.assertEqual(persisted["status"], "finished")
         self.assertEqual(persisted["result_digest"], recovered["result_digest"])
 
     def test_interrupted_worker_recovery_accepts_clean_base(self) -> None:
@@ -2226,7 +2284,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
         complete_wave(
             self.run_dir, "FEAT-001", "WAVE-002", "combined tests passed"
-        )
+        , session='deterministic-coordinator')
         completed = json.loads(
             (self.run_dir / "execution/FEAT-001/coordinator.json").read_text()
         )
@@ -2363,8 +2421,8 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
                 summary=f"completed {assignment['task_id']}",
             )
         integrated = integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
-        self.assertEqual(integrated["merged_task_ids"], ["TASK-001", "TASK-002"])
-        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+        self.assertEqual(integrated["integrated_task_ids"], ["TASK-001", "TASK-002"])
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed", session='deterministic-coordinator')
 
         second_wave = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")
         assignment = second_wave[0]
@@ -2393,7 +2451,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             summary="completed TASK-003",
         )
         integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
-        complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "combined tests passed")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "combined tests passed", session='deterministic-coordinator')
 
         self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.base_head)
         (integration / "docs").mkdir(exist_ok=True)
@@ -2655,6 +2713,9 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         self.assertEqual(git(worker, "branch", "--show-current"), branch_name)
 
     def test_prepare_recovers_branch_created_before_integration_worktree(self) -> None:
+        seed_validation(self.plan)
+        from workflow_capacity import policy
+        limits = policy(self.run_dir, worker_limit=2, initialize=True)
         common_raw = git(self.project, "rev-parse", "--git-common-dir")
         common = Path(common_raw)
         if not common.is_absolute():
@@ -2667,7 +2728,9 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         state_path.write_text(
             json.dumps(
                 {
-                    "schema": "workflow/execution-coordinator-v2",
+                    "schema": "workflow/execution-coordinator-v3",
+                    "policy_sha256": execution_core.canonical_digest(limits),
+                    "validation_plan_sha256": execution_core.canonical_digest(json.loads(self.plan.with_suffix(".md.validation.json").read_text())),
                     "state_version": 1,
                     "owner": "agentic-sdlc",
                     "coordinator_session_sha256": hashlib.sha256(b"deterministic-coordinator").hexdigest(),
@@ -2734,7 +2797,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         integration = Path(coordinator["integration_worktree"])
         git(integration, "merge", "--no-ff", "--no-edit", assignments[0]["branch"])
         integrated = integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
-        self.assertEqual(integrated["merged_task_ids"], ["TASK-001", "TASK-002"])
+        self.assertEqual(integrated["integrated_task_ids"], ["TASK-001", "TASK-002"])
 
     def test_promote_recovers_fast_forward_completed_before_state_write(self) -> None:
         coordinator = self.prepare()
@@ -2803,7 +2866,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
                     summary=f"completed {assignment['task_id']}",
                 )
             integrate_wave(self.run_dir, "FEAT-001", wave_id)
-            complete_wave(self.run_dir, "FEAT-001", wave_id, "combined tests passed")
+            complete_wave(self.run_dir, "FEAT-001", wave_id, "combined tests passed", session='deterministic-coordinator')
         seal_feature(self.run_dir, "FEAT-001", "all evidence passed", "feat: seal")
         (self.project / "dirty.txt").write_text("dirty\n", encoding="utf-8")
         with self.assertRaises(ExecutionError) as raised:
@@ -2872,7 +2935,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         state_path.write_text(json.dumps(state), encoding="utf-8")
         completed = complete_wave(
             self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed"
-        )
+        , session='deterministic-coordinator')
         self.assertEqual(completed["status"], "done")
 
     def test_cleanup_retains_branch_when_registered_worker_path_is_missing(
@@ -2902,7 +2965,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         missing.rename(missing.with_name(f"{missing.name}-moved"))
 
         with self.assertRaises(ExecutionError) as raised:
-            complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+            complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "combined tests passed", session='deterministic-coordinator')
         self.assertEqual(raised.exception.code, "CLEANUP_BLOCKED")
         self.assertTrue(local_branch_exists(self.project, assignments[0]["branch"]))
         self.assertIn(missing.resolve(), worktrees(Path(coordinator["project_root"])))
@@ -3024,6 +3087,141 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
                     self.assertEqual(raised.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
 
 
+class SealMessageContractTests(unittest.TestCase):
+    """Exercise the real commit boundary; only coordinator publication is interrupted."""
+
+    def exercise(self, phase, *, cleanup="strip", interrupt="after", hook="unchanged"):
+        fixture = GitLifecycleTests(
+            "test_tdd_seal_recovers_commit_completed_before_state_write"
+        )
+        fixture.setUp()
+        try:
+            state = fixture.prepare()
+            integration = Path(state["integration_worktree"])
+            state_path = coordinator_path(fixture.run_dir, "FEAT-001")
+            if phase == "feature":
+                state["status"] = "integrated"
+                write_private(state_path, state)
+            before_state = state_path.read_bytes()
+            before_head = git(integration, "rev-parse", "HEAD")
+            message = "\n  test(FEAT-001): café 日本語  \n\n\n  indented body\t\n# retained comment\n\n"
+            expected = "  test(FEAT-001): café 日本語\n\n  indented body\n# retained comment\n".encode()
+            git(integration, "config", "commit.cleanup", cleanup)
+            git(integration, "config", "i18n.logOutputEncoding", "ISO-8859-1")
+            (integration / "seal-evidence.md").write_text("ready\n", encoding="utf-8")
+            hooks = fixture.root / "seal-hooks"
+            hooks.mkdir()
+            git(integration, "config", "core.hooksPath", str(hooks))
+            hook_path = hooks / "commit-msg"
+            hook_path.write_text(
+                '#!/bin/sh\nprintf "\\nChanged substantive body.\\n" >> "$1"\n'
+                if hook == "rewrite"
+                else "#!/bin/sh\nexit 0\n",
+                encoding="utf-8",
+            )
+            hook_path.chmod(0o700)
+
+            def action():
+                if phase == "tdd":
+                    return seal_tdd_base(fixture.run_dir, "FEAT-001", message)
+                return seal_feature(
+                    fixture.run_dir, "FEAT-001", "final evidence passed", message
+                )
+
+            if hook == "rewrite":
+                for _ in range(2):
+                    with self.assertRaisesRegex(
+                        ExecutionError, "seal message"
+                    ) as error:
+                        action()
+                    self.assertEqual(error.exception.code, "WORKTREE_CONFLICT")
+                    self.assertEqual(state_path.read_bytes(), before_state)
+                self.assertEqual(
+                    git(integration, "rev-list", "--count", f"{before_head}..HEAD"), "1"
+                )
+                rows = [
+                    json.loads(line)
+                    for line in journal_path(fixture.run_dir, "FEAT-001", "coordinator")
+                    .read_text()
+                    .splitlines()
+                ]
+                self.assertFalse(
+                    any(row.get("event") == f"{phase}_sealed" for row in rows)
+                )
+                return
+            if interrupt == "after":
+                with mock.patch.object(
+                    execution_core,
+                    "_save_coordinator",
+                    side_effect=RuntimeError("publication interrupted"),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "publication interrupted"
+                    ):
+                        action()
+                self.assertEqual(state_path.read_bytes(), before_state)
+                committed = git(integration, "rev-parse", "HEAD")
+                self.assertNotEqual(committed, before_head)
+            elif interrupt == "before":
+                original_git = execution_core.git
+
+                def before_commit(cwd, args, label, **kwargs):
+                    if args[0] == "commit":
+                        raise ExecutionError(
+                            "GIT_OPERATION_FAILED", "commit interrupted"
+                        )
+                    return original_git(cwd, args, label, **kwargs)
+
+                with mock.patch.object(
+                    execution_core, "git", side_effect=before_commit
+                ):
+                    with self.assertRaisesRegex(ExecutionError, "commit interrupted"):
+                        action()
+                self.assertEqual(git(integration, "rev-parse", "HEAD"), before_head)
+                committed = None
+            else:
+                committed = None
+            recovered = action()
+            self.assertEqual(
+                recovered["status"], "tdd_sealed" if phase == "tdd" else "sealed"
+            )
+            final_head = git(integration, "rev-parse", "HEAD")
+            if committed is not None:
+                self.assertEqual(final_head, committed)
+            self.assertEqual(action()["integration_head"], final_head)
+            self.assertEqual(
+                git(integration, "rev-list", "--count", f"{before_head}..HEAD"), "1"
+            )
+            raw = subprocess.check_output(
+                ["git", "cat-file", "commit", final_head], cwd=integration
+            )
+            self.assertEqual(raw.split(b"\n\n", 1)[1], expected)
+        finally:
+            fixture.tearDown()
+            fixture.doCleanups()
+
+    def test_both_seals_recover_full_message_after_commit(self):
+        for phase in ("tdd", "feature"):
+            for cleanup in ("strip", "verbatim", "whitespace"):
+                with self.subTest(phase=phase, cleanup=cleanup):
+                    self.exercise(phase, cleanup=cleanup)
+
+    def test_both_seals_retry_before_commit_once(self):
+        for phase in ("tdd", "feature"):
+            with self.subTest(phase=phase):
+                self.exercise(phase, interrupt="before")
+
+    def test_both_seals_normal_creation_uses_same_message_contract(self):
+        for phase in ("tdd", "feature"):
+            with self.subTest(phase=phase):
+                self.exercise(phase, interrupt=None)
+
+    def test_both_seals_reject_hook_rewrite_without_publishing_or_recommitting(self):
+        for phase in ("tdd", "feature"):
+            with self.subTest(phase=phase):
+                self.exercise(phase, hook="rewrite")
+
+
 class ManagedOuterLifecycleTests(unittest.TestCase):
 
     def test_managed_outer_execution_releases_to_local_source_integration(self) -> None:
@@ -3081,15 +3279,45 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 )
             outer_root = Path(str(outer["worktree"]))
             outer_selected = Path(str(outer["scope_cwd"]))
-            run_dir = root / "private" / "run-managed"
+            import workflow_objectives as objectives
+            from workflow_refinement import refinement, settle
+            from workflow_impact import CLAIM_SCHEMA
+            from workflow_state import WorkflowError, read
+            from project_specs_lib.impact import statement_inventory
+
+            session = "deterministic-coordinator"
+            home = root / "codex-home"
+            run_dir = Path(objectives.accept(outer_selected, home, "agentic-sdlc", session, {
+                "outcome": "Implement selected behavior", "scope": ["selected project"],
+                "constraints": [], "acceptance_criteria": ["all declared tests pass"],
+                "clarifications": [],
+                "provenance": {"kind": "direct_request", "source_sha256": "a" * 64},
+            })["run_dir"])
+            refined = refinement(run_dir)
+            claim = {key: refined[key] for key in ("objective_id", "revision", "intent_sha256")}
+            claim.update(schema=CLAIM_SCHEMA, declared_effects=["execution"],
+                         declared_plan_action="replan_required", dispositions=[
+                {"statement": item["key"], "disposition": "execution_only",
+                 "requirements": [], "design": [], "effects": ["execution"], "reason": None}
+                for item in statement_inventory(refined["extracted"])
+            ])
+            settle(run_dir, claim)
+            write_private(run_dir / "host-capacity.json", capacity_fixture(run_dir, 2))
+
+            def completion_blocked():
+                terminal = [run_dir / "run.json", objectives._binding_path(home, "agentic-sdlc", session)]
+                before = [path.read_bytes() for path in terminal]
+                with self.assertRaises(WorkflowError) as error:
+                    objectives.complete_run(run_dir, session)
+                self.assertEqual(error.exception.code, "COMPLETION_BLOCKED")
+                self.assertEqual([path.read_bytes() for path in terminal], before)
+
             plan = run_dir / "plans" / "FEAT-001.plan.v1.md"
             plan.parent.mkdir(parents=True)
             plan.write_text(MANAGED_PLAN, encoding="utf-8")
             plan.with_suffix(plan.suffix + ".lock").write_text(
                 "locked\n", encoding="utf-8"
             )
-            seed_objective_impact(run_dir, outer_selected)
-
             prepare_execution(run_dir, outer_selected, "FEAT-001", plan, capacity=1)
             with self.assertRaisesRegex(manager.WorktreeError, "still owns"):
                 manager.integrate_worktree(
@@ -3143,7 +3371,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                     cwd=Path(str(coordinator["integration_worktree"])),
                     action="create-pr",
                 )
-            complete_wave(run_dir, "FEAT-001", "WAVE-001", "combined tests passed")
+            complete_wave(run_dir, "FEAT-001", "WAVE-001", "combined tests passed", session='deterministic-coordinator')
             seal_feature(
                 run_dir,
                 "FEAT-001",
@@ -3291,7 +3519,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 summary="second selected-scope handoff",
             )
             integrate_wave(run_dir, "FEAT-002", "WAVE-001")
-            complete_wave(run_dir, "FEAT-002", "WAVE-001", "combined tests passed")
+            complete_wave(run_dir, "FEAT-002", "WAVE-001", "combined tests passed", session='deterministic-coordinator')
             seal_feature(
                 run_dir,
                 "FEAT-002",
@@ -3376,6 +3604,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             pending = load_outer_interop(run_dir)
             assert pending is not None
             self.assertEqual(pending["outer_integration_status"], "pending")
+            completion_blocked()
             interop_path = run_dir / "execution" / "interop.json"
             stale = dict(pending)
             stale["promoted_head"] = "f" * 40
@@ -3412,6 +3641,7 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
                 expected_source_head=str(candidate["source_head"]),
                 expected_child_head=str(candidate["child_head"]),
             )
+            completion_blocked()
             git(repository, "reset", "--hard", str(candidate["source_head"]))
             with self.assertRaises(ExecutionInteropError):
                 complete_source_integration(run_dir, outer_selected)
@@ -3421,6 +3651,13 @@ class ManagedOuterLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 proof["source_integration_head"], integrated["source_head"]
             )
+            git(repository, "reset", "--hard", str(candidate["source_head"]))
+            completion_blocked()
+            git(repository, "reset", "--hard", str(integrated["source_head"]))
+            for _ in range(2):
+                self.assertEqual(objectives.complete_run(run_dir, session)["status"], "COMPLETE")
+            self.assertEqual(read(run_dir / "run.json")["status"], "done")
+            self.assertIsNotNone(objectives.observe_binding(home, "agentic-sdlc", session, outer_selected))
 
 
 if __name__ == "__main__":

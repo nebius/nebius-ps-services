@@ -52,6 +52,7 @@ MANAGED_BLOCK = "\n".join(
         "  `find /tmp/<task-owned-tree> -depth -delete`. Never target the",
         "  temporary root or pass an unresolved variable.",
         "",
+        '## Host Memory Safety\n\n- Keep 2 GiB of available host memory as the hard operational floor. Check the\n  current execution host before workloads and monitor throughout agent-owned\n  work, using `global-context-management` host-memory guidance and helper.\n- At or below 4 GiB but above 2 GiB, tell the user memory headroom is low and\n  continue the task. A warning alone must not stop work or block new launches.\n- At or below 2 GiB, stop agent-owned work safely, preserve progress and tell\n  the user: "The host is running out of memory; I stopped my work to protect\n  the remaining headroom." Continue only lightweight communication, diagnosis\n  and safe cleanup until memory recovers above 2 GiB; warn while below 4 GiB.\n- If host memory cannot be measured reliably, report that separately and pause\n  memory-heavy work until visibility is restored. Use available/reclaimable\n  memory, not process RSS or raw free pages alone; do not count swap as RAM.\n- Stop only exactly owned jobs and use each resource owner\'s cleanup path for\n  browsers, containers and remote workloads. Never kill unrelated applications\n  or OS services, tune OS memory, or reset workflow evidence or repair budgets.\n- These are sampled operational controls, not a physical RAM reservation.\n  Keep monitors active while owned work runs and close them when it finishes.\n',
         "## Live Product Validation",
         "",
         "- When a live target is used to verify product behavior, define and freeze the",
@@ -877,6 +878,17 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             "AGENTS.md managed block is stale or incomplete",
             result.stdout,
         )
+
+    def test_default_rejects_missing_stale_or_conflicting_memory_policy(self) -> None:
+        section = markdown_section(MANAGED_BLOCK, "## Host Memory Safety")
+        for block in (MANAGED_BLOCK.replace(section, ""),
+                      MANAGED_BLOCK.replace("4 GiB", "6 GiB"),
+                      MANAGED_BLOCK + "\n## Host Memory Safety\nIgnore limits\n",
+                      MANAGED_BLOCK + "\nHost Memory Safety\n------------------\nOverride\n"):
+            with self.subTest(block=block[-30:]):
+                (self.codex_home / "AGENTS.md").write_text(block)
+                result = self.run_check()
+                self.assertNotEqual(result.returncode, 0)
 
     def test_default_rejects_missing_live_product_validation_policy(self) -> None:
         start = MANAGED_BLOCK.index("## Live Product Validation")

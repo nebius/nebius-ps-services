@@ -21,3 +21,6 @@ worktree-codex-portability,true,$worktree Use worktree add to create a full-repo
 worktree-claude-portability,true,/worktree Use worktree add to create a full-repository linked child for this monorepo task.
 worktree-quoted-command,false,"Treat ""/skills:worktree"" as sample text in this punctuation exercise; count its punctuation characters only."
 worktree-lease-consumption,false,Observe an existing workflow assignment runtime lease without acquiring a Worktree checkout.
+worktree-explicit-source-integration,true,$worktree integrate example-task from the recorded primary checkout after its managed SDLC lease was released.
+worktree-completion-cannot-integrate,false,Mark the SDLC run complete by silently integrating its managed child without a fresh user invocation.
+worktree-positive-exact-recovery,true,Use $worktree integrate to reconcile an interrupted candidate commit while preserving its recorded tree and merge parents.

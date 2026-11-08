@@ -14,6 +14,7 @@ import sys
 import tempfile
 
 import verify_agentic_sdlc as verifier
+import verification_workspace as workspace
 
 
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -68,6 +69,7 @@ def read_bounded_regular_file(source: Path) -> bytes:
         os.close(descriptor)
 
 
+@workspace.serialized
 def collect(
     verification_root: Path,
     *,

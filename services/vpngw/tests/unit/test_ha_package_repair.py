@@ -14,6 +14,67 @@ from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
 from nebius_vpngw.deploy.ordinary_handoff import streamed_source
 
 
+@pytest.mark.parametrize(
+    "failure", [None, "authority", "lock", "boot", "forwarding", "writers", "history"]
+)
+def test_corrective_adoption_preserves_exact_predecessor_before_replacement(
+    evidence_guest, monkeypatch, failure
+):
+    guest = evidence_guest
+    root = guest.root
+    monkeypatch.setattr(ha_repair, "STATE", root)
+
+    def publish(path, raw, mode=0o600):
+        path.write_bytes(raw)
+        path.chmod(mode)
+
+    monkeypatch.setattr(ha_repair, "publish", publish)
+    calls = []
+
+    def quiescent(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=int(failure == "writers"))
+
+    monkeypatch.setattr(ha_repair.subprocess, "run", quiescent)
+    old = b'{"operation_id":"prior","node_id":"owner"}\n'
+    new = b'{"operation_id":"current","node_id":"owner"}\n'
+    path = root / "apply-owner-adoption.json"
+    publish(path, old)
+    old_hash, new_hash = ha_repair.sha(old), ha_repair.sha(new)
+    lock_hash = ha_repair.sha((root / "apply.lock").read_bytes())
+    if failure == "authority":
+        publish(path, old.replace(b"owner", b"foreign"))
+    elif failure == "lock":
+        lock_hash = "0" * 64
+    elif failure == "boot":
+        ha_repair.BOOT.write_text("new-boot")
+    elif failure == "forwarding":
+        ha_repair.FORWARDING.write_text("1")
+    elif failure == "history":
+        directory = root / "apply-history"
+        directory.mkdir(mode=0o700)
+        publish(directory / (old_hash + ".json"), b"different")
+    before = path.read_bytes()
+    if failure is not None:
+        with pytest.raises(RuntimeError):
+            ha_repair.archive_apply_owner_adoption(new_hash, old_hash, lock_hash)
+        assert path.read_bytes() == before
+        return
+    ha_repair.archive_apply_owner_adoption(new_hash, old_hash, lock_hash)
+    assert path.read_bytes() == old
+    archive = root / "apply-history" / (old_hash + ".json")
+    assert archive.read_bytes() == old
+    assert archive.stat().st_mode & 0o777 == 0o600
+    assert calls[0][0][-2:] == ["--vm-ha-apply-lock-quiescent", str(root / "apply.lock")]
+    assert calls[0][1]["timeout"] == 30
+    # Repeat after a lost archive acknowledgement, then after installer publication.
+    ha_repair.archive_apply_owner_adoption(new_hash, old_hash, lock_hash)
+    publish(path, new)
+    calls.clear()
+    ha_repair.archive_apply_owner_adoption(new_hash, old_hash, lock_hash)
+    assert not calls and archive.read_bytes() == old
+
+
 @pytest.fixture
 def evidence_guest(tmp_path, monkeypatch):
     def write(name, value):

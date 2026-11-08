@@ -1,0 +1,6 @@
+# Disposable package-test baseline; never contains candidate artifacts.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY *.whl install_predecessor.py verify_predecessor.py /predecessor/
+RUN python3 -B /predecessor/install_predecessor.py /predecessor/*.whl \
+    && python3 -B /predecessor/verify_predecessor.py --record

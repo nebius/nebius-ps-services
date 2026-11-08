@@ -8,6 +8,7 @@ import logging
 import subprocess
 import sys
 import zipfile
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -1432,7 +1433,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         owner_record={
             "controller_capabilities": []
             if failed_target == "wire-break"
-            else ["independent-heartbeat-v5"]
+            else ["independent-heartbeat-v6"]
         },
     )
     canonical = _VMHAApplyPlanReport(
@@ -1457,7 +1458,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
             if target == failed_target:
                 raise EOFError("TOP_SECRET_REMOTE_DETAIL")
 
-        def require_vm_ha_heartbeat_v5(self, target, *_args):
+        def require_vm_ha_heartbeat_v6(self, target, *_args):
             assert target == "standby-target"
             if failed_target == "standby-wire-break":
                 raise RuntimeError("heartbeat wire upgrade requires coordinated two-member apply")
@@ -4014,7 +4015,7 @@ def test_vm_ha_inspection_uses_the_plan_region_for_both_manager_fields(
         "gateway_group": {"region": "eu-central1"},
     }
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(region="eu-north1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), region="eu-north1"),
         iter_instance_configs=lambda: (),
     )
     observed: dict[str, object] = {}
@@ -5792,3 +5793,108 @@ def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
     assert payload["reasons"] == ["approval-digest-stale-or-incorrect"]
     lock.assert_not_called()
     effect.assert_not_called()
+
+
+@pytest.mark.parametrize("dry_run", (False, True))
+@pytest.mark.parametrize("commit_boundary", ("before-prepare", "owner-prepared", "peer-committed"))
+def test_vm_ha_resumes_policy_after_completed_start_with_both_members_reachable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dry_run: bool, commit_boundary: str
+) -> None:
+    config_path = tmp_path / "gateway.vm-ha.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    healthy = _inspection(_snapshot(overall="HEALTHY", action="none"))
+    statuses = list(_terminal_enabled_recovery_statuses(peer_agrees=True))
+    decision = policy_decision_digest(
+        cluster_id="cluster-a",
+        member_node_ids=("node-0", "node-1"),
+        generation_id="a" * 64,
+        desired=StandbyAutoHealing.DISABLED,
+        operation_id="c" * 64,
+        coordinator_node_id="node-0",
+        predecessor_digest="b" * 64,
+    )
+    for status in statuses:
+        record = AutoHealingPolicyRecord.from_mapping(
+            {
+                **status["record"],
+                "desired": "disabled",
+                "decision_digest": decision,
+                "peer_ack_digest": decision,
+            }
+        )
+        status.update(record=record.to_dict(), desired="disabled", decision_digest=decision)
+    transaction = _vm_ha_auto_healing_transaction_for_statuses(
+        desired=StandbyAutoHealing.ENABLED,
+        inspection=healthy,
+        statuses=statuses,
+    )
+    statuses[0]["recovery"].update(
+        operation_id=transaction.operation_id, policy_digest=decision, predecessor_digest=decision
+    )
+    terminal = list(
+        _terminal_enabled_recovery_statuses(
+            peer_agrees=True,
+            operation_id=transaction.operation_id,
+            predecessor_digest=decision,
+        )
+    )
+    if commit_boundary != "before-prepare":
+        prepared = AutoHealingPolicyRecord.from_mapping(
+            {**terminal[0]["record"], "phase": "prepared", "peer_ack_digest": None}
+        )
+        statuses[0] = {
+            **terminal[0],
+            "record": prepared.to_dict(),
+            "phase": "prepared",
+            "peer_agrees": False,
+            "recovery": statuses[0]["recovery"],
+        }
+        if commit_boundary == "peer-committed":
+            statuses[1] = terminal[1]
+    effects = []
+
+    def execute(**kwargs):
+        assert kwargs["transaction"] == transaction
+        assert kwargs["initial_statuses"] == statuses
+        effects.append("commit-enabled")
+        return terminal
+
+    def cleanup(**kwargs):
+        assert kwargs["statuses"] == terminal
+        effects.append("clear-completed")
+        return True
+
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
+    )
+    monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", lambda _path: healthy)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses", lambda **_kwargs: statuses
+    )
+    monkeypatch.setattr("nebius_vpngw.cli._execute_vm_ha_auto_healing_policy", execute)
+    monkeypatch.setattr("nebius_vpngw.cli._clear_completed_vm_ha_auto_healing_recovery", cleanup)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._prepare_vm_ha_planned_target",
+        Mock(side_effect=AssertionError("completed start was repeated")),
+    )
+    monkeypatch.setattr("nebius_vpngw.cli.VMHAApplyLock", Mock(return_value=nullcontext()))
+    result = CliRunner().invoke(
+        app,
+        [
+            "vm-ha",
+            "-c",
+            str(config_path),
+            "--standby-auto-healing",
+            "enabled",
+            "--output-format",
+            "json",
+            *(["--dry-run"] if dry_run else []),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["outcome"] == ("planned" if dry_run else "healthy")
+    assert effects == ([] if dry_run else ["commit-enabled", "clear-completed"])
+    if dry_run:
+        assert "clear-completed-recovery" not in payload["approval"]["effects"]

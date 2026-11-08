@@ -9,6 +9,9 @@ from pathlib import Path
 SOURCES = (
     ("_vpngw_ingress", "ingress_policy.py"),
     ("_vpngw_ordinary_operations", "ordinary_operations.py"),
+    ("_vpngw_runtime_migration", "runtime_migration.py"),
+    ("nebius_vpngw.faults", "faults.py"),
+    ("nebius_vpngw.apply_lock", "apply_lock.py"),
     ("_vpngw_tunnel_state", "tunnel_state.py"),
     ("_vpngw_ordinary_routes", "ordinary_routes.py"),
     ("nebius_vpngw.agent.vm_ha.models", "agent/vm_ha/models.py"),

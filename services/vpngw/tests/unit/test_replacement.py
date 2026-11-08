@@ -1,3 +1,5 @@
+import json
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -129,6 +131,122 @@ def test_bundle_is_private_scoped_and_rejects_secrets(tmp_path):
         replace(desired, desired={"private_key": "forbidden"}).mapping()
 
 
+def test_external_bundle_resumes_newer_canonical_progress_without_republishing(tmp_path):
+    desired = plan()
+    with workflow.Journal(
+        desired.project_id, desired.gateway_name, root=tmp_path / "source"
+    ) as source:
+        source.start(desired, workflow.digest(desired.mapping()))
+        bundle = source.bundle
+    with workflow.Journal(
+        desired.project_id, desired.gateway_name, root=tmp_path / "local"
+    ) as local:
+        local.import_bundle(bundle)
+        before = local.path.read_bytes()
+        local.import_bundle(bundle)
+        assert local.path.read_bytes() == before
+        ports = Ports(fail="transfer")
+        with pytest.raises(RuntimeError, match="interrupted"):
+            workflow.run(local, ports)
+        before = local.path.read_bytes()
+        admitted = []
+        local.import_bundle(bundle, admit=lambda state: admitted.append(deepcopy(state)))
+        assert admitted == [local.state]
+        assert local.path.read_bytes() == before
+        ports.fail = None
+        workflow.run(local, ports)
+        assert [step for step, _ in ports.effects].count("prepare") == 1
+        before = local.path.read_bytes()
+        local.import_bundle(bundle)
+        workflow.run(local, ports)
+        assert local.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("conflict", ["different-operation", "changed-result", "changed-receipt"])
+def test_import_cannot_replace_completed_history_with_conflicting_higher_revision(
+    tmp_path, conflict
+):
+    desired = plan()
+    with workflow.Journal(
+        desired.project_id, desired.gateway_name, root=tmp_path / "local"
+    ) as local:
+        local.start(desired, workflow.digest(desired.mapping()))
+        local.state["transaction"]["operations"]["effect"] = {
+            "status": "settled",
+            "cloud_operation_id": "operation-one",
+            "resource_id": "resource-one",
+        }
+        workflow.run(local, Ports())
+        before = local.path.read_bytes()
+        candidate = deepcopy(local.state)
+        candidate["revision"] += 100
+        tx = candidate["transaction"]
+        if conflict == "different-operation":
+            tx["plan"]["operation_id"] = "9" * 32
+            tx["approval"] = workflow.digest(tx["plan"])
+        elif conflict == "changed-result":
+            tx["results"]["0:prepare"] = {"verified_step": "foreign"}
+        else:
+            tx["operations"]["effect"]["cloud_operation_id"] = "operation-foreign"
+        bundle = tmp_path / "external.json"
+        bundle.write_text(json.dumps(candidate))
+        bundle.chmod(0o600)
+        with pytest.raises(RuntimeError, match="differs|conflict"):
+            local.import_bundle(bundle)
+        assert local.path.read_bytes() == before
+
+
+def test_newer_same_operation_bundle_preserves_prior_history(tmp_path):
+    desired = plan()
+    with workflow.Journal(
+        desired.project_id, desired.gateway_name, root=tmp_path / "source"
+    ) as source:
+        source.start(desired, workflow.digest(desired.mapping()))
+        with workflow.Journal(
+            desired.project_id, desired.gateway_name, root=tmp_path / "local"
+        ) as local:
+            local.import_bundle(source.bundle)
+            before = local.path.read_bytes()
+            workflow.run(source, Ports())
+            local.import_bundle(source.bundle)
+            assert local.state["transaction"] == source.state["transaction"]
+            assert [p.read_bytes() for p in (local.root / "history").glob("*.json")] == [before]
+
+
+@pytest.mark.parametrize("after_exchange", [False, True])
+def test_newer_bundle_interrupted_publication_keeps_local_revision_sequence(
+    tmp_path, monkeypatch, after_exchange
+):
+    from nebius_vpngw.deploy import operator_guest
+
+    desired = plan()
+    source = workflow.Journal(desired.project_id, desired.gateway_name, root=tmp_path / "source")
+    destination = workflow.Journal(
+        desired.project_id, desired.gateway_name, root=tmp_path / "local"
+    )
+    exchange = operator_guest._exchange
+    with source, destination:
+        source.start(desired, workflow.digest(desired.mapping()))
+        destination.import_bundle(source.bundle)
+        previous_revision = destination.state["revision"]
+        workflow.run(source, Ports())
+
+        def interrupted(before, after):
+            if after == destination.path:
+                if after_exchange:
+                    exchange(before, after)
+                raise OSError("publication interrupted")
+            return exchange(before, after)
+
+        monkeypatch.setattr(operator_guest, "_exchange", interrupted)
+        with pytest.raises(OSError, match="publication interrupted"):
+            destination.import_bundle(source.bundle)
+    monkeypatch.setattr(operator_guest, "_exchange", exchange)
+    with destination:
+        assert destination.state["revision"] == previous_revision + 1
+        assert destination.state["transaction"] == source.state["transaction"]
+
+
 def test_different_approval_cannot_replace_pending_work(tmp_path):
     desired = plan()
     with workflow.Journal(
@@ -223,6 +341,9 @@ def test_cloud_receipt_survives_timeout_and_settles_without_resubmission(tmp_pat
         desired.project_id, desired.gateway_name, root=tmp_path / "state"
     ) as journal:
         journal.start(desired, workflow.digest(desired.mapping()))
+        bundle = tmp_path / "before-accepted-effect.json"
+        bundle.write_bytes(journal.path.read_bytes())
+        bundle.chmod(0o600)
         with pytest.raises(TimeoutError):
             Cloud(object(), journal).mutate(
                 "stop-old", StopInstanceRequest(id="compute-old"), submit
@@ -234,6 +355,9 @@ def test_cloud_receipt_survives_timeout_and_settles_without_resubmission(tmp_pat
     with workflow.Journal(
         desired.project_id, desired.gateway_name, root=tmp_path / "state"
     ) as journal:
+        checkpoint = journal.path.read_bytes()
+        journal.import_bundle(bundle)
+        assert journal.path.read_bytes() == checkpoint
         cloud = Cloud(object(), journal)
         cloud.settle()
         assert (
@@ -244,7 +368,7 @@ def test_cloud_receipt_survives_timeout_and_settles_without_resubmission(tmp_pat
     assert [event[0] for event in events] == ["submit", "lookup"]
 
 
-def test_candidate_has_captured_security_groups_in_create_request(tmp_path, monkeypatch):
+def test_candidate_preserves_implicit_default_without_pinning_it(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     from nebius.api.nebius.compute import v1 as compute
@@ -305,6 +429,7 @@ def test_candidate_has_captured_security_groups_in_create_request(tmp_path, monk
     assert len(requests) == 1
     nic = requests[0].spec.network_interfaces[0]
     assert nic.subnet_id == "subnet-captured"
-    assert [group.id for group in nic.security_groups] == ["sg-original-default"]
+    assert [group.id for group in nic.security_groups] == []
     assert nic.public_ip_address.allocation_id == "allocation-temp"
-    assert checked[0][0].create_ids == ("sg-original-default",)
+    assert checked[0][0].create_ids == ()
+    assert checked[0][0].effective_ids == ("sg-original-default",)

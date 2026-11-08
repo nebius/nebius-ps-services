@@ -41,6 +41,8 @@ def private_json(path, value):
     path.chmod(0o600)
 
 
+from test_workflow_fixture import prepare_execution as fixture_prepare_execution, replan_future as fixture_replan_future, complete_wave as fixture_complete_wave  # noqa: E402
+
 class ThreeTierTargetTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(isolated_git_configuration())
@@ -78,7 +80,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.assertEqual(initialized['status'], 'INITIALIZED')
         self.base = self.git("rev-parse", "HEAD")
         self.startup_observation = target.observe_startup(
-            self.state, skills_root=ROOT, agent="codex"
+            self.state, skills_root=ROOT, agent="codex", coordinator_session="target-root"
         )
         relative = "evidence/phases/sdlc-start.json"
         private_json(
@@ -96,7 +98,8 @@ class ThreeTierTargetTests(unittest.TestCase):
             },
         )
         self.state = lifecycle.record_phase(
-            self.root, "sdlc-start", "PASS", "Exact hook registration observed.", [relative]
+            self.root, "sdlc-start", "PASS", "Exact hook registration observed.", [relative],
+            coordinator_session="target-root",
         )
         # The deterministic coordinator fixture selects its feature after startup.
         current = json.loads((self.run / 'current-state.json').read_text())
@@ -158,17 +161,18 @@ class ThreeTierTargetTests(unittest.TestCase):
     def test_startup_receipt_is_bound_and_cannot_be_retrofitted(self):
         observed = target.validate_startup_receipt(self.state)
         self.assertEqual(observed["run_id"], self.run_id)
-        self.assertEqual(observed["hook_discovery"], "MATCH")
+        self.assertEqual(observed["source_state_discovery"], "MATCH")
         self.state.pop("workflow_startup")
         lifecycle.update_state(self.root, self.state)
         with self.assertRaisesRegex(lifecycle.LifecycleError, "after other phase"):
             lifecycle.record_phase(
                 self.root, "sdlc-start", "PASS", "Late observation.",
                 ["evidence/phases/sdlc-start.json"],
+                coordinator_session="target-root",
             )
         self.admit_and_prepare()
         with self.assertRaisesRegex(target.TargetError, "too late"):
-            target.observe_startup(self.state, skills_root=ROOT, agent="codex")
+            target.observe_startup(self.state, skills_root=ROOT, agent="codex", coordinator_session="target-root")
 
     def test_execution_rejects_mismatched_hook_owner(self):
         self.admit_and_prepare()
@@ -212,7 +216,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         # Exercise the preparation owner; a fixture commit would pre-satisfy
         # the exact product transition this composition test must observe.
         refinement.settle(self.run, self.claim)
-        coordinator = execution.prepare_execution(self.run, self.project, "FEAT-001", plan, 1)
+        coordinator = fixture_prepare_execution(self.run, self.project, "FEAT-001", plan, 1)
         contract = self.git("rev-parse", "HEAD")
         self.assertEqual(self.git("rev-list", "--parents", "-n", "1", contract).split(),
                          [contract, self.base])
@@ -237,13 +241,280 @@ class ThreeTierTargetTests(unittest.TestCase):
         private_json(current_path, {**current, "current_phase": "sdlc-classify-failure"})
         return coordinator, integration, document
 
+    def record_observed_phase(self, phase):
+        observation = {"phase_observation": phase} if phase == "sdlc-classify-failure" else {}
+        selected = self.resolve(**observation)
+        relative = f"evidence/phases/{phase}.json"
+        private_json(Path(self.state["run_root"]) / relative, {
+            "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
+            "verification_id": self.state["verification_id"], "baseline_sha": self.base,
+            "recorded_head": selected["head"], "objective_sha256": self.startup_observation["objective_sha256"],
+            "basis_sha256": selected["basis_sha256"], "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase],
+        })
+        self.state = lifecycle.record_phase(self.root, phase, "PASS", "Deterministic owner observation.", [relative])
+        return self.state["phases"][-1]
+
+    def pending_design_fixture(self, *, observe_preparation=False):
+        """Reach the observed native boundary through real owners; exits are synthetic."""
+        from test_workflow_execution import GitLifecycleTests
+        from workflow_state import read
+        from workflow_publication import _basis
+        import workflow_design_revision as revision
+
+        coordinator = self.admit_and_prepare()
+        integration = Path(coordinator["integration_worktree"])
+        if observe_preparation:
+            self.record_observed_phase("sdlc-prepare-execution")
+        (integration / "test_contract.py").write_text("def test_contract():\n    assert False\n")
+        parent = execution.seal_tdd_base(self.run, "FEAT-001", "Test-only pending revision fixture")["integration_head"]
+        assignment = execution.prepare_wave(self.run, "FEAT-001", "WAVE-001")[0]
+        worker = GitLifecycleTests()
+        worker.run_dir, worker.session = self.run, "target-root"
+        worker.result_start(assignment)
+        worker.result_write(assignment)
+        _, termination, _ = worker.result_ingest(assignment, "blocked")
+        before = {kind: hashlib.sha256((integration / "docs" / f"{kind}.md").read_bytes()).hexdigest()
+                  for kind in ("requirements", "design")}
+        scripts = ROOT / "sdlc-classify-failure/scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import repair_control
+        from test_repair_control import failure_payload, design_diagnosis
+
+        payload = failure_payload(proposed="UNKNOWN_DEFECT", cause_status="unknown",
+                                  commit=parent, lifecycle="active_task")
+        payload["phase"] = "sdlc-implement-plan"
+        payload["fingerprints"] = {**{key: "sha256:" + value for key, value in before.items()},
+                                   "plan": "sha256:" + coordinator["plan_digest"],
+                                   "basis": "sha256:" + _basis(self.run, "FEAT-001")}
+        event = repair_control.record_failure_event(self.run, payload)["event"]
+        diagnosis = repair_control.record_diagnosis(self.run, design_diagnosis(event))["diagnosis"]
+        classification = repair_control.classify_failure(
+            self.run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"])["classification"]
+        dispatch = repair_control.begin_remediation(
+            self.run, "FEAT-001", classification["classification_id"], "design",
+            "Correct the proven contract at its semantic owner.", "evidence/design-cause.json")["attempt"]
+        prepared = revision.prepare_design_revision(
+            self.run, "FEAT-001", classification["classification_id"], dispatch["dispatch_id"],
+            [termination], "target-root")
+        current = read(self.run / "current-state.json")
+        private_json(self.run / "current-state.json", {**current, "current_phase": "sdlc-classify-failure"})
+        return prepared, integration
+
+    def test_material_design_replan_requires_fresh_classifier_and_preparation(self):
+        import workflow_design_revision as revision
+        from project_specs_lib.impact import statement_inventory
+
+        prepared, integration = self.pending_design_fixture(observe_preparation=True)
+        self.record_observed_phase("sdlc-classify-failure")
+        phases = ("sdlc-prepare-execution", "sdlc-classify-failure")
+        old = {phase: next(row for row in self.state["phases"] if row["phase"] == phase) for phase in phases}
+        retained = {phase: (Path(self.state["run_root"]) / row["evidence"][0]).read_bytes()
+                    for phase, row in old.items()}
+        requirements = (integration / "docs/requirements.md").read_bytes()
+        design = (integration / "docs/design.md").read_bytes().replace(
+            b"Use coordinator-owned dependency waves and isolated workers.",
+            b"Use coordinator-owned dependency waves and revised isolated worker contracts.")
+        publish_spec_pair(
+            integration, requirements_candidate=requirements, design_candidate=design,
+            expected_git_head=prepared["parent"], expected_requirements_sha256=prepared["before"]["requirements"],
+            expected_design_sha256=prepared["before"]["design"], operation_id="test-material-revision",
+            expected_objective_sha256=prepared["objective_sha256"], expected_basis_sha256=prepared["basis_sha256"],
+        )
+        revision.seal_design_revision(self.run, "FEAT-001", prepared["revision_id"],
+                                      "test-material-revision", "Correct the design", "target-root")
+        value = refinement.refinement(self.run)
+        claim = {key: value[key] for key in ("objective_id", "revision", "intent_sha256")}
+        claim.update(schema=impact.CLAIM_SCHEMA, declared_effects=["design"],
+                     declared_plan_action="replan_required", dispositions=[{
+                         "statement": item["key"], "disposition": "changed_contract",
+                         "requirements": ["REQ-001"], "design": ["FEAT-001"],
+                         "effects": ["design"], "reason": None,
+                     } for item in statement_inventory(value["extracted"])])
+        refinement.settle(self.run, claim)
+        plan = self.run / "plans/FEAT-001-v1.md"
+        replacement = plan.with_name("FEAT-001-v2.md")
+        original = plan.read_text()
+        replacement.write_text(original.replace("Plan v1", "Plan v2") + "### TASK-002" +
+                               original.split("### TASK-001", 1)[1].replace("src/a.py", "src/new.py"))
+        replacement.with_suffix(".md.lock").write_text("locked\n")
+        fixture_replan_future(self.run, "FEAT-001", replacement, 1)
+        for phase in phases:
+            with self.subTest(phase=phase), self.assertRaisesRegex(lifecycle.LifecycleError, "material identity"):
+                lifecycle.validate_phase_pass_artifact(self.state, phase, old[phase]["evidence"], historical_entry=old[phase])
+            fresh = self.record_observed_phase(phase)
+            lifecycle.validate_phase_pass_artifact(self.state, phase, fresh["evidence"], historical_entry=fresh)
+            self.assertEqual(fresh["attempt"], 2)
+            self.assertEqual((Path(self.state["run_root"]) / old[phase]["evidence"][0]).read_bytes(), retained[phase])
+
+    def test_pending_design_classifier_observation_is_read_only(self):
+        prepared, integration = self.pending_design_fixture()
+        boundary = Path(self.state["run_root"])
+
+        def snapshot():
+            return {str(path.relative_to(boundary)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in boundary.rglob("*") if path.is_file()}
+
+        before = snapshot()
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+            selected = self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+            self.assertEqual(os.environ["CODEX_THREAD_ID"], "independent-observer")
+        self.assertEqual(selected["path"], str(integration))
+        self.assertEqual(selected["head"], prepared["parent"])
+        self.assertEqual(selected["basis_sha256"], prepared["basis_sha256"])
+        self.assertEqual(snapshot(), before)
+
+    def test_pending_design_classifier_never_admits_runtime(self):
+        self.pending_design_fixture()
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        with self.assertRaisesRegex(target.TargetError, "stable pre-promotion"):
+            self.resolve(require_clean=False)
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["build", "web"])
+            command.assert_not_called()
+
+    def test_pending_design_observation_rejects_changed_checkpoint_and_proofs(self):
+        prepared, _ = self.pending_design_fixture()
+        directory = self.run / "execution/FEAT-001"
+        current_path = self.run / "current-state.json"
+        coordinator_path = directory / "coordinator.json"
+        wave_path = directory / "waves" / (prepared["wave_id"] + ".json")
+        task_path = execution.task_path(self.run, "FEAT-001", prepared["wave_id"], "TASK-001")
+        prepare_path = directory / "design-revisions" / prepared["revision_id"] / "prepare.json"
+        termination_path = Path(prepared["writers"][0]["termination_path"])
+        proof_path = self.run / prepared["writers"][0]["proof_path"]
+        for path, changes in (
+            (current_path, {"current_phase": "sdlc-design"}),
+            (current_path, {"status": "blocked"}),
+            (coordinator_path, {"active_wave": prepared["wave_id"]}),
+            (coordinator_path, {"design_revision_id": "0" * 64}),
+            (wave_path, {"active_task_ids": ["TASK-001"]}),
+            (wave_path, {"integrated_task_ids": ["TASK-001"]}),
+            (wave_path, {"design_revision_id": "0" * 64}),
+            (task_path, {"status": "running"}),
+            (prepare_path, {"parent": self.base}),
+            (termination_path, {"observer_session_hash": "0" * 64}),
+            (proof_path, {"termination_sha256": "0" * 64}),
+        ):
+            original = path.read_bytes()
+            try:
+                private_json(path, {**json.loads(original), **changes})
+                with self.subTest(path=path.name, changes=changes), self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+            finally:
+                path.write_bytes(original)
+        sealed = prepare_path.with_name("sealed.json")
+        private_json(sealed, {})
+        with self.assertRaises(target.TargetError):
+            self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        sealed.unlink()
+        self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+
+
+    def unsealed_tdd_output_fixture(self, checkpoint):
+        coordinator = self.admit_and_prepare()
+        integration = Path(coordinator["integration_worktree"])
+        tests = integration / "test_contract.py"
+        tests.write_text("def test_pending_behavior():\n    assert False\n")
+        current_path = self.run / "current-state.json"
+        current = json.loads(current_path.read_text())
+        private_json(current_path, {**current, "current_phase": checkpoint})
+        return coordinator, integration, tests
+
+    def assert_tdd_output_observed_without_sealing(self, checkpoint):
+        coordinator, integration, tests = self.unsealed_tdd_output_fixture(checkpoint)
+        current_path = self.run / "current-state.json"
+        before = (tests.read_bytes(), current_path.read_bytes())
+        phase = "sdlc-tdd"
+        objective, basis = lifecycle.phase_identity(self.state, phase)
+        relative = f"evidence/phases/{phase}.json"
+        private_json(Path(self.state["run_root"]) / relative, {
+            "schema": lifecycle.PHASE_RESULT_SCHEMA,
+            "phase": phase,
+            "status": "PASS",
+            "verification_id": self.state["verification_id"],
+            "baseline_sha": self.base,
+            "recorded_head": coordinator["integration_head"],
+            "objective_sha256": objective,
+            "basis_sha256": basis,
+            "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase],
+        })
+        self.state = lifecycle.record_phase(
+            self.root, phase, "PASS", "Observed documented unsealed TDD output.", [relative]
+        )
+        self.assertEqual((tests.read_bytes(), current_path.read_bytes()), before)
+        self.assertEqual(self.git("rev-parse", "HEAD", path=integration),
+                         coordinator["integration_head"])
+        entry = self.state["phases"][-1]
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry
+        )
+        self.assertEqual(self.state["runtime_observations"], [])
+        execution.seal_tdd_base(self.run, "FEAT-001", "Seal observed TDD output")
+        current = json.loads(current_path.read_text())
+        private_json(current_path, {**current, "current_phase": "sdlc-implement-plan"})
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry
+        )
+
+    def test_tdd_red_output_observation_preserves_unsealed_tests(self):
+        self.assert_tdd_output_observed_without_sealing("tests_red")
+
+    def test_tdd_ready_output_observation_preserves_unsealed_tests(self):
+        self.assert_tdd_output_observed_without_sealing("tests_ready")
+
+    def test_tdd_output_observation_never_admits_runtime_or_acceptance(self):
+        self.unsealed_tdd_output_fixture("tests_red")
+        self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        with self.assertRaisesRegex(target.TargetError, "cleanliness"):
+            self.resolve(require_clean=True, phase_observation="sdlc-tdd")
+        with self.assertRaisesRegex(target.TargetError, "cleanliness"):
+            self.resolve(require_clean=False)
+        for arguments in (["build", "web"], ["stop", "web", "db"],
+                          ["up", "--force-recreate", "--detach", "--wait", "web", "db"],
+                          ["exec", "-T", "web", "python", "test_contract.py"]):
+            with self.subTest(arguments=arguments), mock.patch.object(lifecycle, "command") as command:
+                with self.assertRaisesRegex(lifecycle.LifecycleError, "cleanliness"):
+                    lifecycle.run_owned_compose(self.state, arguments)
+                command.assert_not_called()
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "admission_failure; target.admitted"):
+                lifecycle.record_runtime(self.root, web_path="/", health_path="/healthz")
+            command.assert_not_called()
+        _, recorded = lifecycle.load_active(self.root)
+        self.assertEqual(recorded["resources"], self.state["resources"])
+        self.assertEqual(recorded["endpoints"], self.state["endpoints"])
+        self.assertEqual(recorded["runtime_observations"][-1]["category"], "admission_failure")
+
+    def test_tdd_output_observation_rejects_wrong_checkpoint_and_identity(self):
+        _, integration, _ = self.unsealed_tdd_output_fixture("tests_red")
+        current_path = self.run / "current-state.json"
+        current = json.loads(current_path.read_text())
+        for phase, status in (("sdlc-evaluate", "running"), ("tests_red", "blocked"),
+                              ("tests_already_green", "running")):
+            with self.subTest(phase=phase, status=status):
+                private_json(current_path, {**current, "current_phase": phase, "status": status})
+                with self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        private_json(current_path, current)
+        for purpose in (True, "unknown", ["sdlc-tdd"]):
+            with self.subTest(purpose=purpose), self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation=purpose)
+        with self.assertRaises(target.TargetError):
+            self.resolve(require_clean=False, phase_observation="sdlc-tdd",
+                         worker_task="TASK-001", assignment_digest="a" * 64)
+        self.git("commit", "--allow-empty", "-m", "Unregistered descendant", path=integration)
+        with self.assertRaises(target.TargetError):
+            self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+
     def test_classifier_observation_preserves_unsealed_documentation(self):
         coordinator, integration, document = self.unsealed_classifier_fixture()
         before = document.read_bytes()
         phase = "sdlc-classify-failure"
         objective, basis = lifecycle.phase_identity(self.state, phase)
         selected = lifecycle.execution_target(
-            self.state, require_clean=False, classifier_observation=True
+            self.state, require_clean=False, phase_observation="sdlc-classify-failure"
         )
         relative = f"evidence/phases/{phase}.json"
         private_json(Path(self.state["run_root"]) / relative, {
@@ -278,9 +549,9 @@ class ThreeTierTargetTests(unittest.TestCase):
 
     def test_classifier_observation_never_admits_runtime_or_acceptance(self):
         self.unsealed_classifier_fixture()
-        self.resolve(require_clean=False, classifier_observation=True)
+        self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
         with self.assertRaisesRegex(target.TargetError, "cleanliness"):
-            self.resolve(require_clean=True, classifier_observation=True)
+            self.resolve(require_clean=True, phase_observation="sdlc-classify-failure")
         with self.assertRaisesRegex(target.TargetError, "cleanliness"):
             self.resolve(require_clean=False)
         for arguments in (["build", "web"], ["stop", "web", "db"],
@@ -308,19 +579,19 @@ class ThreeTierTargetTests(unittest.TestCase):
             with self.subTest(phase=phase, status=status):
                 private_json(current_path, {**current, "current_phase": phase, "status": status})
                 with self.assertRaises(target.TargetError):
-                    self.resolve(require_clean=False, classifier_observation=True)
+                    self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
         private_json(current_path, current)
         with self.assertRaises(target.TargetError):
-            self.resolve(require_clean=False, classifier_observation=True,
+            self.resolve(require_clean=False, phase_observation="sdlc-classify-failure",
                          worker_task="TASK-001", assignment_digest="a" * 64)
         with self.assertRaises(target.TargetError):
-            self.resolve(require_clean=False, classifier_observation="yes")
+            self.resolve(require_clean=False, phase_observation="yes")
 
     def test_classifier_observation_rejects_changed_registered_head(self):
         _, integration, _ = self.unsealed_classifier_fixture()
         self.git("commit", "--allow-empty", "-m", "Unregistered descendant", path=integration)
         with self.assertRaises(target.TargetError):
-            self.resolve(require_clean=False, classifier_observation=True)
+            self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
 
     def admit_phase_then_reconcile_delivery(self, *, material=False):
         """Real owner publication/settlement; no fabricated execution basis."""
@@ -356,7 +627,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             for row in claim["dispositions"]:
                 row.update(disposition="existing_contract", effects=[])
         refinement.settle(self.run, claim)
-        execution.replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
+        fixture_replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
         current = json.loads((self.run / "current-state.json").read_text())
         private_json(self.run / "current-state.json", {**current, "current_phase": "sdlc-update-documents"})
         self.assertNotEqual(prior_basis, self.resolve(require_clean=False)["basis_sha256"])
@@ -393,7 +664,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         for row in claim["dispositions"]:
             row.update(disposition="existing_contract", effects=[])
         refinement.settle(self.run, claim)
-        execution.replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
+        fixture_replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
         with self.assertRaisesRegex(lifecycle.LifecycleError, "succession is missing or material"):
             lifecycle.validate_phase_pass_artifact(
                 self.state, phase, entry["evidence"], historical_entry=entry,
@@ -405,33 +676,42 @@ class ThreeTierTargetTests(unittest.TestCase):
         new = self.run / "plans/FEAT-001-v2.md"
         new.write_text(old.read_text().replace("Plan v1", "Plan v2"))
         new.with_suffix(".md.lock").write_text("locked\n")
-        execution.replan_future(self.run, "FEAT-001", new, 1)
+        fixture_replan_future(self.run, "FEAT-001", new, 1)
         with self.assertRaisesRegex(lifecycle.LifecycleError, "material identity"):
             lifecycle.validate_phase_pass_artifact(
                 self.state, phase, entry["evidence"], historical_entry=entry,
             )
 
-    def promoted_corrective_tdd(self):
+    def promoted_corrective_tdd(
+        self, *, observe_before_seal=False, unchanged_seal=False,
+        seal_message="Original test-only TDD",
+    ):
         """Exercise the real execution owner from original TDD through replan/promotion."""
         coordinator = self.admit_and_prepare()
         integration = Path(coordinator["integration_worktree"])
         current_path = self.run / "current-state.json"
         current = json.loads(current_path.read_text())
-        private_json(current_path, {**current, "current_phase": "sdlc-tdd"})
-        (integration / "test_original.py").write_text("assert True\n")
-        sealed = execution.seal_tdd_base(self.run, "FEAT-001", "Original test-only TDD")
+        checkpoint = ("tests_ready" if unchanged_seal else "tests_red") if observe_before_seal else "sdlc-tdd"
+        private_json(current_path, {**current, "current_phase": checkpoint})
+        if not unchanged_seal:
+            (integration / "test_original.py").write_text("assert True\n")
+        if not observe_before_seal:
+            execution.seal_tdd_base(self.run, "FEAT-001", seal_message)
+        observed = self.resolve(require_clean=False, phase_observation="sdlc-tdd")
         phase = "sdlc-tdd"
         relative = f"evidence/phases/{phase}.json"
         private_json(Path(self.state["run_root"]) / relative, {
             "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
             "verification_id": self.state["verification_id"], "baseline_sha": self.base,
-            "recorded_head": sealed["integration_head"],
+            "recorded_head": observed["head"],
             "objective_sha256": self.startup_observation["objective_sha256"],
-            "basis_sha256": self.resolve()["basis_sha256"],
+            "basis_sha256": observed["basis_sha256"],
             "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase],
         })
-        self.state = lifecycle.record_phase(self.root, phase, "PASS", "Original TDD sealed.", [relative])
+        self.state = lifecycle.record_phase(self.root, phase, "PASS", "Original TDD observed.", [relative])
         entry = self.state["phases"][-1]
+        if observe_before_seal:
+            execution.seal_tdd_base(self.run, "FEAT-001", seal_message)
 
         def complete(wave, task, filename):
             assignment = execution.prepare_wave(self.run, "FEAT-001", wave)[0]
@@ -444,7 +724,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             fixture_finish(self.run, "FEAT-001", wave, task, "fixture validation", "fixture review",
                            "Implement " + task, summary="fixture complete", coordinator_identity="target-root")
             execution.integrate_wave(self.run, "FEAT-001", wave)
-            execution.complete_wave(self.run, "FEAT-001", wave, "fixture validation")
+            fixture_complete_wave(self.run, "FEAT-001", wave, "fixture validation", session='target-root')
 
         complete("WAVE-001", "TASK-001", "a.py")
         old = Path(coordinator["plan_path"])
@@ -455,7 +735,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         new.chmod(0o600)
         new.with_suffix(".md.lock").write_text("locked\n")
         new.with_suffix(".md.lock").chmod(0o600)
-        execution.replan_future(self.run, "FEAT-001", new, 1)
+        fixture_replan_future(self.run, "FEAT-001", new, 1)
         complete("WAVE-002", "TASK-002", "b.py")
         # Reproduce the live combination: corrective plan followed by a
         # delivery-only specification settlement before the final seal.
@@ -475,12 +755,130 @@ class ThreeTierTargetTests(unittest.TestCase):
         for row in claim["dispositions"]:
             row.update(disposition="existing_contract", effects=[])
         refinement.settle(self.run, claim)
-        execution.replan_future(self.run, "FEAT-001", new, 1)
+        fixture_replan_future(self.run, "FEAT-001", new, 1)
         execution.seal_feature(self.run, "FEAT-001", "fixture validation", "Seal corrected fixture")
         promoted = execution.promote_feature(self.run, "FEAT-001", "fixture validation")
         self.state["git"]["promoted_sha"] = promoted["promoted_head"]
         private_json(current_path, {**current, "current_phase": "post-uat-documents"})
         return phase, entry, old, new
+
+    def test_unsealed_original_tdd_history_survives_completed_corrective_replan(self):
+        phase, entry, _, _ = self.promoted_corrective_tdd(observe_before_seal=True)
+        path = Path(self.state["run_root"]) / entry["evidence"][0]
+        original = path.read_bytes()
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry,
+        )
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_unsealed_tdd_accepts_full_seal_message_and_rejects_changed_body(self):
+        phase, entry, _, _ = self.promoted_corrective_tdd(
+            observe_before_seal=True,
+            seal_message="Original test-only TDD\n\nDetailed seal intent",
+        )
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry,
+        )
+        journal = execution.journal_path(self.run, "FEAT-001", "coordinator")
+        rows = [json.loads(line) for line in journal.read_text().splitlines()]
+        for row in rows:
+            if row.get("event") == "tdd_seal_intent":
+                row["message"] = row["message"].replace("Detailed seal intent", "Changed seal intent")
+        journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "original TDD seal"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_unsealed_tdd_accepts_git_whitespace_cleanup_and_preserves_comments(self):
+        phase, entry, _, _ = self.promoted_corrective_tdd(
+            observe_before_seal=True,
+            seal_message="\nOriginal test-only TDD \t\n \t\n\nDetailed intent \t\n# Retained comment \t\n\n",
+        )
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry,
+        )
+
+    def test_unsealed_tdd_rejects_changed_leading_indentation(self):
+        phase, entry, _, _ = self.promoted_corrective_tdd(
+            observe_before_seal=True,
+            seal_message="  Original TDD café 日本語\n\n  Indented body\n# Retained comment",
+        )
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry,
+        )
+        journal = execution.journal_path(self.run, "FEAT-001", "coordinator")
+        rows = [json.loads(line) for line in journal.read_text().splitlines()]
+        for row in rows:
+            if row.get("event") == "tdd_seal_intent":
+                row["message"] = row["message"].lstrip(" ")
+        journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "original TDD seal"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
+    def test_unchanged_original_tdd_seal_survives_completed_corrective_replan(self):
+        phase, entry, _, _ = self.promoted_corrective_tdd(
+            observe_before_seal=True, unchanged_seal=True,
+        )
+        lifecycle.validate_phase_pass_artifact(
+            self.state, phase, entry["evidence"], historical_entry=entry,
+        )
+
+    def test_unsealed_original_tdd_rejects_changed_seal_lineage(self):
+        phase, entry, _, _ = self.promoted_corrective_tdd(observe_before_seal=True)
+        artifact = json.loads((Path(self.state["run_root"]) / entry["evidence"][0]).read_text())
+        journal = execution.journal_path(self.run, "FEAT-001", "coordinator")
+        original = journal.read_bytes()
+        rows = [json.loads(line) for line in original.splitlines()]
+        for case in ("missing_intent", "intent_base", "intent_message", "seal_head"):
+            changed = json.loads(json.dumps(rows))
+            if case == "missing_intent":
+                changed = [row for row in changed if row.get("event") != "tdd_seal_intent"]
+            else:
+                for row in changed:
+                    if row.get("event") == "tdd_seal_intent" and case == "intent_base":
+                        row["base"] = self.base
+                    if row.get("event") == "tdd_seal_intent" and case == "intent_message":
+                        row["message"] = "Changed seal message"
+                    if row.get("event") == "tdd_sealed" and case == "seal_head":
+                        row["head"] = artifact["recorded_head"]
+            journal.write_text("".join(json.dumps(row) + "\n" for row in changed))
+            with self.subTest(case=case), self.assertRaisesRegex(lifecycle.LifecycleError, "original TDD seal"):
+                lifecycle.validate_phase_pass_artifact(
+                    self.state, phase, entry["evidence"], historical_entry=entry,
+                )
+            journal.write_bytes(original)
+        with self.assertRaisesRegex(target.TargetError, "original TDD seal"):
+            target.validate_historical_basis(
+                self.state, artifact["basis_sha256"], agent="codex", phase=phase,
+                recorded_head=self.base,
+            )
+        wave_path = execution.wave_path(self.run, "FEAT-001", "WAVE-001")
+        original_wave = wave_path.read_bytes()
+        wave = json.loads(original_wave)
+        wave["base_head"] = self.base
+        private_json(wave_path, wave)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "original TDD seal"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+        wave_path.write_bytes(original_wave)
+        assignment_path = execution.assignment_path(self.run, "FEAT-001", "WAVE-001", "TASK-001")
+        assignment = json.loads(assignment_path.read_text())
+        assignment["base_head"] = self.base
+        assignment.pop("assignment_digest")
+        assignment["assignment_digest"] = execution.sha256_json(assignment)
+        private_json(assignment_path, assignment)
+        task_path = execution.task_path(self.run, "FEAT-001", "WAVE-001", "TASK-001")
+        task = json.loads(task_path.read_text())
+        task["assignment_digest"] = assignment["assignment_digest"]
+        private_json(task_path, task)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "TDD preserved task"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
 
     def test_original_tdd_history_survives_completed_corrective_replan(self):
         phase, entry, _, _ = self.promoted_corrective_tdd()
@@ -492,6 +890,17 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), original)
         with self.assertRaisesRegex(lifecycle.LifecycleError, "basis is stale"):
             lifecycle.validate_phase_pass_artifact(self.state, phase, entry["evidence"])
+
+    def test_original_tdd_rejects_changed_executable_validation_plan(self):
+        phase, entry, old, _ = self.promoted_corrective_tdd()
+        path = old.with_suffix(old.suffix + ".validation.json")
+        checks = json.loads(path.read_text())
+        checks["wave_checks"][0]["argv"] = ["{python}", "-c", "raise SystemExit(0)"]
+        private_json(path, checks)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "executable validation plan changed"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
 
     def test_original_tdd_replan_rejects_missing_completed_owner_transition(self):
         phase, entry, _, _ = self.promoted_corrective_tdd()
@@ -720,7 +1129,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             coordinator_identity="target-root",
         )
         execution.integrate_wave(self.run, "FEAT-001", "WAVE-001")
-        execution.complete_wave(self.run, "FEAT-001", "WAVE-001", "fixture validation")
+        fixture_complete_wave(self.run, "FEAT-001", "WAVE-001", "fixture validation", session='target-root')
         execution.seal_feature(
             self.run, "FEAT-001", "fixture validation", "Seal fixture"
         )
@@ -892,6 +1301,115 @@ print(outcome)
         self.git("worktree", "remove", coordinator["integration_worktree"])
         with self.assertRaises(target.TargetError):
             self.resolve()
+
+
+class StartupObservationTests(unittest.TestCase):
+    """The outer observer and native coordinator are distinct real sessions."""
+
+    def setUp(self):
+        self.enterContext(isolated_git_configuration())
+        temporary = self.enterContext(tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()))
+        self.root = Path(temporary) / "verification"
+        with (
+            mock.patch.object(lifecycle, "require_command", side_effect=["29.0", "5.0", "git version 2.50"]),
+            mock.patch.object(lifecycle, "detect_browser", return_value=("chrome", "Google Chrome")),
+        ):
+            self.state = lifecycle.prepare(self.root)
+        self.project = Path(self.state["project_root"])
+        self.home = Path(self.state["private_root"]) / "codex-home"
+        self.enterContext(mock.patch.dict(os.environ, {
+            **lifecycle.owned_git_origin.environment(self.project),
+            "CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "native-child",
+        }))
+        accepted = objectives.accept(self.project, self.home, "agentic-sdlc", "native-child", {
+            "outcome": "Build the disposable application", "scope": ["fixture project"],
+            "constraints": [], "acceptance_criteria": ["observable behavior passes"], "clarifications": [],
+            "provenance": {"kind": "direct_request", "source_sha256": "a" * 64},
+        })
+        self.run = Path(accepted["run_dir"])
+
+    def startup_artifact(self):
+        initialize_phase.initialize(self.project)
+        objective = json.loads((self.run / "objective.json").read_text())
+        relative = "evidence/phases/sdlc-start.json"
+        private_json(Path(self.state["run_root"]) / relative, {
+            "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": "sdlc-start", "status": "PASS",
+            "verification_id": self.state["verification_id"], "baseline_sha": self.state["git"]["baseline_sha"],
+            "recorded_head": self.state["git"]["baseline_sha"],
+            "objective_sha256": objective["revisions"][-1]["sha256"], "basis_sha256": None,
+            "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS["sdlc-start"],
+        })
+        return relative
+
+    def exited_native(self):
+        import verification_workspace as workspace
+        subprocess.run([
+            sys.executable, "-B", "-c",
+            "import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+            "import verification_workspace as w; w.register_native(Path(sys.argv[2]))",
+            str(Path(workspace.__file__).parent), str(self.root),
+        ], check=True, capture_output=True)
+
+    def test_outer_observer_uses_explicit_native_selector_without_impersonation(self):
+        relative = self.startup_artifact()
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "outer-verifier"}):
+            state = lifecycle.record_phase(self.root, "sdlc-start", "PASS", "Native startup.", [relative],
+                                           coordinator_session="native-child")
+            self.assertEqual(os.environ["CODEX_THREAD_ID"], "outer-verifier")
+        observed = target.validate_startup_receipt(state)
+        self.assertEqual(observed["owner_session_hash"], objectives.session_hash("native-child"))
+        self.assertNotIn("native_activation", state)
+
+    def test_missing_or_foreign_startup_selector_fails_closed(self):
+        relative = self.startup_artifact()
+        for selector in (None, "outer-verifier"):
+            with self.subTest(selector=selector), self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.record_phase(self.root, "sdlc-start", "PASS", "Native startup.", [relative],
+                                       coordinator_session=selector)
+        self.assertFalse((Path(self.state["run_root"]) / "evidence/workflow-startup.json").exists())
+
+    def test_startup_rejects_uncommitted_product_writes_at_baseline_head(self):
+        relative = self.startup_artifact()
+        (self.project / "early-product.txt").write_text("product work before observation\n")
+        with self.assertRaises(lifecycle.LifecycleError):
+            lifecycle.record_phase(self.root, "sdlc-start", "PASS", "Native startup.", [relative],
+                                   coordinator_session="native-child")
+
+    def test_startup_selector_cannot_override_admitted_owner(self):
+        relative = self.startup_artifact()
+        lifecycle.record_phase(self.root, "sdlc-start", "PASS", "Native startup.", [relative],
+                               coordinator_session="native-child")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "only valid for initial"):
+            lifecycle.record_phase(self.root, "sdlc-start", "PASS", "Override attempt.", [relative],
+                                   coordinator_session="outer-verifier")
+
+    def test_accepted_uninitialized_run_can_be_quiescent_without_startup_pass(self):
+        import verification_workspace as workspace
+        self.exited_native()
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "outer-verifier"}):
+            with workspace.product_quiescence(self.root, lifecycle):
+                pass
+        _, state = lifecycle.load_active(self.root)
+        self.assertNotIn("workflow_startup", state)
+        self.assertEqual(state["phases"], [])
+        self.assertFalse((self.run / "current-state.json").exists())
+
+    def test_incomplete_startup_cleanup_rejects_missing_owner_record(self):
+        import verification_workspace as workspace
+        self.exited_native()
+        (self.run.parent / "active.lock").unlink()
+        with self.assertRaises(workspace.WorkspaceError):
+            with workspace.product_quiescence(self.root, lifecycle):
+                self.fail("missing ownership must block cleanup")
+
+    def test_incomplete_startup_cleanup_keeps_writer_and_lease_gates(self):
+        import verification_workspace as workspace
+        self.exited_native()
+        for owner, method in ((objectives, "_writers_quiescent"), (resources, "require_released")):
+            with self.subTest(method=method), mock.patch.object(owner, method, side_effect=RuntimeError("still active")):
+                with self.assertRaises(workspace.WorkspaceError):
+                    with workspace.product_quiescence(self.root, lifecycle):
+                        self.fail("active product ownership must block cleanup")
 
 
 if __name__ == "__main__":

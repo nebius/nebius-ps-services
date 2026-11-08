@@ -19,6 +19,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+try:
+    import _vpngw_ipsec_observation as observation  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from . import ipsec_observation as observation
+
 SCHEMA = "nebius-vpngw.packet-health.v1"
 OBSERVATION_SECONDS = 3
 GATEWAY_TIMEOUT = 30
@@ -36,89 +41,25 @@ def _integer(value: Any, base: int = 10) -> int:
     return result
 
 
-def _section(tokens: list[str], offset: int) -> tuple[dict[str, Any], int]:
-    """Parse balanced VICI raw sections and lists, including unknown nested fields."""
-    result: dict[str, Any] = {}
-    while offset < len(tokens) and tokens[offset] != "}":
-        key = tokens[offset]
-        offset += 1
-        if offset >= len(tokens) or key in result:
-            raise ValueError("invalid VICI section")
-        kind = tokens[offset]
-        offset += 1
-        if kind == "=" and offset < len(tokens) and tokens[offset] == "[":
-            kind = "["
-            offset += 1
-        if kind == "{":
-            value, offset = _section(tokens, offset)
-            result[key] = value
-        elif kind == "[":
-            while offset < len(tokens) and tokens[offset] != "]":
-                if tokens[offset] in {"{", "}", "["}:
-                    raise ValueError("invalid VICI list")
-                offset += 1
-            if offset >= len(tokens):
-                raise ValueError("incomplete VICI list")
-            offset += 1
-        elif kind == "=":
-            words = []
-            while offset < len(tokens) and tokens[offset] != "}":
-                if offset + 1 < len(tokens) and tokens[offset + 1] in {"=", "{", "["}:
-                    break
-                if tokens[offset] in {"{", "[", "]", "="}:
-                    raise ValueError("invalid VICI value")
-                words.append(tokens[offset])
-                offset += 1
-            result[key] = " ".join(words)
-        else:
-            raise ValueError("invalid VICI token")
-    if offset >= len(tokens):
-        raise ValueError("incomplete VICI section")
-    return result, offset + 1
-
-
 def parse_sas(raw: str) -> list[dict[str, Any]]:
-    tokens = re.findall(r"[^\s{}\[\]=]+|[{}\[\]=]", raw)
-    offset = 0
     children = []
-    replied = False
-    while offset < len(tokens):
-        header = tokens[offset : offset + 3]
-        if header not in (["list-sa", "event", "{"], ["list-sas", "reply", "{"]):
-            raise ValueError("unrecognized VICI output")
-        section, offset = _section(tokens, offset + 3)
-        if header[0] == "list-sas":
-            if section or replied or offset != len(tokens):
-                raise ValueError("invalid VICI reply")
-            replied = True
-            continue
-        for ike in section.values():
-            if not isinstance(ike, dict):
-                raise ValueError("invalid IKE section")
-            child_sas = ike.get("child-sas", {})
-            if not isinstance(child_sas, dict):
-                raise ValueError("invalid CHILD section")
-            for child in child_sas.values():
-                if not isinstance(child, dict):
-                    raise ValueError("invalid CHILD")
-                if child.get("state") not in {"INSTALLED", "REKEYING", "REKEYED", "DELETING"}:
-                    continue
-                if child.get("protocol") != "ESP":
-                    continue
-                # VICI prints SPI and interface IDs as hexadecimal even without 0x.
-                children.append(
-                    {
-                        "name": child["name"],
-                        "unique": _integer(child["uniqueid"]),
-                        "spi": _integer(child["spi-in"], 16),
-                        "reqid": _integer(child["reqid"]),
-                        "if_id": _integer(child.get("if-id-in", "0"), 16),
-                        "src": str(ipaddress.ip_address(ike["remote-host"])),
-                        "dst": str(ipaddress.ip_address(ike["local-host"])),
-                    }
-                )
-    if not replied:
-        raise ValueError("incomplete VICI response")
+    for _name, ike in observation.parse_sas(raw):
+        for child in ike.get("child-sas", {}).values():
+            if child.get("state") not in {"INSTALLED", "REKEYING", "REKEYED", "DELETING"}:
+                continue
+            if child.get("protocol") != "ESP":
+                continue
+            children.append(
+                {
+                    "name": child["name"],
+                    "unique": _integer(child["uniqueid"]),
+                    "spi": _integer(child["spi-in"], 16),
+                    "reqid": _integer(child["reqid"]),
+                    "if_id": observation.interface_id(child.get("if-id-in")),
+                    "src": str(ipaddress.ip_address(ike["remote-host"])),
+                    "dst": str(ipaddress.ip_address(ike["local-host"])),
+                }
+            )
     return children
 
 
@@ -277,7 +218,9 @@ def snapshot(expected: dict[str, int | None], deadline: float) -> dict[str, Any]
     for source in ("sas", "states", "links", "global"):
         try:
             if source == "sas":
-                children = parse_sas(_command(["swanctl", "--list-sas", "--raw"], deadline))
+                children = parse_sas(
+                    observation.snapshot(max(0.0, min(5, deadline - time.monotonic()))).json()
+                )
             elif source == "states":
                 states = parse_xfrm(
                     _command(["ip", "-s", "xfrm", "state", "list", "nokeys"], deadline)
@@ -407,7 +350,16 @@ def probe(expected: dict[str, int | None]) -> dict[str, Any]:
 
 def remote_script(expected: dict[str, int | None]) -> str:
     # No YAML, PSKs, agent imports, remote files, shell interpolation or CLI args.
-    return Path(__file__).read_text() + "\nprint(json.dumps(probe(" + repr(expected) + ")))\n"
+    from .observation_bundle import streamed_bootstrap
+
+    return (
+        streamed_bootstrap()
+        + "\n"
+        + Path(__file__).read_text().replace("from __future__ import annotations", "")
+        + "\nprint(json.dumps(probe("
+        + repr(expected)
+        + ")))\n"
+    )
 
 
 def _natural(value: Any) -> bool:

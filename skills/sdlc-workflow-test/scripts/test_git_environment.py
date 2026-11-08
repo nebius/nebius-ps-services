@@ -339,12 +339,24 @@ class GitEnvironmentTests(unittest.TestCase):
         probe.write_text(f'#!{sys.executable}\n' +
                          "import sys\nexec(sys.argv[2])\n")
         probe.chmod(0o700)
+        # This test uses a synthetic native executable. Model that host's
+        # installation discovery while retaining the actual launcher/exec path.
+        launch = (
+            "import sys;from pathlib import Path;from unittest.mock import patch; "
+            "sys.path.insert(0,sys.argv.pop(1)); import run_with_git_environment as native; "
+            "import three_tier_lifecycle; "
+            "catalog=Path(native.__file__).resolve().parents[2]; "
+            "context=patch('agent_runtime.installed_skills_dir',return_value=catalog); context.start(); "
+            "raise SystemExit(native.main(sys.argv[1:]))"
+        )
         result = subprocess.run([
-            sys.executable, str(Path(__file__).with_name("run_with_git_environment.py")),
+            sys.executable, "-B", "-c", launch, str(Path(__file__).parent),
             "--profile", str(self.profile), "--cwd", str(self.project), "--", str(probe),
             "--no-daemon", "import os,subprocess; assert not any(k in os.environ for k in "
             "['GITHUB_TOKEN','UNRELATED_ACCESS','CODEX_THREAD_ID']); "
             "assert os.environ['SKILLS_GIT_PROFILE']; "
+            "from pathlib import Path; p=Path(os.environ['CODEX_HOME'])/'private-mode-probe'; "
+            "p.write_text('synthetic'); assert p.stat().st_mode & 0o777 == 0o600; "
             "assert os.environ['ZDOTDIR'] == os.environ['CODEX_HOME']; "
             "assert os.environ['BASH_ENV'] == '/dev/null'; "
             "subprocess.run(['git','status','--porcelain'],check=True); "

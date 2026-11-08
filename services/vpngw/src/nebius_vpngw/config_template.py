@@ -62,8 +62,9 @@ gateway_group:
   #   - ["203.0.113.10"]  # VM0 NIC0
   #   - ["203.0.113.20"]  # VM1 NIC0
   # network_id: "vpcnetwork-abc123def456"
-  # Existing customer groups, attached only to newly created VMs.
-  # initial_security_group_ids: ["vpcsecuritygroup-example"]
+  # Desired existing groups on every gateway NIC. apply attaches/removes IDs.
+  # Omitted or [] restores the permissive network default group.
+  # security_group_ids: ["vpcsecuritygroup-example"]
   subnet:
     name: "vpngw-subnet"
     cidr: null         # null=auto-carve from parent network private CIDRs; or set e.g. "172.16.30.0/24"

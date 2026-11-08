@@ -24,7 +24,11 @@ def publisher(
         identity=identity,
         service_identity=service_identity or identity,
         sample=sample
-        or (lambda deadline: LocalReadiness(True, True, True, True, serving_ready=True)),
+        or (
+            lambda deadline: LocalReadiness(
+                True, True, True, True, serving_ready=True, protection_ready=True
+            )
+        ),
         build=build
         or (
             lambda snapshot, ready, evidence: replace(
@@ -65,7 +69,7 @@ def test_path_changes_preserve_only_fresh_service_liveness(transition):
         if transition == "collect":
             path[0] += 1
         now[0] += 0.1
-        return LocalReadiness(True, True, True, True, serving_ready=True)
+        return LocalReadiness(True, True, True, True, serving_ready=True, protection_ready=True)
 
     pub = publisher(
         now, sent, identity=lambda: path[0], service_identity=lambda: "boot-config", sample=sample
@@ -100,7 +104,9 @@ def test_unknown_path_positive_service_proof_is_rechecked_after_build(change):
         now,
         sent,
         service_identity=lambda: config[0],
-        sample=lambda deadline: LocalReadiness(True, False, False, False, sample_complete=False),
+        sample=lambda deadline: LocalReadiness(
+            True, False, False, False, sample_complete=False, protection_ready=True
+        ),
         build=build,
     )
     pub.collect()
@@ -118,7 +124,7 @@ def test_partial_or_transition_sample_cannot_claim_health(change):
             now[0] = deadline
         if change == "identity":
             identity[0] += 1
-        return LocalReadiness(True, True, True, True, serving_ready=True)
+        return LocalReadiness(True, True, True, True, serving_ready=True, protection_ready=True)
 
     pub = publisher(now, sent, identity=lambda: identity[0], sample=sample)
     if change == "transition":
@@ -321,7 +327,9 @@ def identity_runtime(tmp_path):
     runtime.config_path.write_text("fixture: true\n")
     runtime.monotonic_clock = lambda: 100.0
     runtime.ports = SimpleNamespace(
-        sample_local_health=lambda **kw: LocalReadiness(True, True, True, True, serving_ready=True)
+        sample_local_health=lambda **kw: LocalReadiness(
+            True, True, True, True, serving_ready=True, protection_ready=True
+        )
     )
     state = empty_state()
     state["episode"] = {
@@ -422,7 +430,7 @@ def test_semantic_identity_change_invalidates_overlapping_health(tmp_path, chang
         if change == "config":
             runtime.config_path.write_text("fixture: changed\n")
         save()
-        return LocalReadiness(True, True, True, True, serving_ready=True)
+        return LocalReadiness(True, True, True, True, serving_ready=True, protection_ready=True)
 
     pub = publisher(now, sent, identity=runtime._health_identity, sample=sample)
     pub.collect()

@@ -290,7 +290,7 @@ def test_default_runtime_keeps_heartbeats_fresh_during_multiple_cloud_observatio
         config=_runtime_config(),
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=observe_cloud,
             data_plane=lambda: DataPlaneMode.ACTIVE,
             routes=lambda: None,
@@ -358,7 +358,7 @@ def test_snapshot_adapter_requires_binding_and_observes_current_guard(tmp_path: 
         config=_runtime_config(),
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -401,7 +401,7 @@ def test_snapshot_adapter_keeps_mtls_transfer_inhibition_out_of_apply_lock(
     def providers(*, apply_operation_id: str | None) -> VMHASnapshotProviders:
         return VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -458,7 +458,7 @@ def test_snapshot_adapter_identifies_exact_standby_replacement_inhibition(
         config=_runtime_config(),
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -501,7 +501,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -518,7 +518,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
     assert status["state"] == "blocked"
     assert status["reasons"] == ["mtls-rotation-active"]
     assert status["controller_capabilities"] == [
-        "independent-heartbeat-v5",
+        "independent-heartbeat-v6",
         "connection-tunnel-selection-v1",
         "vm-ha-mtls-rotation-quiescence-v1",
         "vm-ha-live-peer-replacement-v4",
@@ -1678,7 +1678,7 @@ def test_snapshot_discards_only_redundant_post_promotion_automatic_lineage(
         config=config,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -1701,8 +1701,10 @@ def test_snapshot_discards_only_redundant_post_promotion_automatic_lineage(
         assert lineage_path.exists()
 
 
+@pytest.mark.parametrize("routing_mode", ["static", "bgp"])
 def test_apply_owner_adoption_retires_exact_prior_generation_promotion_receipt(
     tmp_path: Path,
+    routing_mode: str,
 ) -> None:
     config = _passive_runtime_config()
     (tmp_path / "guard.json").write_text(json.dumps({"guard_boot_id": "boot-a"}), encoding="utf-8")
@@ -1736,7 +1738,7 @@ def test_apply_owner_adoption_retires_exact_prior_generation_promotion_receipt(
         config=config,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -1748,6 +1750,35 @@ def test_apply_owner_adoption_retires_exact_prior_generation_promotion_receipt(
         boot_id=lambda: "boot-a",
     )
 
+    # The real controller calls tunnel processing before its ordinary snapshot.
+    # Prior-generation adoption must not recurse into the held rearm lock,
+    # crash the process, or discard the old receipt from the tunnel path.
+    from tests.unit.test_ha_tunnel_selection import config as tunnel_config
+
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+
+    resolved = tunnel_config(routing_mode)
+    resolved["vm_ha"] = config
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(resolved))
+    tunnel_runtime = ControllerTunnelRuntime(
+        path,
+        tmp_path,
+        SimpleNamespace(
+            snapshots=adapter,
+            controller=SimpleNamespace(
+                checkpoints=VMHACheckpointFileStore(tmp_path / "controller-checkpoint.json")
+            ),
+        ),
+        SimpleNamespace(
+            routes=SimpleNamespace(),
+            data_plane=SimpleNamespace(mode=lambda: DataPlaneMode.PASSIVE),
+        ),
+    )
+    before = receipt_path.read_bytes()
+    tunnel_runtime.step()
+    assert receipt_path.read_bytes() == before
+    assert not (tmp_path / "tunnel-selection.json").exists()
     snapshot = adapter.observe()
 
     assert snapshot.apply_locked is True
@@ -1819,7 +1850,7 @@ def test_generation_adoption_defers_retirement_until_local_passive_replay_finish
         config=config,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: mode,
             routes=lambda: None,
@@ -1914,7 +1945,7 @@ def test_prior_generation_promotion_receipt_retirement_remains_fail_closed(
         config=config,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -3377,7 +3408,7 @@ def test_generation_adoption_retires_completed_restoration_before_receipt(
         config=config,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=observe_cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -3762,7 +3793,7 @@ def test_transfer_effect_inhibition_allows_only_exact_owner_forwarding_restore(
         peer_received_at=None,
         apply_locked=False,
         emergency_active_only=False,
-        readiness=LocalReadiness(True, True, True, True),
+        readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         cloud=CloudObservation(
             authoritative=True,
             allocation_id=action.allocation_id,
@@ -3850,6 +3881,7 @@ def test_transfer_effect_inhibition_allows_exact_replacement_owner_preparation(
             False,
             candidate_preparation_required=True,
             cold_standby_ready=True,
+            protection_ready=True,
         ),
         cloud=CloudObservation(
             authoritative=True,
@@ -4415,7 +4447,7 @@ def test_service_executes_verified_controller_from_authoritative_binding(tmp_pat
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.BLOCKED,
             routes=lambda: None,
@@ -4462,7 +4494,7 @@ def test_passive_standby_ready_uses_strict_current_boot_evidence(tmp_path: Path)
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -4499,6 +4531,78 @@ def test_passive_standby_ready_uses_strict_current_boot_evidence(tmp_path: Path)
     assert "standby-ready-evidence-invalid" in status["standby_readiness_reasons"]
 
 
+def test_passive_repair_requires_two_healthy_observations_before_standby_receipt(tmp_path):
+    from tests.unit.test_vm_ha_controller import _peer
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"vm_ha": _runtime_config()}))
+    cloud = CloudObservation(
+        True,
+        "allocation-a",
+        "node-b",
+        "node-b",
+        ComputeState.RUNNING,
+        False,
+        False,
+        False,
+        "7",
+        former_attachment_exact=True,
+        candidate_attachment_absent=True,
+    )
+    (tmp_path / "guard.json").write_text(
+        json.dumps({"guard_boot_id": "boot-a", "data_plane_mode": "passive"})
+    )
+    now = [100.0]
+    peer = replace(
+        _peer(node_id="node-b", configured_role="passive"),
+        cluster_id="cluster-a",
+        authority_ready=True,
+        authority_valid_until=1000,
+        evidence=HeartbeatEvidence(state="healthy", cloud_status="complete", cloud_age_seconds=0),
+    )
+    health = [
+        LocalReadiness(
+            False,
+            True,
+            False,
+            False,
+            protection_ready=True,
+            local_defects=("daemon-configuration-missing:strongswan",),
+        )
+    ]
+    effects = []
+    runtime = build_vm_ha_controller_runtime(
+        config_path=config_path,
+        providers=VMHASnapshotProviders(
+            peer=lambda: (peer, now[0]),
+            readiness=lambda: health[0],
+            cloud=lambda: cloud,
+            data_plane=lambda: DataPlaneMode.PASSIVE,
+            routes=lambda: None,
+        ),
+        handlers={kind: effects.append for kind in ActionKind},
+        state_dir=tmp_path,
+        clock=lambda: now[0],
+        boot_id=lambda: "boot-a",
+    )
+    status = runtime.step()
+    assert not status["standby_ready"]
+    assert [action.kind for action in effects] == [ActionKind.REPAIR_LOCAL_DATAPLANE], status[
+        "reasons"
+    ]
+    health[0] = LocalReadiness(True, True, True, True, protection_ready=True)
+    now[0] += 2
+    first = runtime.step()
+    assert not first["standby_ready"]
+    assert not (tmp_path / "standby-ready.json").exists()
+    assert "standby-repair-verification-pending" in first["standby_readiness_reasons"]
+    now[0] += 2
+    second = runtime.step()
+    assert second["standby_ready"]
+    assert json.loads((tmp_path / "standby-ready.json").read_text())["boot_id"] == "boot-a"
+    assert len(effects) == 1
+
+
 def test_passive_routing_hygiene_drift_invalidates_standby_status(
     tmp_path: Path,
 ) -> None:
@@ -4525,7 +4629,9 @@ def test_passive_routing_hygiene_drift_invalidates_standby_status(
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True, routing_hygiene_ready=False),
+            readiness=lambda: LocalReadiness(
+                True, True, True, True, routing_hygiene_ready=False, protection_ready=True
+            ),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.PASSIVE,
             routes=lambda: None,
@@ -4971,7 +5077,7 @@ def test_controller_effect_failure_persists_secret_free_blocked_status(
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (peer, 9.0),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: CloudObservation(
                 True,
                 "allocation-a",
@@ -5069,7 +5175,7 @@ def test_corrupt_rearm_status_cannot_fail_the_safety_controller(tmp_path: Path) 
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (None, None),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.ACTIVE,
             routes=lambda: routes,
@@ -5234,7 +5340,7 @@ def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
         sequence=3,
         clock=9.0,
         snapshot=standby_snapshot,
-        local_readiness=LocalReadiness(True, True, True, True),
+        local_readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         evidence=HeartbeatEvidence(
             state="unknown" if peer_case == "unknown" else "healthy",
             serving=peer_case == "serving",
@@ -5253,7 +5359,7 @@ def test_owner_redundancy_requires_rearm_bound_to_current_promotion(
         config_path=config_path,
         providers=VMHASnapshotProviders(
             peer=lambda: (peer, 9.0),
-            readiness=lambda: LocalReadiness(True, True, True, True),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=lambda: cloud,
             data_plane=lambda: DataPlaneMode.ACTIVE,
             routes=lambda: routes,
@@ -5365,7 +5471,10 @@ def test_default_factory_two_node_transfer_restarts_after_every_effect(
             self.binding = binding
 
         def readiness(self) -> LocalReadiness:
-            return LocalReadiness(True, True, True, True)
+            return LocalReadiness(True, True, True, True, protection_ready=True)
+
+        def established_context(self) -> RouteReconciliationContext | None:
+            return self.receipt_context()
 
         def receipt_context(self) -> RouteReconciliationContext | None:
             receipts = shared["receipts"]

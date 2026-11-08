@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -288,9 +289,34 @@ EXPECTED_PUBLIC_COMMAND_PATHS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_vm_ha_apply_identity_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_vm_ha_apply_identity_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Keep unrelated CLI orchestration tests below the online identity boundary."""
 
+    # These orchestration tests already replace all cloud/guest transports.
+    # Desired attachment effects and real SDK requests have their own boundary tests.
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.apply_command.CommandJournal",
+        lambda project, gateway, **kwargs: CommandJournal(
+            project, gateway, root=kwargs.get("root", tmp_path / "apply" / project / gateway)
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.security_group_apply.inspect_plan",
+        lambda *_args, **_kwargs: {"desired_ids": [], "members": {}},
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.security_group_apply.require_plan", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.security_group_apply.AttachmentJournal.pending", lambda _self: None
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ordinary_route_command.prepare", lambda *_args, **_kwargs: None
+    )
     credentials = SimpleNamespace(
         service_account_id="service-account-test",
         project_id="project-test",
@@ -302,6 +328,7 @@ def _isolate_vm_ha_apply_identity_preflight(monkeypatch: pytest.MonkeyPatch) -> 
         "nebius_vpngw.cli.inspect_managed_vm_ha_credentials",
         lambda **_kwargs: SimpleNamespace(
             action="reuse",
+            command_action="reuse",
             credentials=credentials,
             source_path=Path("/private/managed-vm-ha-credentials.json"),
             approval_record=lambda: {"action": "reuse"},
@@ -313,6 +340,16 @@ def _isolate_vm_ha_apply_identity_preflight(monkeypatch: pytest.MonkeyPatch) -> 
             credentials=managed_plan.credentials,
             token_identity=SimpleNamespace(token="managed-token"),
         ),
+    )
+
+    def release_runtime(_ssh, _target, _instance, _local, request):
+        assert request["action"] == "release-runtime"
+        return {"status": "verified"}
+
+    monkeypatch.setattr("nebius_vpngw.deploy.ordinary_apply.remote", release_runtime)
+    monkeypatch.setattr("nebius_vpngw.deploy.vm_ha_package.stage", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_created_packages.prepare", lambda **kwargs: kwargs["artifact"]
     )
     artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=(), capabilities=())
     monkeypatch.setattr("nebius_vpngw.cli._unchanged_vm_ha_apply", lambda *args, **kwargs: False)
@@ -613,10 +650,12 @@ def test_status_ipsec_fallback_does_not_borrow_another_bgp_peer(tmp_path, monkey
             {"name": "static-site", "routing_mode": "static", "tunnels": [{"name": "static"}]},
         ]
     }
-    instance = SimpleNamespace(hostname="gateway-0", external_ip="192.0.2.100")
+    instance = SimpleNamespace(
+        hostname="gateway-0", external_ip="192.0.2.100", config_yaml=yaml.safe_dump(cfg)
+    )
     plan = SimpleNamespace(
         vm_ha=None,
-        gateway_group=SimpleNamespace(name="gateway", region="eu-test1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-test1"),
         iter_instance_configs=lambda: (instance,),
     )
     manager = _ContextManagedNamespace(
@@ -636,12 +675,17 @@ def test_status_ipsec_fallback_does_not_borrow_another_bgp_peer(tmp_path, monkey
                 }
             }
             return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
-        if "ipsec statusall" in remote:
-            output = "".join(
-                f"{name}[1]: ESTABLISHED 1 minute ago, "
-                "10.0.0.1[10.0.0.1]...192.0.2.10[192.0.2.10]\n"
-                for name in ("known", "missing", "static")
-            )
+        if "<vici-probe>" in remote:
+            from tests.unit.test_ipsec_observation import event
+
+            from nebius_vpngw.ipsec_observation import Inventory
+
+            output = Inventory.from_events(
+                [
+                    event(name=name, uid=str(i + 1), ifid=f"{100 + i:08x}")
+                    for i, name in enumerate(("known", "missing", "static"))
+                ]
+            ).json()
             return SimpleNamespace(returncode=0, stdout=output, stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="unavailable")
 
@@ -875,7 +919,7 @@ def test_prep_network_help_and_interactive_flags() -> None:
 
 
 @pytest.fixture
-def ordinary_deployment_boundary(monkeypatch):
+def ordinary_deployment_boundary(monkeypatch, tmp_path):
     """Isolate deployment I/O in tests of trust, IAM, readiness and HA removal.
 
     The real plan/approval/receipt path is exercised in test_ordinary_apply.py.
@@ -884,6 +928,8 @@ def ordinary_deployment_boundary(monkeypatch):
     from nebius_vpngw import cli
     from nebius_vpngw.deploy import ordinary_apply
 
+    pinned = tmp_path / "mock-agent.whl"
+    pinned.write_bytes(b"unit-test artifact")
     original_pin = ordinary_apply.pin_agent_artifact
     monkeypatch.setattr(
         ordinary_apply,
@@ -895,11 +941,22 @@ def ordinary_deployment_boundary(monkeypatch):
                 for c in local.get("connections", [])
                 for t in c.get("tunnels", [])
             )
-            else None
+            else pinned
         ),
     )
 
-    monkeypatch.setattr(cli, "_prepare_ordinary_apply", lambda *args, **kwargs: ({}, {}, False))
+    monkeypatch.setattr(
+        cli,
+        "_prepare_ordinary_apply",
+        lambda *args, **kwargs: (
+            {},
+            {},
+            False,
+            SimpleNamespace(
+                resumed=False, plan=SimpleNamespace(effects=()), approval=None, routes=None
+            ),
+        ),
+    )
     monkeypatch.setattr(
         ordinary_apply,
         "inspect_plan",
@@ -919,6 +976,7 @@ def ordinary_deployment_boundary(monkeypatch):
             prepared.target, prepared.instance, local, fail_closed=True
         ),
     )
+    monkeypatch.setattr(ordinary_apply, "stage_plan", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
@@ -964,7 +1022,9 @@ def _gateway_discovery_plan(
 ) -> SimpleNamespace:
     instances = tuple(SimpleNamespace(hostname=name, external_ip=None) for name in instance_names)
     return SimpleNamespace(
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-test1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-test1"
+        ),
         vm_ha=vm_ha,
         iter_instance_configs=lambda: instances,
     )
@@ -3318,7 +3378,9 @@ def test_vm_ha_authoritative_binding_materializes_exact_current_owner() -> None:
             ),
         ),
     )
-    plan = SimpleNamespace(gateway_group=SimpleNamespace(name="nebius-vpn-gw"))
+    plan = SimpleNamespace(
+        gateway_group=SimpleNamespace(security_group_ids=(), name="nebius-vpn-gw")
+    )
 
     state = _active_vm_ha_lifecycle_state(
         plan=plan,
@@ -3372,7 +3434,7 @@ def test_vm_ha_approval_digest_binds_current_revisions_and_recovery_domain() -> 
             members=members,
             generation=generation,
         ),
-        gateway_group=SimpleNamespace(name="gateway"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway"),
     )
     observation = {
         "members": [
@@ -3436,7 +3498,7 @@ def test_activation_recovery_approval_requires_exact_configured_active_reset() -
                 ),
             ),
         ),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="nebius-vpn-gw"),
     )
     lifecycle = _lifecycle_state(status=VMHALifecycleStatus.ACTIVATING)
     assert lifecycle.transaction is not None
@@ -3805,12 +3867,13 @@ def test_vm_ha_apply_authenticates_runtime_credentials_before_effect_boundaries(
     )
     plan = SimpleNamespace(
         vm_ha=object(),
+        gateway_group=SimpleNamespace(name="gateway"),
         validate=lambda: None,
         iter_instance_configs=lambda: iter(planned_instances),
     )
     local_cfg = {
         "project_id": "project-test",
-        "gateway_group": {"vm_spec": {}},
+        "gateway_group": {"name": "gateway", "vm_spec": {}},
     }
 
     with (
@@ -3832,11 +3895,12 @@ def test_vm_ha_apply_authenticates_runtime_credentials_before_effect_boundaries(
     assert "authentication-failed" in result.stdout
     preflight.assert_called_once()
     authenticate.assert_not_called()
-    lifecycle_store.assert_not_called()
+    lifecycle_store.assert_called_once_with(config_path)
+    lifecycle_store.return_value.write_verified.assert_not_called()
     manager.assert_not_called()
 
 
-def test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key(
+def test_vm_ha_apply_failed_retained_trust_preflight_does_not_create_default_directory(
     tmp_path: Path, monkeypatch
 ) -> None:
     config_path = tmp_path / "vm-ha.config.yaml"
@@ -3847,7 +3911,7 @@ def test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key(
     )
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         validate=lambda: None,
         iter_instance_configs=lambda: iter(members),
     )
@@ -3892,7 +3956,7 @@ def test_vm_ha_apply_prepares_default_directory_but_not_a_retained_member_key(
         cluster_id="cluster-a",
     )
     default_directory = tmp_path / ".ssh" / "nebius-vpngw" / "host-keys" / "gateway" / scope.digest
-    assert default_directory.is_dir()
+    assert not default_directory.exists()
     assert not tuple(default_directory.glob("*.key"))
 
 
@@ -3907,7 +3971,7 @@ def test_vm_ha_apply_routes_cli_auth_failure_around_ssh_preflight_to_renderer(
     )
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         validate=lambda: None,
         iter_instance_configs=lambda: iter(members),
     )
@@ -3957,6 +4021,7 @@ def test_vm_ha_apply_ssh_recovery_is_shared_across_routing_modes(
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
         gateway_group=SimpleNamespace(
+            security_group_ids=(),
             name="gateway",
             region="eu-west1",
             routing_mode=routing_mode,
@@ -4047,6 +4112,7 @@ def test_vm_ha_apply_retains_lifecycle_identity_before_replacement(
     plan = SimpleNamespace(
         vm_ha=vm_ha_spec,
         gateway_group=SimpleNamespace(
+            security_group_ids=(),
             name=lifecycle.gateway_name,
             region="eu-west1",
             vm_ha=vm_ha_spec,
@@ -4177,6 +4243,7 @@ def test_vm_ha_apply_planner_projects_persisted_rotation_problem(
         vm_ha=vm_ha_spec,
         gateway={},
         gateway_group=SimpleNamespace(
+            security_group_ids=(),
             name=lifecycle.gateway_name,
             region="eu-west1",
             vm_ha=vm_ha_spec,
@@ -4320,7 +4387,9 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
             generation=generation,
             members=members,
         ),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
         gateway={"local_prefixes": ["10.0.0.0/8"]},
         validate=lambda: None,
         iter_instance_configs=lambda: iter(instances),
@@ -4332,7 +4401,12 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
     }
     calls: list[str] = []
     manager_events: list[str] = []
-    trust_policy = SimpleNamespace(managed_action="create")
+    trust_policy = SimpleNamespace(
+        managed_action="create",
+        transport_targets=tuple((item.hostname, item.external_ip) for item in instances),
+        pin_targets=tuple((item.hostname, item.hostname) for item in instances),
+        fresh_identity_approval_sha256="1" * 64,
+    )
     reservation_entered = [False]
 
     def reserve(*args, **kwargs):
@@ -4368,6 +4442,7 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
                         "instance_name": "nebius-vpn-gw-0",
                         "present": True,
                         "compute_id": "compute-active",
+                        "boot_disk_id": "disk-active",
                         "compute_revision": "changed"
                         if cloud_drift and reservation_entered[0]
                         else "1",
@@ -4390,7 +4465,9 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
             "nebius_vpngw.cli.require_vm_ha_ssh_policy",
             return_value=trust_policy,
         ) as require_trust,
-        patch("nebius_vpngw.cli.publish_vm_ha_ssh_trust") as publish_trust,
+        patch(
+            "nebius_vpngw.deploy.provisioning_trust.publish", return_value={"trust": "verified"}
+        ) as publish_trust,
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush") as ssh_push,
         patch("nebius_vpngw.cli._approve_disruption", return_value=True)
@@ -4452,6 +4529,120 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
     assert observed == (removed if with_removed_tombstone else None)
 
 
+def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import ssh_policy
+
+    config = tmp_path / "fresh-ha.yaml"
+    config.write_text("version: 1\n")
+    members = tuple(
+        SimpleNamespace(
+            instance_index=index,
+            node_id=f"node-{index}",
+            role=SimpleNamespace(value="active" if index == 0 else "passive"),
+        )
+        for index in range(2)
+    )
+    instances = tuple(
+        SimpleNamespace(
+            instance_index=member.instance_index,
+            hostname=f"nebius-vpn-gw-{member.instance_index}",
+            external_ip=f"203.0.113.{10 + member.instance_index}",
+            vm_ha_node=member,
+        )
+        for member in members
+    )
+    generation = SimpleNamespace(
+        generation_id="a" * 64,
+        digests=SimpleNamespace(
+            configuration="a" * 64, static_routes="b" * 64, bgp_policy="c" * 64
+        ),
+    )
+    plan = SimpleNamespace(
+        vm_ha=SimpleNamespace(cluster_id="cluster", generation=generation, members=members),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
+        gateway={"local_prefixes": ["10.0.0.0/8"]},
+        validate=lambda: None,
+        iter_instance_configs=lambda: iter(instances),
+    )
+    plan.gateway_group.vm_ha = plan.vm_ha
+    local = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "gateway_group": {"vm_spec": {}},
+    }
+    policies = []
+    monkeypatch.delenv(ssh_policy.KNOWN_HOSTS_ENV, raising=False)
+    monkeypatch.delenv(ssh_policy.HOST_KEYS_DIR_ENV, raising=False)
+    monkeypatch.setattr(ssh_policy.Path, "home", lambda: tmp_path)
+
+    def prepare_trust(pairs, **kwargs):
+        policy = ssh_policy.require_vm_ha_ssh_policy(
+            pairs,
+            enrollment_hosts=kwargs["enrollment_hosts"],
+            trust_scope=kwargs["trust_scope"],
+            managed_root=tmp_path / "trust",
+            allow_managed_repair=kwargs["allow_managed_repair"],
+            persist_default_host_keys=kwargs["persist_default_host_keys"],
+        )
+        policies.append(policy)
+        return policy
+
+    class Manager(_ContextManagedFake):
+        def __init__(self, **kwargs):
+            pass
+
+        def discover_vm_ha_members(self, _spec):
+            return {}
+
+        def verify_vm_ha_existing_identities(self, *_args, **_kwargs):
+            pass
+
+        def check_changes(self, _spec):
+            return []
+
+        def observe_vm_ha_migration_state(self, *_args):
+            return {
+                "members": [],
+                "shared_allocation": {"present": False},
+                "route_targets": [],
+                "routes": [],
+            }
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
+        patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", side_effect=prepare_trust),
+        patch("nebius_vpngw.cli.VMManager", Manager),
+        patch.object(
+            VMHALifecycleState,
+            "start_provisioning",
+            side_effect=AssertionError("durable boundary reached"),
+        ) as durable,
+    ):
+        command = ["apply", "-c", str(config), "--output-format", "json"]
+        previews = [CliRunner().invoke(app, [*command, "--dry-run"]) for _ in range(2)]
+        for preview in previews:
+            assert preview.exit_code == 0, preview.stderr
+        approvals = [json.loads(result.stdout)["approval"] for result in previews]
+        assert policies[0].managed_receipt_sha256 != policies[1].managed_receipt_sha256
+        assert not (tmp_path / ".ssh").exists() and not (tmp_path / "trust").exists()
+        assert approvals[0] == approvals[1]
+        original_target = instances[1].external_ip
+        instances[1].external_ip = "203.0.113.12"
+        changed = CliRunner().invoke(app, [*command, "--approve-disruption", approvals[0]])
+        assert "Disruption approval is stale" in str(changed.exception)
+        durable.assert_not_called()
+        assert not (tmp_path / ".ssh").exists() and not (tmp_path / "trust").exists()
+        instances[1].external_ip = original_target
+        result = CliRunner().invoke(app, [*command, "--approve-disruption", approvals[0]])
+        assert durable.call_count == 1, (result.stdout, result.exception)
+        assert str(result.exception) == "durable boundary reached"
+
+
 def test_vm_ha_checkpoint_retains_the_ordinary_active_ssh_provenance() -> None:
     active = SimpleNamespace(
         instance_index=0,
@@ -4466,7 +4657,7 @@ def test_vm_ha_checkpoint_retains_the_ordinary_active_ssh_provenance() -> None:
         compute_id="compute-1",
     )
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(name="gateway"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway"),
         vm_ha=SimpleNamespace(
             members=(
                 SimpleNamespace(instance_index=0, role=SimpleNamespace(value="active")),
@@ -4520,7 +4711,7 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         SimpleNamespace(hostname="gateway-1", external_ip="203.0.113.11"),
     )
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(name="gateway"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway"),
         vm_ha=object(),
         iter_instance_configs=lambda: iter(instances),
     )
@@ -4594,7 +4785,29 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
     [
         (None, None, (("gcp", "static"),), False),
         (None, "prepare", (("gcp", "static"),), False),
+        (None, "retained-prepare", (("gcp", "static"),), False),
+        (None, "retained-prepare", (("gcp", "bgp"),), False),
+        *[
+            (None, "retained-prepare-" + boundary, (("gcp", mode),), False)
+            for boundary in (
+                "parent",
+                "before-authorization",
+                "after-authorization",
+                "receipt-before",
+                "receipt-after",
+            )
+            for mode in ("static", "bgp")
+        ],
         (None, "initial-bootstrap", (("gcp", "static"),), False),
+        (None, "fresh-parent-before-lifecycle", (("gcp", "static"),), False),
+        (None, "fresh-parent-before-lifecycle", (("gcp", "bgp"),), False),
+        (None, "attachment-corrective", (("gcp", "static"),), False),
+        (None, "combined-attachments", (("gcp", "static"),), False),
+        (None, "combined-attachments", (("gcp", "bgp"),), False),
+        (None, "combined-upgrade-recovery", (("gcp", "static"),), False),
+        (None, "parent-before-lifecycle", (("gcp", "static"),), False),
+        (None, "parent-before-lifecycle", (("gcp", "bgp"),), False),
+        (None, "parent-corrective", (("gcp", "static"),), False),
         (None, "completed-replacement", (("gcp", "static"),), False),
         (None, "completed-replacement", (("gcp", "bgp"),), False),
         (None, "prepare", (("aws", "bgp"),), False),
@@ -4735,7 +4948,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             generation=generation,
             members=(active.vm_ha_node, passive.vm_ha_node),
         ),
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         gateway={},
         manage_routes=False,
         should_manage_routes=lambda: False,
@@ -4756,6 +4969,18 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
     class UpgradeEvents(list):
         def append(self, event):
             super().append(event)
+            if (
+                invocation[0] == 2
+                and final_transition_fault == "combined-upgrade-recovery"
+                and event[:2] == ("package", "passive")
+            ):
+                raise RuntimeError("injected before release frontier")
+            if (
+                invocation[0] == 2
+                and final_transition_fault == "parent-corrective"
+                and event[:2] == ("clear", "active")
+            ):
+                raise RuntimeError("injected after owner release")
             if invocation[0] == 2 and final_transition_fault == f"upgrade-{event[0]}-{event[1]}":
                 raise RuntimeError("injected upgrade barrier interruption")
 
@@ -4813,7 +5038,24 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                     },
                 }
             return {
-                "members": [],
+                "members": [
+                    {
+                        "instance_name": f"gateway-{index}",
+                        "present": True,
+                        "compute_id": f"compute-{index}",
+                        "boot_disk_id": f"disk-{index}",
+                        "compute_revision": str(11 + index),
+                        "network_interface_name": "eth0",
+                        "subnet_id": "subnet-a",
+                        "primary_allocation_id": f"primary-{index}",
+                        "public_allocation_id": f"public-{index}",
+                        "public_ip": f"203.0.113.{10 + index}",
+                        "aliases": ["shared-private"]
+                        if f"compute-{index}" == owner_compute_id
+                        else [],
+                    }
+                    for index in range(2)
+                ],
                 "project_id": "project-test",
                 "route_targets": [
                     target.model_dump(mode="json") for target in binding.route_targets
@@ -4870,6 +5112,16 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         def ensure_group(self, spec, recreate=False, local_prefixes=None):
             nonlocal ensure_calls
             ensure_calls += 1
+            for index in range(2):
+                effect = f"provision-gateway-{index}-compute"
+                self.journal.begin(effect)
+                self.journal.complete(
+                    effect,
+                    resource_updates={
+                        f"compute:gateway-{index}": f"compute-{index}",
+                        f"disk:gateway-{index}": f"disk-{index}",
+                    },
+                )
             return BoundResult({"gateway-0": "203.0.113.10", "gateway-1": "203.0.113.11"})
 
         def resume_vm_ha_activation(self, spec, local_prefixes=None):
@@ -5067,8 +5319,17 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
 
     def wait_with_controller_shaped_status(*, predicate, inst_cfg, **_kwargs):
         base = {
-            "controller_capabilities": ["independent-heartbeat-v5"],
-            "heartbeat": {"schema_version": 5, "peer_v5_fresh": True},
+            "node_id": inst_cfg.vm_ha_node.node_id,
+            "apply_locked": _kwargs.get("expected_apply_locked") is True,
+            "apply_operation_id": _kwargs.get("expected_operation_id"),
+            "guard_boot_id": "boot-" + inst_cfg.vm_ha_node.node_id,
+            "apply_convergence": {
+                "fresh": True,
+                "data_plane_mode": "passive",
+                "boot_id": "boot-" + inst_cfg.vm_ha_node.node_id,
+            },
+            "controller_capabilities": ["independent-heartbeat-v6"],
+            "heartbeat": {"schema_version": 6, "peer_v6_fresh": True},
             "observed_owner_node_id": owner_node_id,
             "ownership_epoch": "7",
             "pending_operation_id": None,
@@ -5255,6 +5516,23 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         store.write_verified(destroyed, predecessor_sha256=destruction.record_sha256)
         destroyed_sha256 = destroyed.record_sha256
 
+    from nebius_vpngw import cli
+
+    prepare_stopped = cli._prepare_stopped_vm_ha_packages
+    known_hosts = tmp_path / "package-test-known-hosts"
+    known_hosts.write_text("# Transport is replaced by FakeSSHPush in this command test.\n")
+    package_policy = cli.SSHTrustPolicy(
+        known_hosts_file=known_hosts,
+        known_hosts_sha256=hashlib.sha256(known_hosts.read_bytes()).hexdigest(),
+    )
+
+    def verify_package_barrier(**kwargs):
+        for phase in ("lock", "quiescent", "stopped-guarded"):
+            assert [role for step, role, _binding in observed if step == phase][
+                -2:
+            ] == deployment_roles
+        return prepare_stopped(**kwargs)
+
     with (
         patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
         patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
@@ -5264,6 +5542,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             "nebius_vpngw.cli.inspect_managed_vm_ha_credentials",
             return_value=SimpleNamespace(
                 action="reuse",
+                command_action="reuse",
                 credentials=verified_credentials,
                 source_path=Path("/private/managed-vm-ha-credentials.json"),
                 approval_record=lambda: {
@@ -5274,10 +5553,13 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         ),
         patch(
             "nebius_vpngw.cli.require_vm_ha_ssh_policy",
-            return_value=object(),
+            return_value=package_policy,
         ),
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+        patch(
+            "nebius_vpngw.cli._prepare_stopped_vm_ha_packages", side_effect=verify_package_barrier
+        ),
         patch(
             "nebius_vpngw.cli._prepare_vm_ha_managed_mtls",
             return_value=SimpleNamespace(changed=False, operation_id=None),
@@ -5295,7 +5577,468 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         apply_args = ["apply", "--local-config-file", str(config_path)]
         if final_transition_fault == "prepare":
             apply_args.append("--prepare-vm-ha-peer-rotation")
+        fresh_execution = None
+        if final_transition_fault == "fresh-parent-before-lifecycle":
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            with patch(
+                "nebius_vpngw.deploy.ha_command.HACommand.start_runtime",
+                side_effect=TimeoutError("interrupted before first lifecycle publication"),
+            ):
+                interrupted = CliRunner().invoke(app, apply_args)
+            assert interrupted.exit_code != 0
+            assert not observed and ensure_calls == 0
+            parent = CommandJournal("project-test", "gateway")
+            saved = parent.snapshot()
+            fresh_execution = saved["transaction"]["execution_id"]
+            assert saved["bindings"]["runtime"]["packages"]["checkpoint"] is None
+            assert all(
+                m["kind"] == "created" for m in saved["bindings"]["runtime"]["members"].values()
+            )
+            final_transition_fault = None
         first_result = CliRunner().invoke(app, apply_args)
+        if fresh_execution is not None:
+            assert first_result.exit_code == 0, (first_result.stdout, first_result.exception)
+            assert parent.snapshot()["transaction"]["execution_id"] == fresh_execution
+            assert parent.pending() is None
+        if final_transition_fault == "parent-before-lifecycle":
+            from nebius_vpngw import cli
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            assert first_result.exit_code == 0, first_result.stdout
+            before_lifecycle = VMHALifecycleStore(config_path).read(
+                expected_project_id="project-test", expected_gateway_name="gateway"
+            )
+            with patch(
+                "nebius_vpngw.deploy.ha_command.HACommand.start_runtime",
+                side_effect=RuntimeError("before lifecycle publication"),
+            ):
+                failed = CliRunner().invoke(app, apply_args)
+            assert failed.exit_code != 0
+            parent = CommandJournal("project-test", "gateway")
+            execution = parent.pending()["execution_id"]
+            packages = parent.snapshot()["bindings"]["runtime"]["packages"]
+            assert packages["checkpoint"] == before_lifecycle.record_sha256
+            assert packages["parent"] != before_lifecycle.transaction.operation_id
+            boundary = len(observed)
+            with (
+                patch("nebius_vpngw.cli._unchanged_vm_ha_apply", return_value=True),
+                patch(
+                    "nebius_vpngw.cli._plan_vm_ha_package_dependencies",
+                    wraps=cli._plan_vm_ha_package_dependencies,
+                ) as prepare,
+            ):
+                continued = CliRunner().invoke(app, apply_args)
+            assert continued.exit_code == 0, (continued.stdout, continued.exception)
+            assert parent.pending() is None
+            assert parent.snapshot()["transaction"]["execution_id"] == execution
+            assert prepare.call_args.kwargs["resume_parent"] == packages["parent"]
+            assert prepare.call_args.kwargs["resume_manifests"] == packages["manifests"]
+            assert (
+                VMHALifecycleStore(config_path)
+                .read(expected_project_id="project-test", expected_gateway_name="gateway")
+                .transaction.operation_id
+                == packages["parent"]
+            )
+            assert any(phase == "activate" for phase, _role, _ in observed[boundary:])
+            return
+        if final_transition_fault == "parent-corrective":
+            from test_vm_ha_corrective import record
+
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            assert first_result.exit_code == 0, first_result.stdout
+            invocation[0] = 2
+            failed = CliRunner().invoke(app, apply_args)
+            assert failed.exit_code != 0
+            store = VMHALifecycleStore(config_path)
+            checkpoint = store.read(
+                expected_project_id="project-test", expected_gateway_name="gateway"
+            )
+            parent = CommandJournal("project-test", "gateway")
+            original = parent.path.read_bytes()
+            old_execution = parent.pending()["execution_id"]
+            proposed = record(checkpoint)
+            proposed["owner"] = "node-a"
+            proposed.pop("approval")
+            corrective = SimpleNamespace(resumed=False, record=proposed)
+            invocation[0] = 3
+            boundary = len(observed)
+            with (
+                patch(
+                    "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
+                    return_value=SimpleNamespace(
+                        sha256=proposed["artifact"], dependency_plans=(), capabilities=()
+                    ),
+                ),
+                patch("nebius_vpngw.cli._plan_vm_ha_corrective", return_value=corrective),
+            ):
+                preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                assert preview.exit_code == 0, (preview.stdout, preview.exception)
+                assert parent.path.read_bytes() == original and observed[boundary:] == []
+                with patch(
+                    "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
+                    side_effect=RuntimeError("after parent successor"),
+                ):
+                    interrupted = CliRunner().invoke(app, apply_args)
+                assert interrupted.exit_code != 0
+                assert "after parent successor" in interrupted.stdout
+                successor = parent.snapshot()
+                assert successor["transaction"]["execution_id"] != old_execution
+                predecessor = successor["bindings"]["runtime"]["successor"]["predecessor"]
+                assert (parent.root / "history" / (predecessor + ".json")).read_bytes() == original
+                saved = parent.path.read_bytes()
+                repeated = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                assert repeated.exit_code == 0, (repeated.stdout, repeated.exception)
+                assert parent.path.read_bytes() == saved and observed[boundary:] == []
+            return
+        if (final_transition_fault or "").startswith("retained-prepare"):
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            assert first_result.exit_code == 0, first_result.stdout
+            invocation[0] = 2
+            receipt_fault = "receipt-" in final_transition_fault
+            if receipt_fault:
+
+                def interrupt_receipt(command, state):
+                    if final_transition_fault.endswith("receipt-after"):
+                        command.journal.verified("runtime", command.prepared_receipt(state))
+                    raise TimeoutError("interrupted preparation receipt")
+
+                with patch(
+                    "nebius_vpngw.deploy.ha_command.HACommand.finish_preparation", interrupt_receipt
+                ):
+                    prepared = CliRunner().invoke(
+                        app, [*apply_args, "--prepare-vm-ha-peer-rotation"]
+                    )
+                assert prepared.exit_code != 0
+            else:
+                prepared = CliRunner().invoke(app, [*apply_args, "--prepare-vm-ha-peer-rotation"])
+                assert prepared.exit_code == 0, (prepared.stdout, prepared.exception)
+            store = VMHALifecycleStore(config_path)
+            checkpoint = store.read(
+                expected_project_id="project-test", expected_gateway_name="gateway"
+            )
+            assert checkpoint.status is VMHALifecycleStatus.ACTIVATING
+            assert "heartbeat-upgrade-artifact" in dict(checkpoint.transaction.resource_bindings)
+            parent = CommandJournal("project-test", "gateway")
+            prepared_command = parent.snapshot()
+            assert prepared_command is not None
+            assert prepared_command["transaction"]["phase"] == (
+                "pending" if receipt_fault else "complete"
+            )
+            assert prepared_command["bindings"]["runtime"]["preparation"] is True
+            prepared_execution = prepared_command["transaction"]["execution_id"]
+            command_bytes, lifecycle_bytes = parent.path.read_bytes(), store.path.read_bytes()
+            boundary = len(observed)
+            invocation[0] = 3
+            if final_transition_fault == "retained-prepare":
+                with patch("nebius_vpngw.cli._unchanged_vm_ha_apply", return_value=False):
+                    drifted = CliRunner().invoke(
+                        app, [*apply_args, "--prepare-vm-ha-peer-rotation"]
+                    )
+                assert drifted.exit_code != 0
+
+                def stale_status(**kwargs):
+                    status = wait_with_controller_shaped_status(**kwargs)
+                    status["apply_convergence"]["fresh"] = False
+                    return status
+
+                with (
+                    patch("nebius_vpngw.cli._unchanged_vm_ha_apply", return_value=True),
+                    patch(
+                        "nebius_vpngw.cli._wait_for_vm_ha_agent_status", side_effect=stale_status
+                    ),
+                ):
+                    unknown = CliRunner().invoke(
+                        app, [*apply_args, "--prepare-vm-ha-peer-rotation"]
+                    )
+                assert unknown.exit_code != 0
+                assert parent.path.read_bytes() == command_bytes
+                assert store.path.read_bytes() == lifecycle_bytes
+                assert observed[boundary:] == []
+            with patch("nebius_vpngw.cli._unchanged_vm_ha_apply", return_value=True):
+                repeated = CliRunner().invoke(app, [*apply_args, "--prepare-vm-ha-peer-rotation"])
+            assert repeated.exit_code == 0, (repeated.stdout, repeated.exception)
+            assert parent.snapshot()["transaction"]["phase"] == "complete"
+            assert parent.snapshot()["transaction"]["execution_id"] == prepared_execution
+            if not receipt_fault:
+                assert parent.path.read_bytes() == command_bytes
+            assert store.path.read_bytes() == lifecycle_bytes
+            assert observed[boundary:] == []
+            continuation_fault = final_transition_fault != "retained-prepare" and not receipt_fault
+            if continuation_fault:
+                if final_transition_fault.endswith("-parent"):
+                    with patch(
+                        "nebius_vpngw.deploy.ha_command.HACommand.start_runtime",
+                        side_effect=TimeoutError("interrupted after continuation parent"),
+                    ):
+                        interrupted = CliRunner().invoke(app, apply_args)
+                else:
+                    checkpoint = (
+                        "before-"
+                        if final_transition_fault.endswith("before-authorization")
+                        else "after-"
+                    ) + "authorize-peer-rotation-continuation"
+
+                    def interrupt_authorization(store, state, **kwargs):
+                        assert parent.pending() is not None
+                        assert parent.pending()["execution_id"] != prepared_execution
+                        original_write_verified(store, state, **kwargs)
+                        if state.transaction.checkpoint == checkpoint:
+                            raise TimeoutError("interrupted continuation authorization")
+
+                    with patch.object(
+                        VMHALifecycleStore, "write_verified", interrupt_authorization
+                    ):
+                        interrupted = CliRunner().invoke(app, apply_args)
+                assert interrupted.exit_code != 0, interrupted.stdout
+                assert observed[boundary:] == []
+                execution = parent.pending()["execution_id"]
+            continued = CliRunner().invoke(app, apply_args)
+            assert continued.exit_code == 0, (continued.stdout, continued.exception)
+            assert parent.snapshot()["transaction"]["phase"] == "complete"
+            assert parent.snapshot()["transaction"]["execution_id"] != prepared_execution
+            if continuation_fault:
+                assert parent.snapshot()["transaction"]["execution_id"] == execution
+            assert (
+                store.read(
+                    expected_project_id="project-test", expected_gateway_name="gateway"
+                ).status
+                is VMHALifecycleStatus.ACTIVE
+            )
+            return
+        if final_transition_fault in {"combined-attachments", "combined-upgrade-recovery"}:
+            from copy import deepcopy
+
+            from nebius_vpngw.deploy import security_group_apply as attachments
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            assert first_result.exit_code == 0, first_result.stdout
+            before = [
+                {
+                    "name": "eth0",
+                    "subnet_id": "subnet-a",
+                    "network_id": "network-a",
+                    "explicit_ids": [],
+                    "effective_ids": ["sg-default"],
+                }
+            ]
+            desired = [{**before[0], "explicit_ids": ["sg-b"], "effective_ids": ["sg-b"]}]
+            attachment_plan = {
+                "desired_ids": ["sg-b"],
+                "members": {
+                    f"gateway-{index}": {
+                        "compute_id": f"compute-{index}",
+                        "before": before,
+                        "desired": desired,
+                    }
+                    for index in range(2)
+                },
+            }
+            fresh = deepcopy(attachment_plan)
+            child = attachments.AttachmentJournal("project-test", "gateway", root=tmp_path / "sg")
+            calls = []
+
+            def execute(_manager, _ssh, selected, _local, _instances, journal, **kwargs):
+                calls.append(kwargs)
+                assert selected == attachment_plan
+                if len(calls) == 1:
+                    raise TimeoutError("injected after HA runtime completion")
+                with journal:
+                    journal.begin(
+                        selected,
+                        scope=kwargs["scope"],
+                        approval=kwargs["approval"],
+                        operation_id=kwargs["operation_id"],
+                    )
+                    journal.state["transaction"].update(
+                        phase="complete", verified=list(selected["members"])
+                    )
+                    journal.save()
+                for member in fresh["members"].values():
+                    member["before"] = member["desired"]
+
+            with (
+                patch(
+                    "nebius_vpngw.deploy.security_group_apply.AttachmentJournal", return_value=child
+                ),
+                patch.object(
+                    child,
+                    "pending",
+                    side_effect=lambda: (
+                        record
+                        if (record := child.read_transaction()) and record["phase"] == "pending"
+                        else None
+                    ),
+                ),
+                patch(
+                    "nebius_vpngw.deploy.security_group_apply.inspect_plan",
+                    side_effect=lambda *_args, **_kwargs: deepcopy(fresh),
+                ),
+                patch("nebius_vpngw.deploy.security_group_apply.execute", side_effect=execute),
+            ):
+                invocation[0] = 2
+                failed = CliRunner().invoke(app, apply_args)
+                assert failed.exit_code != 0, failed.stdout
+                if final_transition_fault == "combined-upgrade-recovery":
+                    parent = CommandJournal("project-test", "gateway")
+                    old_parent, old_child = parent.path.read_bytes(), child.path.read_bytes()
+                    assert child.read_transaction()["operations"] == {}
+                    assert parent.pending()["progress"]["runtime"] == "started"
+                    checkpoint = VMHALifecycleStore(config_path).read(
+                        expected_project_id="project-test", expected_gateway_name="gateway"
+                    )
+                    recovery = SimpleNamespace(
+                        approval_state={
+                            "lifecycle": checkpoint.record_sha256,
+                            "artifact": "c" * 64,
+                        },
+                        authorization_persisted=False,
+                    )
+                    invocation[0] = 3
+                    with (
+                        patch(
+                            "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
+                            return_value=SimpleNamespace(
+                                sha256="c" * 64, dependency_plans=(), capabilities=()
+                            ),
+                        ),
+                        patch("nebius_vpngw.cli._plan_vm_ha_corrective", return_value=None),
+                        patch(
+                            "nebius_vpngw.cli._plan_vm_ha_upgrade_recovery", return_value=recovery
+                        ),
+                    ):
+                        preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                        assert preview.exit_code == 0, (preview.stdout, preview.exception)
+                        assert (parent.path.read_bytes(), child.path.read_bytes()) == (
+                            old_parent,
+                            old_child,
+                        )
+                        with patch.object(
+                            child,
+                            "replace_unstarted",
+                            side_effect=RuntimeError("before SG successor"),
+                        ):
+                            interrupted = CliRunner().invoke(app, apply_args)
+                        assert interrupted.exit_code != 0 and "before SG successor" in str(
+                            interrupted.exception
+                        )
+                        assert child.path.read_bytes() == old_child
+                        pending = parent.pending()
+                        assert pending["execution_id"] != child.read_transaction()["operation_id"]
+                        replay = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                        assert replay.exit_code == 0, (replay.stdout, replay.exception)
+                        with patch(
+                            "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
+                            side_effect=RuntimeError("after SG successor"),
+                        ):
+                            interrupted = CliRunner().invoke(app, apply_args)
+                        assert (
+                            interrupted.exit_code != 0
+                            and "after SG successor" in interrupted.stdout
+                        )
+                        assert child.read_transaction()["operation_id"] == pending["execution_id"]
+                        replay = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                        assert replay.exit_code == 0, (replay.stdout, replay.exception)
+                        assert child.read_transaction()["operations"] == {}
+                    return
+                assert "injected after HA runtime completion" in str(failed.exception)
+                parent = CommandJournal("project-test", "gateway")
+                assert parent.pending()["progress"]["runtime"] == "verified"
+                original_approval = child.read_transaction()["approval"]
+                assert original_approval != _canonical_digest(
+                    {"scope": child.read_transaction()["scope"], "attachments": attachment_plan}
+                )
+                boundary = len(observed)
+                saved = parent.path.read_bytes(), child.path.read_bytes()
+                with patch("nebius_vpngw.cli._unchanged_vm_ha_apply", return_value=True):
+                    preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                    assert preview.exit_code == 0, (preview.stdout, preview.exception)
+                    assert (parent.path.read_bytes(), child.path.read_bytes()) == saved
+                    resumed = CliRunner().invoke(app, apply_args)
+                    assert resumed.exit_code == 0, (resumed.stdout, resumed.exception)
+                    assert parent.pending() is None
+                    saved = parent.path.read_bytes(), child.path.read_bytes()
+                    repeated = CliRunner().invoke(app, apply_args)
+                    assert repeated.exit_code == 0, (repeated.stdout, repeated.exception)
+                    assert (parent.path.read_bytes(), child.path.read_bytes()) == saved
+                assert observed[boundary:] == []
+                assert (
+                    len(calls) == 2
+                    and calls[0]["approval"] == calls[1]["approval"] == original_approval
+                )
+                assert calls[0]["operation_id"] == calls[1]["operation_id"]
+            return
+        if final_transition_fault == "attachment-corrective":
+            from nebius_vpngw.deploy import security_group_apply as attachments
+
+            assert first_result.exit_code == 0, first_result.stdout
+            attachment_plan = {"desired_ids": [], "members": {}}
+            attachment_journal = attachments.AttachmentJournal(
+                "project-test", "gateway", root=tmp_path / "attachments"
+            )
+            with attachment_journal:
+                attachment_journal.begin(
+                    attachment_plan,
+                    scope=_canonical_digest(
+                        {"desired": local_cfg, "artifact": "e" * 64, "project": "project-test"}
+                    ),
+                    approval="d" * 64,
+                )
+            original = attachment_journal.path.read_bytes()
+            corrective = SimpleNamespace(
+                resumed=False,
+                record={
+                    "prior_artifact": "e" * 64,
+                    "artifact": "f" * 64,
+                    "prior_record": "c" * 64,
+                    "operation": "b" * 64,
+                },
+            )
+            invocation[0] = 2
+            boundary = len(observed)
+            with (
+                patch(
+                    "nebius_vpngw.deploy.security_group_apply.AttachmentJournal",
+                    return_value=attachment_journal,
+                ),
+                patch.object(
+                    attachment_journal,
+                    "pending",
+                    side_effect=attachment_journal.read_transaction,
+                ),
+                patch("nebius_vpngw.cli._plan_vm_ha_corrective", return_value=corrective),
+            ):
+                preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                assert preview.exit_code == 0, (preview.stdout, preview.exception)
+                assert attachment_journal.path.read_bytes() == original
+                assert observed[boundary:] == []
+                # Stop after the command has published its new attachment scope,
+                # before runtime or credential effects. A replay must retain the
+                # reviewed successor, not borrow the failed release's approval.
+                with patch(
+                    "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
+                    side_effect=RuntimeError("injected after attachment prelude"),
+                ):
+                    interrupted = CliRunner().invoke(app, apply_args)
+                    assert interrupted.exit_code != 0
+                    assert "injected after attachment prelude" in interrupted.stdout
+                pending = attachment_journal.read_transaction()
+                assert pending["approval"] != "d" * 64
+                assert pending["corrective_successor"]["prior_approval"] == "d" * 64
+                assert (
+                    attachment_journal.root / "history" / (pending["history"] + ".json")
+                ).read_bytes() == original
+                saved = attachment_journal.path.read_bytes()
+                resumed_preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                assert resumed_preview.exit_code == 0, (
+                    resumed_preview.stdout,
+                    resumed_preview.exception,
+                )
+                assert attachment_journal.path.read_bytes() == saved
+                assert observed[boundary:] == []
+            return
         if reversed_owner_case:
             assert first_result.exit_code == 0, first_result.stdout
             reversed_owner = True
@@ -5310,7 +6053,16 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             assert first_result.exit_code == 0, first_result.stdout
             _, _, failed_role, failure_kind = final_transition_fault.split("-")
             packages = tuple(
-                (instance.hostname, SimpleNamespace(instance=instance, digest="e" * 64))
+                (
+                    instance.hostname,
+                    SimpleNamespace(
+                        instance=instance,
+                        digest="e" * 64,
+                        manifest={},
+                        target_identity=instance.hostname,
+                        target=instance.hostname,
+                    ),
+                )
                 for instance in (passive, active)
             )
             artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=packages, capabilities=())
@@ -5542,7 +6294,11 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             and final_transition_fault in {None, "prepare"}
             and first_result.exit_code == 0
         ):
-            idempotent_result = CliRunner().invoke(app, apply_args)
+            with patch(
+                "nebius_vpngw.cli._unchanged_vm_ha_apply",
+                return_value=final_transition_fault == "prepare",
+            ):
+                idempotent_result = CliRunner().invoke(app, apply_args)
             if final_transition_fault == "prepare":
                 prepared_state = VMHALifecycleStore(config_path).read(
                     expected_project_id="project-test", expected_gateway_name="gateway"
@@ -5585,14 +6341,14 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         ]
         ordinary_trace = preparation_trace + [("clear", "active"), ("clear", "passive")]
         assert [(phase, role) for phase, role, _ in observed] == (
-            preparation_trace * 2 + ordinary_trace
+            preparation_trace + ordinary_trace
         )
         state = VMHALifecycleStore(config_path).read(
             expected_project_id="project-test", expected_gateway_name="gateway"
         )
         assert state is not None and state.status is VMHALifecycleStatus.ACTIVE
         assert ensure_calls == 1
-        assert resume_calls == 2
+        assert resume_calls == 1
     elif failing_stage_role is None and final_transition_fault in {None, "after-write"}:
         assert result.exit_code == 0, result.stdout
         expected_trace = [
@@ -5652,6 +6408,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 "public-allocation:gateway-1:eth0",
                 "route-targets-digest",
                 "heartbeat-initial-artifact",
+                "runtime-command-approval",
+                "runtime-command-execution",
+                "runtime-package-manifests",
             }
             assert bindings["heartbeat-initial-artifact"] == "f" * 64
             assert bindings["public-allocation:gateway-0:eth0"] == "retained-public-0"
@@ -5720,9 +6479,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
     expected_sources = [managed_source]
     if failing_stage_role != "passive":
         expected_sources.append(managed_source)
-    if final_transition_fault == "prepare":
-        expected_sources *= 3
-    elif final_transition_fault in {"before-write-once", "before-write-once-v3"} or (
+    if final_transition_fault in {"prepare", "before-write-once", "before-write-once-v3"} or (
         failing_stage_role is None and final_transition_fault is None
     ):
         expected_sources *= 2
@@ -5787,7 +6544,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
             generation=generation,
             members=(active.vm_ha_node, passive.vm_ha_node),
         ),
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         gateway={"local_prefixes": []},
         manage_routes=False,
         should_manage_routes=lambda: False,
@@ -6072,6 +6829,79 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
     )
     activating_state = replace(activating_state, transaction=transaction)
     lifecycle_store = VMHALifecycleStore(config_path)
+    if not before_first_write:
+        from nebius_vpngw.cli import _vm_ha_command_approval_scope
+        from nebius_vpngw.deploy import ha_command, ha_members
+        from nebius_vpngw.deploy.apply_command import CommandJournal
+
+        envelope = CommandJournal("project-test", "gateway")
+        intent = {
+            "recreate": False,
+            "prepare_peer_rotation": False,
+            "destructive": False,
+            "managed_ssh": None,
+            "managed_credentials": "reuse",
+        }
+        member_intent = ha_members.intent(
+            active_members,
+            created={"gateway-1"},
+            replacement=SimpleNamespace(
+                target_instance_name="gateway-1",
+                replacement_cycle=replacement_cycle,
+                approval_digest="1" * 64,
+                retired_compute_id="compute-old",
+                retired_disk_id="disk-old",
+            ),
+        )
+        command = ha_command.create(
+            envelope,
+            scope=_canonical_digest(
+                {"desired": local_cfg, "artifact": "f" * 64, "project": "project-test"}
+            ),
+            artifact="f" * 64,
+            action_scope=_canonical_digest(intent),
+            targets=ha_members.targets(member_intent),
+            approval="2" * 64,
+            runtime_scope=_canonical_digest(
+                _vm_ha_command_approval_scope(
+                    SimpleNamespace(sha256="f" * 64, dependency_plans=()), local_cfg, intent=intent
+                )
+            ),
+            report={
+                "kind": "active-standby-replacement",
+                "engine_digest": "1" * 64,
+                "effects": [],
+                "has_destructive_changes": False,
+                "managed_ssh_action": None,
+                "managed_credential_action": "reuse",
+                "owner_refresh_required": False,
+            },
+            attachment_plan=None,
+            members=member_intent,
+            artifact_key="heartbeat-initial-artifact",
+            packages={
+                "parent": "f" * 64,
+                "checkpoint": active_state.record_sha256,
+                "manifests": {},
+            },
+        )
+        with envelope:
+            command.begin()
+            command.start_runtime()
+            activating_state = replace(
+                activating_state,
+                transaction=replace(
+                    transaction,
+                    resource_bindings=tuple(
+                        sorted(
+                            {
+                                **dict(transaction.resource_bindings),
+                                **command.lifecycle_bindings(),
+                            }.items()
+                        )
+                    ),
+                ),
+            )
     lifecycle_store.path.write_text(
         json.dumps((active_state if before_first_write else activating_state).to_dict(), indent=2)
         + "\n",
@@ -6231,6 +7061,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
             "nebius_vpngw.cli.inspect_managed_vm_ha_credentials",
             return_value=SimpleNamespace(
                 action="reuse",
+                command_action="reuse",
                 credentials=verified_credentials,
                 source_path=Path("/private/managed-vm-ha-credentials.json"),
                 approval_record=lambda: {
@@ -6307,7 +7138,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
                         sha256="0" * 64, dependency_plans=(), capabilities=()
                     ),
                 ),
-                pytest.raises(RuntimeError, match="artifact changed during interrupted apply"),
+                pytest.raises(RuntimeError, match="artifact changed"),
             ):
                 _apply_impl(
                     local_config_file=config_path,
@@ -6413,12 +7244,15 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
             generation=generation,
             members=members,
         ),
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         gateway={},
         manage_routes=False,
         should_manage_routes=lambda: False,
         validate=lambda: None,
-        iter_instance_configs=lambda: iter(()),
+        iter_instance_configs=lambda: iter(
+            SimpleNamespace(hostname=f"gateway-{m.instance_index}", external_ip="", vm_ha_node=m)
+            for m in members
+        ),
     )
     manager_keys: list[Path | None] = []
     manager_regions: list[tuple[str | None, str | None]] = []
@@ -6458,7 +7292,7 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
 
         def ensure_group(self, spec, recreate=False, local_prefixes=None):
             trust_order.append("ensure")
-            return BoundResult()
+            raise RuntimeError("fixture reached provisioning boundary")
 
     plan.gateway_group.vm_ha = plan.vm_ha
 
@@ -6473,11 +7307,18 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
         patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
         patch(
             "nebius_vpngw.cli.require_vm_ha_ssh_policy",
-            return_value=SimpleNamespace(managed_action="repair"),
+            return_value=SimpleNamespace(
+                managed_action="repair",
+                fresh_identity_approval_sha256="1" * 64,
+                transport_targets=(("gateway-0", "gateway-0"), ("gateway-1", "gateway-1")),
+                pin_targets=(("gateway-0", "gateway-0"), ("gateway-1", "gateway-1")),
+            ),
         ) as require_policy,
         patch(
-            "nebius_vpngw.cli.publish_vm_ha_ssh_trust",
-            side_effect=lambda _policy: trust_order.append("publish") or True,
+            "nebius_vpngw.deploy.provisioning_trust.publish",
+            side_effect=lambda *_args, **_kwargs: (
+                trust_order.append("publish") or {"verified": True}
+            ),
         ),
         patch("nebius_vpngw.cli._vm_ha_apply_order", return_value=[]),
         patch("nebius_vpngw.cli._vm_ha_bound_owner_node_id", return_value="node-a"),
@@ -6492,7 +7333,7 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
         result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
 
     assert result.exit_code == 1
-    assert "staged acknowledgements do not have exact generation parity" in result.stdout
+    assert "fixture reached provisioning boundary" in str(result.exception)
     assert manager_keys == [expected_key, expected_key]
     assert manager_regions == [("eu-west1", "eu-west1"), ("eu-west1", "eu-west1")]
     assert manager_events == ["enter:0", "enter:1", "exit:1", "exit:0"]
@@ -6513,7 +7354,7 @@ def test_vm_ha_removal_holds_the_canonical_apply_lock(monkeypatch, tmp_path) -> 
     config_path = tmp_path / "gateway.config.yaml"
     plan = SimpleNamespace(
         vm_ha=None,
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="nebius-vpn-gw"),
     )
     lock_events: list[tuple[str, str, str]] = []
 
@@ -6575,7 +7416,7 @@ def test_vm_ha_apply_sanitizes_exhausted_sdk_deadline_and_restores_filter(
     config_path = tmp_path / "gateway.vm-ha.config.yaml"
     plan = SimpleNamespace(
         vm_ha=object(),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="nebius-vpn-gw"),
     )
 
     class ApplyLock:
@@ -6646,7 +7487,7 @@ def test_vm_ha_apply_sanitizes_unauthenticated_and_restores_filter(
     config_path = tmp_path / "gateway.vm-ha.config.yaml"
     plan = SimpleNamespace(
         vm_ha=object(),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="nebius-vpn-gw"),
     )
 
     class ApplyLock:
@@ -6716,7 +7557,7 @@ def test_ordinary_apply_preserves_exception_and_sdk_retry_diagnostic(
     config_path = tmp_path / "gateway.config.yaml"
     plan = SimpleNamespace(
         vm_ha=None,
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="nebius-vpn-gw"),
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._resolve_local_config", lambda *_args, **_kwargs: config_path
@@ -7404,7 +8245,7 @@ def test_missing_standby_plan_waits_for_exact_identity_preflight(pending_samples
     )
     ready = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["independent-heartbeat-v5", "vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["independent-heartbeat-v6", "vm-ha-standby-restoration-v2"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -7562,7 +8403,7 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
         "apply_locked": False,
         "pending_operation_id": None,
         "transfer_inhibition_operation_id": None,
-        "controller_capabilities": ["independent-heartbeat-v5"],
+        "controller_capabilities": ["independent-heartbeat-v6"],
         "route_reconciliation": {
             "owner_node_id": "node-a",
             "allocation_id": binding.shared_allocation_id,
@@ -7657,7 +8498,7 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
         "reasons": ["current-boot-guard-not-active"],
         "apply_operation_id": None,
         "controller_capabilities": [
-            "independent-heartbeat-v5",
+            "independent-heartbeat-v6",
             "vm-ha-live-peer-replacement-v4",
             "vm-ha-standby-replacement-inhibition-v1",
         ],
@@ -7713,7 +8554,7 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
         "pending_operation_id": None,
         "transfer_inhibition_operation_id": operation_id,
         "transfer_inhibition_quiescent": True,
-        "controller_capabilities": ["independent-heartbeat-v5", "vm-ha-live-peer-replacement-v2"],
+        "controller_capabilities": ["independent-heartbeat-v6", "vm-ha-live-peer-replacement-v2"],
     }
     with (
         patch(
@@ -7786,7 +8627,7 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
     current = {
         **inhibited,
         "controller_capabilities": [
-            "independent-heartbeat-v5",
+            "independent-heartbeat-v6",
             "vm-ha-live-peer-replacement-v4",
             "vm-ha-standby-replacement-inhibition-v2",
         ],
@@ -7997,6 +8838,9 @@ def test_vm_ha_cloud_authority_binds_owner_members_alias_and_routes() -> None:
     )
     assert no_alias_route_authority.condition == "blocked"
     assert no_alias_route_authority.reasons == ("route-prefixes-not-exact",)
+    assert no_alias_route_authority.ownership_condition == "exact"
+    assert no_alias_route_authority.ownership_digest == authority.ownership_digest
+    assert foreign_authority.ownership_condition == "blocked"
 
     missing_target_authority = _vm_ha_cloud_authority(
         state,
@@ -8004,6 +8848,7 @@ def test_vm_ha_cloud_authority_binds_owner_members_alias_and_routes() -> None:
     )
     assert missing_target_authority.condition == "blocked"
     assert missing_target_authority.reasons == ("route-targets-not-exact",)
+    assert missing_target_authority.ownership_condition == "blocked"
 
     duplicate_route_authority = _vm_ha_cloud_authority(
         state,
@@ -8011,6 +8856,7 @@ def test_vm_ha_cloud_authority_binds_owner_members_alias_and_routes() -> None:
     )
     assert duplicate_route_authority.condition == "blocked"
     assert duplicate_route_authority.reasons == ("route-records-not-exact",)
+    assert duplicate_route_authority.ownership_condition == "blocked"
 
     malformed_presence_authority = _vm_ha_cloud_authority(
         state,
@@ -8044,6 +8890,7 @@ def test_vm_ha_cloud_authority_binds_owner_members_alias_and_routes() -> None:
     incomplete_authority = _vm_ha_cloud_authority(two_target_state, incomplete_routes)
     assert incomplete_authority.condition == "blocked"
     assert incomplete_authority.reasons == ("route-prefixes-not-exact",)
+    assert incomplete_authority.ownership_condition == "blocked"
 
     complete_routes = {
         **incomplete_routes,
@@ -8073,6 +8920,7 @@ def test_vm_ha_cloud_authority_binds_owner_members_alias_and_routes() -> None:
     wrong_next_hop_authority = _vm_ha_cloud_authority(two_target_state, wrong_next_hop)
     assert wrong_next_hop_authority.condition == "blocked"
     assert wrong_next_hop_authority.reasons == ("route-next-hop-not-exact",)
+    assert wrong_next_hop_authority.ownership_condition == "blocked"
 
     foreign_route = {
         "allocation_id": "foreign-allocation",
@@ -9304,12 +10152,12 @@ def test_status_zero_sa_rows_distinguish_a_vm_without_configured_tunnels() -> No
         (
             "sudo swanctl --list-sas",
             "tunnel-a: #1, ESTABLISHED, IKEv2\n",
-            True,
+            False,
         ),
         (
             "sudo ipsec statusall",
             "tunnel-a[1]: ESTABLISHED 8 minutes ago, 10.0.0.1[10.0.0.1]...192.0.2.10[192.0.2.10]\n",
-            True,
+            False,
         ),
         ("sudo ipsec statusall", "Security Associations (0 up, 0 connecting):\nnone\n", False),
     ),
@@ -9331,7 +10179,7 @@ def test_status_partial_runtime_observation_keeps_every_configured_tunnel(
     config_path.write_text("version: 1\n", encoding="utf-8")
     instance = SimpleNamespace(hostname="gateway-0", external_ip="192.0.2.100")
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(name="gateway", region="eu-test1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-test1"),
         vm_ha=None,
         iter_instance_configs=lambda: (instance,),
     )
@@ -9366,24 +10214,19 @@ def test_status_partial_runtime_observation_keeps_every_configured_tunnel(
     def run_command(command: list[str], **_kwargs: t.Any) -> SimpleNamespace:
         remote_command = str(command[-1])
         commands.append(remote_command)
-        if "swanctl --list-sas" in remote_command:
-            if not preferred_swanctl:
-                return SimpleNamespace(returncode=1, stdout="", stderr="unavailable")
+        if "<vici-probe>" in remote_command:
+            from tests.unit.test_ipsec_observation import event
+
+            from nebius_vpngw.ipsec_observation import Inventory
+
+            rows = [
+                event(name="tunnel-active"),
+                {"runtime-only": {"uniqueid": "2", "state": "CONNECTING"}},
+            ]
+            if preferred_swanctl:
+                rows.append(event(name="tunnel-active", state="DELETING", uid="3"))
             return SimpleNamespace(
-                returncode=0,
-                stdout="tunnel-active: #1, ESTABLISHED, IKEv2\nruntime-only: #2, CONNECTING, IKEv2\n",
-                stderr="",
-            )
-        if "ipsec statusall" in remote_command:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=(
-                    "tunnel-active[1]: ESTABLISHED 8 minutes ago, "
-                    "10.0.0.1[10.0.0.1]...192.0.2.10[192.0.2.10]\n"
-                    "runtime-only[2]: CONNECTING 1 minute ago, "
-                    "10.0.0.1[10.0.0.1]...192.0.2.99[192.0.2.99]\n"
-                ),
-                stderr="",
+                returncode=0, stdout=Inventory.from_events(rows).json(), stderr=""
             )
         if "systemctl is-active" in remote_command or "pgrep -x charon" in remote_command:
             return SimpleNamespace(returncode=0, stdout="active\n", stderr="")
@@ -9450,13 +10293,15 @@ def test_status_partial_runtime_observation_keeps_every_configured_tunnel(
         "-",
     ]
     assert rows[2][1:4] == ["-", "gateway-0", "[yellow]Connecting[/yellow]"]
-    assert ("sudo ipsec statusall" in commands) is not preferred_swanctl
+    assert not any(
+        "ipsec statusall" in command or "swanctl --list-sas" in command for command in commands
+    )
 
 
 def test_status_skips_all_vm_ha_work_for_non_ha_plan(tmp_path: Path) -> None:
     config_path = tmp_path / "gateway.config.yaml"
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(name="gateway", region="eu-test1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-test1"),
         vm_ha=None,
         iter_instance_configs=lambda: (),
     )
@@ -9496,7 +10341,7 @@ def test_status_loads_real_config_without_resolving_unused_psk(
     config_path = tmp_path / "gateway.config.yaml"
     config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(name="gateway", region="eu-test1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-test1"),
         vm_ha=None,
         iter_instance_configs=lambda: (),
     )
@@ -9528,7 +10373,7 @@ def test_status_passes_one_explicit_region_to_plan_and_manager(
     config_path = tmp_path / "status-region.config.yaml"
     config_path.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
     plan = SimpleNamespace(
-        gateway_group=SimpleNamespace(name="gateway", region="eu-north1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-north1"),
         vm_ha=None,
         iter_instance_configs=lambda: (),
     )
@@ -9721,7 +10566,9 @@ def test_status_collects_read_only_vm_ha_evidence_and_renders_one_view(
             vm_ha_generation=SimpleNamespace(generation_id="a" * 64, digests=digests),
         ),
     )
-    gateway_group = SimpleNamespace(name="nebius-vpn-gw", region="eu-test1", vm_ha=object())
+    gateway_group = SimpleNamespace(
+        security_group_ids=(), name="nebius-vpn-gw", region="eu-test1", vm_ha=object()
+    )
     plan = SimpleNamespace(
         gateway_group=gateway_group,
         vm_ha=object(),
@@ -10205,6 +11052,36 @@ def test_vm_ha_status_wait_timeout_retains_last_stale_diagnostic() -> None:
         )
 
 
+@pytest.mark.parametrize("late_success", [False, True])
+def test_vm_ha_status_wait_bounds_fetch_and_rejects_late_success(late_success: bool) -> None:
+    elapsed = [0.0]
+    fetch_timeouts = []
+
+    def fetch(**kwargs):
+        fetch_timeouts.append(kwargs.get("timeout_seconds"))
+        elapsed[0] = 1.1 if late_success else 0.75
+        return {"ready": late_success}
+
+    def sleep(seconds):
+        elapsed[0] += seconds
+
+    with (
+        patch("nebius_vpngw.cli._fetch_vm_ha_agent_status", side_effect=fetch),
+        patch("nebius_vpngw.cli.time.monotonic", side_effect=lambda: elapsed[0]),
+        patch("nebius_vpngw.cli.time.sleep", side_effect=sleep),
+        pytest.raises(RuntimeError, match="status verification timed out"),
+    ):
+        _wait_for_vm_ha_agent_status(
+            predicate=lambda payload: payload["ready"],
+            timeout_seconds=1.0,
+            poll_seconds=2.0,
+            target="fixture",
+        )
+
+    assert fetch_timeouts == [1.0]
+    assert elapsed[0] == pytest.approx(1.1 if late_success else 1.0)
+
+
 def test_vm_ha_service_account_requires_reviewed_current_project_role(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
@@ -10311,7 +11188,7 @@ def test_apply_rejects_service_account_override_for_vm_ha(tmp_path: Path) -> Non
     config_path.write_text("version: 1\n", encoding="utf-8")
     plan = SimpleNamespace(
         vm_ha=object(),
-        gateway_group=SimpleNamespace(name="gateway-a", region="eu-north1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway-a", region="eu-north1"),
         validate=lambda: None,
         iter_instance_configs=lambda: iter(()),
     )
@@ -10439,7 +11316,9 @@ def _manual_failback_plan() -> SimpleNamespace:
     )
     return SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster"),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
         iter_instance_configs=lambda: iter((active, passive)),
     )
 
@@ -13991,7 +14870,9 @@ def test_status_ssh_context_isolates_one_missing_explicit_vm_ha_pin(
     ]
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
         iter_instance_configs=lambda: iter(members),
     )
     vm_ips = {
@@ -14074,7 +14955,9 @@ def test_status_ssh_context_resolves_managed_vm_ha_trust_at_full_member_scope(
     ]
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
         iter_instance_configs=lambda: iter(members),
     )
     managed_policy = object()
@@ -14122,7 +15005,9 @@ def test_status_ssh_context_rejects_managed_trust_for_an_incomplete_member_set(
     ]
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
         iter_instance_configs=lambda: iter(members),
     )
     observed: list[tuple[tuple[str, str], ...]] = []
@@ -14178,7 +15063,7 @@ def test_vm_ha_status_does_not_probe_without_exact_client_identity(
     )
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         iter_instance_configs=lambda: iter(members),
     )
     context = cli_module._StatusSSHContext(
@@ -14216,7 +15101,7 @@ def test_ordinary_existing_ssh_consumer_uses_published_managed_trust(monkeypatch
     instance = SimpleNamespace(hostname="gateway-0", external_ip="203.0.113.10")
     plan = SimpleNamespace(
         vm_ha=None,
-        gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway", region="eu-west1"),
         iter_instance_configs=lambda: iter((instance,)),
     )
     local_cfg = {
@@ -14251,7 +15136,7 @@ def test_ordinary_existing_ssh_consumer_uses_published_managed_trust(monkeypatch
 def test_vm_ha_ssh_trust_scope_uses_the_resolved_plan_region() -> None:
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster-a"),
-        gateway_group=SimpleNamespace(name="gateway-a", region="eu-north1"),
+        gateway_group=SimpleNamespace(security_group_ids=(), name="gateway-a", region="eu-north1"),
     )
 
     scope = _vm_ha_ssh_trust_scope(
@@ -15074,7 +15959,7 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
 
 
 @pytest.mark.parametrize("pending", [True, False])
-def test_pending_handoff_without_package_effects_repairs_before_credentials(
+def test_pending_handoff_checks_peer_but_waits_for_credentials_before_repair(
     tmp_path, monkeypatch, approved_disruption, pending
 ):
     from contextlib import contextmanager
@@ -15111,7 +15996,9 @@ def test_pending_handoff_without_package_effects_repairs_before_credentials(
     )
     plan = SimpleNamespace(
         vm_ha=SimpleNamespace(cluster_id="cluster", generation=generation, members=members),
-        gateway_group=SimpleNamespace(name="nebius-vpn-gw", region="eu-west1"),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="nebius-vpn-gw", region="eu-west1"
+        ),
         gateway={"local_prefixes": ["10.0.0.0/8"]},
         validate=lambda: None,
         iter_instance_configs=lambda: iter(instances),
@@ -15200,9 +16087,10 @@ def test_pending_handoff_without_package_effects_repairs_before_credentials(
         app,
         ["apply", "--local-config-file", str(config_path), "--recover-vm-ha-migration", "c" * 64],
     )
-    assert events == (
-        ["peer", "reserve", "prepare", "checkpoint", "credentials"] if pending else ["credentials"]
-    ), (result.stdout, result.exception)
+    assert events == (["peer", "credentials"] if pending else ["credentials"]), (
+        result.stdout,
+        result.exception,
+    )
     assert "boundary reached" in result.stdout
 
 
@@ -15280,3 +16168,91 @@ def test_replay_window_rejects_unusable_wheel_before_ordinary_provisioning(
     assert "VPNGW_AGENT_WHEEL" in result.stdout
     assert "Traceback" not in result.output
     assert effects == []
+
+
+@pytest.mark.parametrize("fail_second_stage", [False, True])
+def test_ordinary_apply_stages_all_members_before_any_activation(
+    ordinary_deployment_boundary, monkeypatch, tmp_path, fail_second_stage
+):
+    from dataclasses import replace
+
+    from nebius_vpngw.deploy import ordinary_apply
+
+    config = tmp_path / "ordinary.yaml"
+    config.write_text("version: 1\n")
+    local = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    plan = _static_route_plan()
+    plan.gateway_group = replace(plan.gateway_group, instance_count=2)
+    plan.per_instance.append(
+        replace(
+            plan.per_instance[0],
+            instance_index=1,
+            hostname="nebius-vpn-gw-1",
+            external_ip="203.0.113.11",
+        )
+    )
+    events = []
+
+    class Manager(_ContextManagedFake):
+        def __init__(self, **kwargs):
+            pass
+
+        def discover_former_vm_ha_candidate_members(self, *args, **kwargs):
+            return {}
+
+        def check_changes(self, spec):
+            return [
+                (
+                    item.hostname,
+                    VMDiff(
+                        change_type=ChangeType.SAFE,
+                        differences=["VM does not exist (will create)"],
+                        destructive_fields=[],
+                    ),
+                )
+                for item in plan.iter_instance_configs()
+            ]
+
+        def ensure_group(self, *args, **kwargs):
+            return {item.hostname: item.external_ip for item in plan.iter_instance_configs()}
+
+    def stage(ssh, prepared, local, *, approved):
+        assert approved
+        events.append(("stage", prepared.instance.hostname))
+        if fail_second_stage and prepared.instance.instance_index == 1:
+            raise RuntimeError("approved archive unavailable")
+
+    monkeypatch.setattr(ordinary_apply, "stage_plan", stage)
+    monkeypatch.setattr(
+        ordinary_apply,
+        "execute_plan",
+        lambda ssh, p, local, **kw: events.append(("activate", p.instance.hostname)),
+    )
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="test-token"),
+        patch("nebius_vpngw.cli.VMManager", Manager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=SimpleNamespace()),
+    ):
+        result = CliRunner().invoke(app, ["apply", "-c", str(config)])
+    assert result.exit_code == int(fail_second_stage), (result.output, result.exception)
+    assert events == [
+        ("stage", "nebius-vpn-gw-0"),
+        ("stage", "nebius-vpn-gw-1"),
+        *(
+            []
+            if fail_second_stage
+            else [
+                ("activate", "nebius-vpn-gw-0"),
+                ("activate", "nebius-vpn-gw-1"),
+            ]
+        ),
+    ]

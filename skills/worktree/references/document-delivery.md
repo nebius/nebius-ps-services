@@ -88,14 +88,18 @@ candidate. Removing it changes the accepted plan and invalidates evidence.
 
 Use `--execution` for private execution/repair helpers. Execution identities
 are FEAT or SLICE IDs; product mappings remain FEAT IDs. Current state uses
-`current_execution`. Changed execution/assignment/result contracts use v2;
+`current_execution`. Current schemas are enumerated in the
+[execution plane](../../sdlc-prepare-execution/references/execution-plane.md);
 obsolete active runs are retained and rejected for explicit recovery. There is
 no automatic conversion or compatibility alias.
 
 One candidate runs at a time. Tasks in eligible features may run in parallel
 when dependencies, write claims, contracts and runtime resources allow it.
-At most four workers are active and four task worktrees retained. Unknown host
-capacity falls back to one active worker. Every task has its own worktree.
+Freeze independent worker, wave and retained-worktree limits using the
+[wave contract](worker-waves.md), with defaults 4/8/16. Unknown host capacity
+permits one total active worker; known zero waits. Reserve each entire wave
+against run-wide retained and uncertain resources before allocating its first
+worktree. Every task has its own worktree.
 Each batch shares one frozen base, integrates deterministically, passes combined
 checks and cleans its workers before the next batch starts from the validated
 integration tip. Preserve immutable assignments, writer termination checks,

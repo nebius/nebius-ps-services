@@ -18,3 +18,5 @@ config-claude-positive-context7-retirement,true,Use $config-claude to remove Con
 config-claude-adaptive-routing,true,Use $config-claude to improve my global search instructions with adaptive evidence checkpoints while preserving current MCP settings and hooks.
 config-claude-research-not-setup,false,Research the recovery guarantees and limitations of one public workflow engine; do not configure my agent.
 config-claude-tavily-static-safety,true,Use $config-claude to audit the selected Tavily bridge executable paths and native wiring without changing credentials.
+config-claude-memory-policy,true,/config-claude Add only the host memory policy to my partially configured Claude home.
+config-claude-memory-near-miss,false,Run a guarded foreground test without configuring my Claude home.

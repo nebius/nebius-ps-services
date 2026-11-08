@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 from grpc import StatusCode
 from nebius.aio.service_error import RequestError
+from nebius.api.nebius.common.v1 import ResourceMetadata
 from nebius.api.nebius.vpc.v1 import IPv4PrivateSubnetPools
 
 from nebius_vpngw.deploy.vm_manager import VMManager
@@ -281,17 +282,14 @@ def test_strict_pool_extension_preserves_concurrent_cidrs_and_binds_version(
     def pool(version: int, *cidrs: str):
         return SimpleNamespace(
             id="pool-1",
-            metadata=SimpleNamespace(
+            metadata=ResourceMetadata(
                 id="pool-1",
                 parent_id="project-1",
                 name="private-pool",
                 resource_version=version,
             ),
-            spec=SimpleNamespace(
-                cidrs=[SimpleNamespace(cidr=cidr) for cidr in cidrs],
-                version=None,
-                visibility=None,
-                source_pool_id="",
+            spec=vpc_v1.PoolSpec(
+                cidrs=[vpc_v1.PoolCidr(cidr=cidr) for cidr in cidrs],
             ),
         )
 
@@ -495,7 +493,11 @@ def test_strict_route_refuses_to_modify_shared_or_conflicting_table(
 
 
 def test_strict_route_creates_canonical_table_route_and_attachment_once(monkeypatch) -> None:
+    from nebius.api.nebius.vpc.v1 import SubnetSpec
+
     before = _subnet(route_table_id="")
+    before.metadata = ResourceMetadata(**vars(before.metadata))
+    before.spec = SubnetSpec(**vars(before.spec))
     after = _subnet(route_table_id="route-table-1")
     route_table = _route_table()
     exact_route = _route(name="default-egress")

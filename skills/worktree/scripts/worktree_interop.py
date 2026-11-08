@@ -140,7 +140,7 @@ from agent_runtime import agent_home  # noqa: E402
 
 
 LEASE_SCHEMA = 4
-RESERVATION_SCHEMA = 3
+RESERVATION_SCHEMA = 4
 PREPARATION_SCHEMA = 1
 LEASE_KIND = "coordinator"
 LEASE_REMOVAL_SCHEMA = 1
@@ -150,7 +150,7 @@ OWNER_KINDS = {"implement", "agentic-sdlc"}
 LEASE_RECORD_STATES = {"active", "released"}
 RESOURCE_STATES = {"planned", "present", "absent"}
 RESOURCE_KINDS = {"integration", "worker"}
-INTEGRATION_STATES = {"planned", "present", "ready"}
+INTEGRATION_STATES = {"planned", "present", "committing", "ready"}
 PREPARATION_TARGETS = {"child", "source"}
 PREPARATION_COMMIT_STATES = {"verified", "review-required"}
 OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40,64}$")
@@ -1023,7 +1023,7 @@ def abort_integration_preparation(
 
 
 def validate_reservation(value: dict[str, object], name: str) -> dict[str, object]:
-    if value.get("schema") in {1, 2}:
+    if value.get("schema") in {1, 2, 3}:
         raise InteropError(
             "WORKFLOW_UPGRADE_REQUIRED: unfinished publication reservation is unsupported"
         )
@@ -1041,6 +1041,8 @@ def validate_reservation(value: dict[str, object], name: str) -> dict[str, objec
             "integration_branch",
             "integration_worktree",
             "integration_head",
+            "commit_tree",
+            "commit_message_sha256",
             "state",
             "token",
         }
@@ -1066,6 +1068,12 @@ def validate_reservation(value: dict[str, object], name: str) -> dict[str, objec
     if state not in INTEGRATION_STATES:
         raise InteropError("integration reservation state is invalid")
     integration_head = value.get("integration_head")
+    if state in {"committing", "ready"}:
+        _sha(value.get("commit_tree"), "integration commit tree")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("commit_message_sha256"))):
+            raise InteropError("integration commit message digest is invalid")
+    elif value.get("commit_tree") is not None or value.get("commit_message_sha256") is not None:
+        raise InteropError("unprepared integration reservation has commit intent")
     if state == "ready":
         _sha(integration_head, "integration candidate head")
     elif integration_head is not None:
@@ -1589,6 +1597,8 @@ def begin_integration(
             "integration_branch": integration_branch,
             "integration_worktree": str(integration_worktree.resolve()),
             "integration_head": None,
+            "commit_tree": None,
+            "commit_message_sha256": None,
             "state": "planned",
             "token": secrets.token_hex(16),
         }
@@ -1606,6 +1616,8 @@ def update_integration(
     reservation_id: str,
     state: str,
     integration_head: str | None = None,
+    commit_tree: str | None = None,
+    commit_message_sha256: str | None = None,
 ) -> dict[str, object]:
     with interop_lock(primary):
         reservation = load_reservation(primary, name)
@@ -1614,13 +1626,18 @@ def update_integration(
         updated = dict(reservation)
         transitions = {
             "planned": {"present"},
-            "present": {"present", "ready"},
+            "present": {"present", "committing"},
+            "committing": {"committing", "ready"},
             "ready": {"ready"},
         }
         if state not in transitions[str(reservation["state"])]:
             raise InteropError("integration reservation state transition is invalid")
+        for key, proposed in (("commit_tree", commit_tree), ("commit_message_sha256", commit_message_sha256), ("integration_head", integration_head)):
+            if proposed is not None:
+                if reservation.get(key) not in {None, proposed}:
+                    raise InteropError("integration commit intent is immutable")
+                updated[key] = proposed
         updated["state"] = state
-        updated["integration_head"] = integration_head
         validate_reservation(updated, name)
         _atomic_json(reservation_path(primary, name), updated)
         return updated

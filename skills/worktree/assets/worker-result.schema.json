@@ -37,7 +37,8 @@
       },
       "type": "array"
     },
-    "status": {"enum": ["implemented", "replan_required", "blocked"]},
+    "status": {"enum": ["implemented",
+        "verified_no_change", "replan_required", "blocked"]},
     "summary": {"minLength": 1, "type": "string"},
     "task_id": {"pattern": "^TASK-[0-9]{3,}$", "type": "string"},
     "validation": {"minLength": 1, "type": "string"}

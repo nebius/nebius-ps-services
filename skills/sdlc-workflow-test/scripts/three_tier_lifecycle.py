@@ -155,11 +155,12 @@ from three_tier_semantics import (  # noqa: E402 — verified bootstrap precedes
 
 
 from agent_runtime import agent_home, agent_name  # noqa: E402
+import verification_catalog as runtime_catalog  # noqa: E402
 
 
 ROOT_MARKER = ".sdlc-workflow-test-root.json"
 ROOT_SCHEMA = "agentic-sdlc/verification-root-v1"
-LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v7"
+LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v8"
 RUN_MARKER = ".agentic-sdlc-three-tier-run.json"
 PROJECT_MARKER = ".sdlc-workflow-test-project.json"
 OWNERSHIP_LABEL = "sdlc-workflow-test.verification-id"
@@ -185,6 +186,7 @@ RESOURCE_KINDS = ("containers", "networks", "volumes", "images")
 TASK_API_PATH = "/api/v1/tasks"
 GENERATION_GUARDED_COMMANDS = {
     "record-phase",
+    "record-native-activation",
     "record-validation",
     "record-runtime",
     "run-browser-stage",
@@ -220,6 +222,10 @@ SECRET_MATERIAL_PATTERNS = (
     r"(?i)(?:^|\s)(?:-u|--user)(?:=|\s+)\S+:\S+",
     r"(?i)://[^/\s:@]+:[^@\s/]+@",
 )
+
+
+import three_tier_native as native_evidence  # noqa: E402
+import verification_workspace as workspace  # noqa: E402
 
 
 class LifecycleError(RuntimeError):
@@ -340,30 +346,12 @@ def reject_symlinks(path: Path, *, stop_at: Path | None = None) -> None:
 
 
 def verification_root(value: Path, *, create: bool) -> Path:
-    requested = value.expanduser().absolute()
-    if requested in {
-        Path(requested.anchor),
-        Path.home().absolute(),
-        Path.cwd().absolute(),
-    }:
-        raise LifecycleError("Verification root is too broad for lifecycle ownership.")
-    reject_symlinks(requested)
-    if requested.exists() and not requested.is_dir():
-        raise LifecycleError(f"Verification root is not a directory: {requested}")
-    marker = requested / ROOT_MARKER
-    if requested.exists():
-        if not marker.is_file() or marker.is_symlink():
-            raise LifecycleError(
-                "Existing verification root is not owned by sdlc-workflow-test."
-            )
-        if read_json(marker) != {"schema": ROOT_SCHEMA}:
-            raise LifecycleError("Verification-root ownership marker is invalid.")
-    elif create:
-        requested.mkdir(parents=True, mode=0o700)
-        private_json(marker, {"schema": ROOT_SCHEMA})
-    else:
-        raise LifecycleError("NO_ACTIVE_THREE_TIER_APPLICATION")
-    return requested.resolve(strict=True)
+    try:
+        return workspace.admit_root(value, create=create)
+    except FileNotFoundError as error:
+        raise LifecycleError("NO_ACTIVE_THREE_TIER_APPLICATION") from error
+    except (workspace.WorkspaceError, OSError) as error:
+        raise LifecycleError(str(error)) from error
 
 
 def paths(root: Path) -> dict[str, Path]:
@@ -380,35 +368,36 @@ def paths(root: Path) -> dict[str, Path]:
 
 @contextmanager
 def lifecycle_lock(root: Path):
-    """Serialize create replacement and standalone destroy for one owned root."""
-    if fcntl is None:
-        raise LifecycleError("Three-tier lifecycle locking requires a POSIX host.")
-    lifecycle_paths = paths(root)
-    base = lifecycle_paths["base"]
-    reject_symlinks(base, stop_at=root)
-    base.mkdir(parents=True, mode=0o700, exist_ok=True)
-    lock_path = lifecycle_paths["lock"]
-    reject_symlinks(lock_path, stop_at=root)
-    flags = os.O_RDWR | os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, flags, 0o600)
-    except OSError as error:
-        raise LifecycleError(f"Could not open the lifecycle lock: {error}") from error
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise LifecycleError("Lifecycle lock must be one regular file.")
-        if os.name == "posix":
-            os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
-    finally:
+    """Serialize workspace before live lifecycle mutations."""
+    with workspace.operation(root):
+        if fcntl is None:
+            raise LifecycleError("Three-tier lifecycle locking requires a POSIX host.")
+        lifecycle_paths = paths(root)
+        base = lifecycle_paths["base"]
+        reject_symlinks(base, stop_at=root)
+        base.mkdir(parents=True, mode=0o700, exist_ok=True)
+        lock_path = lifecycle_paths["lock"]
+        reject_symlinks(lock_path, stop_at=root)
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            descriptor = os.open(lock_path, flags, 0o600)
+        except OSError as error:
+            raise LifecycleError(f"Could not open the lifecycle lock: {error}") from error
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise LifecycleError("Lifecycle lock must be one regular file.")
+            if os.name == "posix":
+                os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
         finally:
-            os.close(descriptor)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
 
 def command(args: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -503,6 +492,10 @@ def validate_state(root: Path, state: dict[str, Any]) -> None:
             raise LifecycleError(f"Lifecycle {key} does not match the owned location.")
         reject_symlinks(expected, stop_at=root)
     reject_symlinks(recorded_run, stop_at=root)
+    try:
+        runtime_catalog.validate(state)
+    except (runtime_catalog.CatalogError, three_tier_target.TargetError, OSError, ValueError) as error:
+        raise LifecycleError(str(error)) from error
     marker = recorded_run / RUN_MARKER
     if not marker.is_file() or marker.is_symlink():
         raise LifecycleError("Owned three-tier run marker is missing.")
@@ -606,6 +599,18 @@ def prepare(root_value: Path) -> dict[str, Any]:
     git_version = require_command(["git", "--version"], "Git")
     browser_key, browser_name = detect_browser()
     with lifecycle_lock(root):
+        verification_id = uuid.uuid4().hex
+        run_root = lifecycle_paths["runs"] / verification_id
+        # Reject unavailable/mixed catalogs before replacing an existing run or
+        # creating any new run paths that would lack an active lifecycle owner.
+        try:
+            catalog = runtime_catalog.snapshot(run_root / "project")
+        except runtime_catalog.CatalogError as error:
+            raise LifecycleError(str(error)) from error
+        try:
+            workspace.require_native_absent(root)
+        except workspace.WorkspaceError as error:
+            raise LifecycleError(str(error)) from error
         if lifecycle_paths["active"].is_symlink():
             raise LifecycleError("Active lifecycle pointer is symlinked.")
         if lifecycle_paths["active"].exists():
@@ -621,8 +626,6 @@ def prepare(root_value: Path) -> dict[str, Any]:
                 "ORPHANED_THREE_TIER_RUN: repair or safely destroy the existing owned "
                 "run before creating another application."
             )
-        verification_id = uuid.uuid4().hex
-        run_root = lifecycle_paths["runs"] / verification_id
         for directory in (
             run_root / "project",
             run_root / "private" / (agent_name() + "-home"),
@@ -659,6 +662,7 @@ def prepare(root_value: Path) -> dict[str, Any]:
             "scenario": SCENARIO,
             "verification_id": verification_id,
             "status": "PREPARED",
+            "runtime_catalog": {},
             "created_at": utc_now(),
             "updated_at": utc_now(),
             "verification_root": str(root),
@@ -696,6 +700,12 @@ def prepare(root_value: Path) -> dict[str, Any]:
                 "remaining": [],
             },
         }
+        catalog_path = run_root / runtime_catalog.RELATIVE
+        private_json(catalog_path, catalog)
+        state["runtime_catalog"] = {
+            "path": runtime_catalog.RELATIVE,
+            "sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
+        }
         private_json(lifecycle_paths["active"], state)
         write_report(root, state)
         return state
@@ -707,8 +717,48 @@ def update_state(root: Path, state: dict[str, Any]) -> None:
     write_report(root, state)
 
 
-def phase_identity(state: dict[str, Any], phase: str):
-    objective = three_tier_target.current_objective(state, agent=agent_name())
+def validate_results(root: Path, expected_verification_id: str) -> dict[str, str]:
+    """Read-only semantic admission in this exact runtime catalog process."""
+    if not isinstance(expected_verification_id, str) or re.fullmatch(r"[0-9a-f]{32}", expected_verification_id) is None:
+        raise LifecycleError("Expected verification ID is invalid.")
+    active = paths(root)["active"]
+    observed_state = three_tier_target._private_bytes(active, root)
+    _, state = load_active(root)
+    if json.loads(observed_state) != state:
+        raise LifecycleError("Lifecycle changed during read-only validation.")
+    if state["verification_id"] != expected_verification_id:
+        raise LifecycleError("STALE_THREE_TIER_GENERATION: validation targets another trial.")
+    if state.get("filesystem_cleanup") is not None:
+        raise LifecycleError("Filesystem cleanup has begun; only status/destroy are permitted.")
+    if state.get("environment", {}).get("headless_browser") != "PASS":
+        raise LifecycleError("Headless readiness is not passing.")
+    validations = state.get("validations", [])
+    if not validations or any(row.get("status") != "PASS" for row in validations):
+        raise LifecycleError("PASS requires every recorded validation to pass.")
+    baseline, promoted = state["git"]["baseline_sha"], state["git"]["promoted_sha"]
+    if not valid_git_sha(promoted) or promoted == baseline:
+        raise LifecycleError("A distinct promoted Git revision is required.")
+    project, run_root = Path(state["project_root"]), Path(state["run_root"])
+    owned_git_origin.validate(project, run_root, state["verification_id"], baseline=baseline, require_clean=True)
+    if owned_git_origin._git(project, "rev-parse", "HEAD") != promoted:
+        raise LifecycleError("Current Git revision differs from the promoted revision.")
+    canonical = run_root / "evidence/three-tier-results.json"
+    before = hashlib.sha256(three_tier_target._private_bytes(canonical, run_root)).hexdigest()
+    validate_semantic_results(state, keep=state.get("cleanup", {}).get("status") == "KEPT")
+    after = hashlib.sha256(three_tier_target._private_bytes(canonical, run_root)).hexdigest()
+    if before != after:
+        raise LifecycleError("Canonical results changed during validation.")
+    if three_tier_target._private_bytes(active, root) != observed_state:
+        raise LifecycleError("Lifecycle changed during read-only validation.")
+    return {"status": "PASS", "verification_id": state["verification_id"],
+            "canonical_sha256": after, "catalog_root": str(runtime_catalog.anchor()),
+            "baseline_sha": baseline, "promoted_sha": promoted}
+
+
+def phase_identity(state: dict[str, Any], phase: str, *, coordinator_session: str | None = None):
+    if coordinator_session is not None and phase != "sdlc-start":
+        raise LifecycleError("Coordinator selector is only valid for initial startup observation.")
+    objective = three_tier_target.current_objective(state, agent=agent_name(), coordinator_session=coordinator_session)
     execution_phase = phase in EXECUTION_PHASES
     if phase == "sdlc-classify-failure":
         # A selected feature and locked plan precede preparation. Only actual
@@ -738,7 +788,8 @@ def phase_identity(state: dict[str, Any], phase: str):
             for entry in state.get("phases", [])
         ):
             raise LifecycleError("Previously observed execution state is missing.")
-    observation = {"classifier_observation": True} if phase == "sdlc-classify-failure" else {}
+    observation = ({"phase_observation": phase}
+                   if phase in {"sdlc-classify-failure", "sdlc-tdd"} else {})
     basis = (execution_target(state, require_clean=False, **observation)["basis_sha256"]
              if execution_phase else None)
     return objective, basis
@@ -747,6 +798,7 @@ def phase_identity(state: dict[str, Any], phase: str):
 def validate_phase_pass_artifact(
     state: dict[str, Any], phase: str, evidence: list[str], *,
     historical_entry: dict[str, Any] | None = None,
+    coordinator_session: str | None = None,
 ) -> None:
     run_root = Path(state["run_root"])
     expected = f"evidence/phases/{phase}.json"
@@ -792,7 +844,7 @@ def validate_phase_pass_artifact(
     ):
         raise LifecycleError(f"Phase semantic result is invalid: {phase}")
     try:
-        objective, expected_basis = phase_identity(state, phase)
+        objective, expected_basis = phase_identity(state, phase, coordinator_session=coordinator_session)
     except three_tier_target.TargetError as error:
         raise LifecycleError(str(error)) from error
     historical = historical_entry is not None
@@ -838,8 +890,8 @@ def validate_phase_pass_artifact(
     ancestry_checks = [(baseline_sha, recorded_head, "baseline")]
     if promoted_sha is None:
         if expected_basis is not None:
-            observation = ({"classifier_observation": True}
-                           if phase == "sdlc-classify-failure" else {})
+            observation = ({"phase_observation": phase}
+                           if phase in {"sdlc-classify-failure", "sdlc-tdd"} else {})
             current_head = execution_target(
                 state, require_clean=not historical and phase not in {
                     "sdlc-tdd", "sdlc-update-documents", "align", "sdlc-classify-failure",
@@ -875,12 +927,15 @@ def validate_phase_pass_artifact(
 
 
 def record_phase(
-    root_value: Path, phase: str, status: str, summary: str, evidence: list[str]
+    root_value: Path, phase: str, status: str, summary: str, evidence: list[str], *,
+    coordinator_session: str | None = None,
 ) -> dict[str, Any]:
     if status not in PHASE_STATUSES:
         raise LifecycleError(f"Unsupported phase status: {status}")
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
+    if coordinator_session is not None and (phase != "sdlc-start" or status != "PASS" or state.get("workflow_startup")):
+        raise LifecycleError("Coordinator selector is only valid for initial startup observation.")
     if phase not in ALLOWED_PHASES or any(character in phase for character in "\r\n"):
         raise LifecycleError("Phase name is invalid.")
     if contains_secret_material(summary):
@@ -898,7 +953,7 @@ def record_phase(
         reject_symlinks(candidate, stop_at=run_root)
         normalized_evidence.append(candidate.relative_to(run_root).as_posix())
     if status == "PASS":
-        validate_phase_pass_artifact(state, phase, normalized_evidence)
+        validate_phase_pass_artifact(state, phase, normalized_evidence, coordinator_session=coordinator_session)
         try:
             if phase == "sdlc-start" and "workflow_startup" not in state:
                 if state["phases"]:
@@ -906,7 +961,8 @@ def record_phase(
                         "Workflow startup cannot be certified after other phase evidence."
                     )
                 observation = three_tier_target.observe_startup(
-                    state, skills_root=Path(__file__).resolve().parents[2], agent=agent_name()
+                    state, skills_root=Path(__file__).resolve().parents[2], agent=agent_name(),
+                    coordinator_session=coordinator_session,
                 )
                 observation["observed_at"] = utc_now()
                 relative = "evidence/workflow-startup.json"
@@ -1338,14 +1394,14 @@ def discover_owned_resources(state: dict[str, Any]) -> dict[str, list[str]]:
 def execution_target(
     state: dict[str, Any], *, require_clean: bool = True,
     worker_task: str | None = None, assignment_digest: str | None = None,
-    classifier_observation: bool = False,
+    phase_observation: str | None = None,
 ) -> dict[str, str]:
     try:
         return three_tier_target.resolve_target(
             state, skills_root=Path(__file__).resolve().parents[2], agent=agent_name(),
             require_clean=require_clean,
             worker_task=worker_task, assignment_digest=assignment_digest,
-            classifier_observation=classifier_observation,
+            phase_observation=phase_observation,
         )
     except three_tier_target.TargetError as error:
         raise LifecycleError(str(error)) from error
@@ -1927,6 +1983,25 @@ def finish(root_value: Path, status: str, keep: bool) -> dict[str, Any]:
     return state
 
 
+
+def record_native_activation(root_value: Path) -> dict:
+    root = verification_root(root_value, create=False)
+    _, state = load_active(root)
+    try:
+        if state.get("native_activation"):
+            return native_evidence.validate(state, skills_root=Path(__file__).resolve().parents[2])
+        artifact = Path(state["run_root"]) / native_evidence.RELATIVE
+        if not artifact.exists() and not artifact.is_symlink():
+            observation = native_evidence.observe(state, skills_root=Path(__file__).resolve().parents[2])
+            private_json(artifact, observation)
+        state["native_activation"] = {"path": native_evidence.RELATIVE, "sha256": hashlib.sha256(workspace._read(artifact, private=True)).hexdigest()}
+        observation = native_evidence.validate(state, skills_root=Path(__file__).resolve().parents[2])
+        update_state(root, state)
+        return observation
+    except (native_evidence.NativeEvidenceError, three_tier_target.TargetError, workspace.WorkspaceError, OSError) as error:
+        raise LifecycleError(str(error)) from error
+
+
 def write_report(root: Path, state: dict[str, Any]) -> None:
     report_path = Path(state["report_path"])
     expected = paths(root)["reports"] / state["verification_id"] / "report.md"
@@ -2038,14 +2113,16 @@ def validate_filesystem_cleanup(root, state):
             hashlib.sha256(checkpoint.read_bytes()).hexdigest() != binding["sha256"]
             or value
             != {
-                "schema": "agentic-sdlc/filesystem-cleanup-v1",
+                "schema": "agentic-sdlc/filesystem-cleanup-v2",
                 "agent": agent_name(),
                 "root_identity": root_identity,
+                "runtime_catalog": value.get("runtime_catalog"),
                 "snapshot": cleanup_snapshot(state),
             }
             or state["cleanup"]["remaining"]
         ):
             raise LifecycleError("Filesystem cleanup checkpoint changed.")
+        runtime_catalog.validate_record(value.get("runtime_catalog"), Path(state["project_root"]))
     except (three_tier_target.TargetError, OSError, ValueError) as error:
         raise LifecycleError(
             "Filesystem cleanup checkpoint is unavailable or invalid."
@@ -2082,6 +2159,10 @@ def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
     if not active_path.exists():
         return "ALREADY_DESTROYED", None
     _, state = load_active(root)
+    try:
+        workspace.require_native_absent(root)
+    except workspace.WorkspaceError as error:
+        raise LifecycleError(str(error)) from error
     if state.get("filesystem_cleanup") is not None:
         try:
             return finish_filesystem_cleanup(root, state)
@@ -2092,6 +2173,11 @@ def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
             raise LifecycleError(
                 "Owned filesystem cleanup remains incomplete."
             ) from error
+    with workspace.product_quiescence(root, sys.modules[__name__]):
+        return _destroy_quiescent(root, state)
+
+
+def _destroy_quiescent(root: Path, state: dict) -> tuple[str, dict | None]:
     assert_project_safe_for_destroy(state)
     reconcile_runtime_observations(root, state)
     try:
@@ -2180,9 +2266,10 @@ def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
         )
         metadata = Path(state["run_root"]).lstat()
         snapshot = {
-            "schema": "agentic-sdlc/filesystem-cleanup-v1",
+            "schema": "agentic-sdlc/filesystem-cleanup-v2",
             "agent": agent_name(),
             "root_identity": {"device": metadata.st_dev, "inode": metadata.st_ino},
+            "runtime_catalog": runtime_catalog.read(state),
             "snapshot": cleanup_snapshot(state),
         }
         if checkpoint.exists() or checkpoint.is_symlink():
@@ -2294,10 +2381,16 @@ def parser() -> argparse.ArgumentParser:
     )
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("prepare")
+    commands.add_parser("record-native-activation")
+    commands.add_parser("validate-results")
     phase_parser = commands.add_parser("record-phase")
     phase_parser.add_argument("--phase", required=True)
     phase_parser.add_argument("--status", choices=sorted(PHASE_STATUSES), required=True)
     phase_parser.add_argument("--summary", required=True)
+    phase_parser.add_argument(
+        "--coordinator-session",
+        help="Actual native session selector, required only for initial sdlc-start PASS; never an environment override.",
+    )
     phase_parser.add_argument(
         "--evidence", action="append", default=[],
         help="PASS requires exactly evidence/phases/<phase>.json relative to the owned run root.",
@@ -2359,6 +2452,13 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     arguments = parser().parse_args(argv)
     try:
+        if arguments.command == "validate-results":
+            # Aggregate verification already holds the workspace lock. This
+            # observer never mutates state or reacquires that lock; exact
+            # generation and before/after evidence bytes guard its admission.
+            root = verification_root(arguments.verification_root, create=False)
+            print(json.dumps(validate_results(root, arguments.expected_verification_id), sort_keys=True))
+            return 0
         guarded = arguments.command in GENERATION_GUARDED_COMMANDS
         root = None
         guard = nullcontext()
@@ -2381,6 +2481,9 @@ def main(argv: list[str]) -> int:
                 print(f"Evidence root: {state['evidence_root']}")
                 print(f"Compose project: {state['compose_project']}")
                 print(f"Report path: {state['report_path']}")
+            elif arguments.command == "record-native-activation":
+                record_native_activation(arguments.verification_root)
+                print("Native hook activation: correlated with the owned Codex session")
             elif arguments.command == "record-phase":
                 record_phase(
                     arguments.verification_root,
@@ -2388,6 +2491,7 @@ def main(argv: list[str]) -> int:
                     arguments.status,
                     arguments.summary,
                     arguments.evidence,
+                    coordinator_session=arguments.coordinator_session,
                 )
             elif arguments.command == "record-validation":
                 record_validation(
@@ -2461,7 +2565,8 @@ def main(argv: list[str]) -> int:
                 if state is not None:
                     print(f"Report path: {state['report_path']}")
         return 0
-    except LifecycleError as error:
+    except (LifecycleError, workspace.WorkspaceError, SemanticEvidenceError,
+            three_tier_target.TargetError, owned_git_origin.OriginError) as error:
         print(str(error), file=sys.stderr)
         return 2
 

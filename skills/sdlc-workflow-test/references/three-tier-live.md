@@ -15,10 +15,10 @@ This skill cannot adopt their ownership markers, labels or Compose names. The
 | Invocation | Required result |
 | --- | --- |
 | `$sdlc-workflow-test` | Run the existing lightweight deterministic verifier only. Do not inspect or change Docker or a browser. |
-| `$sdlc-workflow-test --create-live-test` | Safely destroy the previous active exactly owned environment, create one fresh owned live project, run four fresh owned headless Playwright Test stages, run the whole SDLC and three-tier test, write the report, close that exact Chrome process group, then destroy all owned live resources even after a test failure. If prior replacement cleanup cannot be proven, do not create a new stack. Any browser or Docker cleanup ambiguity makes the run FAIL. |
+| `$sdlc-workflow-test --create-live-test` | Safely destroy the previous active exactly owned environment, create one fresh owned live project, run four fresh owned headless Playwright Test stages, run the whole SDLC and three-tier test, write the report, close that exact Chrome process group, then destroy both owned fixture types even after a test failure. If prior replacement cleanup cannot be proven, do not create a new stack. Any browser or Docker cleanup ambiguity makes the run FAIL. |
 | `$sdlc-workflow-test --create-live-test --keep` | Replace the previous active exactly owned environment, run the same workflow, write the report, and retain only the newly created project, private run state, two containers, network, database volume, built web image. Every browser stage closes, including keep mode. |
 | `$sdlc-workflow-test --resume` | Revalidate and continue the one retained KEPT run only when its prior result is FAIL or PARTIAL. |
-| `$sdlc-workflow-test --destroy` | Close only the exact recorded verifier-owned Chrome process group, remove the one active owned application, and archive its lifecycle state while retaining sanitized reports. Existing Chrome instances are never targets. If none exists, return `ALREADY_DESTROYED`. |
+| `$sdlc-workflow-test --destroy` | Close only the exact recorded verifier-owned Chrome process group, remove the active owned application and validated lightweight fixture, and retain sanitized reports plus cleanup/lifecycle history. Existing Chrome instances are never targets. Return `ALREADY_DESTROYED` only when both fixture types are absent. |
 
 Reject `--keep` without `--create-live-test`, `--destroy` combined with `--create-live-test` or
 `--keep`, and unknown lifecycle flags. A repeated create must destroy the prior
@@ -50,7 +50,7 @@ health checks and database readiness before the web service starts.
 
 ## Ownership and private state
 
-The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v7` under:
+The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v8` under:
 
 ```text
 <verification-root>/three-tier-live/
@@ -69,6 +69,23 @@ prompts, plans, screenshots, transcripts, database contents, and SDLC state
 inside the owned run. Keep only the sanitized report and lifecycle archive
 after destruction.
 
+`private/runtime-catalog.json` pins the executing installed catalog's canonical
+root and runtime payload hashes. Every lifecycle operation validates the binding;
+native launch additionally checks the host's installed catalog convention. Use
+fresh processes from that same installed catalog for runtime lease consumption,
+semantic validation and cleanup, preserving owner locks across their effects.
+Source preflight and source fixtures remain distinct. Aggregate source verification
+invokes the configured installed owner's generation-fenced, read-only
+`validate-results` action and checks its exact canonical-result digest. A receipt
+never grants authority to execute a path named inside it.
+The pinned closure includes the native hook entrypoint, verified loader and its
+declared hook support group. Native observation compares each installed file's
+complete bytes with that source; matching changes on both sides still fail the
+frozen catalog check. Native receipt hook hashes remain entrypoint hashes.
+This read-only action does not reacquire the aggregate caller's workspace lock;
+it requires the exact generation and unchanged lifecycle/result bytes across
+semantic validation. Mutating runtime and cleanup operations retain their locks.
+
 Every owned Docker resource must have both exact labels:
 
 ```text
@@ -84,8 +101,10 @@ ownership from a name prefix alone.
 
 1. Parse and validate the public flags before reading or mutating lifecycle
    state.
-2. Run the unchanged no-flag deterministic verifier. Stop before live mutation
-   on any deterministic FAIL.
+2. Run `verification_workspace.py --verification-root <root> destroy` first.
+   Missing ownership or incomplete cleanup blocks replacement. Run the no-flag
+   deterministic verifier against the clean root; stop before live creation on
+   any deterministic FAIL.
 3. Confirm Docker, Compose, Git, Node.js 20+, npm, installed Chrome and
    source-installed parity. After preparation, run the owned headless
    `capability-discovery` stage. No desktop capture prerequisite applies.
@@ -163,6 +182,9 @@ ownership from a name prefix alone.
    the exact input path `<run-root>/evidence/phases/<phase>.json`, supplied by
    `--evidence`; no alternate directory is accepted. The recorder alone writes
    the immutable attempt archive. Read its installed subcommand help first.
+   Initial `sdlc-start` PASS additionally requires `--coordinator-session` with
+   the actual native identity; it selects and validates the owned binding without
+   impersonating that session in the outer environment. Later phases reject it.
    Bind the result to
    the lifecycle verification ID, immutable baseline SHA, phase-time
    `recorded_head`, `objective_sha256`, the current `basis_sha256` for prepared
@@ -171,12 +193,26 @@ ownership from a name prefix alone.
    not a recordable canonical phase; retain its private diagnostic evidence.
    `record-phase` retains immutable attempts; prior failures and superseded passes
    remain in the ledger. Final ingestion rechecks the admitted current attempt.
+   At the running classifier checkpoint, a pending design revision is observable
+   only after the Worktree owner validates its active authority, immutable
+   preparation and retained quiescent writers. After material design replanning,
+   complete the owner's required revalidation and record fresh observations for
+   every invalidated phase, including classifier and execution preparation.
+   Preserve the old attempts; they cannot certify the revised contract.
    Earlier admitted bases may cross only hash-linked owner spec reconciliation
    with no material effects, retained plan, unchanged objective and execution
    identities, and valid Git ancestry. After clean promotion, the original
    admitted TDD receipt may also cross appended corrective plans when exact
    locked plan bytes, completed owner replan records, preserved completed task
    definitions and assignments, and the original TDD seal prove its lineage.
+   Bind that seal to the first wave and preserved assignment bases. A pre-seal
+   observation must name the seal commit's sole parent and match an earlier
+   owner seal intent for that base and commit message; ordinary ancestry alone
+   is insufficient. Exact-seal observations and unchanged clean seals remain valid.
+   Compare the full message after Git's default nonedited whitespace cleanup,
+   preserving body text and comment lines. Git documents
+   [full-message formatting](https://git-scm.com/docs/pretty-formats) and
+   [commit cleanup](https://git-scm.com/docs/git-commit).
    Missing, changed, non-appending or ambiguous lineage fails closed. This
    exception never applies to later acceptance phases. New admission stays strict;
    never rewrite earlier receipts to today's basis. Phase results
@@ -226,8 +262,16 @@ ownership from a name prefix alone.
     inventory, resolved ports/endpoints, Git SHAs, phase/test/UAT results,
     validation commands, top issues and recommended fixes, owned resources,
     retention state, and cleanup outcome.
-13. Without `--keep`, call destroy in a finally-style path after both success
-    and failure. Destroy revalidates and closes only the recorded Chrome PID
+13. Validate canonical evidence and preserve reports before teardown. For a failed
+    run with a terminated worker still occupying a scheduler slot, have its native
+    coordinator complete the documented cancellation fence, exact worker
+    reconciliation and cancellation-completion path before exiting. Use retained
+    genuine termination evidence; preserve the failed trial and repair budgets.
+    This cleanup handoff grants no retry or qualification authority. The verifier
+    never clears product slots or edits workflow state itself. Then exit the
+    owned native coordinator normally and require product worker/validator/lease
+    quiescence. Without `--keep`, call aggregate workspace destroy in a finally-style
+    path after both success and failure. Destroy revalidates and closes only the recorded Chrome PID
     and process group; ambiguity fails before Docker deletion as
     `CLEANUP_FAILED`. A cleanup failure overrides the test result.
 
@@ -309,19 +353,29 @@ private route inputs, lease/build authority, durable diagnostics and recovery.
    and return FAIL so a later destroy can safely resume. Treat a failed remove
    as already absent only when a fresh inspect proves the resource is gone.
 
-The helper commands are private implementation mechanics:
+Aggregate standalone and terminal cleanup first validates both fixture classes.
+The lightweight receipt binds exact paths and directory identities to one
+creation generation. Its cleanup checkpoint retains the sealed context, fixed
+scope and exact file hashes; partial deletion resumes only that checkpoint.
+Reports, the root marker and minimal ownership/cleanup records survive. Unknown
+files, replaced paths, unsealed profiles or orphaned live runs are preserved and
+reported as failure. No root-wide recursive deletion is permitted.
+
+The helper commands are private implementation mechanics. Resolve the absolute
+`<installed-skills-root>` through the selected host's installation convention,
+never from a receipt or the source checkout:
 
 ```bash
-python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
+python3 <installed-skills-root>/sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> prepare
-python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
+python3 <installed-skills-root>/sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> --expected-verification-id <id> run-browser-stage --stage capability-discovery
-python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
+python3 <installed-skills-root>/sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> status
-python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
+python3 <installed-skills-root>/sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> --expected-verification-id <id> \
   run-compose -- up --force-recreate --detach --wait web db
-python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
+python3 <installed-skills-root>/sdlc-workflow-test/scripts/verification_workspace.py \
   --verification-root <root> destroy
 ```
 
@@ -341,13 +395,13 @@ Shipping and UAT always require a clean promoted checkout. After completed promo
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
-Read-only classifier observations have a separate explicit target purpose. While
-the bound root coordinator is running `sdlc-classify-failure`, it may observe
-unsealed integration files without committing them or changing phase. Exact
-worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
-This purpose is never used by Compose, runtime inventory, build certification,
-browser acceptance or test execution; explicit clean-target requests still win.
-Worker selectors and dirty promoted checkouts remain rejected.
+Read-only phase observations use a named private purpose. Classification permits
+unsealed integration files during `sdlc-classify-failure`; TDD additionally permits
+its documented `tests_red` and `tests_ready` output checkpoints before sealing.
+Exact worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+These purposes never reach Compose, inventory, build, browser or test execution;
+explicit clean requests still win. Worker selectors and dirty promoted checkouts
+remain rejected. Read the runtime-inventory reference before phase collection.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.

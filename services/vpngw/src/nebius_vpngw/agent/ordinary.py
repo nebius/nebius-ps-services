@@ -156,7 +156,7 @@ def observe_local(cfg: dict[str, Any]) -> str:
         else:
             _require(path.read_text() == expected)
     _require(SWANCTL_CONF.stat().st_mode & 0o777 == 0o600)
-    _require(_output(["systemctl", "is-active", "strongswan-starter"]) == "active")
+    _require(_output(["systemctl", "is-active", "strongswan"]) == "active")
     _require(_output(["systemctl", "is-active", "frr"]) == "active")
     _require("Status: active" in _output(["ufw", "status"]))
     for key, value in REQUIRED_SYSCTLS.items():

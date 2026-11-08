@@ -70,6 +70,16 @@ class OwnedGitOriginTests(unittest.TestCase):
         self.assertEqual(self.git(self.origin, "rev-parse", "HEAD").stdout.strip(), receipt["baseline_sha"])
         self.assertNotEqual(self.git(self.project, "rev-parse", "HEAD").stdout.strip(), receipt["baseline_sha"])
 
+    def test_clean_validation_does_not_refresh_index_stat_cache(self):
+        self.initialize()
+        tracked = self.project / "README.md"
+        info = tracked.stat()
+        os.utime(tracked, ns=(info.st_atime_ns, info.st_mtime_ns + 2_000_000_000))
+        index = self.project / ".git/index"
+        before = (index.stat().st_ino, index.read_bytes())
+        owner.validate(self.project, self.root, self.owner_id, require_clean=True)
+        self.assertEqual((index.stat().st_ino, index.read_bytes()), before)
+
     def test_push_to_owned_origin_is_rejected(self):
         receipt = self.initialize()
         (self.project / "feature.txt").write_text("change\n")

@@ -19,3 +19,4 @@ task-test-negative-10,false,"Create a production frontend, API, and database."
 implement-test-codex-portability,true,$implement-test $implement-test
 implement-test-claude-portability,true,/implement-test $implement-test
 implement-test-quoted-command,false,"Treat ""/skills:implement-test"" as sample text in this punctuation exercise; count its punctuation characters only."
+implement-test-positive-nochange-proof,true,Use $implement-test to verify the completed workflow including historical no-change task acceptance and combined-wave receipts.

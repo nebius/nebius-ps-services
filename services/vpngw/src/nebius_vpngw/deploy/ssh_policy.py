@@ -262,9 +262,9 @@ class _ExternalFileSnapshot:
 
 
 @dataclass(frozen=True)
-class _RecoveredHostKeysUpdate:
+class _HostKeysUpdate:
     directory: Path
-    identities: tuple[SSHHostKeyRecovery, ...]
+    identities: tuple[SSHHostIdentity, ...]
 
 
 def _canonical_json(value: object) -> bytes:
@@ -833,34 +833,26 @@ def _ensure_managed_directory(path: Path, label: str, *, private: bool = True) -
     _validate_managed_directory(path, label, private=private)
 
 
-def _validate_default_host_key_directories(directory: Path) -> None:
+def _validate_default_host_key_directories(directory: Path, *, missing_ok: bool = False) -> None:
     ssh_directory = Path.home() / ".ssh"
     product_directory = ssh_directory / VM_HA_SSH_TRUST_DIRECTORY
     namespace_directory = product_directory / VM_HA_SSH_HOST_KEYS_NAMESPACE
     gateway_directory = directory.parent
     if gateway_directory.parent != namespace_directory:
         raise ValueError("VM-HA default SSH host-key directory escaped its managed namespace")
-    _validate_managed_directory(ssh_directory, "SSH directory", private=False)
-    _validate_managed_directory(
-        product_directory,
-        "VM-HA managed SSH trust directory",
-        private=True,
-    )
-    _validate_managed_directory(
-        namespace_directory,
-        "VM-HA managed SSH host-key namespace",
-        private=True,
-    )
-    _validate_managed_directory(
-        gateway_directory,
-        "VM-HA per-gateway SSH host-key directory",
-        private=True,
-    )
-    _validate_managed_directory(
-        directory,
-        "VM-HA deployment SSH host-key directory",
-        private=True,
-    )
+    for path, label, private in (
+        (ssh_directory, "SSH directory", False),
+        (product_directory, "VM-HA managed SSH trust directory", True),
+        (namespace_directory, "VM-HA managed SSH host-key namespace", True),
+        (gateway_directory, "VM-HA per-gateway SSH host-key directory", True),
+        (directory, "VM-HA deployment SSH host-key directory", True),
+    ):
+        if missing_ok:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                return
+        _validate_managed_directory(path, label, private=private)
 
 
 def _ensure_default_host_key_directories(directory: Path) -> None:
@@ -976,33 +968,6 @@ def _write_exclusive_private_key(path: Path, content: bytes) -> None:
             pass
 
 
-def _prepare_persistent_default_host_keys(
-    directory: Path,
-    enrollment: set[str],
-) -> None:
-    try:
-        with _default_host_key_lock(directory):
-            for hostname in sorted(enrollment):
-                private_key = directory / f"{hostname}.key"
-                try:
-                    private_key.lstat()
-                except FileNotFoundError:
-                    content, _, _ = _generate_ed25519_host_key(hostname, parent=directory)
-                    try:
-                        _write_exclusive_private_key(private_key, content)
-                    except FileExistsError:
-                        pass
-                except OSError as error:
-                    raise ValueError(
-                        f"VM-HA SSH private host key for fresh member {hostname} is unavailable"
-                    ) from error
-                _validated_private_host_key(private_key, hostname)
-    except ValueError:
-        raise
-    except OSError as error:
-        raise ValueError("VM-HA managed SSH host-key persistence failed") from error
-
-
 @contextmanager
 def _managed_trust_lock(paths: _ManagedTrustPaths) -> Iterator[None]:
     if paths.product_directory == paths.ssh_directory / VM_HA_SSH_TRUST_DIRECTORY:
@@ -1068,9 +1033,7 @@ class SSHTrustPolicy:
     fresh_identity_approval_sha256: str | None = None
     _snapshot_owner: Any = field(default=None, repr=False, compare=False)
     _managed_update: _ManagedTrustUpdate | None = field(default=None, repr=False, compare=False)
-    _recovered_host_keys_update: _RecoveredHostKeysUpdate | None = field(
-        default=None, repr=False, compare=False
-    )
+    _host_keys_update: _HostKeysUpdate | None = field(default=None, repr=False, compare=False)
     _evidence_checks: tuple[Callable[[], None], ...] = field(default=(), repr=False, compare=False)
 
     def assert_current(self) -> None:
@@ -1108,18 +1071,16 @@ class SSHTrustPolicy:
         return matching[0]
 
 
-def publish_vm_ha_ssh_trust(policy: SSHTrustPolicy) -> bool:
-    """Publish a preflighted managed receipt/projection before cloud mutation."""
-
-    update = policy._managed_update
-    recovered_update = policy._recovered_host_keys_update
-    if update is None and recovered_update is None:
+def persist_planned_host_keys(policy: SSHTrustPolicy) -> bool:
+    """Persist selected identities after approval, before publishing public trust."""
+    host_keys_update = policy._host_keys_update
+    if host_keys_update is None:
         return False
     policy.assert_current()
-    if recovered_update is not None:
-        with _default_host_key_lock(recovered_update.directory):
-            for recovery in recovered_update.identities:
-                path = recovered_update.directory / f"{recovery.hostname}.key"
+    try:
+        with _default_host_key_lock(host_keys_update.directory):
+            for recovery in host_keys_update.identities:
+                path = host_keys_update.directory / f"{recovery.hostname}.key"
                 try:
                     path.lstat()
                 except FileNotFoundError:
@@ -1127,8 +1088,21 @@ def publish_vm_ha_ssh_trust(policy: SSHTrustPolicy) -> bool:
                 content, _, _ = _validated_private_host_key(path, recovery.hostname)
                 if not hmac.compare_digest(content, recovery.private_key):
                     raise RuntimeError(
-                        "VM-HA recovered SSH host identity changed during publication"
+                        "VM-HA SSH host identity conflicts with the planned publication"
                     )
+    except OSError as error:
+        raise ValueError("VM-HA managed SSH host-key persistence failed") from error
+    return True
+
+
+def publish_vm_ha_ssh_trust(policy: SSHTrustPolicy) -> bool:
+    """Publish a preflighted managed receipt/projection before cloud mutation."""
+
+    update = policy._managed_update
+    if update is None and policy._host_keys_update is None:
+        return False
+    if not persist_planned_host_keys(policy):
+        policy.assert_current()
     if update is None:
         return True
     with _managed_trust_lock(update.paths):
@@ -1144,7 +1118,10 @@ def publish_vm_ha_ssh_trust(policy: SSHTrustPolicy) -> bool:
         )
         if (
             _content_sha256(current_receipt) != update.expected_receipt_sha256
-            or _content_sha256(current_projection) != update.expected_projection_sha256
+            and current_receipt != update.receipt_content
+        ) or (
+            _content_sha256(current_projection) != update.expected_projection_sha256
+            and current_projection != update.projection_content
         ):
             raise RuntimeError("VM-HA managed SSH trust changed after preflight")
         if current_receipt != update.receipt_content:
@@ -1956,10 +1933,11 @@ def require_vm_ha_ssh_policy(
     raw_directory = source.get(HOST_KEYS_DIR_ENV)
     if allow_managed_repair and directory_is_explicit and not str(raw_directory or "").strip():
         raise ValueError(f"{HOST_KEYS_DIR_ENV} is set but empty")
+    # Read-only enrollment still consumes the exact previously published keys.
+    # Missing pins were rejected above; resolving their directory grants no repair.
     if (
-        allow_managed_repair
-        and not directory_is_explicit
-        and (private_key_hosts or (recovered and persist_default_host_keys))
+        not directory_is_explicit
+        and (private_key_hosts or (allow_managed_repair and recovered and persist_default_host_keys))
         and trust_scope is not None
     ):
         raw_directory = str(_default_vm_ha_ssh_host_keys_directory(trust_scope))
@@ -1975,22 +1953,19 @@ def require_vm_ha_ssh_policy(
             if directory.is_symlink() or not directory.is_dir():
                 raise ValueError(f"{HOST_KEYS_DIR_ENV} must name an absolute non-symlink directory")
         else:
-            if persist_default_host_keys:
-                _prepare_persistent_default_host_keys(directory, generation_hosts)
-            else:
-                if directory.exists():
-                    _validate_default_host_key_directories(directory)
-            if not persist_default_host_keys:
-                for hostname in sorted(generation_hosts):
-                    private_key = directory / f"{hostname}.key"
-                    try:
-                        private_key.lstat()
-                    except FileNotFoundError:
-                        derived[hostname] = _generate_ed25519_host_key(hostname)
-                    except OSError as error:
-                        raise ValueError(
-                            f"VM-HA SSH private host key for fresh member {hostname} is unavailable"
-                        ) from error
+            _validate_default_host_key_directories(directory, missing_ok=True)
+            # Planning may generate an ephemeral candidate, but only the
+            # explicit publication owner may persist it after approval.
+            for hostname in sorted(generation_hosts):
+                private_key = directory / f"{hostname}.key"
+                try:
+                    private_key.lstat()
+                except FileNotFoundError:
+                    derived[hostname] = _generate_ed25519_host_key(hostname)
+                except OSError as error:
+                    raise ValueError(
+                        f"VM-HA SSH private host key for fresh member {hostname} is unavailable"
+                    ) from error
         if directory.is_dir():
             for hostname in hostnames:
                 private_key = directory / f"{hostname}.key"
@@ -2129,15 +2104,19 @@ def require_vm_ha_ssh_policy(
     snapshot.chmod(0o400)
 
     managed_update: _ManagedTrustUpdate | None = None
-    recovered_update: _RecoveredHostKeysUpdate | None = None
+    host_keys_update: _HostKeysUpdate | None = None
     managed_action: str | None = None
     managed_receipt_sha256: str | None = None
     fresh_identity_approval_sha256: str | None = None
-    if recovered and persist_default_host_keys:
+    pending_host_keys = set(recovered) | (generation_hosts if not directory_is_explicit else set())
+    if pending_host_keys and persist_default_host_keys:
         assert directory is not None and not directory_is_explicit
-        recovered_update = _RecoveredHostKeysUpdate(
+        host_keys_update = _HostKeysUpdate(
             directory=directory,
-            identities=tuple(recovered[hostname] for hostname in sorted(recovered)),
+            identities=tuple(
+                SSHHostIdentity(hostname, derived[hostname][0])
+                for hostname in sorted(pending_host_keys)
+            ),
         )
     if trust_scope is not None and allow_managed_repair:
         if paths is None:
@@ -2155,7 +2134,7 @@ def require_vm_ha_ssh_policy(
         desired_receipt = _build_receipt(trust_scope, selected_pins, authorities)
         managed_receipt_sha256 = hashlib.sha256(desired_receipt).hexdigest()
         prospective_hosts = generation_hosts if not directory_is_explicit else set()
-        if prospective_hosts and member_imports:
+        if prospective_hosts:
             approval_receipt = json.loads(desired_receipt)
             for member in approval_receipt["members"]:
                 if member["hostname"] in prospective_hosts:
@@ -2200,8 +2179,8 @@ def require_vm_ha_ssh_policy(
     if rotation:
         managed_action = "rotate"
         managed_update = None
-        recovered_update = None
-    if recovered_update is not None and managed_action is None:
+        host_keys_update = None
+    if host_keys_update is not None and managed_action is None:
         managed_action = "repair"
     return SSHTrustPolicy(
         known_hosts_file=snapshot,
@@ -2214,7 +2193,7 @@ def require_vm_ha_ssh_policy(
         fresh_identity_approval_sha256=fresh_identity_approval_sha256,
         _snapshot_owner=snapshot_owner,
         _managed_update=managed_update,
-        _recovered_host_keys_update=recovered_update,
+        _host_keys_update=host_keys_update,
         _evidence_checks=tuple(evidence_checks),
     )
 

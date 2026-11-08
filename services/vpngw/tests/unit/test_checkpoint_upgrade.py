@@ -14,9 +14,37 @@ from nebius_vpngw.agent.vm_ha_checkpoint import (
 from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint, HAState
 
 
+@pytest.mark.parametrize("version", [5, 6])
+def test_predecessor_active_repair_gains_explicit_mode_without_renewing_budget(version):
+    from tests.unit.test_vm_ha_controller import _owned_cloud, _snapshot
+
+    from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode, VMHAController
+
+    snapshot = _snapshot(cloud=_owned_cloud(), data_plane_mode=DataPlaneMode.ACTIVE)
+    snapshot = replace(snapshot, readiness=replace(snapshot.readiness, service_healthy=False))
+    checkpoint = (
+        VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
+        ._repair_action(snapshot, ControllerCheckpoint())
+        .checkpoint
+    )
+    if version == 6:
+        checkpoint = replace(checkpoint, path_transfer_destinations=("192.0.2.0/24",))
+    raw = controller_checkpoint_to_dict(checkpoint)
+    raw["schema"] = upgrade.PREFIX + str(version)
+    raw["pending_action"].pop("repair_mode")
+    raw["repair_attempt"].pop("repair_mode")
+    if version == 5:
+        raw.pop("path_transfer_destinations")
+    with pytest.raises(ValueError, match="unsupported"):
+        controller_checkpoint_from_dict(raw)
+    assert upgrade.inspect_checkpoint(raw) == checkpoint
+    assert "repair_mode" not in raw["repair_attempt"]
+
+
 def predecessor(version=4):
     value = controller_checkpoint_to_dict(ControllerCheckpoint(sequence=7, state=HAState.SUSPECT))
     value.pop("suspicion_boot_id")
+    value.pop("path_transfer_destinations")
     value.update(schema=upgrade.PREFIX + str(version), suspect_since=999999.0)
     if version < 4:
         value.pop("repair_attempt")
@@ -242,6 +270,22 @@ def test_preinstall_rejects_completed_receipt_with_legacy_state(conversion):
         upgrade.conversion_preflight(**conversion)
 
 
+def test_completed_previous_release_can_upgrade_again_under_new_authority(conversion):
+    root = conversion["state_dir"]
+    receipt = upgrade.convert_checkpoint(**conversion)
+    prior = json.dumps({**receipt, "phase": "completed"}).encode()
+    repair.publish(root / "checkpoint-conversion.json", prior)
+    repair.publish(root / "controller-checkpoint.json", json.dumps(predecessor()).encode())
+    next_release = {**conversion, "artifact": "e" * 64}
+    assert upgrade.conversion_preflight(**next_release)
+    result = upgrade.convert_checkpoint(**next_release)
+    assert result["phase"] == "pending" and result["artifact"] == "e" * 64
+    assert repair.read_json(root / "controller-checkpoint.json")["schema"] == upgrade.SCHEMA
+    archive = root / f"checkpoint-conversion-{repair.sha(prior)}.completed.json"
+    assert archive.read_bytes() == prior
+    assert upgrade.convert_checkpoint(**next_release) == result
+
+
 def test_preinstall_rejects_pending_artifact_change(conversion):
     upgrade.convert_checkpoint(**conversion)
     with pytest.raises(RuntimeError, match="binding changed"):
@@ -334,6 +378,47 @@ def test_package_transport_excludes_writers_before_conversion(
     assert set((*ops.MANAGEMENT, *ops.HA_WRITERS)).issubset(events)
     assert events[-1] == "unlocked"
     assert repair.read_json(checkpoint)["schema"] == upgrade.SCHEMA
+
+    # The activation barrier verifies a prepared package without converting it
+    # again. Retain its lock authority until activation completes the receipt.
+    from nebius_vpngw.deploy import ordinary_apply, vm_ha_package
+
+    manifest = {
+        "wheel_sha256": conversion["artifact"],
+        "files": {},
+        "assets": {},
+        "version": "1",
+        "expected_dependencies": {},
+        "expected_requirements": [],
+    }
+    observation = {
+        "boot_id": conversion["boot_id"],
+        "config_sha256": "c" * 64,
+        "ha_config_digest": "d" * 64,
+        "files": {},
+        "assets": {},
+        "asset_modes": {},
+        "package_version": "1",
+        "dependencies": {},
+        "requirements": [],
+    }
+    monkeypatch.setattr(ordinary_apply, "remote", lambda *a: {"observation": observation})
+    plan = SimpleNamespace(
+        target="example",
+        instance=SimpleNamespace(hostname="host"),
+        manifest=manifest,
+        observation=observation,
+    )
+    prepared = checkpoint.read_bytes()
+    vm_ha_package.verify_prepared(
+        SimpleNamespace(_inspect_vm_ha_host=inspect),
+        plan,
+        {},
+        checkpoint_conversion=conversion["expected"],
+        convert=False,
+    )
+    assert checkpoint.read_bytes() == prepared
+    assert repair.read_json(root / "checkpoint-conversion.json")["phase"] == "pending"
 
 
 @pytest.mark.parametrize("obstacle", [None, "authority", "marker", "status", "writer", "boot"])

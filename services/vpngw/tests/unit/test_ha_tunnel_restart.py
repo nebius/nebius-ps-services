@@ -32,7 +32,11 @@ def restart_runtime(tmp_path):
         peer_heartbeat=replace(_peer(), tunnel_capability=True),
         peer_received_at=100.0,
     )
-    snapshots = SimpleNamespace(observe=lambda: snapshot, last_snapshot=snapshot)
+    snapshots = SimpleNamespace(
+        observe=lambda: snapshot,
+        last_snapshot=snapshot,
+        providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
+    )
     runtime = ControllerTunnelRuntime(
         path,
         tmp_path,
@@ -211,3 +215,55 @@ def test_forwarding_revocation_during_verification_cannot_complete_operation(tmp
     selector.tick(AUTH, 101)
     assert selector.state["operation"]["phase"] == "verify"
     assert selector.state["operation"]["successes"] == 0
+
+
+@pytest.mark.parametrize("condition", ["failed", "missing", "unknown", "healthy", "path-down"])
+def test_path_selection_defers_component_defect_to_recovery_owner(tmp_path, condition):
+    runtime, _, _, _ = restart_runtime(tmp_path)
+    snapshot = runtime.controller.snapshots.last_snapshot
+    health = replace(
+        snapshot.readiness,
+        service_healthy=condition not in {"failed", "missing"},
+        sample_complete=condition != "unknown",
+        local_defects=("daemon-configuration-missing:strongswan",)
+        if condition == "missing"
+        else (),
+        static_ready=condition != "path-down",
+    )
+    runtime.controller.snapshots.observe = lambda: replace(
+        snapshot, data_plane_mode=DataPlaneMode.ACTIVE, readiness=health
+    )
+    assert (runtime.authority() is not None) is (condition in {"healthy", "path-down"})
+
+
+@pytest.mark.parametrize("credential_failure", [False, True])
+def test_native_policy_change_loads_credentials_before_initiation(
+    tmp_path, monkeypatch, credential_failure
+):
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", path)
+
+    def render(self, cfg, *, rendered_files):
+        rendered_files[path] = "fixture"
+
+    monkeypatch.setattr(tunnel_runtime.StrongSwanRenderer, "render_and_apply", render)
+    effects = tunnel_runtime.NativeTunnelEffects(
+        config("static"), tmp_path, lambda authority: True, active_revalidate=lambda authority: True
+    )
+    calls = []
+
+    def run(argv):
+        calls.append(tuple(argv))
+        if credential_failure and "--load-all" in argv:
+            raise RuntimeError("credential load incomplete")
+        return ""
+
+    effects.run = run
+    if credential_failure:
+        with pytest.raises(RuntimeError, match="incomplete"):
+            effects._swan_config(effects.cfg)
+    else:
+        effects._swan_config(effects.cfg)
+    assert calls == [("swanctl", "--load-all", "--noprompt")]

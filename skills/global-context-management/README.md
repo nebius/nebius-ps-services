@@ -517,6 +517,8 @@ when useful, or state the active runtime/tool reason it cannot spawn them.
 The verified support bundle includes `git_environment.py`. Disposable SDLC
 fixtures alone opt into its sealed profile: fixed configuration/attributes,
 generation and origin binding, exact Git scope and local configuration checks.
+The three-tier generation marker follows lifecycle v8, including its separate
+physical runtime-catalog binding; old markers require their original cleanup owner.
 `runtime_environment` preserves and revalidates this context for fresh workers.
 No profile means existing ordinary runtime behavior. A supplied invalid profile
 fails closed; it is never dropped to recover ambient Git settings.
@@ -546,3 +548,17 @@ selected script skill with no hook bundle of its own.
 Codex configuration reconciliation remains owned by `config-codex`. Its copied
 hook templates require these shared support files even though the configured
 product and user home remain Codex. See the [catalog installation guide](../README.md#skills-installer).
+
+## Host Memory Safety
+
+The [shared memory helper](references/host-memory.md) provides bounded host
+observations and explicit foreground supervision without dependencies or new
+hooks. At <=4 GiB and >2 GiB, warn and continue; at <=2 GiB, stop owned work
+safely and report the shortage. Measurement failure pauses heavy work without
+claiming a low-memory observation. The setup skills mirror the same compact
+policy into native personal instructions. Regression checks use synthetic
+readings and tiny subprocesses, never deliberate host memory exhaustion:
+
+```bash
+python3 -B global-context-management/scripts/test_host_memory.py
+```

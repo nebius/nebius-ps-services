@@ -353,7 +353,7 @@ class TwoNodeScenario:
             peer_received_at=node.peer_received_at,
             apply_locked=False,
             emergency_active_only=False,
-            readiness=LocalReadiness(True, True, True, True),
+            readiness=LocalReadiness(True, True, True, True, protection_ready=True),
             cloud=self.cloud.observe(local=local, peer=peer),
             guard_boot_id=node.guard_boot_id,
             data_plane_mode=node.mode,

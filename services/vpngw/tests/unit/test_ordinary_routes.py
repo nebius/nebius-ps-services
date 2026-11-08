@@ -14,6 +14,8 @@ from nebius_vpngw import ordinary_routes as routes
 from nebius_vpngw.agent.state_store import StateStore
 from nebius_vpngw.agent.strongswan_renderer import StrongSwanRenderer
 
+pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
+
 
 def config(*prefixes):
     return {
@@ -628,6 +630,7 @@ def test_saved_proof_lost_reply_retry_rebinds_ledger_before_final_confirmation(
             "route_projection": [],
         }
         final = {
+            "runtime": {"ready": True},
             "files": {},
             "assets": {},
             "asset_modes": {},

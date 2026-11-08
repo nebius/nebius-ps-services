@@ -1,28 +1,8 @@
-"""Tunnel health monitor for detecting and recovering from stale IPsec tunnels.
+"""Observe typed tunnel health and supervise bounded ordinary component repair.
 
-This module implements automated detection and recovery for IPsec tunnel state desync
-where strongSwan reports ESTABLISHED but the xfrm interface has stopped passing traffic.
-
-Root Causes Addressed:
-- NAT keepalive failures causing silent tunnel death
-- Asymmetric routing dropping return packets
-- Kernel/userspace XFRM state desynchronization
-- DPD (Dead Peer Detection) false negatives
-
-Detection Methods:
-1. XFRM interface traffic counters (TX drops, RX zero bytes)
-2. BGP session state (should be Established if tunnel is healthy)
-3. Actual traffic test (ICMP/TCP probe through tunnel)
-
-Recovery Actions:
-1. Restart specific tunnel connection (least disruptive)
-2. Full strongSwan restart if multiple tunnels affected
-3. Alert logging for investigation
-
-Best Practice References:
-- AWS VPN: Monitors DPD and restarts tunnels on keepalive failure
-- Managed VPN peers vary; do not assume BFD support from BGP support alone
-- Azure VPN: Implements tunnel health probes with auto-recovery
+Native strongSwan owns peer retries. The ordinary monitor repairs positively
+failed components or lost authorized daemon configuration; HA monitoring is
+observation-only. Explicit proactive refresh runs only after complete health.
 """
 
 from __future__ import annotations
@@ -42,11 +22,14 @@ from typing import Any, Literal
 
 import yaml
 
-from ..ipsec_observation import child_ready
+from ..ipsec_observation import ConfigurationInventory, snapshot
+from ..ipsec_observation import command as observation_command
+from .strongswan_renderer import authorized_configuration
 from .tunnel_iterator import iter_active_tunnels
 
 CONFIG_PATH = Path("/etc/nebius-vpngw/config-resolved.yaml")
 LOCK_PATH = Path("/run/nebius-vpngw/health-monitor.lock")
+COMPONENT_RECOVERY_PATH = Path("/var/lib/nebius-vpngw/component-recovery.json")
 
 
 def _vm_ha_observer_only(config: object) -> bool:
@@ -230,19 +213,9 @@ class TunnelHealthMonitor:
                 if_id = matches[0]
             except (OSError, ValueError, TypeError, yaml.YAMLError):
                 return "UNKNOWN"
-        if not shutil.which("swanctl"):
-            return "UNKNOWN"
         try:
-            result = subprocess.run(
-                ["swanctl", "--list-sas", "--ike", tunnel_name, "--raw"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode:
-                return "UNKNOWN"
-            return "ESTABLISHED" if child_ready(result.stdout, tunnel_name, if_id) else "DOWN"
-        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return "ESTABLISHED" if snapshot(5).ready(tunnel_name, if_id) else "DOWN"
+        except ValueError:
             return "UNKNOWN"
 
     def get_bgp_peer_status(self, peer_ip: str) -> str | None:
@@ -337,11 +310,14 @@ class TunnelHealthMonitor:
                     timeout=5,
                 )
 
-                if result.returncode != 0:
+                if result.returncode == 1:
                     down = True
                     failure_reasons.append(
                         f"BGP peer {bgp_peer} unreachable (tunnel data plane broken)"
                     )
+                elif result.returncode != 0:
+                    unknown = True
+                    failure_reasons.append("Ping observation unavailable")
             except subprocess.TimeoutExpired:
                 unknown = True
                 failure_reasons.append("Ping observation timed out")
@@ -441,164 +417,157 @@ class TunnelHealthMonitor:
             print(f"[TunnelMonitor] ⚠️  Error loading config: {e}")
             return []
 
-    def run_health_check(self) -> dict[str, TunnelHealth]:
-        """Run health check on all configured tunnels.
+    def _repair_failed_components(self, healthy: bool) -> None:
+        """One bounded attempt per positively failed component until 60s health.
 
-        Returns:
-            Dictionary mapping tunnel names to TunnelHealth objects
+        Missing SAs, BGP withdrawals and unknown observations never enter this
+        owner. The durable record is written before a mutation can be submitted.
         """
+        if self.observer_only:
+            return
+        from .. import ordinary_operations as ops
+        from .vm_ha.store import atomic_write_json
+
+        path = COMPONENT_RECOVERY_PATH
+        try:
+            with ops.mutation_lock():
+                if _installed_observer_only():
+                    return
+                value = (
+                    json.loads(path.read_text())
+                    if path.exists()
+                    else {"attempted": [], "healthy_since": None, "failed_observations": {}}
+                )
+                if (
+                    not isinstance(value, dict)
+                    or set(value) != {"attempted", "healthy_since", "failed_observations"}
+                    or not isinstance(value["attempted"], list)
+                    or any(
+                        unit not in {"strongswan.service", "frr.service"}
+                        for unit in value["attempted"]
+                    )
+                    or (
+                        value["healthy_since"] is not None
+                        and type(value["healthy_since"]) not in {int, float}
+                    )
+                    or not isinstance(value["failed_observations"], dict)
+                    or any(
+                        type(count) is not int or count < 0
+                        for count in value["failed_observations"].values()
+                    )
+                ):
+                    return
+                now = time.time()
+                if healthy:
+                    since = value["healthy_since"]
+                    if since is None or now < since:
+                        value["healthy_since"] = now
+                    elif now - since >= 60:
+                        value["attempted"] = []
+                else:
+                    value["healthy_since"] = None
+                for unit in ("strongswan.service", "frr.service"):
+                    observed = ops.bounded(
+                        ["systemctl", "show", unit, "--property=ActiveState", "--value"], timeout=5
+                    )
+                    if observed.returncode:
+                        continue
+                    state = observed.stdout.strip()
+                    missing = False
+                    if unit == "strongswan.service" and state in {"active", "failed"}:
+                        try:
+                            cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+                            if not isinstance(cfg, dict) or _vm_ha_observer_only(cfg):
+                                continue
+                            expected = authorized_configuration(cfg)
+                            if state == "active" and expected.connections:
+                                listed = ops.bounded(
+                                    [*observation_command(), "--configuration"], timeout=3
+                                )
+                                if listed.returncode:
+                                    continue
+                                missing = not ConfigurationInventory.from_json(
+                                    listed.stdout
+                                ).includes(expected)
+                        except (OSError, ValueError, RuntimeError, yaml.YAMLError):
+                            continue
+                    if state in {"active", "inactive"} and not missing:
+                        value["failed_observations"].pop(unit, None)
+                    if state != "failed" and not missing:
+                        continue
+                    value["healthy_since"] = None
+                    if unit in value["attempted"]:
+                        continue
+                    count = value["failed_observations"].get(unit, 0) + 1
+                    value["failed_observations"][unit] = count
+                    if count < self.max_failures_before_restart:
+                        continue
+                    # Recheck under the same writer lock immediately before consuming
+                    # the durable attempt. Neither a timeout nor changed policy is failure.
+                    current = ops.bounded(
+                        ["systemctl", "show", unit, "--property=ActiveState", "--value"], timeout=5
+                    )
+                    if current.returncode or current.stdout.strip() != state:
+                        continue
+                    if unit == "strongswan.service":
+                        if authorized_configuration(cfg) != expected:
+                            continue
+                        if missing:
+                            listed = ops.bounded(
+                                [*observation_command(), "--configuration"], timeout=3
+                            )
+                            if listed.returncode or ConfigurationInventory.from_json(
+                                listed.stdout
+                            ).includes(expected):
+                                continue
+                    value["attempted"].append(unit)
+                    atomic_write_json(path, value)
+                    if missing:
+                        ops.bounded(["swanctl", "--load-all", "--noprompt"], timeout=15)
+                    else:
+                        result = ops.bounded(["systemctl", "restart", unit], timeout=20)
+                        if result.returncode == 0 and unit == "strongswan.service":
+                            ops.bounded(["swanctl", "--load-all", "--noprompt"], timeout=15)
+                atomic_write_json(path, value)
+        except (OSError, ValueError, TypeError, RuntimeError, subprocess.TimeoutExpired):
+            # Unknown process completion is never permission to resubmit.
+            return
+
+    def run_health_check(self) -> dict[str, TunnelHealth]:
+        """Observe all paths before admitting repair or scheduled maintenance."""
         tunnels = self.get_configured_tunnels()
         results = {}
-        current_time = time.time()
-
-        for tunnel_name, interface, bgp_peer in tunnels:
-            previous_health = self.tunnel_states.get(tunnel_name)
-            health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
-
-            if previous_health and previous_health.xfrm_present and health.xfrm_present:
-                stats = health.stats
-                prev_stats = previous_health.stats
-                delta_tx_dropped = stats.tx_dropped - prev_stats.tx_dropped
-                delta_tx_errors = stats.tx_errors - prev_stats.tx_errors
-                delta_rx_errors = stats.rx_errors - prev_stats.rx_errors
-
-                if delta_tx_dropped > 0 or delta_tx_errors > 0 or delta_rx_errors > 0:
+        for name, interface, peer in tunnels:
+            health = self.check_tunnel_health(name, interface, peer)
+            previous = self.tunnel_states.get(name)
+            if previous and previous.xfrm_present and health.xfrm_present:
+                if any(
+                    getattr(health.stats, field) > getattr(previous.stats, field)
+                    for field in ("tx_dropped", "tx_errors", "rx_errors")
+                ):
                     health.assessment = "unhealthy"
-                    health.failure_reasons.append(
-                        "XFRM errors increased "
-                        f"(tx_dropped +{delta_tx_dropped}, "
-                        f"tx_errors +{delta_tx_errors}, "
-                        f"rx_errors +{delta_rx_errors})"
-                    )
-            results[tunnel_name] = health
-
+                    health.failure_reasons.append("XFRM errors increased")
+            results[name] = health
             if health.is_healthy:
-                self.consecutive_failures.pop(tunnel_name, None)
-
-            # Proactive refresh (optional, preventive maintenance)
-            if self.enable_proactive_refresh and health.is_healthy and not self.observer_only:
-                last_refresh = self.last_proactive_refresh.get(tunnel_name, 0)
-                time_since_refresh = current_time - last_refresh
-
-                if time_since_refresh >= self.proactive_refresh_interval:
-                    print(
-                        f"[TunnelMonitor] 🔄 Proactive refresh for {tunnel_name} "
-                        f"(uptime: {time_since_refresh / 3600:.1f}h)"
-                    )
-
-                    if self.restart_tunnel(tunnel_name):
-                        self.last_proactive_refresh[tunnel_name] = current_time
-                        # Re-check health after proactive restart
-                        time.sleep(5)
-                        health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
-                        results[tunnel_name] = health
-
-                    if health.is_healthy:
-                        self.consecutive_failures.pop(tunnel_name, None)
-                    self.tunnel_states[tunnel_name] = health
-                    continue  # Do not immediately repair a proactive refresh again.
-
-            # Unknown evidence holds history and cannot authorize a repair.
-            if health.assessment == "unknown":
-                self.tunnel_states[tunnel_name] = health
-                continue
-
-            # Track consecutive failures (reactive detection)
-            if health.assessment == "unhealthy":
-                self.consecutive_failures[tunnel_name] = (
-                    self.consecutive_failures.get(tunnel_name, 0) + 1
-                )
-
-                print(
-                    f"[TunnelMonitor] ⚠ Tunnel {tunnel_name} unhealthy "
-                    f"(failure #{self.consecutive_failures[tunnel_name]}): "
-                    f"{', '.join(health.failure_reasons)}"
-                )
-
-                # Attempt restart if failures exceed threshold
-                if self.consecutive_failures[tunnel_name] >= self.max_failures_before_restart:
-                    print(
-                        f"[TunnelMonitor] 🚨 Tunnel {tunnel_name} failed "
-                        f"{self.consecutive_failures[tunnel_name]} consecutive checks"
-                    )
-
-                    if self.observer_only:
-                        print(
-                            "[TunnelMonitor] VM-HA controller owns recovery; "
-                            f"observing {tunnel_name} without restart"
-                        )
-                    elif self.restart_tunnel(tunnel_name):
-                        # Only confirmed healthy observation clears history.
-                        # Give tunnel time to establish
-                        time.sleep(5)
-                        # Re-check health after restart
-                        health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
-                        results[tunnel_name] = health
-
-                        if health.is_healthy:
-                            self.consecutive_failures.pop(tunnel_name, None)
-                            print(f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered after restart")
-                        else:
-                            print(
-                                f"[TunnelMonitor] ⚠ Tunnel {tunnel_name} still unhealthy after restart"
-                            )
-                else:
-                    # Immediate re-check after first failure (don't wait full interval)
-                    # This reduces detection time from 20s to ~15s (10s + 5s re-check)
-                    print("[TunnelMonitor] 🔄 Immediate re-check in 5 seconds...")
-                    time.sleep(5)
-                    health_recheck = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
-
-                    health = health_recheck
-                    results[tunnel_name] = health
-                    if health_recheck.assessment == "unhealthy":
-                        # Second failure confirmed immediately
-                        self.consecutive_failures[tunnel_name] += 1
-                        print(
-                            f"[TunnelMonitor] ⚠ Tunnel {tunnel_name} still unhealthy after re-check "
-                            f"(failure #{self.consecutive_failures[tunnel_name]})"
-                        )
-
-                        # Check again if we hit threshold after immediate recheck
-                        if (
-                            self.consecutive_failures[tunnel_name]
-                            >= self.max_failures_before_restart
-                        ):
-                            print(
-                                f"[TunnelMonitor] 🚨 Tunnel {tunnel_name} failed "
-                                f"{self.consecutive_failures[tunnel_name]} consecutive checks"
-                            )
-
-                            if self.observer_only:
-                                print(
-                                    "[TunnelMonitor] VM-HA controller owns recovery; "
-                                    f"observing {tunnel_name} without restart"
-                                )
-                            elif self.restart_tunnel(tunnel_name):
-                                time.sleep(5)
-                                health = self.check_tunnel_health(tunnel_name, interface, bgp_peer)
-                                results[tunnel_name] = health
-
-                                if health.is_healthy:
-                                    self.consecutive_failures.pop(tunnel_name, None)
-                                    print(
-                                        f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered after restart"
-                                    )
-                    elif health_recheck.is_healthy:
-                        # False positive - tunnel recovered on its own
-                        print(
-                            f"[TunnelMonitor] ✓ Tunnel {tunnel_name} recovered (transient failure)"
-                        )
-                        del self.consecutive_failures[tunnel_name]
-                        results[tunnel_name] = health_recheck
-            else:
-                # Reset failure counter on success
-                if tunnel_name in self.consecutive_failures:
-                    del self.consecutive_failures[tunnel_name]
-
-            # Store state
-            self.tunnel_states[tunnel_name] = health
-
+                self.consecutive_failures.pop(name, None)
+            elif health.assessment == "unhealthy":
+                self.consecutive_failures[name] = self.consecutive_failures.get(name, 0) + 1
+        self.tunnel_states = results
+        complete_health = bool(results) and all(item.is_healthy for item in results.values())
+        self._repair_failed_components(complete_health)
+        # A healthy individual path is insufficient while another path is in
+        # native recovery. Serialize one scheduled refresh after complete health.
+        if complete_health and self.enable_proactive_refresh and not self.observer_only:
+            now = time.time()
+            for name, _interface, _peer in tunnels:
+                last = self.last_proactive_refresh.setdefault(name, now)
+                if now - last >= self.proactive_refresh_interval:
+                    # A timeout cannot prove a native mutation was cancelled.
+                    # Reserve the maintenance interval before submitting once.
+                    self.last_proactive_refresh[name] = now
+                    self.restart_tunnel(name)
+                    results[name] = self.check_tunnel_health(name, _interface, _peer)
+                    break
         return results
 
     def get_health_summary(self) -> dict[str, Any]:
@@ -687,7 +656,7 @@ def main() -> None:
         type=str,
         metavar="TUNNEL_NAME",
         help="Manually restart a specific tunnel by name, or 'all' to restart all tunnels. "
-        "Use with 'swanctl --list-sas' (or 'ipsec statusall') to find tunnel names. This is useful for quick "
+        "Use gateway status to find configured tunnel names. This is useful for quick "
         "recovery from stale tunnel state without waiting for automatic detection.",
     )
     parser.add_argument(
@@ -860,7 +829,7 @@ def main() -> None:
             f"[TunnelMonitor] Starting continuous monitoring (interval: {config_check_interval}s)"
         )
         print(
-            f"[TunnelMonitor] Will restart tunnels after {monitor.max_failures_before_restart} consecutive failures"
+            "[TunnelMonitor] Native strongSwan recovery owns tunnel retries; confirmed component failures receive bounded repair"
         )
 
         if monitor.enable_proactive_refresh:
@@ -869,7 +838,7 @@ def main() -> None:
                 f"tunnels will be restarted every {config_refresh_hours}h"
             )
         else:
-            print("[TunnelMonitor] Proactive refresh DISABLED (reactive mode only)")
+            print("[TunnelMonitor] Proactive refresh DISABLED (native recovery enabled)")
 
         try:
             while True:

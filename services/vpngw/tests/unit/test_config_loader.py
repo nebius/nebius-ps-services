@@ -231,6 +231,19 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 
     first_plan = merge_with_peer_configs(deepcopy(normalized), [])
     second_plan = merge_with_peer_configs(deepcopy(normalized), [])
+    # Public apply later inspects status with the effective region made
+    # explicit. That equivalent input must retain the installed generation.
+    explicit_region = deepcopy(normalized)
+    explicit_region["gateway_group"]["region"] = normalized["region_id"]
+    explicit_plan = merge_with_peer_configs(explicit_region, [])
+    assert explicit_plan.vm_ha.generation == first_plan.vm_ha.generation
+    repeated = deepcopy(normalized)
+    repeated_first = merge_with_peer_configs(repeated, [])
+    assert merge_with_peer_configs(repeated, []).vm_ha.generation == repeated_first.vm_ha.generation
+    different_region = deepcopy(normalized)
+    different_region["gateway_group"]["region"] = "eu-north1"
+    different_plan = merge_with_peer_configs(different_region, [])
+    assert different_plan.vm_ha.generation != first_plan.vm_ha.generation
     omitted_probes = deepcopy(normalized)
     omitted_probes["gateway_group"]["vm_ha"].pop("tunnel_probes", None)
     omitted_plan = merge_with_peer_configs(omitted_probes, [])

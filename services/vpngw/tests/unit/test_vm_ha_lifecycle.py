@@ -442,9 +442,30 @@ def _missing_standby_state(
 @pytest.mark.parametrize(
     "artifact_sha256", ("a" * 64, "f" * 64), ids=("same-artifact", "new-artifact")
 )
+@pytest.mark.parametrize("with_command", (False, True))
 def test_active_missing_non_owner_starts_creation_only_replacement(
-    tmp_path: Path, prior_key: str | None, artifact_sha256: str
+    tmp_path: Path, prior_key: str | None, artifact_sha256: str, with_command: bool
 ) -> None:
+    from nebius_vpngw.apply_approval import bind
+
+    old_command = (
+        {
+            "runtime-command-approval": json.dumps(bind("a" * 64, {"old": True})),
+            "runtime-command-execution": "a" * 32,
+            "runtime-package-manifests": "{}",
+        }
+        if with_command
+        else {}
+    )
+    new_command = (
+        {
+            "runtime-command-approval": json.dumps(bind("b" * 64, {"new": True})),
+            "runtime-command-execution": "b" * 32,
+            "runtime-package-manifests": "{}",
+        }
+        if with_command
+        else None
+    )
     members = (_member(0, "passive"), _member(1, "active"))
     observation = {
         "members": [
@@ -480,6 +501,7 @@ def test_active_missing_non_owner_starts_creation_only_replacement(
         desired_state_digest=_digest("b"),
         current_state_digest=_digest("c"),
         initial_resource_bindings={
+            **old_command,
             **({prior_key: "a" * 64} if prior_key else {}),
             "compute:gateway-0": "vm-0",
             "compute:gateway-1": "vm-1",
@@ -519,6 +541,7 @@ def test_active_missing_non_owner_starts_creation_only_replacement(
         current_state_digest=_digest("f"),
         current_observation=observation,
         artifact_sha256=artifact_sha256,
+        command_bindings=new_command,
     )
 
     assert successor.status is VMHALifecycleStatus.PROVISIONING
@@ -531,6 +554,9 @@ def test_active_missing_non_owner_starts_creation_only_replacement(
     )
     assert successor.transaction is not None
     bindings = dict(successor.transaction.resource_bindings)
+    for key, value in old_command.items():
+        assert bindings[f"standby-replacement-1-prior-{key}:gateway-1"] == value
+        assert bindings[key] == new_command[key]
     assert bindings["retired-compute:gateway-1"] == "vm-1"
     assert bindings["retired-disk:gateway-1"] == "disk-1"
     assert bindings[vm_ha_missing_standby_disk_name_binding_key("gateway-1", 1)] == disk_name

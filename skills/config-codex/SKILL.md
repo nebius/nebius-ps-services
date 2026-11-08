@@ -200,6 +200,18 @@ refreshing the recovery baseline from a live setup. It owns the allowlist,
 omissions, redacted inspection procedure, file-mode rule, and private-state
 recovery boundary.
 
+## Selected Host Memory Policy
+
+For a requested memory guard, reconcile only the template's Host Memory Safety
+section in the native personal instruction file. At or below 4 GiB and above
+2 GiB, warn and continue, including launches; at or below 2 GiB, safely stop
+owned work and notify the user. Follow the focused procedure in
+[local setup](references/local-setup.md), then load the host memory guide
+owned by `global-context-management`.
+Preserve partial setups; this request does not bootstrap other settings,
+hooks, roles or permissions. Validate policy separately from full-home setup
+and fresh-session loading. Do not install a background daemon or new hook.
+
 ## Selected Research Setup
 
 For requested Tavily OAuth or global research routing, read

@@ -139,6 +139,17 @@ Hooks own only non-SDLC global-context events:
 Hooks must not call subagent tools directly, route `sdlc-start`, select SDLC
 phase skills, modify SDLC run state, or inject large documents.
 
+## Host Memory Headroom
+
+Before workloads and throughout owned work, follow
+[host memory guidance](references/host-memory.md). Warn at or below 4 GiB and
+continue work and launches above 2 GiB. At or below 2 GiB, stop owned work
+safely and tell the user the host is running out of memory. Unknown measurement
+separately pauses heavy work. Use the shared helper for foreground jobs and
+bounded observation; use existing resource owners for Docker/browser cleanup.
+Close monitors at task end. Global personal policy is maintained by
+`config-codex` and `config-claude`; no new hook or background daemon is added.
+
 ## Task State
 
 Use the durable task-state path injected by global hooks. No legacy task-state

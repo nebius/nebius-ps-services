@@ -395,21 +395,9 @@ set -euo pipefail
 
 /usr/local/bin/nebius-vpngw-esp4-preflight.sh --verify
 
-if systemctl list-unit-files strongswan-starter.service >/dev/null 2>&1; then
-  systemctl restart strongswan-starter
-elif systemctl list-unit-files strongswan.service >/dev/null 2>&1; then
-  systemctl restart strongswan
-fi
-
-systemctl restart nebius-vpngw-agent
-
-if systemctl list-unit-files strongswan-starter.service >/dev/null 2>&1; then
-  systemctl is-active strongswan-starter
-elif systemctl list-unit-files strongswan.service >/dev/null 2>&1; then
-  systemctl is-active strongswan
-else
-  echo "strongSwan service not found"
-fi
+systemctl restart strongswan.service
+systemctl restart nebius-vpngw-agent.service
+systemctl is-active strongswan.service
 systemctl is-active nebius-vpngw-agent
 REMOTE
 }

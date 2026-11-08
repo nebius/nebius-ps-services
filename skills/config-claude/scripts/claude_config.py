@@ -116,10 +116,10 @@ def check_instructions(data: bytes) -> None:
     # User sections are never rewritten to repair duplicate policy headings.
     outside = text.split(BEGIN)[0] + text.split(END)[1]
     visible = re.sub(r"(?ms)^(```|~~~).*?^\1[^\n]*$", "", outside)
-    if re.search(r"(?im)^\s{0,3}#{1,6}\s+Live Product Validation\s*#*\s*$", visible):
-        raise ValueError("conflicting user-owned live validation heading")
-    if re.search(r"(?im)^Live Product Validation\s*\n[=-]+\s*$", visible):
-        raise ValueError("conflicting user-owned live validation heading")
+    for heading in ("Live Product Validation", "Host Memory Safety"):
+        if (re.search(rf"(?im)^\s{{0,3}}#{{1,6}}\s+{heading}\s*#*\s*$", visible)
+                or re.search(rf"(?im)^{heading}\s*\n[=-]+\s*$", visible)):
+            raise ValueError("conflicting user-owned policy heading")
 
 
 def check_role(data: bytes, name: str) -> None:

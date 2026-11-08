@@ -16,7 +16,7 @@ import time
 import typing as t
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
@@ -282,6 +282,12 @@ class ComputeObservation:
     resource_version: str
     nic_allocations: tuple[tuple[str, str], ...]
     nic_alias_allocations: tuple[tuple[str, tuple[str, ...]], ...]
+    retained_ownership_epoch: str | None = None
+
+    @property
+    def ownership_epoch(self) -> str:
+        """Attachment authority; raw resource_version remains the CAS revision."""
+        return self.retained_ownership_epoch or self.resource_version
 
     def allocation_on(self, network_interface_name: str) -> str | None:
         matches = [
@@ -798,6 +804,7 @@ class VMHACloudAdapter:
         attempts: int = 10,
         poll_interval: float = 1.0,
         sleeper: t.Callable[[float], None] = time.sleep,
+        instance_epoch_provider: t.Callable[[t.Any], str] | None = None,
     ) -> None:
         if attempts < 1:
             raise ValueError("attempts must be at least 1")
@@ -810,6 +817,7 @@ class VMHACloudAdapter:
         self._attempts = attempts
         self._poll_interval = poll_interval
         self._sleep = sleeper
+        self._instance_epoch_provider = instance_epoch_provider
 
     @staticmethod
     def _call(description: str, operation: t.Callable[[], t.Any]) -> t.Any:
@@ -849,7 +857,11 @@ class VMHACloudAdapter:
         )
         if instance is None:
             raise AmbiguousHACloudError(f"Compute instance {instance_id} was not returned")
-        return compute_observation(instance_id, instance)
+        observation = compute_observation(instance_id, instance)
+        if self._instance_epoch_provider is not None:
+            epoch = self._instance_epoch_provider(instance)
+            observation = replace(observation, retained_ownership_epoch=epoch)
+        return observation
 
     def _read_allocation(self, allocation_id: str) -> AllocationObservation:
         allocation = self._call(

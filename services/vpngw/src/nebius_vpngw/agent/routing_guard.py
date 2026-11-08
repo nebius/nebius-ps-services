@@ -103,6 +103,9 @@ def _vm_ha_enabled(cfg: dict[str, Any]) -> bool:
     return isinstance(vm_ha, dict) and vm_ha.get("enabled") is not False
 
 
+VM_HA_WRITER_READY_STATES = frozenset({"active", "degraded", "degraded-path"})
+
+
 def require_vm_ha_current_boot_ready(
     cfg: dict[str, Any],
     *,
@@ -135,7 +138,7 @@ def require_vm_ha_current_boot_ready(
         and status.get("guard_boot_id") == boot_id
         and status.get("promotion_ready") is True
         and status.get("data_plane_mode") == "active"
-        and status.get("state") in {"active", "degraded", "degraded-path"}
+        and status.get("state") in VM_HA_WRITER_READY_STATES
         and guard.get("guard_boot_id") == boot_id
         and guard.get("data_plane_mode") == "active"
     ):

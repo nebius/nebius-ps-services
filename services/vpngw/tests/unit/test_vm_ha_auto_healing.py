@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,6 +41,8 @@ from nebius_vpngw.cli import (
     _execute_vm_ha_auto_healing_policy,
     _run_vm_ha_auto_healing_statuses,
     _vm_ha_auto_healing_is_terminal,
+    _vm_ha_auto_healing_pending_recovery_policy,
+    _vm_ha_auto_healing_recovery_progress_is_exact,
     _vm_ha_auto_healing_recovery_required,
     _vm_ha_auto_healing_transaction,
 )
@@ -1251,3 +1254,96 @@ def test_terminal_enabled_policy_clears_every_member_local_completed_recovery(
             "operation_id": recovery.operation_id,
             "recovery_digest": auto_healing_recovery_digest(recovery),
         }
+
+
+@pytest.mark.parametrize(
+    "phase", (AutoHealingRecoveryPhase.CONSUMED, AutoHealingRecoveryPhase.COMPLETED)
+)
+@pytest.mark.parametrize("prepared", (False, True))
+@pytest.mark.parametrize(
+    "drift",
+    (
+        None,
+        "operation_id",
+        "approval_digest",
+        "policy_digest",
+        "predecessor_digest",
+        "cluster_id",
+        "generation_id",
+        "node_id",
+        "target_node_id",
+        "armed",
+        "unacknowledged",
+    ),
+)
+def test_cli_recognizes_accepted_recovery_before_policy_enable(
+    tmp_path: Path, phase: AutoHealingRecoveryPhase, prepared: bool, drift: str | None
+) -> None:
+    passive, owner, peer, record, _ = _disable_pair(tmp_path)
+    transaction = _vm_ha_auto_healing_transaction(
+        desired=StandbyAutoHealing.ENABLED, statuses=[_status(record)]
+    )
+    if prepared:
+        record = owner.prepare(
+            cluster_id=record.cluster_id,
+            node_id=record.node_id,
+            peer_node_id=record.peer_node_id,
+            generation_id=record.generation_id,
+            desired=StandbyAutoHealing.ENABLED,
+            operation_id=transaction.operation_id,
+            coordinator_node_id=transaction.coordinator_node_id,
+            predecessor_digest=transaction.predecessor_digest,
+            peer=peer,
+            updated_at=4.0,
+        )
+    recovery = AutoHealingRecoveryRecord(
+        cluster_id=record.cluster_id,
+        node_id=record.node_id,
+        target_node_id=record.peer_node_id,
+        generation_id=record.generation_id,
+        desired=StandbyAutoHealing.ENABLED,
+        operation_id=transaction.operation_id,
+        approval_digest="c" * 64,
+        policy_digest=record.decision_digest,
+        predecessor_digest=transaction.predecessor_digest,
+        promotion_receipt_id="receipt-a",
+        allocation_id="allocation-a",
+        ownership_epoch="7",
+        stopped_revision="8",
+        phase=phase,
+        rearm_operation_id="rearm-a",
+        updated_at=5.0,
+    )
+    if drift == "armed":
+        recovery = replace(recovery, phase=AutoHealingRecoveryPhase.ARMED, rearm_operation_id=None)
+    elif drift == "unacknowledged":
+        record = replace(record, peer_ack_digest=None)
+    elif drift is not None:
+        value = (
+            "e" * 64
+            if drift.endswith("digest") or drift in {"operation_id", "generation_id"}
+            else "foreign"
+        )
+        recovery = replace(recovery, **{drift: value})
+    status = {
+        **_status(record),
+        "recovery_phase": recovery.phase.value,
+        "recovery": recovery.to_dict(),
+    }
+    assert _vm_ha_auto_healing_recovery_progress_is_exact(
+        recovery_status=status,
+        recovery_owner_node_id=record.node_id,
+        transaction=transaction,
+        approval_digest="c" * 64,
+    ) is (drift is None or (drift == "unacknowledged" and prepared))
+
+    # A new invocation may finish a completed start under fresh policy authority;
+    # its historical approval is not authority to repeat the Compute start.
+    assert _vm_ha_auto_healing_pending_recovery_policy(
+        [status, _status(peer)],
+        desired=StandbyAutoHealing.ENABLED,
+        owner_node_id=record.node_id,
+    ) is (
+        phase is AutoHealingRecoveryPhase.COMPLETED
+        and (drift in {None, "approval_digest"} or (drift == "unacknowledged" and prepared))
+    )

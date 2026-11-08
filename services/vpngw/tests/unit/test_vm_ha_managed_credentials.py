@@ -378,6 +378,7 @@ def test_inspection_rejects_shared_managed_directory(tmp_path: Path) -> None:
         project_id="project-a", gateway_name="gateway-a", home=tmp_path
     )
     source.parent.mkdir(parents=True)
+    source.parent.chmod(0o755)
     source.write_text("{}", encoding="utf-8")
     source.chmod(0o600)
 

@@ -305,6 +305,24 @@ class RuntimeInventoryTests(unittest.TestCase):
         self.assertIn("Playwright", advice)
         self.assertNotIn("Docker", advice)
 
+    def test_unrun_browser_mentions_do_not_change_failure_owner(self):
+        from three_tier_reporting import recommended_fix
+
+        summary = "Implementation blocked after the vertical HTTP test errored."
+        expected = recommended_fix("sdlc-implement-plan", summary)
+        for unrun in (
+            "No promotion or browser acceptance claimed.",
+            "Playwright evaluation and GUI UAT were not run.",
+        ):
+            with self.subTest(unrun=unrun):
+                self.assertEqual(
+                    recommended_fix("sdlc-implement-plan", summary + " " + unrun),
+                    expected,
+                )
+        self.assertIn(
+            "Playwright", recommended_fix("npx playwright test", "assertion failed")
+        )
+
     def test_capacity_rejection_precedes_unreadable_state(self):
         for state in (
             {"runtime_observations": [{}] * 128},

@@ -7,10 +7,11 @@ import argparse
 import json
 import os
 from pathlib import Path
-import signal
 import shutil
 import subprocess
 import sys
+
+from workflow_process import OwnedProcessGroup, ProcessCleanupError
 
 
 SDLC_EXECUTION_SCRIPTS = (
@@ -240,32 +241,17 @@ def _transition(
     return result
 
 
-def _stop_worker(
-    process: subprocess.Popen[str], *, terminate_grace: float
-) -> tuple[str, str]:
+def _stop_worker(process: subprocess.Popen[str], *, terminate_grace: float) -> tuple[str, str]:
+    owner = getattr(process, "_workflow_group", None)
+    if owner is None:
+        raise DispatchError("CLEANUP_BLOCKED", "worker group ownership is unavailable")
     try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGTERM)
-        elif process.poll() is None:
-            process.terminate()
-    except ProcessLookupError:
-        pass
-    try:
-        return process.communicate(timeout=terminate_grace)
-    except subprocess.TimeoutExpired:
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            elif process.poll() is None:
-                process.kill()
-        except ProcessLookupError:
-            pass
-        try:
-            return process.communicate(timeout=terminate_grace)
-        except subprocess.TimeoutExpired as exc:
-            raise DispatchError(
-                "CLEANUP_BLOCKED", "worker termination is unproven; retain its resources"
-            ) from exc
+        owner.close(grace=terminate_grace)
+        output = process.communicate(timeout=max(1, terminate_grace))
+        owner.verify_absent()
+        return output
+    except (ProcessCleanupError, subprocess.TimeoutExpired) as exc:
+        raise DispatchError("CLEANUP_BLOCKED", "worker termination is unproven; retain its resources") from exc
 
 
 def _agent_available(agent_binary: str) -> bool:
@@ -319,21 +305,28 @@ def dispatch_sequential(
             command = [agent_binary, "--add-dir", *launch["support_write_roots"],
                        "--print", "--output-format", "json",
                        "--no-session-persistence", "--json-schema", output_schema.read_text()]
+        environment = runtime_environment(selected, fresh_session=True, cwd=Path(assignment["scope_cwd"]))
+        owner = OwnedProcessGroup()
         try:
             process = subprocess.Popen(
                 command,
                 cwd=str(assignment["scope_cwd"]),
-                env=runtime_environment(selected, fresh_session=True, cwd=Path(assignment["scope_cwd"])),
+                env=environment,
                 stdin=subprocess.PIPE,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                start_new_session=os.name == "posix",
+                process_group=owner.id,
             )
-        except OSError as exc:
+        except BaseException as exc:
+            owner.close(grace=0)
+            owner.verify_absent()
+            if not isinstance(exc, OSError):
+                raise
             raise DispatchError(
                 "ENVIRONMENT_BLOCKER", "selected agent executable is unavailable"
             ) from exc
+        process._workflow_group = owner
         try:
             prompt: str | None = launch["prompt"]
             while True:
@@ -383,9 +376,8 @@ def dispatch_sequential(
                     worker_result=result,
                 )
             results.append(result)
-        except BaseException:
+        finally:
             _stop_worker(process, terminate_grace=terminate_grace)
-            raise
     return results
 
 

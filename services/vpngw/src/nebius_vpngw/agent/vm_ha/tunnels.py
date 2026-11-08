@@ -68,6 +68,9 @@ class TunnelEffects(Protocol):
         self, policy: ConnectionPolicy, target: str | None, authority: Authority
     ) -> None: ...
     def verify(self, policy: ConnectionPolicy, target: str | None) -> Health: ...
+    def authority_restored(
+        self, policy: ConnectionPolicy, target: str, authority: Authority
+    ) -> bool: ...
     def fence(self) -> None: ...
 
 
@@ -166,6 +169,7 @@ def read_state(path: Path) -> dict[str, Any]:
                 "activate",
                 "restore",
                 "verify",
+                "verify-unchanged",
                 "verify-restore",
                 "failed",
                 "succeeded",
@@ -366,11 +370,18 @@ class TunnelController:
                 "name one eligible tunnel on the current owner; selection is unavailable or ambiguous"
             )
         policy, resolved = candidates[0]
+        unchanged = verb == "failback" and (
+            policy.mode == "static"
+            and self.state["selected"].get(policy.name, policy.preferred) == resolved
+            or policy.mode == "bgp"
+            and policy.name not in self.state["selected"]
+        )
         episode = self.state["episode"]
         if (
-            policy.mode == "static"
+            not unchanged
+            and policy.mode == "static"
             and episode is not None
-            and (episode["exhausted"] or now >= episode["deadline"] - 1)
+            and (episode["exhausted"] or now >= episode["deadline"])
         ):
             raise RuntimeError(
                 "Static recovery budget is consumed; 60 seconds of continuous health is required"
@@ -388,6 +399,7 @@ class TunnelController:
             now,
             operation_id=operation_id,
             requested_target=target,
+            unchanged=unchanged,
         )
         return str(self.state["operation"]["id"])
 
@@ -401,6 +413,7 @@ class TunnelController:
         *,
         operation_id: str | None = None,
         requested_target: str | None = None,
+        unchanged: bool = False,
     ) -> None:
         self.state["sequence"] += 1
         operation_id = (
@@ -425,7 +438,11 @@ class TunnelController:
             "requested_verb": verb,
             "requested_target": requested_target,
             "previous": self.state["selected"].get(policy.name, policy.preferred),
-            "phase": "suspend" if policy.mode == "static" else "activate",
+            "phase": "verify-unchanged"
+            if unchanged
+            else "suspend"
+            if policy.mode == "static"
+            else "activate",
             "deadline": now + 29,
             "attempt_deadline": now + 10,
             "successes": 0,
@@ -479,7 +496,7 @@ class TunnelController:
             else:
                 health[policy.name] = self.effects.observe(policy, target, selected=True).value
         self.state["health"] = health
-        static = [p for p in self.policies.values() if p.mode == "static"]
+        static = list(self.policies.values())
         loss = any(health[p.name] == Health.DOWN.value for p in static)
         healthy = bool(static) and all(health[p.name] == Health.HEALTHY.value for p in static)
         if loss:
@@ -492,7 +509,10 @@ class TunnelController:
             if now - episode["last_observed"] > 10:
                 episode["healthy_since"] = None
             episode["last_observed"] = max(now, episode["last_observed"])
-            if healthy and not self._pending():
+            observing_unchanged = (
+                self._pending() and self.state["operation"]["phase"] == "verify-unchanged"
+            )
+            if healthy and (not self._pending() or observing_unchanged):
                 if episode["healthy_since"] is None:
                     episode["healthy_since"] = now
                 elif now - episode["healthy_since"] >= 60:
@@ -502,18 +522,30 @@ class TunnelController:
             if (
                 episode is not None
                 and not healthy
-                and (episode["exhausted"] or now >= episode["deadline"] - 1)
+                and (episode["exhausted"] or now >= episode["deadline"])
             ):
                 episode["exhausted"] = True
                 self._save()
-                self.effects.fence()
-                if self._pending():
-                    self.state["operation"].update(phase="failed", result="recovery-exhausted")
+                # Expiry is path evidence, never gateway failure. Restore the
+                # previous authority durably, then leave native retry running.
+                if self._pending() and self.state["operation"]["phase"] not in {
+                    "restore",
+                    "verify-restore",
+                    "verify-unchanged",
+                }:
+                    op = self.state["operation"]
+                    policy = self.policies[op["connection"]]
+                    if policy.mode == "bgp":
+                        self.state["selected"].pop(policy.name, None)
+                        op.update(verb="release", phase="activate", successes=0)
+                    else:
+                        op.update(phase="restore", successes=0)
                 self._save()
-                return
         self._save()
         if self._pending():
             self._advance(authority, now)
+            return
+        if episode is not None and episode["exhausted"]:
             return
         for policy in self.policies.values():
             if not policy.eligible:
@@ -540,6 +572,26 @@ class TunnelController:
         policy = self.policies[op["connection"]]
         if not self.effects.revalidate(authority):
             return
+        if op["phase"] == "verify-unchanged":
+            # Selection already matches intent. Verification cannot consume or
+            # renew recovery authority, reload policy, or restart native SAs.
+            try:
+                observed = (
+                    self.effects.verify(policy, None if policy.mode == "bgp" else op["target"])
+                    if self.effects.active(authority)
+                    else Health.UNKNOWN
+                )
+            except RuntimeError:
+                observed = Health.UNKNOWN
+            op["successes"] = op["successes"] + 1 if observed is Health.HEALTHY else 0
+            if now >= op["deadline"]:
+                op.update(phase="failed", result="unchanged-path-unverified")
+            elif op["successes"] >= 2:
+                op.update(phase="succeeded", result="verified")
+            elif observed is Health.DOWN:
+                op.update(phase="failed", result="unchanged-path-unverified")
+            self._save()
+            return
         if policy.mode == "bgp" and not self.effects.active(authority):
             return
         if policy.mode == "static":
@@ -559,18 +611,9 @@ class TunnelController:
                         result="target-failed-restoring-policy",
                     )
                     self._save()
-            else:
-                op.update(phase="failed", result="operation-expired")
+            elif op["phase"] not in {"restore", "verify-restore"}:
+                op.update(phase="restore", successes=0, result="recovery-exhausted-restoring")
                 self._save()
-                if (
-                    op["effects_started"]
-                    and self.state["health"].get(policy.name) != Health.HEALTHY.value
-                ):
-                    self.effects.fence()
-                return
-        if policy.mode == "static" and self.state["episode"]["exhausted"]:
-            self.effects.fence()
-            return
         if policy.mode == "bgp" and op["verb"] == "failback":
             # A restart or delayed retry must not reuse old preferred-path proof.
             if self.effects.candidate(policy, policy.preferred) is not Health.HEALTHY:
@@ -598,6 +641,18 @@ class TunnelController:
                 op["phase"] = "verify-restore" if restore else "verify"
             else:
                 restoring = op["phase"] == "verify-restore"
+                if (
+                    restoring
+                    and self.state["episode"] is not None
+                    and self.state["episode"]["exhausted"]
+                ):
+                    # Recovery health is separate from restored initiation
+                    # authority. Do not continually cancel native retries while
+                    # waiting for an unavailable remote endpoint to return.
+                    if self.effects.authority_restored(policy, op["previous"], authority):
+                        op.update(phase="failed", result="native-recovery-retained")
+                    self._save()
+                    return
                 observed = self.effects.verify(policy, op["previous"] if restoring else target)
                 if policy.mode == "bgp" and not self.effects.active(authority):
                     op["successes"] = 0

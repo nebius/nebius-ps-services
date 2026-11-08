@@ -25,6 +25,8 @@ from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget, run
 from nebius_vpngw.deploy import ordinary_apply, ordinary_remote, vm_ha_package
 from nebius_vpngw.deploy.ssh_push import SSHPush, VMHAAgentArtifact
 
+pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
+
 
 @pytest.mark.parametrize("reverse", [False, True])
 def test_package_inspection_rejects_conflicting_metadata_in_one_prefix(
@@ -172,17 +174,27 @@ def test_ha_asset_installer_checks_ufw_before_writing_any_asset(
 
 @pytest.mark.parametrize("ha", [False, True])
 @pytest.mark.parametrize("predecessor", ["missing", "previous", "current", "foreign"])
-def test_ufw_ordering_upgrade_admits_only_product_owned_override(
-    release_wheel, monkeypatch, ha, predecessor
+@pytest.mark.parametrize(
+    ("path", "released"),
+    [
+        (ordinary_apply.UFW_ORDERING_PATH,
+         b"[Unit]\nAfter=network-online.target cloud-init.service\nWants=network-online.target\n"),
+        ("/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
+         b"[Unit]\nAfter=strongswan-starter.service frr.service\n"),
+        ("/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
+         b"[Unit]\nAfter=strongswan-starter.service frr.service\nWants=strongswan-starter.service frr.service\n"),
+    ],
+)
+def test_ordering_upgrade_admits_only_product_owned_override(
+    release_wheel, monkeypatch, ha, predecessor, path, released
 ):
     owner = vm_ha_package if ha else ordinary_apply
     config = "gateway: {}\nconnections: []\n"
     manifest = owner.artifact(release_wheel, config)
-    path = ordinary_apply.UFW_ORDERING_PATH
     asset = manifest["assets"][path]
     prior = {
         "missing": None,
-        "previous": ordinary_apply.sha(ordinary_apply.PREVIOUS_UFW_ORDERING),
+        "previous": ordinary_apply.sha(released),
         "current": asset["sha256"],
         "foreign": ordinary_apply.sha(b"[Unit]\nAfter=customer.service\n"),
     }[predecessor]
@@ -198,6 +210,9 @@ def test_ufw_ordering_upgrade_admits_only_product_owned_override(
         config_sha256=manifest["config_sha256"],
         verified=False,
         agent_state="active",
+        runtime={"ready": True},
+        runtime_plan={},
+        runtime_pending=None,
     )
     monkeypatch.setattr(ordinary_apply, "remote", Mock(return_value={"observation": observation}))
     monkeypatch.setattr(ordinary_apply, "resolve_dependencies", lambda *args: [])
@@ -209,6 +224,24 @@ def test_ufw_ordering_upgrade_admits_only_product_owned_override(
     else:
         plan = owner.inspect_plan(*args, target_identity="compute-0")
         plan.close()
+
+
+@pytest.mark.parametrize("wants", [False, True])
+def test_ha_asset_installer_upgrades_released_agent_ordering(release_wheel, tmp_path, wants):
+    root = tmp_path / "guest"
+    override = root / "etc/systemd/system/nebius-vpngw-agent.service.d/override.conf"
+    override.parent.mkdir(parents=True)
+    # Exact bytes emitted by the authentic 0.6.0-0.6.3 service owners.
+    released = b"[Unit]\nAfter=strongswan-starter.service frr.service\n"
+    if wants:
+        released += b"Wants=strongswan-starter.service frr.service\n"
+    override.write_bytes(released)
+    script = shlex.split(SSHPush._install_vm_ha_assets_from_artifact_command(str(release_wheel)))[3]
+    script = re.sub(r"/(?:etc|usr|var)/", lambda match: str(root) + match.group(), script)
+    result = subprocess.run([sys.executable, "-c", script, str(release_wheel)], capture_output=True)
+    assert result.returncode == 0, result.stderr
+    canonical = Path(ordinary.__file__).parents[1] / "systemd/nebius-vpngw-agent-ordering.conf"
+    assert override.read_bytes() == canonical.read_bytes()
 
 
 def test_previous_capability_absence_plans_approved_upgrade(release_wheel, monkeypatch):
@@ -226,6 +259,9 @@ def test_previous_capability_absence_plans_approved_upgrade(release_wheel, monke
         "config_sha256": manifest["config_sha256"],
         "verified": False,
         "agent_state": "active",
+        "runtime": {"ready": True},
+        "runtime_plan": {},
+        "runtime_pending": None,
         "dependencies": {"cryptography": "46.0.0"},
         "requirements": {},
         "markers": {},
@@ -253,6 +289,166 @@ def test_previous_capability_absence_plans_approved_upgrade(release_wheel, monke
         plan.close()
 
 
+def test_ordinary_parent_resumes_before_guest_without_resolving_new_packages(
+    release_wheel, monkeypatch, tmp_path
+):
+    import io
+
+    from nebius_vpngw import apply_approval
+    from nebius_vpngw.deploy import ordinary_command
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+
+    config = "gateway: {}\nconnections: []\n"
+    instance = SimpleNamespace(hostname="gateway", config_yaml=config)
+    ssh = SimpleNamespace(_build_wheel=lambda **kw: release_wheel, _find_project_root=lambda: None)
+    raw, filename = b"approved dependency", "example_dep-1.2-py3-none-any.whl"
+    manifest = ordinary_apply.artifact(release_wheel, config)
+    observed = {
+        "files": {},
+        "assets": {},
+        "asset_modes": {},
+        "boot_id": "boot",
+        "package_version": "0.6.0",
+        "config_sha256": "old",
+        "verified": False,
+        "agent_state": "active",
+        "runtime": {"ready": True},
+        "runtime_plan": {"closure": "approved"},
+        "runtime_pending": None,
+        "dependencies": {},
+        "requirements": {},
+        "markers": {},
+        "route_ownership": empty_routes(),
+        "wheel_tags": ["py3-none-any"],
+    }
+
+    def remote(_ssh, _target, _instance, _local, request):
+        current = copy.deepcopy(observed)
+        if request["manifest"].get("command_approval"):
+            current["runtime_plan"] = request["manifest"]["runtime_plan"]
+        return {"observation": current}
+
+    def resolve(_manifest, _observed, directory):
+        path = directory / filename
+        path.write_bytes(raw)
+        return [path]
+
+    monkeypatch.setattr(ordinary_apply, "remote", remote)
+    monkeypatch.setattr(ordinary_apply, "resolve_dependencies", resolve)
+    prepared = ordinary_apply.inspect_plan(ssh, "host", instance, {}, target_identity="compute")
+    journal = CommandJournal("project", "gateway", root=tmp_path / "command")
+    args = {
+        "local": {},
+        "targets": {"gateway": ("compute", "host")},
+        "plans": {"gateway": prepared},
+        "attachments": None,
+        "attachment_pending": None,
+        "artifact_sha256": manifest["wheel_sha256"],
+    }
+    command = ordinary_command.inspect(journal, **args)
+    with journal:
+        command.begin()
+        journal.started("guest:gateway")
+    old_payload = prepared.dependency_paths[0]
+    prepared.close()
+    assert not old_payload.exists()
+    monkeypatch.setattr(
+        ordinary_apply,
+        "resolve_dependencies",
+        lambda *args: pytest.fail("must not resolve newer dependencies"),
+    )
+    observed["runtime_plan"] = {"closure": "new apt candidates"}
+    saved = ordinary_command.package_manifests(
+        journal, local={}, targets=args["targets"], artifact=args["artifact_sha256"]
+    )["gateway"]
+
+    def download(url, **kwargs):
+        if url == "https://pypi.org/pypi/example-dep/1.2/json":
+            return io.BytesIO(
+                json.dumps(
+                    {
+                        "urls": [
+                            {
+                                "filename": filename,
+                                "packagetype": "bdist_wheel",
+                                "digests": {"sha256": ordinary_apply.sha(raw)},
+                                "url": "https://files.pythonhosted.org/packages/approved.whl",
+                            }
+                        ]
+                    }
+                ).encode()
+            )
+        assert url == "https://files.pythonhosted.org/packages/approved.whl"
+        return io.BytesIO(raw)
+
+    monkeypatch.setattr(ordinary_apply, "urlopen", download)
+    resumed = ordinary_apply.inspect_plan(
+        ssh, "host", instance, {}, target_identity="compute", resume_manifest=saved
+    )
+    try:
+        assert resumed.dependency_paths[0].read_bytes() == raw
+        assert resumed.manifest == saved
+        args["plans"] = {"gateway": resumed}
+        continued = ordinary_command.inspect(journal, **args)
+        assert continued.resumed and continued.approval == command.approval
+    finally:
+        resumed.close()
+    observed.update(
+        files=manifest["files"],
+        package_version=manifest["version"],
+        verified=True,
+        config_sha256=manifest["config_sha256"],
+        dependencies=saved["expected_dependencies"],
+        assets={path: asset["sha256"] for path, asset in manifest["assets"].items()},
+        asset_modes={path: [asset["mode"], 0, 0] for path, asset in manifest["assets"].items()},
+        runtime_completion={
+            "approval": saved["command_approval"],
+            "manifest": apply_approval.manifest_identity(saved),
+        },
+    )
+    monkeypatch.setattr(ordinary_apply, "urlopen", lambda *a, **kw: pytest.fail("no-op download"))
+    complete = ordinary_apply.inspect_plan(
+        ssh, "host", instance, {}, target_identity="compute", resume_manifest=saved
+    )
+    try:
+        assert complete.noop and not complete.dependency_paths
+        args["plans"] = {"gateway": complete}
+        with journal:
+            ordinary_command.inspect(journal, **args).begin()
+            journal.complete()
+        assert journal.pending() is None
+    finally:
+        complete.close()
+
+
+def test_ordinary_readonly_inspection_honors_pinned_native_plan(
+    monkeypatch, tmp_path, runtime_migration_guest
+):
+    from nebius_vpngw import runtime_migration
+
+    monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "missing-config")
+    boot = tmp_path / "boot"
+    boot.write_text("12345678-1234-1234-1234-123456789012")
+    monkeypatch.setattr(ordinary_remote, "BOOT", boot)
+    monkeypatch.setattr(
+        runtime_migration, "plan", lambda *args: pytest.fail("must not resolve another apt closure")
+    )
+    observed = ordinary_remote.inspect(
+        {
+            "files": {},
+            "assets": {},
+            "runtime_plan": runtime_migration_guest,
+            "command_approval": {
+                "schema": "nebius-vpngw.apply-approval.v1",
+                "approval": "a" * 64,
+                "scope": "b" * 64,
+            },
+        },
+        runtime_admission=False,
+    )
+    assert observed["runtime_plan"] == runtime_migration_guest
+
+
 @pytest.mark.parametrize(
     ("existing", "enrollment", "retained"),
     [
@@ -277,7 +473,17 @@ def test_ha_package_plans_bind_only_retained_compute(
     inspected = []
     closed = []
 
-    def inspect_plan(_ssh, _target, instance, _local, *, target_identity):
+    def inspect_plan(
+        _ssh,
+        _target,
+        instance,
+        _local,
+        *,
+        target_identity,
+        resume_parent=None,
+        resume_manifest=None,
+    ):
+        assert resume_parent is None and resume_manifest is None
         assert instance.hostname not in enrollment, "retired guest must not be inspected"
         assert target_identity == instance.hostname
         inspected.append(instance.hostname)
@@ -303,7 +509,9 @@ def test_ha_package_plans_bind_only_retained_compute(
 
 
 @pytest.fixture
-def transaction(release_wheel, tmp_path, monkeypatch, ordinary_operation_guest):
+def transaction(
+    release_wheel, tmp_path, monkeypatch, ordinary_operation_guest, runtime_migration_guest
+):
     root = tmp_path / "guest"
     root.mkdir()
     for name, basename in (
@@ -320,6 +528,7 @@ def transaction(release_wheel, tmp_path, monkeypatch, ordinary_operation_guest):
     manifest["assets"] = {
         str(root / Path(path).name): item for path, item in manifest["assets"].items()
     }
+    manifest["runtime_plan"] = runtime_migration_guest
     manifest["expected_dependencies"] = {
         "nebius-vpngw": manifest["version"],
         "cryptography": "46.0.0",
@@ -328,6 +537,9 @@ def transaction(release_wheel, tmp_path, monkeypatch, ordinary_operation_guest):
         "files": {},
         "package_version": "0.6.0",
         "agent_state": "active",
+        "runtime": {"ready": True},
+        "runtime_plan": {},
+        "runtime_pending": None,
         "verified": False,
         "dependencies": {"nebius-vpngw": "0.6.0", "cryptography": "46.0.0"},
     }
@@ -424,6 +636,29 @@ def transaction(release_wheel, tmp_path, monkeypatch, ordinary_operation_guest):
         command=command,
         receipt=receipt,
     )
+
+
+def test_route_timer_starts_only_after_native_release(
+    transaction, monkeypatch, ordinary_operation_guest
+):
+    from nebius_vpngw import runtime_migration
+
+    settled = ordinary_operation_guest.unit_settled
+    timer_phases = []
+
+    def guarded_timer(self, effect):
+        if effect.get("unit") == "nebius-vpngw-fix-routes.timer" and effect["action"] == "start":
+            phase = runtime_migration.state()["phase"]
+            timer_phases.append(phase)
+            # PID 1 skips the timer while its negative ConditionPathExists is false.
+            return phase == "complete"
+        return settled(self, effect)
+
+    monkeypatch.setattr(ordinary_operation_guest, "unit_settled", guarded_timer)
+    monkeypatch.setattr(ordinary_operation_guest, "unit_finished", lambda self, effect: True)
+    result = ordinary_remote.execute(transaction.request)
+    assert result["status"] == "applied", result
+    assert timer_phases == ["complete"]
 
 
 def test_approved_transaction_publishes_exact_assets_then_rerun_has_no_effects(transaction):
@@ -742,6 +977,8 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(
         manifest = request["manifest"]
         return {
             "observation": {
+                "runtime": {"ready": True},
+                "runtime_pending": None,
                 "files": manifest["files"],
                 "assets": {path: item["sha256"] for path, item in manifest["assets"].items()},
                 "asset_modes": {
@@ -763,10 +1000,10 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(
         }
 
     monkeypatch.setattr(ordinary_apply, "remote", remote)
-    inspection = SimpleNamespace(snapshot=SimpleNamespace(view=SimpleNamespace(overall="HEALTHY")))
+    from test_apply_health import snapshot
+
+    inspection = SimpleNamespace(snapshot=snapshot())
     monkeypatch.setattr(cli, "_inspect_vm_ha_status_with_region", Mock(return_value=inspection))
-    confirm = Mock()
-    monkeypatch.setattr(cli, "_confirm_vm_ha_healthy", confirm)
     ssh = Mock()
     monkeypatch.setattr(cli, "SSHPush", lambda **kwargs: ssh)
 
@@ -786,7 +1023,7 @@ def test_ha_noop_requires_both_member_artifacts_and_fresh_health(
             check()
     else:
         assert check() is (not drift and failure != "policy drift")
-    confirm.assert_called_once()
+    assert cli._inspect_vm_ha_status_with_region.call_count == 2
     assert calls[:2] == [i.hostname for i in instances]
     assert not ssh.mock_calls
 
@@ -1282,7 +1519,23 @@ def test_remote_stale_predecessor_has_no_command_or_config_effects(monkeypatch, 
         }
     )
     assert result["status"] == "failed" and result["stage"] == "predecessor"
+    assert result["error_code"] == "stale_plan"
     command.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["runtime_drift", "final_artifact", "private-fixture-output"])
+def test_remote_failure_diagnostics_are_closed_and_metadata_only(monkeypatch, tmp_path, failure):
+    monkeypatch.setattr(ordinary_remote, "LOCK", tmp_path / "lock")
+    monkeypatch.setattr(ordinary_remote, "inspect", Mock(side_effect=RuntimeError(failure)))
+    result = ordinary_remote.execute({"manifest": {}, "noop": True})
+    assert result == {
+        "status": "failed",
+        "stage": "predecessor",
+        "error_code": failure
+        if failure != "private-fixture-output"
+        else "ordinary_transaction_failed",
+    }
+    assert "private-fixture-output" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("status,output", [(1, "{}"), (0, "{}\n{}"), (0, "{"), (0, "[]")])
@@ -1377,3 +1630,52 @@ def test_replacement_preparation_never_starts_dataplane_or_commits_routes(
     assert not any(effect[:2] == ["systemctl", "start"] for effect in tx.effects)
     route_prepare.assert_not_called()
     assert json.loads(guard.read_text()) == {"operation": operation}
+
+
+@pytest.mark.parametrize("fault", [None, "unapproved", "wheel", "receipt", "unchanged"])
+def test_ordinary_durable_staging_requires_exact_approval_and_receipt(tmp_path, monkeypatch, fault):
+    wheel = tmp_path / "nebius_vpngw-1-py3-none-any.whl"
+    wheel.write_bytes(b"approved wheel")
+    dependency = tmp_path / "vici-6.0.3-py3-none-any.whl"
+    dependency.write_bytes(b"approved dependency")
+    manifest = {
+        "wheel_sha256": ordinary_apply.sha(wheel.read_bytes()),
+        "runtime_plan": {"archives": {"exact.deb": {"sha256": "a" * 64}}},
+        "dependency_wheels": {dependency.name: ordinary_apply.sha(dependency.read_bytes())},
+    }
+    plan = SimpleNamespace(
+        noop=fault == "unchanged",
+        wheel=wheel,
+        manifest=manifest,
+        dependency_paths=[dependency],
+        target="192.0.2.1",
+        instance=object(),
+    )
+    expected = {
+        "manifest": ordinary_apply.digest(manifest),
+        "runtime_plan": ordinary_apply.digest(manifest["runtime_plan"]),
+    }
+    remote = Mock(return_value={"status": "staged", "receipt": expected})
+    monkeypatch.setattr(ordinary_apply, "remote", remote)
+    if fault == "wheel":
+        wheel.write_bytes(b"changed artifact")
+    if fault == "receipt":
+        remote.return_value = {"status": "staged", "receipt": {**expected, "manifest": "b" * 64}}
+    if fault in {"unapproved", "wheel", "receipt"}:
+        with pytest.raises(RuntimeError):
+            ordinary_apply.stage_plan(object(), plan, {}, approved=fault != "unapproved")
+    else:
+        assert ordinary_apply.stage_plan(object(), plan, {}, approved=True) == (
+            None if fault == "unchanged" else expected
+        )
+    if fault in {"unapproved", "wheel", "unchanged"}:
+        remote.assert_not_called()
+    else:
+        payload = remote.call_args.args[4]
+        assert payload["action"] == "stage-package"
+        assert base64.b64decode(payload["wheel"]) == b"approved wheel"
+        assert (
+            base64.b64decode(payload["dependency_wheels"][dependency.name])
+            == b"approved dependency"
+        )
+        assert "config" not in payload  # This phase cannot publish guest configuration.

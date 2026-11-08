@@ -64,6 +64,29 @@ Keep detailed workflow instructions in this skill instead of expanding the
 global file.
 
 ```markdown
+## Host Memory Safety
+
+- Keep 2 GiB of available host memory as the hard operational floor. Check the
+  current execution host before workloads and monitor throughout agent-owned
+  work, using `global-context-management` host-memory guidance and helper.
+- At or below 4 GiB but above 2 GiB, tell the user memory headroom is low and
+  continue the task. A warning alone must not stop work or block new launches.
+- At or below 2 GiB, stop agent-owned work safely, preserve progress and tell
+  the user: "The host is running out of memory; I stopped my work to protect
+  the remaining headroom." Continue only lightweight communication, diagnosis
+  and safe cleanup until memory recovers above 2 GiB; warn while below 4 GiB.
+- If host memory cannot be measured reliably, report that separately and pause
+  memory-heavy work until visibility is restored. Use available/reclaimable
+  memory, not process RSS or raw free pages alone; do not count swap as RAM.
+- Stop only exactly owned jobs and use each resource owner's cleanup path for
+  browsers, containers and remote workloads. Never kill unrelated applications
+  or OS services, tune OS memory, or reset workflow evidence or repair budgets.
+- These are sampled operational controls, not a physical RAM reservation.
+  Keep monitors active while owned work runs and close them when it finishes.
+
+```
+
+```markdown
 ## Live Product Validation
 
 - When a live target is used to verify product behavior, define and freeze the
@@ -361,3 +384,9 @@ CLAUDE.md instructions, settings reconciliation and restricted Markdown roles.
 This reference retains its Codex setup contract. Shared hooks advertise
 validated Claude role candidates subject to effective runtime override checks;
 they do not make a permissionMode label an enforcement boundary.
+
+## Memory Policy Setup
+
+Use the selected setup skill for a focused Host Memory Safety section patch.
+The [memory guide](host-memory.md) defines sampling and exact owned-job cleanup;
+the policy does not require new hooks, settings or a full-home bootstrap.

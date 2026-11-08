@@ -112,6 +112,18 @@ the session. Installing this skill does not configure the user's machine.
    the native validation steps in the setup reference; a template or JSON parse
    does not prove runtime hook execution or model behavior.
 
+## Selected Host Memory Policy
+
+For a requested memory guard, reconcile only the template's Host Memory Safety
+section in the native personal instruction file. At or below 4 GiB and above
+2 GiB, warn and continue, including launches; at or below 2 GiB, safely stop
+owned work and notify the user. Follow the focused procedure in
+[local setup](references/local-setup.md), then load the host memory guide
+owned by `global-context-management`.
+Preserve partial setups; this request does not bootstrap other settings,
+hooks, roles or permissions. Validate policy separately from full-home setup
+and fresh-session loading. Do not install a background daemon or new hook.
+
 ## Selected Research Setup
 
 For requested Tavily OAuth or global research routing, read
@@ -127,10 +139,10 @@ remain separate and may report unrelated missing defaults on such a home.
 
 ## Native Boundaries
 
-- Use `CLAUDE.md`, `settings.json` and Markdown role definitions. Claude does
-  not automatically discover `AGENTS.md` or `AGENTS.override.md`. Preserve the
-  durable nested-instruction safety principle using Claude's documented file
-  hierarchy; do not copy Codex precedence rules or config keys.
+- Use personal `CLAUDE.md`, `settings.json` and Markdown role definitions.
+  Verify project instruction discovery against the installed Claude version;
+  current Claude also supports project `AGENTS.md`. Preserve Claude's native
+  hierarchy and do not copy Codex override precedence or config keys.
 - Keep model and provider selection inherited. The optional `trusted-local`
   profile sets `permissions.defaultMode` to `bypassPermissions` and
   `sandbox.enabled` to `false` only after explicit selection. Preserve existing

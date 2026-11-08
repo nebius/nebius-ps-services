@@ -506,6 +506,8 @@ def test_unset_host_keys_directory_uses_per_gateway_operator_default(
     )
 
     private_key = default_directory / f"{hostname}.key"
+    assert not private_key.exists()
+    assert publish_vm_ha_ssh_trust(policy)
     assert stat_mode(tmp_path / ".ssh") == 0o700
     assert stat_mode(tmp_path / ".ssh" / "nebius-vpngw") == 0o700
     assert stat_mode(default_directory.parent) == 0o700
@@ -515,6 +517,81 @@ def test_unset_host_keys_directory_uses_per_gateway_operator_default(
     assert policy.identity_for(hostname).private_key == private_key.read_bytes()
     assert not private_key.with_suffix(".key.pub").exists()
     assert "ssh-ed25519" in policy.known_hosts_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("enrollment", [("gateway-0", "gateway-1"), ("gateway-1",)])
+@pytest.mark.parametrize("key_state", ["intact", "missing", "mismatched"])
+def test_read_only_enrollment_reuses_exact_published_default_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enrollment: tuple[str, ...],
+    key_state: str,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hosts = ("gateway-0", "gateway-1")
+    scope = _trust_scope()
+    managed = tmp_path / "managed"
+    policy = require_vm_ha_ssh_policy(
+        hosts,
+        {},
+        enrollment_hosts=hosts,
+        trust_scope=scope,
+        allow_managed_repair=True,
+        persist_default_host_keys=True,
+        managed_root=managed,
+    )
+    assert publish_vm_ha_ssh_trust(policy)
+    directory = _default_host_key_directory(tmp_path, scope)
+    selected = directory / "gateway-1.key"
+    if key_state == "missing":
+        selected.unlink()
+    elif key_state == "mismatched":
+        selected.write_bytes((directory / "gateway-0.key").read_bytes())
+
+    def snapshot():
+        return {
+            str(path): (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_mode)
+            for parent in (directory, managed)
+            for path in parent.rglob("*")
+            if path.is_file()
+        }
+
+    before = snapshot()
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Read-only enrollment must not generate or publish an identity")
+
+    monkeypatch.setattr(ssh_policy_module, "_generate_ed25519_host_key", forbidden)
+    monkeypatch.setattr(ssh_policy_module, "_write_atomic", forbidden)
+    monkeypatch.setattr(ssh_policy_module, "_write_exclusive_private_key", forbidden)
+
+    def observe():
+        return require_vm_ha_ssh_policy(
+            hosts,
+            {},
+            enrollment_hosts=enrollment,
+            retained_hosts=set(hosts) - set(enrollment),
+            trust_scope=scope,
+            allow_managed_repair=False,
+            persist_default_host_keys=True,
+            managed_root=managed,
+        )
+
+    if key_state == "missing":
+        with pytest.raises(VMHAReplacementSSHIdentityUnavailable, match="exact replacement"):
+            observe()
+    elif key_state == "mismatched":
+        with pytest.raises(ValueError, match="does not match its exact pin"):
+            observe()
+    else:
+        observed = observe()
+        observed.assert_current()
+        assert observed.managed_action is None
+        assert {identity.hostname for identity in observed.identities} == set(enrollment)
+        for hostname in enrollment:
+            assert observed.identity_for(hostname).private_key == policy.identity_for(hostname).private_key
+        assert publish_vm_ha_ssh_trust(observed) is False
+    assert snapshot() == before
 
 
 def test_default_host_keys_are_isolated_by_complete_deployment_scope(
@@ -545,6 +622,8 @@ def test_default_host_keys_are_isolated_by_complete_deployment_scope(
     first_path = _default_host_key_directory(tmp_path, first_scope) / "gateway-0.key"
     second_path = _default_host_key_directory(tmp_path, second_scope) / "gateway-0.key"
     assert first_path != second_path
+    assert publish_vm_ha_ssh_trust(first)
+    assert publish_vm_ha_ssh_trust(second)
     assert first_path.is_file()
     assert second_path.is_file()
     assert first.identity_for("gateway-0").private_key == first_path.read_bytes()
@@ -563,30 +642,31 @@ def test_default_host_key_persistence_normalizes_filesystem_failures(
 
     monkeypatch.setattr(ssh_policy_module, "_write_exclusive_private_key", fail_write)
 
+    policy = require_vm_ha_ssh_policy(
+        ("gateway-0",),
+        {},
+        trust_scope=_trust_scope(),
+        allow_managed_repair=True,
+        persist_default_host_keys=True,
+        managed_root=tmp_path / "managed",
+    )
     with pytest.raises(
         ValueError,
         match="VM-HA managed SSH host-key persistence failed",
     ) as captured:
-        require_vm_ha_ssh_policy(
-            ("gateway-0",),
-            {},
-            trust_scope=_trust_scope(),
-            allow_managed_repair=True,
-            persist_default_host_keys=True,
-            managed_root=tmp_path / "managed",
-        )
+        publish_vm_ha_ssh_trust(policy)
 
     assert "simulated private filesystem detail" not in str(captured.value)
 
 
-def test_concurrent_default_host_key_preparation_converges_without_residue(
+def test_concurrent_default_host_key_publication_preserves_exact_winner_without_residue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     scope = _trust_scope()
 
-    def resolve() -> bytes:
+    def resolve():
         policy = require_vm_ha_ssh_policy(
             ("gateway-0",),
             {},
@@ -595,14 +675,27 @@ def test_concurrent_default_host_key_preparation_converges_without_residue(
             persist_default_host_keys=True,
             managed_root=tmp_path / "managed",
         )
-        return policy.identity_for("gateway-0").private_key
+        return policy
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         first, second = executor.map(lambda _: resolve(), range(2))
+    assert not (tmp_path / ".ssh").exists()
+
+    def publish(policy):
+        try:
+            assert publish_vm_ha_ssh_trust(policy)
+            return policy.identity_for("gateway-0").private_key
+        except RuntimeError as error:
+            assert "conflicts" in str(error)
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winners = [key for key in executor.map(publish, (first, second)) if key is not None]
+    assert len(winners) == 1
 
     directory = _default_host_key_directory(tmp_path, scope)
     private_key = directory / "gateway-0.key"
-    assert first == second == private_key.read_bytes()
+    assert winners[0] == private_key.read_bytes()
     assert stat_mode(private_key) == 0o600
     assert private_key.stat().st_nlink == 1
     assert sorted(path.name for path in directory.iterdir()) == [".lock", "gateway-0.key"]
@@ -803,7 +896,7 @@ def test_default_host_keys_never_generate_a_retained_member_identity(
             managed_root=tmp_path / "managed",
         )
 
-    assert default_directory.is_dir()
+    assert not default_directory.exists()
     assert not tuple(default_directory.glob("*.key"))
 
 
@@ -1720,6 +1813,39 @@ def test_fresh_managed_trust_dry_run_uses_ephemeral_identity_without_writes(
     assert not (tmp_path / ".ssh").exists()
 
 
+def test_fresh_identity_is_persisted_only_by_publication_after_planning(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    scope = _trust_scope(cluster_id="ordinary-v1")
+
+    def prepare():
+        return require_vm_ha_ssh_policy(
+            (("gateway-0", "203.0.113.10"),),
+            {},
+            enrollment_hosts={"gateway-0"},
+            trust_scope=scope,
+            allow_managed_repair=True,
+            persist_default_host_keys=True,
+        )
+
+    first, second = prepare(), prepare()
+    assert not (tmp_path / ".ssh").exists()
+    assert first.fresh_identity_approval_sha256 is not None
+    assert first.fresh_identity_approval_sha256 == second.fresh_identity_approval_sha256
+    assert first.identity_for("gateway-0") != second.identity_for("gateway-0")
+    assert publish_vm_ha_ssh_trust(first)
+    key = _default_host_key_directory(tmp_path, scope) / "gateway-0.key"
+    assert key.read_bytes() == first.identity_for("gateway-0").private_key
+    assert stat_mode(key) == 0o600
+    before = key.read_bytes()
+    with pytest.raises(RuntimeError, match="conflicts"):
+        publish_vm_ha_ssh_trust(second)
+    assert key.read_bytes() == before
+    repeated = prepare()
+    assert repeated.managed_action is None
+    assert repeated.identity_for("gateway-0") == first.identity_for("gateway-0")
+    assert not publish_vm_ha_ssh_trust(repeated)
+
+
 def test_migration_fresh_identity_approval_is_stable_until_exact_publication(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     key_type, key_data = _ed25519_public_key(tmp_path)
@@ -1928,3 +2054,53 @@ def test_ordinary_uses_strong_recovery_before_network_enrollment(tmp_path, monke
     assert len(calls) == (0 if local else 1)
     assert publish_vm_ha_ssh_trust(policy)
     assert key_path.read_bytes() == private
+
+
+@pytest.mark.parametrize("boundary", ["trust.json", "known_hosts"])
+@pytest.mark.parametrize("foreign", [False, True])
+def test_exact_trust_publication_resumes_its_split_write_without_changing_key(
+    tmp_path, monkeypatch, boundary, foreign
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    scope = _trust_scope(cluster_id="ordinary-v1")
+    policy = require_vm_ha_ssh_policy(
+        (("gateway-0", "203.0.113.10"),),
+        {},
+        enrollment_hosts={"gateway-0"},
+        trust_scope=scope,
+        allow_managed_repair=True,
+        persist_default_host_keys=True,
+        managed_root=tmp_path / "managed",
+    )
+    write = ssh_policy_module._write_atomic
+    interrupted = []
+
+    def stop_after_write(path, content):
+        write(path, content)
+        if path.name == boundary and not interrupted:
+            interrupted.append(True)
+            raise OSError("interrupted publication")
+
+    monkeypatch.setattr(ssh_policy_module, "_write_atomic", stop_after_write)
+    with pytest.raises(OSError, match="interrupted publication"):
+        publish_vm_ha_ssh_trust(policy)
+    key = _default_host_key_directory(tmp_path, scope) / "gateway-0.key"
+    original = key.read_bytes()
+    managed = tmp_path / "managed" / scope.digest
+    if foreign:
+        changed = managed / boundary
+        changed.write_bytes(b"unrelated operator change")
+        with pytest.raises(RuntimeError, match="changed after preflight"):
+            publish_vm_ha_ssh_trust(policy)
+        assert changed.read_bytes() == b"unrelated operator change"
+        assert key.read_bytes() == original
+        return
+    assert publish_vm_ha_ssh_trust(policy)
+    assert key.read_bytes() == original == policy.identity_for("gateway-0").private_key
+    before = {
+        p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in managed.iterdir() if p.is_file()
+    }
+    assert publish_vm_ha_ssh_trust(policy)
+    assert before == {
+        p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in managed.iterdir() if p.is_file()
+    }

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 sys.dont_write_bytecode = True
@@ -375,6 +376,55 @@ raise SystemExit(92)
             "multiple or nested project selectors are not allowed",
             result["hookSpecificOutput"]["permissionDecisionReason"],
         )
+
+    def test_local_preparation_then_selector_has_bounded_recovery_advice(self) -> None:
+        preparations = (
+            "python3 -c 'print(\"prepared\")'; ",
+            "python3 - <<'PREP'\nprint('prepared')\nPREP\n",
+        )
+        selected = f"{PROJECT_ENV}={PROJECT} python3 ./stage.py"
+        with mock.patch.object(self.hook, "discover_default_profile_project") as discover:
+            for preparation in preparations:
+                with self.subTest(preparation=preparation):
+                    result = self.evaluate(preparation + selected, selector=False)
+                    output = result["hookSpecificOutput"]
+                    self.assertEqual(output["permissionDecision"], "deny")
+                    self.assertNotIn("updatedInput", output)
+                    reason = output["permissionDecisionReason"]
+                    for instruction in (
+                        "the project selector is not the first shell token",
+                        "separate Bash calls",
+                        "local-only calls unprefixed",
+                        "already selected",
+                        "do not rediscover or run verify",
+                        "retry the corrected payload once",
+                        "absent or conflicting",
+                    ):
+                        self.assertIn(instruction, reason)
+            discover.assert_not_called()
+
+    def test_split_preparation_and_selected_script_preserve_auth_scope(self) -> None:
+        preparation = "python3 - <<'PREP'\nprint('prepared')\nPREP"
+        operation = (
+            "python3 -c 'import os; "
+            f"assert os.environ[\"NEBIUS_PROJECT_ID\"] == \"{PROJECT}\"'"
+        )
+        with mock.patch.object(self.hook, "discover_default_profile_project") as discover:
+            self.assertEqual(self.evaluate(preparation, selector=False), {})
+            output = self.evaluate(operation)["hookSpecificOutput"]
+            self.assertEqual(output["permissionDecision"], "allow")
+            rewritten = output["updatedInput"]["command"]
+            self.assertNotIn(preparation, rewritten)
+            discover.assert_not_called()
+        result = subprocess.run(
+            ["bash", "-c", rewritten],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_managed_auth_mutation_is_denied(self) -> None:
         commands = (

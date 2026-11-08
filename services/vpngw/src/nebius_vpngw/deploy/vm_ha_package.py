@@ -39,6 +39,7 @@ PACKAGE_FIELDS = (
     "python",
     "machine",
     "package_version",
+    "runtime_plan",
 )
 
 
@@ -76,6 +77,10 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
         }
         ufw = ordinary_apply.UFW_ORDERING_PATH
         manifest["assets"][ufw]["predecessors"] = manifest["ordinary_assets"][ufw]["predecessors"]
+        agent = ordinary_apply.AGENT_ORDERING_PATH
+        manifest["assets"][agent]["predecessors"] = manifest["ordinary_assets"][agent][
+            "predecessors"
+        ]
     return manifest
 
 
@@ -90,6 +95,7 @@ class VMHAPackagePlan:
     effects: list[str]
     target_identity: str
     temporary: Any = field(repr=False)
+    uploaded_payload_identity: str | None = field(default=None, repr=False)
 
     @property
     def digest(self) -> str:
@@ -150,7 +156,9 @@ def verify_prepared(
         local,
         artifact=manifest["wheel_sha256"],
         boot_id=plan.observation["boot_id"],
-        expected=checkpoint_conversion if convert else None,
+        # Read-only verification still needs the exact authority for an already
+        # converted checkpoint whose activation receipt remains pending.
+        expected=checkpoint_conversion,
         publish=convert,
     )
 
@@ -163,47 +171,83 @@ def inspect_plan(
     *,
     target_identity: str,
     wheel: Path | None = None,
+    resume_parent: str | None = None,
+    resume_manifest: dict | None = None,
 ) -> VMHAPackagePlan:
     if wheel is None:
         wheel = ssh._build_wheel(allow_installed_fallback=False)
     if wheel is None:
         raise RuntimeError("HA deployment requires a deployable agent wheel")
     manifest = artifact(wheel, instance.config_yaml)
-    observed = package_predecessor(
-        ordinary_apply.remote(
-            ssh, target, instance, local, {"action": "inspect-package", "manifest": manifest}
-        )["observation"]
-    )
-    for path, item in manifest["assets"].items():
-        if "predecessors" in item and observed["assets"].get(path) not in item["predecessors"]:
+    if resume_manifest is not None:
+        if resume_parent is None or any(
+            resume_manifest[key] != manifest[key]
+            for key in ("wheel_sha256", "config_sha256", "files", "assets")
+        ):
+            raise VMHAAgentPackageError("Interrupted HA package authority changed")
+        manifest = dict(resume_manifest)
+    if resume_parent is not None:
+        manifest["ha_parent"] = resume_parent
+    full_observation = ordinary_apply.remote(
+        ssh, target, instance, local, {"action": "inspect-package", "manifest": manifest}
+    )["observation"]
+    observed = package_predecessor(full_observation)
+    if resume_manifest is not None and manifest["runtime_plan"] != observed["runtime_plan"]:
+        raise VMHAAgentPackageError("Interrupted HA package authority changed native closure")
+    manifest["runtime_plan"] = observed["runtime_plan"]
+    pending = full_observation.get("runtime_pending")
+    if pending is not None:
+        saved = pending["manifest"]
+        if resume_manifest is not None:
+            from ..apply_approval import manifest_identity
+
+            if saved.get("ha_parent") != resume_parent or manifest_identity(
+                saved
+            ) != manifest_identity(manifest):
+                raise VMHAAgentPackageError("Interrupted HA package authority changed")
+        if any(
+            saved[key] != manifest[key]
+            for key in ("wheel_sha256", "config_sha256", "files", "assets")
+        ):
             raise VMHAAgentPackageError(
-                "Product service override has unknown contents; no gateway changes are admitted"
+                "Interrupted apply requires the same approved artifact and configuration"
             )
+        manifest = saved
+    ordinary_apply.verify_asset_predecessors(manifest, observed, error_type=VMHAAgentPackageError)
     temporary = tempfile.TemporaryDirectory(prefix="vpngw-ha-dependency-plan-")
     try:
-        dependencies = ordinary_apply.resolve_dependencies(manifest, observed, Path(temporary.name))
-        manifest["dependency_wheels"] = {
-            path.name: ordinary_apply.sha(path.read_bytes()) for path in dependencies
-        }
-        expected = dict(observed["dependencies"])
-        expected["nebius-vpngw"] = manifest["version"]
-        for path in dependencies:
-            name, version, _build, _tags = parse_wheel_filename(path.name)
-            expected[str(name)] = str(version)
-        manifest["expected_dependencies"] = expected
-        expected_requirements = dict(observed["requirements"])
-        expected_requirements["nebius-vpngw"] = manifest["requirements"]
-        for path in dependencies:
-            name, _version, _build, _tags = parse_wheel_filename(path.name)
-            with zipfile.ZipFile(path) as archive:
-                metadata = next(
-                    item for item in archive.namelist() if item.endswith(".dist-info/METADATA")
-                )
-                expected_requirements[str(name)] = (
-                    BytesParser().parsebytes(archive.read(metadata)).get_all("Requires-Dist") or []
-                )
-        manifest["expected_requirements"] = expected_requirements
-        effects = []
+        dependencies = []
+        if pending is None and resume_manifest is None:
+            dependencies = ordinary_apply.resolve_dependencies(
+                manifest, observed, Path(temporary.name)
+            )
+            manifest["dependency_wheels"] = {
+                path.name: ordinary_apply.sha(path.read_bytes()) for path in dependencies
+            }
+            expected = dict(observed["dependencies"])
+            expected["nebius-vpngw"] = manifest["version"]
+            for path in dependencies:
+                name, version, _build, _tags = parse_wheel_filename(path.name)
+                expected[str(name)] = str(version)
+            manifest["expected_dependencies"] = expected
+            expected_requirements = dict(observed["requirements"])
+            expected_requirements["nebius-vpngw"] = manifest["requirements"]
+            for path in dependencies:
+                name, _version, _build, _tags = parse_wheel_filename(path.name)
+                with zipfile.ZipFile(path) as archive:
+                    metadata = next(
+                        item for item in archive.namelist() if item.endswith(".dist-info/METADATA")
+                    )
+                    expected_requirements[str(name)] = (
+                        BytesParser().parsebytes(archive.read(metadata)).get_all("Requires-Dist")
+                        or []
+                    )
+            manifest["expected_requirements"] = expected_requirements
+        elif pending is None:
+            dependencies = ordinary_apply.restore_dependencies(
+                manifest, observed, Path(temporary.name)
+            )
+        effects = ["stage and verify approved daemon package and startup policy"]
         if (
             observed["files"] != manifest["files"]
             or observed["package_version"] != manifest["version"]
@@ -231,3 +275,51 @@ def inspect_plan(
     except Exception:
         temporary.cleanup()
         raise
+
+
+def stage(ssh: Any, plan: VMHAPackagePlan, local: dict, *, artifact: Any) -> dict:
+    """Durable, non-disruptive staging; caller completes the all-member barrier."""
+    import base64
+
+    with artifact.open_verified() as stream:
+        wheel = stream.read()
+    if ordinary_apply.sha(wheel) != plan.manifest["wheel_sha256"]:
+        raise VMHAAgentPackageError("HA staged artifact differs from approved plan")
+    payload_identity = digest(
+        {
+            "target": plan.target,
+            "member": plan.target_identity,
+            "hostname": plan.instance.hostname,
+            "boot": plan.observation.get("boot_id"),
+            "runtime_plan": plan.manifest["runtime_plan"],
+            "wheel_name": plan.manifest.get("wheel_name"),
+            "wheel": plan.manifest["wheel_sha256"],
+            "dependencies": plan.manifest["dependency_wheels"],
+        }
+    )
+    request = {"action": "stage-package", "manifest": plan.manifest}
+    if plan.uploaded_payload_identity != payload_identity:
+        request.update(
+            wheel=base64.b64encode(wheel).decode(),
+            dependency_wheels={
+                p.name: base64.b64encode(p.read_bytes()).decode() for p in plan.dependency_paths
+            },
+        )
+    # This is only an upload hint. The canonical guest staging owner still
+    # rehashes every archive/wheel and publishes the full current manifest,
+    # including a lifecycle parent bound after initial non-disruptive staging.
+    result = ordinary_apply.remote(
+        ssh,
+        plan.target,
+        plan.instance,
+        local,
+        request,
+    )
+    expected = {
+        "manifest": digest(plan.manifest),
+        "runtime_plan": digest(plan.manifest["runtime_plan"]),
+    }
+    if result != {"status": "staged", "receipt": expected}:
+        raise VMHAAgentPackageError("HA durable package staging receipt differs")
+    plan.uploaded_payload_identity = payload_identity
+    return expected

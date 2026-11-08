@@ -68,6 +68,18 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(snapshot(self.home), before)
         self.assertEqual(first["runtime"], "NOT_RUN")
 
+    def test_missing_or_stale_memory_policy_is_reported_without_mutation(self):
+        original = (self.home / "CLAUDE.md").read_text()
+        section = original.split("## Host Memory Safety", 1)[1].split("\n## ", 1)[0]
+        for value in (original.replace("## Host Memory Safety" + section, ""),
+                      original.replace("4 GiB", "6 GiB"),
+                      original + "\n## Host Memory Safety\nOverride\n",
+                      original + "\nHost Memory Safety\n------------------\nOverride\n"):
+            put(self.home / "CLAUDE.md", value)
+            before = snapshot(self.home)
+            self.assertEqual(self.inspect()["status"], "NOT_ALIGNED")
+            self.assertEqual(snapshot(self.home), before)
+
     def test_missing_home_is_reported_without_creation(self):
         missing = self.base / "missing"
         self.assertEqual(config.inspect(missing, ROOT)["status"], "NOT_ALIGNED")

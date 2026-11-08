@@ -129,7 +129,10 @@ class OrdinaryReplacement:
             client.close()
 
     def inspect(self) -> Plan:
-        desired = asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec))
+        desired = dict(
+            asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec)),
+            security_group_ids=list(self.deployment.gateway_group.security_group_ids),
+        )
         image = self.manager._resolve_boot_image_id(
             self.sdk,
             self.deployment.gateway_group,
@@ -200,6 +203,12 @@ class OrdinaryReplacement:
                     (nic.ip_address.allocation_id,),
                     "",
                     "",
+                    tuple(
+                        asdict(item)
+                        for item in security_groups.desired(
+                            self.sdk, instance, self.deployment.gateway_group.security_group_ids
+                        )
+                    ),
                 )
             )
         rosters = [item["projection"]["operators"] for item in self.snapshots.values()]
@@ -209,6 +218,7 @@ class OrdinaryReplacement:
             self.sdk,
             self.manager.project_id,
             {identifier for member in members for identifier in member.primary_allocations},
+            gateway=self.deployment.gateway_group.name,
         )
         configuration = configuration_digest(tuple(self.instances.values()))
         artifact = ordinary_apply.sha(self.wheel.read_bytes())
@@ -258,7 +268,11 @@ class OrdinaryReplacement:
             )
 
     def settle(self, journal: Journal) -> None:
-        Cloud(self.sdk, journal).settle()
+        cloud = Cloud(self.sdk, journal)
+        replacement_routes.admit_replay(
+            cloud, tuple(journal.state["transaction"]["plan"]["routes"])
+        )
+        cloud.settle()
 
     @staticmethod
     def member(journal: Journal, index: int | None = None) -> dict:
@@ -277,7 +291,11 @@ class OrdinaryReplacement:
         if (
             plan["configuration_sha256"] != configuration_digest(tuple(self.instances.values()))
             or plan["artifact_sha256"] != ordinary_apply.sha(self.wheel.read_bytes())
-            or plan["desired"] != asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec))
+            or plan["desired"]
+            != dict(
+                asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec)),
+                security_group_ids=list(self.deployment.gateway_group.security_group_ids),
+            )
         ):
             raise RuntimeError(
                 "Replacement recovery requires the exact approved configuration and artifact"
@@ -359,7 +377,9 @@ class OrdinaryReplacement:
             raise RuntimeError(
                 "Replacement candidate infrastructure differs from the approved plan"
             )
-        security_groups.verify_candidate(self.sdk, candidate, groups(member["security_groups"]))
+        security_groups.verify_candidate(
+            self.sdk, candidate, groups(member["desired_security_groups"])
+        )
         return cloud, member, access, target
 
     def _verify_access(
@@ -439,7 +459,7 @@ class OrdinaryReplacement:
                 disk_id=disk,
                 public_allocation=allocation,
                 desired=plan["desired"],
-                security_groups=member["security_groups"],
+                security_groups=member["desired_security_groups"],
                 cloud_init=cloud_init,
             )
             # Record identities before any SSH/bootstrap wait, including failures.
@@ -698,6 +718,50 @@ class OrdinaryReplacement:
                 role="active",
                 label="complete-candidate",
             )
+
+    def terminal_receipt(self, journal: Journal) -> dict:
+        """Independent terminal readback for the enclosing apply command."""
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest
+
+        from .vm_ha_cloud import nebius_request_error_code_is
+
+        transaction = journal.state["transaction"]
+        plan = transaction["plan"]
+        if (
+            transaction["phase"] != "complete"
+            or transaction["pending"] is not None
+            or any(record["status"] != "settled" for record in transaction["operations"].values())
+            or plan["artifact_sha256"] != ordinary_apply.sha(self.wheel.read_bytes())
+            or plan["configuration_sha256"] != configuration_digest(tuple(self.instances.values()))
+        ):
+            raise RuntimeError("Replacement lacks an exact completed artifact and effect receipt")
+        members = []
+        for index, member in enumerate(plan["members"]):
+            cloud = Cloud(self.sdk, journal, member_index=index)
+            if cloud.get_instance(member["compute_id"], absent_ok=True) is not None:
+                raise RuntimeError("Retired replacement Compute is still present")
+            if (
+                member["owned_disk"]
+                and self.manager._get_disk_by_id(self.sdk, member["disk_id"]) is not None
+            ):
+                raise RuntimeError("Retired owned boot disk is still present")
+            temporary = self.result(journal, "prepare", index)["temporary_allocation_id"]
+            try:
+                AllocationServiceClient(self.sdk).get(
+                    GetAllocationRequest(id=temporary), **vm_ha_request_kwargs()
+                ).wait()
+            except Exception as error:
+                if not nebius_request_error_code_is(error, "NOT_FOUND"):
+                    raise
+            else:
+                raise RuntimeError("Temporary replacement allocation is still present")
+            members.append(self._serving(journal, index))
+        return {
+            "approval": transaction["approval"],
+            "operation_id": plan["operation_id"],
+            "members": members,
+            "cloud_receipts": digest(transaction["operations"]),
+        }
 
     def verify(self, journal: Journal, *, step: str, result: dict) -> None:
         if not result:

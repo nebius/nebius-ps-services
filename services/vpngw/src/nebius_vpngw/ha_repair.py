@@ -174,6 +174,55 @@ def verified_file(path: Path, expected_sha256: str) -> bytes:
         os.close(fd)
 
 
+def archive_apply_owner_adoption(current: str, predecessor: str, lock_digest: str) -> None:
+    """Authorize only an exact corrective predecessor; caller holds rearm.lock."""
+    path = STATE / "apply-owner-adoption.json"
+    if not path.exists() and not path.is_symlink():
+        return
+    read_json(path)  # Bound and validate the private record before reading its bytes.
+    try:
+        verified_file(path, current)
+        return
+    except RuntimeError:
+        raw = verified_file(path, predecessor)
+    verified_file(STATE / "apply.lock", lock_digest)
+    guard = read_json(STATE / "guard.json")
+    if (
+        guard.get("schema") != STATUS_SCHEMA
+        or guard.get("guard_boot_id") != BOOT.read_text().strip()
+        or guard.get("data_plane_mode") not in {"blocked", "passive"}
+        or FORWARDING.read_text().strip() != "0"
+    ):
+        raise RuntimeError("corrective adoption requires a current forwarding fence")
+    result = subprocess.run(
+        [
+            "/usr/bin/python3",
+            "-B",
+            "-m",
+            "nebius_vpngw.agent.main",
+            "--vm-ha-apply-lock-quiescent",
+            str(STATE / "apply.lock"),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("corrective adoption has unresolved writers")
+    directory = STATE / "apply-history"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise RuntimeError("corrective adoption history is unsafe")
+    archive = directory / (predecessor + ".json")
+    if archive.exists() or archive.is_symlink():
+        verified_file(archive, predecessor)
+    else:
+        publish(archive, raw)
+    sync_directory(STATE)
+
+
 def initialize_unstarted_checkpoint(*, state_dir: Path = STATE, unstarted: bool) -> None:
     """Durably seed the canonical initial state before first startup admission.
 
@@ -376,8 +425,8 @@ def peer_checkpoint_transition(before: object, after: object, artifact: str) -> 
         return False
     return bool(
         before.get("checkpoint_schema")
-        in {"nebius-vpngw/vm-ha-controller-checkpoint-v" + str(v) for v in range(1, 5)}
-        and after.get("checkpoint_schema") == "nebius-vpngw/vm-ha-controller-checkpoint-v5"
+        in {"nebius-vpngw/vm-ha-controller-checkpoint-v" + str(v) for v in range(1, 6)}
+        and after.get("checkpoint_schema") == "nebius-vpngw/vm-ha-controller-checkpoint-v7"
         and receipt.get("schema") == "nebius-vpngw/checkpoint-conversion-v1"
         and receipt.get("phase") == "pending"
         and receipt.get("before") == before.get("checkpoint_sha256")

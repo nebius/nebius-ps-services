@@ -434,7 +434,7 @@ def _execution_registration(
             coordinator = load_json(coordinator_path) or {}
         except json.JSONDecodeError:
             continue
-        if coordinator.get("schema") != "workflow/execution-coordinator-v2" or coordinator.get("owner") != "agentic-sdlc":
+        if coordinator.get("schema") != "workflow/execution-coordinator-v3" or coordinator.get("owner") != "agentic-sdlc":
             continue
         integration_path = coordinator.get("integration_worktree")
         if coordinator_owned and integration_path and is_inside(cwd_path, str(integration_path)):
@@ -479,8 +479,8 @@ def _execution_registration(
                 result = load_json(result_path) or {}
             except json.JSONDecodeError:
                 result = {}
-            if result.get("commit"):
-                expected_head = str(result["commit"])
+            if result.get("head"):
+                expected_head = str(result["head"])
             return coordinator, {
                 "role": "worker",
                 "execution_id": str(assignment.get("execution_id") or ""),

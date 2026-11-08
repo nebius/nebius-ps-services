@@ -1370,7 +1370,7 @@ def _current_revalidation_commit(run_dir: Path, execution_id: str, surface: str)
         run_dir.resolve() / "execution" / execution_id / "coordinator.json",
         "execution coordinator",
     )
-    if coordinator.get("schema") != "workflow/execution-coordinator-v2":
+    if coordinator.get("schema") != "workflow/execution-coordinator-v3":
         raise RepairControlError(
             "REVALIDATION_INVALID", "current execution coordinator is unsupported"
         )

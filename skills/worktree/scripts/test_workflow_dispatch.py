@@ -24,6 +24,53 @@ import workflow_worker_contract as contract  # noqa: E402 — load verified shar
 
 
 class WorkerDispatchTests(unittest.TestCase):
+    def test_launch_setup_failure_releases_anchor(self):
+        from workflow_process import OwnedProcessGroup
+        owners = []
+        def create():
+            owner = OwnedProcessGroup()
+            owners.append(owner)
+            return owner
+        assignment = self.assignment("TASK-001")
+        try:
+            with mock.patch.object(dispatch, "OwnedProcessGroup", side_effect=create), \
+                    mock.patch.object(dispatch, "runtime_environment", side_effect=ValueError("invalid environment")):
+                with self.assertRaises(ValueError):
+                    dispatch.dispatch_sequential([assignment], self.schema, agent_binary=str(self.fake), terminate_grace=.01)
+            self.assertTrue(all(owner.closed for owner in owners))
+        finally:
+            for owner in owners:
+                owner.close(grace=0)
+                owner.verify_absent()
+
+    def test_cleanup_stops_redirected_child_after_parent_exit(self):
+        import subprocess
+        import sys
+        from workflow_process import OwnedProcessGroup
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "child-pid"
+            owner = OwnedProcessGroup()
+            process = subprocess.Popen([sys.executable, "-c",
+                "import subprocess,sys; subprocess.Popen([sys.executable,'-c',"
+                "\"import os,signal,time; from pathlib import Path; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)\".replace('import os,','import sys,os,'),sys.argv[1]],"
+                "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)", str(marker)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, process_group=owner.id)
+            process._workflow_group = owner
+            try:
+                process.communicate(timeout=5)
+                deadline = time.monotonic() + 5
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(marker.exists())
+                dispatch._stop_worker(process, terminate_grace=.05)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int(marker.read_text()), 0)
+            finally:
+                owner.close(grace=0)
+                process.wait(timeout=5)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -151,7 +198,7 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
         )
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff = {
-            "schema": "agentic-sdlc/incoming-handoff-v2",
+            "schema": "agentic-sdlc/incoming-handoff-v3",
             "execution_id": "FEAT-001",
             "wave_id": "WAVE-001",
             "task_id": task_id,
@@ -466,7 +513,7 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
         schema = json.loads(self.schema.read_text())
         self.assertEqual(
             schema["properties"]["status"]["enum"],
-            ["implemented", "replan_required", "blocked"],
+            ["implemented", "verified_no_change", "replan_required", "blocked"],
         )
 
     def test_native_transport_accepts_worker_result_schema(self) -> None:
@@ -852,6 +899,34 @@ child.wait()
             contract.load_assignment(assignment)
 
         self.assertEqual(caught.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+
+
+class ProcessGroupTests(unittest.TestCase):
+    def test_interrupted_grace_still_cleans_and_close_replay_does_not_signal(self):
+        from workflow_process import OwnedProcessGroup
+        owner = OwnedProcessGroup()
+        original_sleep = time.sleep
+        interrupted = False
+
+        def interrupt_once(delay):
+            nonlocal interrupted
+            if not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt
+            original_sleep(delay)
+
+        try:
+            with mock.patch("workflow_process.time.sleep", side_effect=interrupt_once):
+                with self.assertRaises(KeyboardInterrupt):
+                    owner.close(grace=5)
+            self.assertTrue(owner.closed)
+            owner.verify_absent()
+            with mock.patch("workflow_process.os.killpg") as signal_group:
+                owner.close(grace=0)
+                signal_group.assert_not_called()
+        finally:
+            owner.close(grace=0)
+            owner.verify_absent()
 
 
 if __name__ == "__main__":

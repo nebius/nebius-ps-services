@@ -20,12 +20,14 @@ from typing import Any, cast
 import yaml
 
 from nebius_vpngw import ingress_policy
+from nebius_vpngw.faults import FaultCategory
 from nebius_vpngw.schema import VMHARuntimeBinding
 from nebius_vpngw.vm_ha_diagnostics import encode_not_ready, readiness_reasons
 
 from .firewall_manager import update_firewall_from_config
 from .frr_renderer import FRRRenderer
 from .routing_guard import (
+    VM_HA_WRITER_READY_STATES,
     acquire_routing_lock,
     enforce_routing_invariants,
     enforce_routing_invariants_locked,
@@ -296,6 +298,7 @@ class VMHASnapshotProviders:
     emergency_active_only: Callable[[], bool] = lambda: False
     transfer_intent: Callable[[], tuple[TransferIntent | None, bool]] = lambda: (None, False)
     completed_effect: Callable[[], tuple[str, str] | None] = lambda: None
+    established_routes: Callable[[], RouteReconciliationContext | None] = lambda: None
 
 
 def _strict_boolean_record(path: Path, *, schema: str, field: str) -> bool:
@@ -1055,6 +1058,7 @@ class VMHASnapshotAdapter:
             guard_boot_id=str(guard.get("guard_boot_id")) if guard.get("guard_boot_id") else None,
             data_plane_mode=self.providers.data_plane(),
             routes_reconciled_context=self.providers.routes(),
+            established_routes_context=self.providers.established_routes(),
             route_runtime_id=self.route_runtime_id,
             completed_effect_operation_id=(
                 completed_effect[0] if completed_effect is not None else None
@@ -1137,6 +1141,17 @@ def _vm_ha_transfer_effect_guard(
         return
     try:
         snapshot = snapshots.last_snapshot
+        obligation_store = VMHACheckpointFileStore(state_dir / VM_HA_CHECKPOINT_PATH.name)
+        obligation = obligation_store.load()
+        if obligation.path_transfer_destinations:
+            snapshot = snapshots.observe()
+            policy = VMHAController(peer_timeout_seconds=10.0, suspicion_seconds=5.0)
+            if not policy._path_obligation_ready(snapshot, obligation) or (
+                action.kind is ActionKind.STOP_FORMER_OWNER
+                and not snapshot.transfer_effect_started
+                and not policy._path_transfer_eligible(snapshot)
+            ):
+                raise RuntimeError("path transfer coverage changed before effect")
         if action.kind is ActionKind.STOP_FORMER_OWNER and snapshot is not None:
             # Absence must be proven before cancellation. Never erase lineage or
             # an accepted/uncertain operation to make a heartbeat win a race.
@@ -2052,11 +2067,8 @@ class VMHAControllerRuntime:
     ) -> bool:
         if (
             self.tunnel_runtime is None
-            or (snapshot.readiness.static_ready and snapshot.readiness.bgp_ready)
+            or snapshot.readiness.fault_category is not FaultCategory.COVERAGE_LOSS
             or checkpoint.pending_action is not None
-            or checkpoint.repair_attempt is not None
-            or decision.action is None
-            or decision.action.kind is not ActionKind.REPAIR_LOCAL_DATAPLANE
         ):
             return False
         return bool(self.tunnel_runtime.before_owner_repair())
@@ -2065,7 +2077,16 @@ class VMHAControllerRuntime:
         snapshot = self.snapshots.last_snapshot
         if snapshot is None:
             raise RuntimeError("VM-HA controller has no observed snapshot")
-        ready = bool(result.forwarding_enabled and result.action is None)
+        # Retaining protected forwarding during recovery does not admit an
+        # Agent reload. Its current-boot writer gate requires verified recovery.
+        ready = bool(
+            result.forwarding_enabled
+            and result.action is None
+            and result.state.value in VM_HA_WRITER_READY_STATES
+            and snapshot.readiness.sample_complete
+            and snapshot.readiness.promotion_ready
+            and snapshot.routes_reconciled_context is not None
+        )
         route_context = snapshot.routes_reconciled_context
         cold_standby = bool(
             snapshot.data_plane_mode is DataPlaneMode.PASSIVE
@@ -2090,6 +2111,12 @@ class VMHAControllerRuntime:
             (not snapshot.apply_locked, "apply-lock-held"),
             (not snapshot.transfer_inhibited, "mtls-rotation-active"),
             (result.checkpoint.pending_action is None, "controller-effect-pending"),
+            (
+                result.checkpoint.repair_attempt is None
+                or result.checkpoint.repair_attempt.repair_mode is not DataPlaneMode.PASSIVE
+                or result.checkpoint.repair_attempt.healthy_observations >= 2,
+                "standby-repair-verification-pending",
+            ),
         )
         standby_reasons.extend(reason for passed, reason in standby_checks if not passed)
         if not snapshot.readiness.transfer_ready:
@@ -2254,8 +2281,53 @@ class VMHAControllerRuntime:
         )
         payload = {
             "schema": _STATUS_SCHEMA,
+            "apply_convergence": {
+                "boot_id": snapshot.boot_id,
+                "observed_at": snapshot.now,
+                "data_plane_mode": snapshot.data_plane_mode.value,
+                "local_runtime": (
+                    "degraded"
+                    if snapshot.readiness.local_defects
+                    else "ready"
+                    if (
+                        snapshot.readiness.sample_complete
+                        and snapshot.readiness.service_healthy
+                        and snapshot.readiness.routing_hygiene_ready
+                    )
+                    else "unknown"
+                ),
+                "authority_ready": bool(
+                    snapshot.guard_boot_id == snapshot.boot_id
+                    and (
+                        snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                        and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+                        and snapshot.readiness.protection_ready
+                        and result.forwarding_enabled
+                        or snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+                        and snapshot.cloud.passive_attachment_exact(
+                            snapshot.local_node_id, snapshot.peer_node_id
+                        )
+                        and not result.forwarding_enabled
+                    )
+                ),
+                "quiescent": bool(
+                    not snapshot.apply_locked
+                    and not snapshot.transfer_inhibited
+                    and result.action is None
+                    and result.checkpoint.pending_action is None
+                    and not (self.status_path.parent / "accepted-cloud-operation.json").exists()
+                    and not (self.status_path.parent / "rearm-cloud-operation.json").exists()
+                ),
+                "coverage": (
+                    "unknown"
+                    if not snapshot.readiness.sample_complete
+                    else "ready"
+                    if snapshot.readiness.promotion_ready or cold_standby
+                    else "degraded"
+                ),
+            },
             "controller_capabilities": [
-                "independent-heartbeat-v5",
+                "independent-heartbeat-v6",
                 "connection-tunnel-selection-v1",
                 _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
@@ -2264,10 +2336,10 @@ class VMHAControllerRuntime:
             ],
             "state": result.state.value,
             "heartbeat": {
-                "schema_version": 5,
+                "schema_version": 6,
                 "peer_sequence": peer.sequence if peer is not None else None,
                 "peer_process_id": peer.evidence.process_id if peer is not None else None,
-                "peer_v5_fresh": bool(
+                "peer_v6_fresh": bool(
                     peer_fresh
                     and peer is not None
                     and peer.echo_valid_until is not None
@@ -2851,6 +2923,7 @@ def build_default_vm_ha_controller_runtime(
                 cloud=ports.cloud.observe,
                 data_plane=ports.data_plane.mode,
                 routes=ports.routes.receipt_context,
+                established_routes=ports.routes.established_context,
                 apply_lock_operation_id=lambda: _vm_ha_apply_lock_operation_id(
                     state_dir=state_dir,
                     cluster_id=str(config.get("cluster_id") or ""),
@@ -2987,7 +3060,7 @@ def _vm_ha_config_from_resolved(
     if vm_ha.get("enabled") is False:
         return None
     resolved = dict(vm_ha)
-    for data_plane_key in ("gateway", "connections"):
+    for data_plane_key in ("gateway", "connections", "defaults"):
         if data_plane_key in payload:
             resolved[data_plane_key] = payload[data_plane_key]
     return resolved
@@ -3018,7 +3091,7 @@ def _blocked_vm_ha_status(
     return {
         "schema": _STATUS_SCHEMA,
         "controller_capabilities": [
-            "independent-heartbeat-v5",
+            "independent-heartbeat-v6",
             "connection-tunnel-selection-v1",
             _VM_HA_MTLS_ROTATION_QUIESCENCE_CAPABILITY,
             LIVE_PEER_REPLACEMENT_CAPABILITY,
@@ -3381,6 +3454,7 @@ def _project_current_vm_ha_status(
         )
         payload.update(
             state=HAState.BLOCKED.value,
+            apply_convergence=None,
             reasons=[reason],
             recovery_action=None,
             controller_ready_boot_id=None,
@@ -3471,6 +3545,23 @@ def _project_current_vm_ha_status(
             redundancy_ready=False,
             standby_readiness_reasons=list(dict.fromkeys(reasons)),
         )
+    convergence = payload.get("apply_convergence")
+    if isinstance(convergence, dict):
+        observed_at = convergence.get("observed_at")
+        convergence["fresh"] = bool(
+            isinstance(observed_at, (int, float))
+            and not isinstance(observed_at, bool)
+            and math.isfinite(observed_at)
+            and 0 <= clock() - observed_at < 10
+            and convergence.get("boot_id") == current_boot_id
+            and guard.get("guard_boot_id") == current_boot_id
+            and convergence.get("data_plane_mode") == guard.get("data_plane_mode")
+        )
+        if payload.get("apply_locked") is not False or any(
+            (state_dir / name).exists()
+            for name in ("accepted-cloud-operation.json", "rearm-cloud-operation.json")
+        ):
+            convergence["quiescent"] = False
     return payload
 
 
@@ -5429,7 +5520,7 @@ def main() -> None:
             json.dumps(
                 {
                     "features": [
-                        "independent-heartbeat-v5",
+                        "independent-heartbeat-v6",
                         "connection-tunnel-selection-v1",
                         "ordinary-apply-v1",
                         "managed-peer-ingress-v2",

@@ -59,7 +59,7 @@ class SemanticsTests(unittest.TestCase):
         scripts = Path(__file__).resolve().parents[2] / "worktree/scripts"
         sys.path.insert(0, str(scripts))
         from test_workflow_contracts import DirectExecutionTests
-        from test_workflow_execution import git
+        from test_workflow_execution import git, complete_wave
         import workflow_execution as execution
         import workflow_impact as impact
         import workflow_objectives as objectives
@@ -78,7 +78,7 @@ class SemanticsTests(unittest.TestCase):
                 fixture.finish(assignment)
             pending = execution.refill_wave(fixture.run_dir, "FEAT-001", "WAVE-001")
         execution.integrate_wave(fixture.run_dir, "FEAT-001", "WAVE-001")
-        execution.complete_wave(fixture.run_dir, "FEAT-001", "WAVE-001", "fixture checks passed")
+        complete_wave(fixture.run_dir, "FEAT-001", "WAVE-001", "fixture checks passed")
         integration = Path(coordinator["integration_worktree"])
         objective = objectives.validate_run(fixture.run_dir)[1]["revisions"][-1]["sha256"]
         fixture.publication(integration, objective=objective, basis=_basis(fixture.run_dir, "FEAT-001"))

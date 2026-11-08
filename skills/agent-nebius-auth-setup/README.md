@@ -114,6 +114,13 @@ renewable project/profile/credential context. Explicit task selectors still
 win, malformed selectors fail closed, and raw-token children require an
 explicit selector.
 
+For selector-format denials, split local preparation and Nebius-sensitive work
+into separate calls, leaving local calls unprefixed. Reuse an authoritative
+task project without rediscovery or `verify`, then retry the corrected payload
+once. Resolve absent or conflicting task project evidence through read-only
+diagnosis. The denied payload never ran, including any local preparation.
+This correction needs no setup, credential change or IAM operation.
+
 ## Validation
 
 ```bash

@@ -15,13 +15,19 @@ from unittest import mock
 import workflow_execution as engine
 import workflow_impact as impact
 import workflow_objectives as objectives
+import workflow_interop as interop
+import workflow_issue_resolution as issue_resolution
+import workflow_intake as intake
 import workflow_reconcile as reconcile
 import workflow_resources as resources
 from workflow_refinement import refinement, settle
 from workflow_state import WorkflowError, read, write
 from workflow_worker_results import ingest_result
-from test_workflow_execution import git
+from test_workflow_execution import git, capacity_fixture
 
+
+from test_workflow_execution import write_private  # noqa: E402
+from test_workflow_fixture import prepare_execution as fixture_prepare_execution, complete_wave as fixture_complete_wave, replan_future as fixture_replan_future, seed_validation  # noqa: E402
 
 class TransitionErrorTests(unittest.TestCase):
     def test_resource_errors_are_structured_at_cli_boundary(self):
@@ -114,14 +120,8 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
             )
         )
         self.plan.with_suffix(".md.lock").write_text("locked\n")
-        write(
-            self.run_dir / "host-capacity.json",
-            {
-                "schema": "workflow/host-capacity-v1",
-                "native_slots": 2,
-                "evidence": "deterministic native observation stub; not live proof",
-            },
-        )
+        seed_validation(self.plan)
+        write_private(self.run_dir / "host-capacity.json", capacity_fixture(self.run_dir, 2))
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -153,12 +153,12 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
 
     def prepare(self):
         if self.workflow_owner == 'agentic-sdlc':
-            result = engine.prepare_execution(self.run_dir, self.project, 'FEAT-001', self.plan, 4)
+            result = fixture_prepare_execution(self.run_dir, self.project, 'FEAT-001', self.plan, 4)
             engine.seal_tdd_base(self.run_dir, 'FEAT-001', 'test: synthetic native admission base')
             return result
         if not engine.coordinator_path(self.run_dir, "FEAT-001").exists():
             engine.prepare_specifications(self.run_dir, self.project, "FEAT-001")
-        return engine.prepare_execution(
+        return fixture_prepare_execution(
             self.run_dir, self.project, "FEAT-001", self.plan, 4
         )
 
@@ -576,11 +576,12 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
                 self.finish(assignment)
             pending = engine.refill_wave(self.run_dir, "FEAT-001", "WAVE-001")
         engine.integrate_wave(self.run_dir, "FEAT-001", "WAVE-001")
-        engine.complete_wave(
+        fixture_complete_wave(
             self.run_dir,
             "FEAT-001",
             "WAVE-001",
             "all identifiers independently checked",
+            session=self.session,
         )
 
     def deliver(self):
@@ -839,7 +840,7 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
 
     def test_unobserved_capacity_uses_one_slot(self):
         (self.run_dir / "host-capacity.json").unlink()
-        self.assertEqual(self.prepare()["capacity"], 1)
+        self.assertEqual(self.prepare()["capacity"], 4)
         self.assertEqual(
             len(engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")), 1
         )
@@ -862,7 +863,7 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         with self.assertRaises(WorkflowError):
             objectives.authorize_coordinator(self.run_dir, self.session)
         self.assertEqual(
-            len(engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")), 2
+            len(engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")), 1
         )
 
     def test_cancellation_drains_writers_without_admitting_results(self):
@@ -929,6 +930,10 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         git(self.project, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
         original_plan = self.plan.read_text().split("### TASK-002")[0]
         self.plan.write_text(original_plan)
+        validation_path = self.plan.with_suffix(".md.validation.json")
+        validation = read(validation_path)
+        validation["task_checks"] = {"TASK-001": validation["task_checks"]["TASK-001"]}
+        write_private(validation_path, validation)
         self.prepare()
         first = engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
         self.start(first)
@@ -942,13 +947,13 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         replacement.write_text(original_plan.replace("Plan v1", "Plan v2") +
                                "### TASK-002" + original_plan.split("### TASK-001", 1)[1])
         replacement.with_suffix(".md.lock").write_text("locked\n")
-        engine.replan_future(self.run_dir, "FEAT-001", replacement, 2)
+        fixture_replan_future(self.run_dir, "FEAT-001", replacement, 2)
         reconcile.resume_replanned(self.run_dir, self.session)
         second = engine.prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
         self.start(second, wave="WAVE-002")
         self.finish(second, wave="WAVE-002")
         engine.integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
-        engine.complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "revised identifier checked")
+        fixture_complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "revised identifier checked", session=self.session)
         engine.seal_feature(self.run_dir, "FEAT-001", "combined validation and alignment", "final")
         result = engine.promote_feature(self.run_dir, "FEAT-001", "delivered identifier checked")
         self.assertEqual(result["delivery_result"], "feature-checkout")
@@ -1146,6 +1151,190 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         ):
             with self.assertRaises(WorkflowError):
                 workflow_transition.execute(args)
+
+
+class ManagedSdlcCompletionTests(unittest.TestCase):
+    def fixture(self, owner="agentic-sdlc"):
+        f = DirectExecutionTests(
+            "test_completion_requires_authoritative_outer_lease_release"
+        )
+        f.workflow_owner = owner
+        f.setUp()
+        self.addCleanup(f.doCleanups)
+        self.addCleanup(f.tearDown)
+        f.deliver()
+        return f
+
+    def state(self, integrated=False):
+        return {
+            "mode": "managed",
+            "name": "test-outer",
+            "released": True,
+            "promoted_head": "a" * 40,
+            "outer_integration_status": "integrated" if integrated else "pending",
+            "source_integration_head": "b" * 40 if integrated else None,
+        }
+
+    def observed(self):
+        return {
+            "lifecycle_status": "integrated",
+            "head": "a" * 40,
+            "integration_head": "b" * 40,
+            "source_contains_integration": True,
+        }
+
+    def test_pending_blocks_before_terminal_writes(self):
+        f = self.fixture()
+        before = (f.run_dir / "run.json").read_bytes()
+        with (
+            mock.patch.object(interop, "load", return_value=self.state()),
+            mock.patch.object(
+                interop, "_reconcile", return_value={"state": "released"}
+            ),
+            mock.patch.object(issue_resolution, "write_completion") as terminal,
+            mock.patch.object(objectives, "_bind") as binding,
+            mock.patch.object(interop, "_call") as inspect,
+        ):
+            with self.assertRaisesRegex(WorkflowError, "source integration") as error:
+                objectives.complete_run(f.run_dir, f.session)
+            self.assertEqual(error.exception.code, "COMPLETION_BLOCKED")
+            terminal.assert_not_called()
+            binding.assert_not_called()
+            inspect.assert_not_called()
+        self.assertEqual((f.run_dir / "run.json").read_bytes(), before)
+
+    def test_stale_or_missing_authoritative_proof_blocks(self):
+        f = self.fixture()
+        before = (f.run_dir / "run.json").read_bytes()
+        for key, value in [
+            ("lifecycle_status", "released"),
+            ("head", "c" * 40),
+            ("integration_head", "c" * 40),
+            ("source_contains_integration", False),
+            ("integration_head", None),
+        ]:
+            observed = self.observed() | {key: value}
+            with (
+                self.subTest(key=key, value=value),
+                mock.patch.object(interop, "load", return_value=self.state(True)),
+                mock.patch.object(
+                    interop, "_reconcile", return_value={"state": "released"}
+                ),
+                mock.patch.object(interop, "_call", return_value=observed),
+                mock.patch.object(issue_resolution, "write_completion") as terminal,
+                mock.patch.object(objectives, "_bind") as binding,
+            ):
+                with self.assertRaises(WorkflowError) as error:
+                    objectives.complete_run(f.run_dir, f.session)
+                self.assertEqual(error.exception.code, "COMPLETION_BLOCKED")
+                terminal.assert_not_called()
+                binding.assert_not_called()
+                self.assertEqual((f.run_dir / "run.json").read_bytes(), before)
+
+    def test_matching_recorded_and_authoritative_proof_completes(self):
+        f = self.fixture()
+        state = self.state(True)
+        with (
+            mock.patch.object(interop, "load", return_value=state),
+            mock.patch.object(
+                interop, "_reconcile", return_value={"state": "released"}
+            ),
+            mock.patch.object(
+                interop, "_call", return_value=self.observed()
+            ) as inspect,
+            mock.patch.object(interop, "_write") as publish,
+        ):
+            for _ in range(2):
+                self.assertEqual(
+                    objectives.complete_run(f.run_dir, f.session)["status"], "COMPLETE"
+                )
+            self.assertEqual(inspect.call_count, 2)
+            publish.assert_not_called()
+            self.assertEqual(
+                inspect.call_args.args[1],
+                ["inspect", "--name", "test-outer", "--require-clean"],
+            )
+        self.assertEqual(read(f.run_dir / "run.json")["status"], "done")
+        self.assertEqual(state["source_integration_head"], "b" * 40)
+
+    def test_authoritative_inspection_failure_blocks_without_terminal_writes(self):
+        f = self.fixture()
+        before = (f.run_dir / "run.json").read_bytes()
+        with (
+            mock.patch.object(interop, "load", return_value=self.state(True)),
+            mock.patch.object(
+                interop, "_reconcile", return_value={"state": "released"}
+            ),
+            mock.patch.object(
+                interop,
+                "_call",
+                side_effect=interop.ExecutionInteropError("inspection unavailable"),
+            ),
+            mock.patch.object(issue_resolution, "write_completion") as terminal,
+            mock.patch.object(objectives, "_bind") as binding,
+        ):
+            with self.assertRaisesRegex(
+                WorkflowError, "inspection unavailable"
+            ) as error:
+                objectives.complete_run(f.run_dir, f.session)
+            self.assertEqual(error.exception.code, "COMPLETION_BLOCKED")
+            terminal.assert_not_called()
+            binding.assert_not_called()
+        self.assertEqual((f.run_dir / "run.json").read_bytes(), before)
+
+    def test_disappearing_managed_proof_blocks_completion(self):
+        f = self.fixture()
+        before = (f.run_dir / "run.json").read_bytes()
+        with mock.patch.object(interop, "load", side_effect=[self.state(True), None]), \
+                mock.patch.object(interop, "_reconcile", return_value={"state": "released"}), \
+                mock.patch.object(issue_resolution, "write_completion") as terminal:
+            with self.assertRaisesRegex(WorkflowError, "source integration") as error:
+                objectives.complete_run(f.run_dir, f.session)
+            self.assertEqual(error.exception.code, "COMPLETION_BLOCKED")
+            terminal.assert_not_called()
+        self.assertEqual((f.run_dir / "run.json").read_bytes(), before)
+
+    def test_implement_released_lease_still_completes(self):
+        f = self.fixture("implement")
+        with (
+            mock.patch.object(interop, "load", return_value=self.state()),
+            mock.patch.object(
+                interop, "_reconcile", return_value={"state": "released"}
+            ),
+            mock.patch.object(interop, "complete_source_integration") as integration,
+        ):
+            self.assertEqual(
+                objectives.complete_run(f.run_dir, f.session)["status"], "COMPLETE"
+            )
+            integration.assert_not_called()
+
+    def test_unmanaged_sdlc_still_completes(self):
+        f = self.fixture()
+        self.assertEqual(
+            objectives.complete_run(f.run_dir, f.session)["status"], "COMPLETE"
+        )
+
+    def test_cli_reports_pending_as_structured_block(self):
+        f = self.fixture()
+        output = io.StringIO()
+        with (
+            mock.patch.object(intake, "complete_run", objectives.complete_run),
+            mock.patch.object(intake, "agent_home", return_value=f.home),
+            mock.patch.object(intake, "native_session_id", return_value=f.session),
+            mock.patch.object(interop, "load", return_value=self.state()),
+            mock.patch.object(
+                interop, "_reconcile", return_value={"state": "released"}
+            ),
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(
+                intake.main(
+                    ["--owner", "agentic-sdlc", "complete", "--run-dir", str(f.run_dir)]
+                ),
+                2,
+            )
+        self.assertEqual(json.loads(output.getvalue())["code"], "COMPLETION_BLOCKED")
+        self.assertEqual(read(f.run_dir / "run.json")["status"], "accepted")
 
 
 if __name__ == "__main__":

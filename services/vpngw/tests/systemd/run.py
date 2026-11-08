@@ -22,10 +22,44 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ssh-bootstrap-only", action="store_true")
     parser.add_argument("--ingress-only", action="store_true")
+    parser.add_argument("--modernization-only", action="store_true")
+    parser.add_argument("--package-migration-only", action="store_true")
+    parser.add_argument("--historical-package-upgrades", action="store_true")
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--candidate-wheel", type=Path)
+    parser.add_argument("--release-wheels", type=Path)
+    parser.add_argument("--report", type=Path)
+    parser.add_argument(
+        "--historical-version", help="One manifest version for partial development checks"
+    )
+    parser.add_argument("--platform", default="linux/amd64")
     args = parser.parse_args()
+    if args.historical_package_upgrades:
+        if not args.candidate_wheel or not args.report:
+            parser.error("historical qualification requires --candidate-wheel and --report")
+        if any(
+            (
+                args.ssh_bootstrap_only,
+                args.ingress_only,
+                args.modernization_only,
+                args.package_migration_only,
+            )
+        ):
+            parser.error("historical qualification is a separate fixture lane")
+        from historical_packages import run_historical
+
+        run_historical(args)
+        return
     project = Path(__file__).resolve().parents[2]
     tests = ["/workspace/tests/integration/test_ssh_bootstrap.py"]
-    if args.ingress_only:
+    if args.package_migration_only:
+        tests = ["/workspace/tests/integration/test_runtime_modernization.py"]
+    elif args.modernization_only:
+        tests = [
+            "/workspace/tests/integration/test_runtime_modernization.py",
+            "/workspace/tests/integration/test_strongswan_sessions.py",
+        ]
+    elif args.ingress_only:
         tests.extend(
             [
                 "/workspace/tests/integration/test_tunnel_host_packets.py",
@@ -41,6 +75,7 @@ def main() -> None:
                 "/workspace/tests/integration/test_ha_tunnel_native.py",
                 "/workspace/tests/integration/test_tunnel_host_packets.py",
                 "/workspace/tests/integration/test_ingress_packets.py",
+                "/workspace/tests/integration/test_runtime_modernization.py",
             ]
         )
     name = "vpngw-systemd-test-" + uuid.uuid4().hex[:12]
@@ -114,9 +149,9 @@ def main() -> None:
             "-p",
             "no:cacheprovider",
             *tests,
-            # Includes real IKE cycles, HA recovery and eight complete fenced BGP
-            # restart replays. Individual product operation deadlines are unchanged.
-            timeout=900,
+            # Includes real IKE cycles, HA recovery, eight fenced BGP replays,
+            # and four Static activation/crash cases. Product deadlines are unchanged.
+            timeout=1200,
         )
     finally:
         if created:

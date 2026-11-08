@@ -6,9 +6,9 @@ import subprocess
 import sys
 
 import workflow_execution as engine
-from workflow_objectives import authorize_coordinator, check_dispatch, _writers_quiescent
+from workflow_objectives import authorize_coordinator, check_dispatch, _writers_quiescent, validate_run
 from workflow_publication import _basis
-from workflow_reconcile import termination, validate_retained_wave
+from workflow_reconcile import termination, observe_termination, validate_retained_wave
 from workflow_resources import require_released
 from workflow_state import digest, read, write
 
@@ -112,6 +112,8 @@ def _reconcile(run_dir, execution, intent):
 def prepare_design_revision(run_dir, execution, classification_id, dispatch_id, terminations, session):
     """Consume a counted design dispatch and retain exact failed work without a steering fence."""
     with engine._execution_transition_lock(run_dir, execution):
+        from workflow_validation import require_quiescent
+        require_quiescent(run_dir, execution)
         _run, objective = authorize_coordinator(run_dir, session)
         check_dispatch(run_dir)
         authority = _authority(run_dir, execution, classification_id, dispatch_id)
@@ -132,7 +134,7 @@ def prepare_design_revision(run_dir, execution, classification_id, dispatch_id, 
             if coordinator.get("design_revision_id") not in {None, dispatch_id} or (directory / "sealed.json").exists():
                 _fail("revision is already sealed or another revision is active")
             wave = read(engine.wave_path(run_dir, execution, intent["wave_id"]))
-            if wave.get("merged_task_ids") or wave["status"] in {"integrating", "integrated", "done", "failed"}:
+            if wave.get("integrated_task_ids") or wave["status"] in {"integrating", "integrated", "done", "failed"}:
                 _fail("interrupted retirement acquired integration effects")
             if {str(path) for path in terminations} != {row["termination_path"] for row in intent["writers"]}:
                 _fail("prepared termination selection changed")
@@ -159,7 +161,7 @@ def prepare_design_revision(run_dir, execution, classification_id, dispatch_id, 
                 _fail("failure belongs to another integration, plan, canonical snapshot or basis")
             wave_id = coordinator["active_wave"]
             wave = read(engine.wave_path(run_dir, execution, wave_id))
-            if wave.get("merged_task_ids") or wave["status"] in {"integrating", "integrated", "done", "failed", "superseded"}:
+            if wave.get("integrated_task_ids") or wave["status"] in {"integrating", "integrated", "done", "failed", "superseded"}:
                 _fail("partial or completed integration cannot be retired as unmerged work")
             for path in (run_dir / "execution").glob("*/waves/*.json"):
                 if path != engine.wave_path(run_dir, execution, wave_id) and read(path).get("active_task_ids"):
@@ -211,7 +213,7 @@ def prepare_design_revision(run_dir, execution, classification_id, dispatch_id, 
         return intent
 
 
-def _verify_prepared(run_dir, execution, prepared, authority, session):
+def _verify_prepared(run_dir, execution, prepared, authority):
     from workflow_impact import _identity_files
     coordinator = engine._load_coordinator(run_dir, execution)
     basis = read(run_dir / "bases" / execution / (prepared["basis_sha256"] + ".json"))
@@ -227,12 +229,50 @@ def _verify_prepared(run_dir, execution, prepared, authority, session):
             or any(authority["fingerprints"].get(key) != value for key, value in expected.items())):
         _fail("prepared revision authority changed")
     for row in prepared["writers"]:
-        assignment, _state, observation = termination(
-            run_dir, execution, prepared["wave_id"], row["task_id"], Path(row["termination_path"]), session)
+        assignment, _state, observation = observe_termination(
+            run_dir, execution, prepared["wave_id"], row["task_id"], Path(row["termination_path"]))
         if (read(run_dir / row["proof_path"]) != row["proof"]
                 or assignment["assignment_digest"] != row["proof"]["assignment_digest"]
                 or digest(observation) != row["proof"]["termination_sha256"]):
             _fail("original retained writer proof changed")
+
+
+def observe_pending_revision(run_dir, execution):
+    """Verify a pending revision without mutation or adopting the coordinator identity."""
+    _run, objective = validate_run(run_dir)
+    check_dispatch(run_dir)
+    coordinator = engine._load_coordinator(run_dir, execution)
+    directory = _directory(run_dir, execution, coordinator.get("design_revision_id"))
+    prepared = _read(directory / "prepare.json", "workflow/design-revision-prepare-v1")
+    if (coordinator["status"] != "design_revision_pending"
+            or coordinator.get("active_wave") is not None
+            or coordinator.get("promoted_head") is not None
+            or (directory / "sealed.json").exists()
+            or prepared["revision_id"] != coordinator["design_revision_id"]
+            or prepared["parent"] != coordinator["integration_head"]
+            or prepared["plan_sha256"] != coordinator["plan_digest"]
+            or prepared["basis_sha256"] != _basis(run_dir, execution)
+            or prepared["objective_sha256"] != objective["revisions"][-1]["sha256"]):
+        _fail("observation requires the exact pending unchanged execution")
+    authority = _authority(run_dir, execution, prepared["authority"]["classification_id"],
+                           prepared["revision_id"])
+    _verify_prepared(run_dir, execution, prepared, authority)
+    _checkout(run_dir, execution, coordinator)
+    for row in prepared["writers"]:
+        state = read(engine.task_path(run_dir, execution, prepared["wave_id"], row["task_id"]))
+        if (state["status"] != "superseded"
+                or row["proof"].get("design_revision_id") != prepared["revision_id"]):
+            _fail("pending revision retains a writer outside its superseded set")
+    wave = read(engine.wave_path(run_dir, execution, prepared["wave_id"]))
+    if (wave["status"] != "superseded" or wave.get("active_task_ids")
+            or wave.get("integrated_task_ids")
+            or wave.get("design_revision_id") != prepared["revision_id"]
+            or {row["task_id"] for row in prepared["writers"]} != {
+                row["task_id"] for row in validate_retained_wave(run_dir, execution, wave)["assignments"]}):
+        _fail("pending revision requires its exact retained unmerged wave")
+    _writers_quiescent(run_dir)
+    require_released(run_dir)
+    return prepared
 
 
 def _git(integration, *arguments):
@@ -260,6 +300,8 @@ def seal_design_revision(run_dir, execution, revision_id, operation_id, message,
     from project_specs_lib.transaction import read_spec_publication
     from project_specs_lib.contracts import ProjectSpecError
     with engine._execution_transition_lock(run_dir, execution):
+        from workflow_validation import require_quiescent
+        require_quiescent(run_dir, execution)
         _run, objective = authorize_coordinator(run_dir, session)
         check_dispatch(run_dir)
         engine._reject_sensitive_evidence(message)
@@ -270,7 +312,7 @@ def seal_design_revision(run_dir, execution, revision_id, operation_id, message,
         sealed_path = directory / "sealed.json"
         authority = _authority(run_dir, execution, prepared["authority"]["classification_id"],
                                revision_id, active=not sealed_path.exists())
-        _verify_prepared(run_dir, execution, prepared, authority, session)
+        _verify_prepared(run_dir, execution, prepared, authority)
         coordinator = engine._load_coordinator(run_dir, execution)
         integration = Path(coordinator["integration_worktree"])
         _checkout(run_dir, execution, coordinator, strict=False)

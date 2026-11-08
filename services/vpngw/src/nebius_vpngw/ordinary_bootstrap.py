@@ -6,7 +6,7 @@ import base64
 import shlex
 from pathlib import Path
 
-from . import ingress_policy, ordinary_operations, ordinary_routes
+from . import ingress_policy, ordinary_operations, ordinary_routes, runtime_migration
 
 SOURCE_LIMIT = 4 * 1024 * 1024
 LOADER = (
@@ -28,6 +28,7 @@ def source_frame() -> bytes:
         ingress_policy.streamed_bootstrap()
         + ordinary_operations.streamed_bootstrap()
         + ordinary_routes.streamed_bootstrap()
+        + runtime_migration.streamed_bootstrap()
         + f"exec(compile(base64.b64decode({source!r}),'<ordinary-transaction>','exec'))"
     )
     frame = base64.b64encode(code.encode()) + b"\n"

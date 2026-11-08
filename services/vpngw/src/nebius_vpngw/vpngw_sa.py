@@ -12,6 +12,9 @@ from typing import Literal
 from .deploy.vm_ha_cloud import nebius_request_error_code_is
 from .nebius_pagination import collect_nebius_pages, nebius_resource_id
 
+if t.TYPE_CHECKING:
+    from .deploy.replacement_cloud import Cloud
+
 """
 Service Account management for Nebius VPNGW.
 
@@ -501,6 +504,8 @@ def _ensure_exact_project_permit(service: t.Any, group_id: str, project_id: str)
 def _reconcile_planned_service_account(
     service: t.Any,
     plan: VMHAIAMReconciliationPlan,
+    *,
+    cloud: Cloud | None = None,
 ) -> str:
     from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
     from nebius.api.nebius.iam.v1 import (  # type: ignore
@@ -508,12 +513,13 @@ def _reconcile_planned_service_account(
         ServiceAccountSpec,
     )
 
+    completed = cloud.completed("service-account") if cloud is not None else None
     labels = dict(plan.ownership_labels)
     current = _read_named_resource(
         lambda: _get_service_account_by_name(service, plan.project_id, plan.service_account_name),
         failure_message="Failed to reread the managed VM-HA Service Account",
     )
-    if plan.service_account_action == "reuse":
+    if plan.service_account_action == "reuse" or completed is not None:
         if current is None:
             raise RuntimeError("managed VM-HA Service Account disappeared after approval")
         resource_id = _require_named_identity(
@@ -523,51 +529,57 @@ def _reconcile_planned_service_account(
             expected_name=plan.service_account_name,
             ownership_labels=labels,
         )
-        if resource_id != plan.service_account_id:
+        if resource_id != (completed or plan.service_account_id):
             raise RuntimeError("managed VM-HA Service Account identity changed after approval")
         return resource_id
     if current is not None:
         raise RuntimeError("managed VM-HA Service Account appeared after approval")
-    _wait_operation(
-        service.create(
-            CreateServiceAccountRequest(
-                metadata=ResourceMetadata(
-                    parent_id=plan.project_id,
-                    name=plan.service_account_name,
-                    labels=labels,
-                ),
-                spec=ServiceAccountSpec(description=_SERVICE_ACCOUNT_DESCRIPTION),
-            )
-        )
+    request = CreateServiceAccountRequest(
+        metadata=ResourceMetadata(
+            parent_id=plan.project_id,
+            name=plan.service_account_name,
+            labels=labels,
+        ),
+        spec=ServiceAccountSpec(description=_SERVICE_ACCOUNT_DESCRIPTION),
     )
+    if cloud is None:
+        _wait_operation(service.create(request))
+    else:
+        completed = cloud.mutate("service-account", request, service.create)
     created = _read_named_resource(
         lambda: _get_service_account_by_name(service, plan.project_id, plan.service_account_name),
         failure_message="Created managed VM-HA Service Account could not be reread",
     )
     if created is None:
         raise RuntimeError("Created managed VM-HA Service Account could not be reread")
-    return _require_named_identity(
+    identifier = _require_named_identity(
         created,
         kind="Managed VM-HA Service Account",
         project_id=plan.project_id,
         expected_name=plan.service_account_name,
         ownership_labels=labels,
     )
+    if completed is not None and identifier != completed:
+        raise RuntimeError("Created service account differs from its operation receipt")
+    return identifier
 
 
 def _reconcile_planned_group(
     service: t.Any,
     plan: VMHAIAMReconciliationPlan,
+    *,
+    cloud: Cloud | None = None,
 ) -> str:
     from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
     from nebius.api.nebius.iam.v1 import CreateGroupRequest, GroupSpec  # type: ignore
 
+    completed = cloud.completed("group") if cloud is not None else None
     labels = dict(plan.ownership_labels)
     current = _read_named_resource(
         lambda: _get_group_by_name(service, plan.project_id, plan.service_account_name),
         failure_message="Failed to reread the managed VM-HA Service Account group",
     )
-    if plan.group_action == "reuse":
+    if plan.group_action == "reuse" or completed is not None:
         if current is None:
             raise RuntimeError("managed VM-HA Service Account group disappeared after approval")
         resource_id = _require_named_identity(
@@ -577,36 +589,39 @@ def _reconcile_planned_group(
             expected_name=plan.service_account_name,
             ownership_labels=labels,
         )
-        if resource_id != plan.group_id:
+        if resource_id != (completed or plan.group_id):
             raise RuntimeError("managed VM-HA Service Account group changed after approval")
         return resource_id
     if current is not None:
         raise RuntimeError("managed VM-HA Service Account group appeared after approval")
-    _wait_operation(
-        service.create(
-            CreateGroupRequest(
-                metadata=ResourceMetadata(
-                    parent_id=plan.project_id,
-                    name=plan.service_account_name,
-                    labels=labels,
-                ),
-                spec=GroupSpec(),
-            )
-        )
+    request = CreateGroupRequest(
+        metadata=ResourceMetadata(
+            parent_id=plan.project_id,
+            name=plan.service_account_name,
+            labels=labels,
+        ),
+        spec=GroupSpec(),
     )
+    if cloud is None:
+        _wait_operation(service.create(request))
+    else:
+        completed = cloud.mutate("group", request, service.create)
     created = _read_named_resource(
         lambda: _get_group_by_name(service, plan.project_id, plan.service_account_name),
         failure_message="Created managed VM-HA Service Account group could not be reread",
     )
     if created is None:
         raise RuntimeError("Created managed VM-HA Service Account group could not be reread")
-    return _require_named_identity(
+    identifier = _require_named_identity(
         created,
         kind="Managed VM-HA Service Account group",
         project_id=plan.project_id,
         expected_name=plan.service_account_name,
         ownership_labels=labels,
     )
+    if completed is not None and identifier != completed:
+        raise RuntimeError("Created group differs from its operation receipt")
+    return identifier
 
 
 def _reconcile_planned_membership(
@@ -615,6 +630,7 @@ def _reconcile_planned_membership(
     *,
     group_id: str,
     service_account_id: str,
+    cloud: Cloud | None = None,
 ) -> None:
     from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
     from nebius.api.nebius.iam.v1 import (  # type: ignore
@@ -622,21 +638,29 @@ def _reconcile_planned_membership(
         GroupMembershipSpec,
     )
 
+    completed = cloud.completed("membership") if cloud is not None else None
     members = _list_group_member_ids(service, group_id)
-    if plan.membership_action == "reuse":
+    if plan.membership_action == "reuse" or completed is not None:
         if members != (service_account_id,):
             raise RuntimeError("managed VM-HA group membership changed after approval")
+        if completed is not None:
+            _verify_created_iam_edge(
+                service, "GroupMembership", completed, group_id, {"member_id": service_account_id}
+            )
         return
     if members:
         raise RuntimeError("managed VM-HA group membership appeared after approval")
-    _wait_operation(
-        service.create(
-            CreateGroupMembershipRequest(
-                metadata=ResourceMetadata(parent_id=group_id),
-                spec=GroupMembershipSpec(member_id=service_account_id),
-            )
-        )
+    request = CreateGroupMembershipRequest(
+        metadata=ResourceMetadata(parent_id=group_id),
+        spec=GroupMembershipSpec(member_id=service_account_id),
     )
+    if cloud is None:
+        _wait_operation(service.create(request))
+    else:
+        completed = cloud.mutate("membership", request, service.create)
+        _verify_created_iam_edge(
+            service, "GroupMembership", completed, group_id, {"member_id": service_account_id}
+        )
     if _list_group_member_ids(service, group_id) != (service_account_id,):
         raise RuntimeError("managed VM-HA group membership did not reread exactly")
 
@@ -646,6 +670,7 @@ def _reconcile_planned_permit(
     plan: VMHAIAMReconciliationPlan,
     *,
     group_id: str,
+    cloud: Cloud | None = None,
 ) -> None:
     from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
     from nebius.api.nebius.iam.v1 import (  # type: ignore
@@ -653,24 +678,60 @@ def _reconcile_planned_permit(
         CreateAccessPermitRequest,
     )
 
+    completed = cloud.completed("permit") if cloud is not None else None
     expected = ((plan.project_id, "editor"),)
     permits = _list_access_permits(service, group_id)
-    if plan.permit_action == "reuse":
+    if plan.permit_action == "reuse" or completed is not None:
         if permits != expected:
             raise RuntimeError("managed VM-HA project access permit changed after approval")
+        if completed is not None:
+            _verify_created_iam_edge(
+                service,
+                "AccessPermit",
+                completed,
+                group_id,
+                {"resource_id": plan.project_id, "role": "editor"},
+            )
         return
     if permits:
         raise RuntimeError("managed VM-HA project access permit appeared after approval")
-    _wait_operation(
-        service.create(
-            CreateAccessPermitRequest(
-                metadata=ResourceMetadata(parent_id=group_id),
-                spec=AccessPermitSpec(resource_id=plan.project_id, role="editor"),
-            )
-        )
+    request = CreateAccessPermitRequest(
+        metadata=ResourceMetadata(parent_id=group_id),
+        spec=AccessPermitSpec(resource_id=plan.project_id, role="editor"),
     )
+    if cloud is None:
+        _wait_operation(service.create(request))
+    else:
+        completed = cloud.mutate("permit", request, service.create)
+        _verify_created_iam_edge(
+            service,
+            "AccessPermit",
+            completed,
+            group_id,
+            {"resource_id": plan.project_id, "role": "editor"},
+        )
     if _list_access_permits(service, group_id) != expected:
         raise RuntimeError("managed VM-HA project access permit did not reread exactly")
+
+
+def _verify_created_iam_edge(
+    service: t.Any, kind: str, identifier: str, parent: str, expected: dict
+) -> None:
+    """A matching grant alone cannot adopt a replaced membership or permit."""
+    import nebius.api.nebius.iam.v1 as iam
+
+    from .deploy.replacement_cloud import message_digest
+    from .deploy.vm_ha_cloud import vm_ha_request_kwargs
+
+    observed = service.get(
+        getattr(iam, "Get" + kind + "Request")(id=identifier), **vm_ha_request_kwargs()
+    ).wait()
+    if (
+        observed.metadata.id != identifier
+        or observed.metadata.parent_id != parent
+        or message_digest(observed.spec) != message_digest(getattr(iam, kind + "Spec")(**expected))
+    ):
+        raise RuntimeError("Created IAM edge differs from its exact operation receipt")
 
 
 def _close_client(client: t.Any) -> None:
@@ -823,6 +884,7 @@ def ensure_service_account_identity_and_token(
     role_ids: tuple[str, ...] = ("editor",),
     ownership_labels: t.Mapping[str, str] | None = None,
     reconciliation_plan: VMHAIAMReconciliationPlan | None = None,
+    cloud_factory: t.Callable[[t.Any], Cloud] | None = None,
 ) -> ServiceAccountTokenIdentity:
     """Ensure and return the exact selected identity plus its ephemeral token."""
 
@@ -842,6 +904,9 @@ def ensure_service_account_identity_and_token(
 
     client, _ = _init_client(tenant_id, project_id, region_id)
     try:
+        if cloud_factory is not None and reconciliation_plan is None:
+            raise ValueError("Journaled IAM effects require an exact reconciliation plan")
+        cloud = cloud_factory(client) if cloud_factory is not None else None
         service_accounts, groups, memberships, permits = _iam_services(client)
         if reconciliation_plan is None:
             service_account_id = _ensure_service_account(
@@ -860,20 +925,27 @@ def ensure_service_account_identity_and_token(
             _ensure_exact_project_permit(permits, group_id, project_id)
         else:
             service_account_id = _reconcile_planned_service_account(
-                service_accounts, reconciliation_plan
+                service_accounts, reconciliation_plan, cloud=cloud
             )
-            group_id = _reconcile_planned_group(groups, reconciliation_plan)
+            group_id = _reconcile_planned_group(groups, reconciliation_plan, cloud=cloud)
             _reconcile_planned_membership(
                 memberships,
                 reconciliation_plan,
                 group_id=group_id,
                 service_account_id=service_account_id,
+                cloud=cloud,
             )
             _reconcile_planned_permit(
                 permits,
                 reconciliation_plan,
                 group_id=group_id,
+                cloud=cloud,
             )
+            if cloud is not None and (
+                _list_group_member_ids(memberships, group_id) != (service_account_id,)
+                or _list_access_permits(permits, group_id) != ((project_id, "editor"),)
+            ):
+                raise RuntimeError("Dedicated IAM group changed after permission verification")
     finally:
         _close_client(client)
 
@@ -927,6 +999,7 @@ def ensure_vm_ha_service_account_identity_and_token(
     verified_role_ids: tuple[str, ...],
     ownership_labels: t.Mapping[str, str] | None = None,
     reconciliation_plan: VMHAIAMReconciliationPlan | None = None,
+    cloud_factory: t.Callable[[t.Any], Cloud] | None = None,
 ) -> ServiceAccountTokenIdentity:
     """Provision and return the exact reviewed VM-HA service account identity."""
 
@@ -946,6 +1019,7 @@ def ensure_vm_ha_service_account_identity_and_token(
         role_ids=roles,
         ownership_labels=ownership_labels,
         reconciliation_plan=reconciliation_plan,
+        **({"cloud_factory": cloud_factory} if cloud_factory is not None else {}),
     )
 
 

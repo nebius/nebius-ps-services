@@ -22,7 +22,8 @@ def markdown_escape(value: object) -> str:
 
 
 def recommended_fix(source: object, issue: object) -> str:
-    context = (str(source) + " " + str(issue)).lower()
+    source_context = str(source).lower()
+    context = source_context + " " + str(issue).lower()
     if any(
         word in context
         for word in (
@@ -40,7 +41,7 @@ def recommended_fix(source: object, issue: object) -> str:
     ):
         return "Investigate owned inventory, target/build identity and assignment lease using the named predicate; unknown causes remain blocked_missing_evidence."
     if any(
-        word in context
+        word in source_context
         for word in ("browser", "playwright", "gui", "uat", "sdlc-evaluate")
     ):
         return (

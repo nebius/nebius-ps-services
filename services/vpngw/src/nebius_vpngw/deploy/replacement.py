@@ -83,6 +83,7 @@ class Member:
     primary_allocations: tuple[str, ...]
     candidate_name: str
     candidate_disk_name: str
+    desired_security_groups: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,7 +123,102 @@ class Plan:
         return result
 
 
+def _retains(before: Any, after: Any) -> bool:
+    """Receipt maps may grow; already recorded leaf evidence cannot change."""
+    if isinstance(before, dict) and isinstance(after, dict):
+        return all(key in after and _retains(value, after[key]) for key, value in before.items())
+    return before == after
+
+
+def _checkpoint_extends(before: dict, after: dict) -> bool:
+    """Prove same-operation forward progress, independently of revision numbers."""
+    old, new = before["transaction"], after["transaction"]
+    if not old or not new or old["plan"] != new["plan"] or old["approval"] != new["approval"]:
+        return False
+    if old["phase"] == "complete":
+        return old == new and before["bindings"] == after["bindings"]
+    old_position, new_position = (old["member"], old["step"]), (new["member"], new["step"])
+    if old_position > new_position or (
+        old_position == new_position
+        and old["pending"] is not None
+        and old["pending"] != new["pending"]
+        and not (old["pending"] == "finish" and new["phase"] == "complete")
+    ):
+        return False
+    for key, value in old["results"].items():
+        later = new["results"].get(key)
+        if key == "ha-lifecycle":
+            if (
+                not isinstance(later, list)
+                or not isinstance(value, list)
+                or later[: len(value)] != value
+            ):
+                return False
+        elif key not in new["results"] or not _retains(value, later):
+            return False
+    transitions = {
+        "intent": {"intent", "accepted", "settled", "rejected", "failed"},
+        "accepted": {"accepted", "settled", "failed"},
+        "settled": {"settled"},
+        "rejected": {"rejected"},
+        "failed": {"failed"},
+    }
+    for key, record in old["operations"].items():
+        later = new["operations"].get(key)
+        if not isinstance(later, dict) or later.get("status") not in transitions.get(
+            record.get("status"), set()
+        ):
+            return False
+        for field, value in record.items():
+            if (
+                field == "submission_count"
+                and record["status"] == "intent"
+                and type(value) is int
+                and type(later.get(field)) is int
+                and later[field] >= value
+            ):
+                continue
+            if (
+                field == "status"
+                or field in {"cloud_operation_id", "resource_id"}
+                and value is None
+            ):
+                continue
+            if field not in later or value != later[field]:
+                return False
+        if record["status"] in {"settled", "rejected", "failed"} and record != later:
+            return False
+    for logical in before["bindings"].keys() | after["bindings"].keys():
+        previous, current = before["bindings"].get(logical), after["bindings"].get(logical)
+        if previous == current:
+            continue
+        index = next(
+            (
+                i
+                for i, member in enumerate(new["plan"]["members"])
+                if member["logical_name"] == logical
+            ),
+            None,
+        )
+        prepared = new["results"].get(f"{index}:prepare", {})
+        if (
+            index is None
+            or not prepared.get("compute_id")
+            or not prepared.get("disk_id")
+            or current
+            != {
+                "compute_id": prepared["compute_id"],
+                "disk_id": prepared["disk_id"],
+                "operation_id": new["plan"]["operation_id"],
+            }
+        ):
+            return False
+    return True
+
+
 class Journal:
+    schema = SCHEMA
+
     def __init__(self, project: str, gateway: str, *, root: Path | None = None) -> None:
         safe_name(project)
         safe_name(gateway)
@@ -160,7 +256,7 @@ class Journal:
                 json.loads(self._before["content"])
                 if self._before
                 else {
-                    "schema": SCHEMA,
+                    "schema": self.schema,
                     "project_id": self.project,
                     "gateway_name": self.gateway,
                     "revision": 0,
@@ -179,6 +275,28 @@ class Journal:
         if self._lock is not None:
             os.close(self._lock)
             self._lock = None
+
+    def snapshot(self) -> dict | None:
+        """Read the latest durable publication without repairing or creating it."""
+        records = []
+        for path in (self.path, self.root / ("." + self.path.name + ".vpngw-recovery/candidate")):
+            record = read_file(path)
+            if record is None:
+                continue
+            if record["uid"] != os.getuid() or record["mode"] != 0o600:
+                raise ValueError("Deployment journal must be private")
+            state = json.loads(record["content"])
+            self.validate(state)
+            records.append(state)
+        if not records:
+            return None
+        records.sort(key=lambda value: value["revision"])
+        if len(records) == 2 and (
+            records[1]["revision"] - records[0]["revision"] not in {0, 1}
+            or (records[0]["revision"] == records[1]["revision"] and records[0] != records[1])
+        ):
+            raise ValueError("Deployment journal publications disagree")
+        return records[-1]
 
     def _recover_publication(self) -> None:
         recovery = self.path.parent / ("." + self.path.name + ".vpngw-recovery")
@@ -277,6 +395,23 @@ class Journal:
         publish(self.path, self._before, desired)
         self._before = desired
 
+    def archive(self) -> str:
+        """Retain exact private history before a reviewed canonical successor."""
+        if self._lock is None or self._before is None:
+            raise RuntimeError("Archiving requires the current locked journal")
+        if read_file(self.path) != self._before:
+            raise RuntimeError("Journal changed before history publication")
+        identity = digest(self.state)
+        directory = self.root / "history"
+        protected_directory(directory)
+        target = directory / (identity + ".json")
+        existing = read_file(target)
+        if existing is None:
+            publish(target, None, self._before)
+        elif existing != self._before:
+            raise ValueError("Archived journal differs from its immutable predecessor")
+        return identity
+
     def start(self, plan: Plan, approval: str) -> None:
         mapping = plan.mapping()
         if digest(mapping) != approval:
@@ -298,17 +433,33 @@ class Journal:
         }
         self.save()
 
-    def import_bundle(self, path: Path) -> None:
+    def import_bundle(
+        self, path: Path, *, admit: Callable[[dict], None] = lambda _state: None
+    ) -> None:
         record = read_file(path.expanduser().absolute())
         if record is None or record["uid"] != os.getuid() or record["mode"] & 0o077:
             raise ValueError("Recovery bundle must be a private operator-owned file")
         candidate = json.loads(record["content"])
         self.validate(candidate)
         current = self.state.get("transaction")
-        if current and current["phase"] != "complete" and current != candidate["transaction"]:
-            raise RuntimeError("Local replacement differs from this recovery bundle")
-        if self.state["revision"] > candidate["revision"]:
-            raise RuntimeError("Recovery bundle is older than the local checkpoint")
+        if current:
+            # A copied older bundle selects its current canonical successor. It
+            # must never erase accepted operations or restart completed work.
+            if _checkpoint_extends(candidate, self.state):
+                admit(self.state)
+                return
+            if not _checkpoint_extends(self.state, candidate):
+                raise RuntimeError(
+                    "Local replacement differs from this recovery bundle; conflicting history"
+                )
+        admit(candidate)
+        if candidate == self.state:
+            return
+        if current:
+            self.archive()
+        # This store's publication sequence is local. Imported progress is
+        # proven from receipts, while crash recovery requires exactly +1.
+        candidate["revision"] = self.state["revision"]
         self.state = candidate
         self.save()
 

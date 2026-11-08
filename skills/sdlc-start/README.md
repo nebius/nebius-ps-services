@@ -24,6 +24,12 @@ unchanged-source checks and managed outer-worktree ownership. Post-promotion
 documentation drift starts a corrective run. Remote publication still requires
 its existing authorization and exact-commit checks.
 
+Managed completion consumes separately recorded source-integration proof. After
+the explicit outer integration and proof-recording transitions, completion
+freshly validates the exact merge and source ancestry before publishing terminal
+state. A released lease or an unrecorded merge is insufficient. Failure preserves
+completion evidence and bindings; completion never performs outer integration.
+
 In verifier-owned disposable runs, hook Git reads validate the sealed Git
 profile before observing project identity or staged content. Invalid profiles
 fail closed; ordinary sessions retain their existing Git environment.

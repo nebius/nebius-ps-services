@@ -35,8 +35,10 @@ def _fake_ssh_run_for_esp4(
             return _completed("pip 24.0\n")
         if "esp4-reboot-pending" in remote_cmd:
             return esp4_result
-        if "dpkg -l strongswan frr" in remote_cmd:
-            return _completed("ii  strongswan  5.9\nii  frr  10.5\nactive\n")
+        if "dpkg -l charon-systemd frr" in remote_cmd:
+            return _completed(
+                "ii  charon-systemd  5.9\nii  strongswan-swanctl 5.9\nii  frr  10.5\nactive\n"
+            )
         raise AssertionError(f"unexpected command: {remote_cmd}")
 
     return fake_run
@@ -109,8 +111,8 @@ def test_bootstrap_agent_health_requires_exact_successful_active_state(
     delegate = _fake_ssh_run_for_esp4(_completed())
 
     def run(command, *args, **kwargs):
-        if "dpkg -l strongswan frr" in command[-1]:
-            return _completed(f"ii strongswan 5.9\nii frr 10.5\n{agent_state}\n", returncode)
+        if "dpkg -l charon-systemd frr" in command[-1]:
+            return _completed(f"ii charon-systemd 5.9\nii frr 10.5\n{agent_state}\n", returncode)
         return delegate(command, *args, **kwargs)
 
     monkeypatch.setattr("subprocess.run", run)

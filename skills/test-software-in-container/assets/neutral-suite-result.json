@@ -1,0 +1,52 @@
+{
+  "schema": "test-software-in-container.suite-result.v2",
+  "runner": {
+    "name": "example-runner",
+    "version": "1"
+  },
+  "suite_sha256": "1b96a67085e0d67fcc55559f01238e9b07ab470e207496bb014b1d487fd2c516",
+  "input_sha256": "004e9dbc24adf470e770e58f8debd5c96f345ed901d1d225559e91da7ecc269e",
+  "selection_sha256": "af7f0b2bd342822f2fa8e6a9fda610570f911f30d3108379ea4184c0866727c3",
+  "inventory_sha256": "bf6afa43676e82529fff2501f31450a839181a28ae048481c5fecb84078b1760",
+  "completed": true,
+  "exit_code": 0,
+  "interrupted": false,
+  "errors": [],
+  "collected": [
+    "integration::works"
+  ],
+  "deselected": [],
+  "observed": [
+    {
+      "id": "integration::works",
+      "origin": {
+        "kind": "source",
+        "reference": "frozen/example.py"
+      },
+      "phases": {
+        "setup": {
+          "outcome": "passed",
+          "seconds": 0.1
+        },
+        "call": {
+          "outcome": "passed",
+          "seconds": 0.1
+        },
+        "teardown": {
+          "outcome": "passed",
+          "seconds": 0.1
+        }
+      }
+    }
+  ],
+  "phase_seconds": {
+    "setup": 0.1,
+    "call": 0.1,
+    "teardown": 0.1
+  },
+  "process_completed": true,
+  "process_exit_code": 0,
+  "collection_skips": [],
+  "case_id": "eca25c85eb057c1ee684fb15",
+  "plan_sha256": "87b19c9a40f42bd4c625933bc2181e5a64985d9624391f2629c2604747fa8261"
+}

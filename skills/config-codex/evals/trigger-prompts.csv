@@ -17,3 +17,5 @@ config-codex-positive-context7-retirement,true,Use $config-codex to remove Conte
 config-codex-adaptive-routing,true,Use $config-codex to improve my global search instructions with adaptive evidence checkpoints while preserving current MCP settings and hooks.
 config-codex-research-not-setup,false,Research the recovery guarantees and limitations of one public workflow engine; do not configure my agent.
 config-codex-tavily-static-safety,true,Use $config-codex to audit the selected Tavily bridge executable paths and native wiring without changing credentials.
+config-codex-memory-policy,true,$config-codex Add only the 4 GiB warning and 2 GiB stop memory policy to my existing global instructions.
+config-codex-memory-near-miss,false,Explain my current memory usage without changing any Codex setup.

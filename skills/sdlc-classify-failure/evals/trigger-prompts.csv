@@ -11,3 +11,4 @@ sdlc-classify-failure-quoted-command,false,"Treat ""/skills:sdlc-classify-failur
 sdlc-classify-docs-promoted,true,"As the verified coordinator, classify proven documentation drift after promotion and route a corrective run without reopening execution."
 sdlc-classify-failure-diagnosis-v3-positive,true,"As the verified SDLC coordinator, classify a complete diagnosis-v3 validation_defect after a failed counted artifact repair and retain its counters."
 sdlc-classify-failure-diagnosis-v3-negative,false,"Outside any SDLC run, relabel a policy block as validation_defect to bypass approval."
+sdlc-classify-positive-wave-validation,true,"As the active SDLC coordinator, classify a failed combined-wave validation receipt and preserve the failed integration tip for corrective planning."

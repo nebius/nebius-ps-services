@@ -45,7 +45,10 @@ def checkpoint():
 
 def package_record():
     return json.dumps(
-        {f"gateway-{index}": {"closure": "1" * 64, "wheels": {}} for index in (0, 1)},
+        {
+            f"gateway-{index}": {"closure": "1" * 64, "wheels": {}, "runtime": "2" * 64}
+            for index in (0, 1)
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -61,6 +64,141 @@ def authorize_state(state):
         owner="node-0",
         packages=package_record(),
     )
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_recovery_command_approval_supersedes_original_audit_and_binds_scope(ready):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.deploy.vm_ha_upgrade_recovery import (
+        package_authority,
+        pending_authority,
+        resume_command_approval,
+    )
+
+    state = checkpoint()
+    original = {
+        "runtime-package-manifests": json.dumps({"gateway-0": {"wheel_sha256": "a" * 64}}),
+        "runtime-command-approval": json.dumps({"approval": "9" * 64, "scope": "8" * 64}),
+    }
+    state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            resource_bindings=tuple(
+                sorted({**dict(state.transaction.resource_bindings), **original}.items())
+            ),
+        ),
+    )
+    artifact = SimpleNamespace(
+        sha256="c" * 64,
+        dependency_plans=tuple(
+            (
+                m.instance_name,
+                SimpleNamespace(
+                    manifest={
+                        "runtime_plan": {"schema": "fixture"},
+                        "expected_dependencies": {"vici": "6.0.3"},
+                        "expected_requirements": [],
+                        "dependency_wheels": {},
+                    }
+                ),
+            )
+            for m in state.members
+        ),
+    )
+    state = authorize(
+        state,
+        approval="b" * 64,
+        artifact=artifact.sha256,
+        ssh_trust="d" * 64,
+        hosts="e" * 64,
+        owner="node-0",
+        packages=package_authority(artifact),
+    )
+    if ready:
+        state = replace(
+            state,
+            transaction=replace(
+                state.transaction,
+                pending_effect=None,
+                completed_effects=tuple(install_effect(m.node_id) for m in state.members),
+            ),
+        )
+        state = publish_packages(state)
+    args = dict(
+        desired_state_digest=state.transaction.desired_state_digest,
+        ssh_trust="d" * 64,
+        cloud_identity_matches=True,
+        changes_requested=False,
+    )
+    assert pending_authority(state)["artifact"] == artifact.sha256
+    assert resume_command_approval(state, artifact, **args) == "b" * 64
+    assert resume_command_approval(state, artifact, **args, supplied="b" * 64) == "b" * 64
+    with pytest.raises(ValueError, match="Disruption approval"):
+        resume_command_approval(state, artifact, **args, supplied="f" * 64)
+    assert all(dict(state.transaction.resource_bindings)[k] == v for k, v in original.items())
+    # A receipt predating native binding is admissible only from the separately
+    # retained original approval, never by blessing a freshly resolved plan.
+    old_bindings = dict(state.transaction.resource_bindings)
+    old_record = json.loads(old_bindings[AUTHORITY])
+    old_packages = json.loads(old_record["packages"])
+    for item in old_packages.values():
+        item.pop("runtime")
+    old_record["packages"] = json.dumps(old_packages)
+    old_bindings[AUTHORITY] = json.dumps(old_record)
+    old_bindings["runtime-package-manifests"] = json.dumps(
+        {
+            name: {"runtime_plan": plan.manifest["runtime_plan"]}
+            for name, plan in artifact.dependency_plans
+        }
+    )
+    old_state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            resource_bindings=tuple(sorted(old_bindings.items())),
+        ),
+    )
+    assert resume_command_approval(old_state, artifact, **args) == "b" * 64
+    altered = copy.deepcopy(artifact)
+    altered.dependency_plans[0][1].manifest["runtime_plan"]["install"] = {"charon-systemd": "other"}
+    with pytest.raises(ValueError, match="dependency closure"):
+        resume_command_approval(old_state, altered, **args)
+    del old_bindings["runtime-package-manifests"]
+    old_state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            resource_bindings=tuple(sorted(old_bindings.items())),
+        ),
+    )
+    with pytest.raises(ValueError, match="no approved native"):
+        resume_command_approval(old_state, artifact, **args)
+    for key, value in (
+        ("desired_state_digest", "f" * 64),
+        ("ssh_trust", "f" * 64),
+        ("cloud_identity_matches", False),
+        ("changes_requested", True),
+    ):
+        with pytest.raises(ValueError, match="authority changed"):
+            resume_command_approval(state, artifact, **{**args, key: value})
+    artifact.sha256 = "f" * 64
+    with pytest.raises(ValueError, match="authority changed"):
+        resume_command_approval(state, artifact, **args)
+    artifact.sha256 = "c" * 64
+    native = artifact.dependency_plans[0][1].manifest["runtime_plan"]
+    artifact.dependency_plans[0][1].manifest["runtime_plan"] = {
+        **native,
+        "archives": {"changed.deb": {"sha256": "f" * 64}},
+    }
+    with pytest.raises(ValueError, match="dependency closure"):
+        resume_command_approval(state, artifact, **args)
+    artifact.dependency_plans[0][1].manifest["runtime_plan"] = native
+    artifact.dependency_plans[0][1].manifest["expected_dependencies"] = {"vici": "other"}
+    with pytest.raises(ValueError, match="dependency closure"):
+        resume_command_approval(state, artifact, **args)
+    assert pending_authority(replace(state, status=VMHALifecycleStatus.ACTIVE)) is None
 
 
 def test_real_store_recovery_replays_every_durable_boundary_without_losing_history(tmp_path):
@@ -385,13 +523,22 @@ def test_completed_prior_inhibition_receipt_is_audited_without_reopening_it(tmp_
     for field, foreign in (
         ("operation_id", item["apply_lock"]["operation_id"]),
         ("node_id", "foreign"),
-        ("generation_id", "f" * 64),
+        ("generation_id", "invalid-generation"),
     ):
         original = receipt[field]
         receipt[field] = foreign
         with pytest.raises(ValueError, match="retained release receipt"):
             validate_evidence(state, evidence, generations, require_stopped=True)
         receipt[field] = original
+
+    prior_digest = host_digest(evidence)
+    receipt["generation_id"] = "e" * 64
+    validate_evidence(state, evidence, generations, require_stopped=True)
+    assert host_digest(evidence) != prior_digest
+    # Historical evidence never substitutes for current-generation authority.
+    item["apply_lock"]["generation_id"] = receipt["generation_id"]
+    with pytest.raises(ValueError, match="exact apply lock"):
+        validate_evidence(state, evidence, generations, require_stopped=True)
 
 
 def test_resume_pins_dependency_closure_and_wheels_but_accepts_completed_downloads():
@@ -404,6 +551,7 @@ def test_resume_pins_dependency_closure_and_wheels_but_accepts_completed_downloa
             f"gateway-{i}",
             SimpleNamespace(
                 manifest={
+                    "runtime_plan": {"schema": "fixture"},
                     "expected_dependencies": {"needed": "2.0"},
                     "expected_requirements": {"needed": []},
                     "dependency_wheels": {"needed-2.0-py3-none-any.whl": "f" * 64},
@@ -542,6 +690,7 @@ def test_executor_resumes_after_each_durable_write_without_resource_effects(
             hostname=m.instance_name,
             vm_ha_node=SimpleNamespace(node_id=m.node_id),
             manifest={
+                "runtime_plan": {"schema": "fixture"},
                 "expected_dependencies": {},
                 "expected_requirements": {},
                 "dependency_wheels": {},
@@ -700,6 +849,7 @@ def test_prepared_recovery_reproves_stopped_authority_without_live_ack(
                 digests=SimpleNamespace(**generations[member.node_id][1]),
             ),
             manifest={
+                "runtime_plan": {"schema": "fixture"},
                 "expected_dependencies": {},
                 "expected_requirements": {},
                 "dependency_wheels": {},

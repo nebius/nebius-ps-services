@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -37,6 +38,14 @@ UFW_ORDERING_PATH = "/etc/systemd/system/ufw.service.d/override.conf"
 PREVIOUS_UFW_ORDERING = (
     b"[Unit]\nAfter=network-online.target cloud-init.service\nWants=network-online.target\n"
 )
+AGENT_ORDERING_PATH = "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf"
+# Exact product-owned bytes from released 0.6.0-0.6.3. Both are replaced by the
+# canonical charon-systemd ordering; administrator overrides remain inadmissible.
+PREVIOUS_AGENT_ORDERINGS = (
+    b"[Unit]\nAfter=strongswan-starter.service frr.service\n",
+    b"[Unit]\nAfter=strongswan-starter.service frr.service\n"
+    b"Wants=strongswan-starter.service frr.service\n",
+)
 
 ASSETS = (
     (
@@ -46,7 +55,7 @@ ASSETS = (
     ),
     (
         "nebius-vpngw-ordinary-agent-ordering.conf",
-        "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
+        AGENT_ORDERING_PATH,
         0o644,
     ),
     (
@@ -61,9 +70,19 @@ ASSETS = (
         0o644,
     ),
     ("nebius-vpngw-ingress.service", "/etc/systemd/system/nebius-vpngw-ingress.service", 0o644),
+    (
+        "nebius-vpngw-strongswan.conf",
+        "/etc/systemd/system/strongswan.service.d/override.conf",
+        0o644,
+    ),
     ("nebius-vpngw-ufw-ordering.conf", UFW_ORDERING_PATH, 0o644),
     ("setup-vpngw-firewall.sh", "/usr/local/bin/setup-vpngw-firewall.sh", 0o755),
     ("nebius-vpngw-esp4-preflight.sh", "/usr/local/bin/nebius-vpngw-esp4-preflight.sh", 0o755),
+    (
+        "nebius-vpngw-esp4-preflight.service",
+        "/etc/systemd/system/nebius-vpngw-esp4-preflight.service",
+        0o644,
+    ),
 )
 
 
@@ -73,6 +92,17 @@ def sha(raw: bytes) -> str:
 
 def digest(value: Any) -> str:
     return sha(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+
+
+def verify_asset_predecessors(
+    manifest: dict, observed: dict, *, error_type: type[RuntimeError] = RuntimeError
+) -> None:
+    """Admit only known product bytes before any package or asset mutation."""
+    for path, asset in manifest["assets"].items():
+        if "predecessors" in asset and observed["assets"].get(path) not in asset["predecessors"]:
+            raise error_type(
+                "Product service override has unknown contents; no gateway changes are admitted"
+            )
 
 
 def artifact(wheel: Path, config: str) -> dict[str, Any]:
@@ -127,6 +157,7 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
                     None,
                     sha(archive.read(member)),
                     sha(archive.read("nebius_vpngw/systemd/nebius-vpngw-agent-ordering.conf")),
+                    *(sha(raw) for raw in PREVIOUS_AGENT_ORDERINGS),
                 ]
             elif name == "nebius-vpngw-ufw-ordering.conf":
                 # Upgrade only the exact product-owned override. Waiting for
@@ -283,17 +314,7 @@ def resolve_dependencies(
         if not candidates:
             raise RuntimeError("No compatible binary wheel for a required dependency")
         item = sorted(candidates, key=lambda value: value["filename"])[0]
-        if not item["url"].startswith("https://files.pythonhosted.org/"):
-            raise RuntimeError("Untrusted dependency download origin")
-        with urlopen(item["url"], timeout=60) as response:
-            raw = response.read(64 * 1024 * 1024 + 1)
-        if len(raw) > 64 * 1024 * 1024 or sha(raw) != item["digests"]["sha256"]:
-            raise RuntimeError("Dependency wheel integrity verification failed")
-        path = directory / item["filename"]
-        if path.parent != directory:
-            raise RuntimeError("Dependency wheel has an invalid filename")
-        path.write_bytes(raw)
-        paths.append(path)
+        paths.append(_download_dependency(item, directory))
     changed = {
         name for name, version in selected.items() if observed["dependencies"].get(name) != version
     }
@@ -307,6 +328,52 @@ def resolve_dependencies(
                 continue
             if dependency in changed and selected[dependency] not in req.specifier:
                 raise RuntimeError("Required dependency update conflicts with installed software")
+    return paths
+
+
+def _download_dependency(item: dict, directory: Path) -> Path:
+    """The resolver and resume path share exactly the same payload admission."""
+    path = directory / item["filename"]
+    if path.parent != directory or path.is_symlink():
+        raise RuntimeError("Dependency wheel has an invalid filename")
+    name, version, _build, _tags = parse_wheel_filename(path.name)
+    if not item["url"].startswith("https://files.pythonhosted.org/"):
+        raise RuntimeError("Untrusted dependency download origin")
+    with urlopen(item["url"], timeout=60) as response:
+        raw = response.read(64 * 1024 * 1024 + 1)
+    if len(raw) > 64 * 1024 * 1024 or sha(raw) != item["digests"]["sha256"]:
+        raise RuntimeError("Dependency wheel integrity verification failed")
+    if name == "vici":
+        from ..ipsec_observation import VICI_VERSION, VICI_WHEEL_SHA256
+
+        if str(version) != VICI_VERSION or sha(raw) != VICI_WHEEL_SHA256:
+            raise RuntimeError("VICI wheel differs from the qualified dependency")
+    path.write_bytes(raw)
+    return path
+
+
+def restore_dependencies(manifest: dict, observed: dict, directory: Path) -> list[Path]:
+    """Fetch only the exact approved filenames and hashes; never resolve again."""
+    paths = []
+    for filename, expected in sorted(manifest["dependency_wheels"].items()):
+        if Path(filename).name != filename or not re.fullmatch(r"[a-f0-9]{64}", expected):
+            raise RuntimeError("Invalid approved dependency identity")
+        name, version, _build, tags = parse_wheel_filename(filename)
+        if not set(observed["wheel_tags"]).intersection(str(tag) for tag in tags):
+            raise RuntimeError("Approved dependency is incompatible with the current gateway")
+        with urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as response:
+            release = json.load(response)
+        matches = [
+            item
+            for item in release["urls"]
+            if item.get("filename") == filename
+            and item.get("packagetype") == "bdist_wheel"
+            and item.get("digests", {}).get("sha256") == expected
+        ]
+        if len(matches) != 1:
+            raise RuntimeError("Exact approved dependency is unavailable; no packages changed")
+        # Yanked status affects new resolution, not a previously approved hash.
+        paths.append(_download_dependency(matches[0], directory))
     return paths
 
 
@@ -372,7 +439,7 @@ def remote(
         result = json.loads(data)
         if not isinstance(result, dict) or rc or result.get("status") == "failed":
             stage = result.get("stage", "transport") if isinstance(result, dict) else "transport"
-            if stage not in {
+            if not isinstance(stage, str) or stage not in {
                 "inspect",
                 "predecessor",
                 "stage",
@@ -384,7 +451,25 @@ def remote(
                 "verify",
             }:
                 stage = "transport"
-            raise RuntimeError(f"Ordinary deployment failed at {stage}; no success is confirmed")
+            reasons = {
+                "stale_plan": "the inspected predecessor changed",
+                "runtime_drift": "local runtime no longer verifies",
+                "final_artifact": "final artifact or runtime proof differs",
+                "receipt": "the guest verification receipt is unconfirmed",
+                "ordinary_environment_changed": "the service or network environment changed",
+                "ordinary_asset_conflict": "a managed service asset conflicts",
+                "route_plan_changed": "the route plan changed",
+                "route_predecessor_changed": "the route predecessor changed",
+                "identity_drift": "the approved guest identity changed",
+                "package_quiescence_unproven": "package writer quiescence is unconfirmed",
+            }
+            code = result.get("error_code") if isinstance(result, dict) else None
+            reason = (
+                reasons.get(code, "no success is confirmed")
+                if isinstance(code, str)
+                else "no success is confirmed"
+            )
+            raise RuntimeError(f"Ordinary deployment failed at {stage}; {reason}")
         return result
     except (OSError, ValueError) as error:
         raise RuntimeError(
@@ -428,47 +513,88 @@ class OrdinaryPlan:
 
 
 def inspect_plan(
-    ssh: Any, target: str, instance: InstanceResolvedConfig, local: dict, *, target_identity: str
+    ssh: Any,
+    target: str,
+    instance: InstanceResolvedConfig,
+    local: dict,
+    *,
+    target_identity: str,
+    resume_manifest: dict | None = None,
 ) -> OrdinaryPlan:
     wheel = ssh._build_wheel(allow_installed_fallback=ssh._find_project_root() is None)
     if wheel is None:
         raise RuntimeError("Ordinary deployment requires a deployable agent wheel")
     manifest = artifact(wheel, instance.config_yaml)
+    if resume_manifest is not None:
+        from ..apply_approval import validate
+
+        validate(resume_manifest.get("command_approval", {}))
+        if any(
+            resume_manifest[key] != manifest[key]
+            for key in ("wheel_sha256", "config_sha256", "files", "assets")
+        ):
+            raise RuntimeError("Interrupted ordinary package authority changed")
+        manifest = json.loads(json.dumps(resume_manifest))
     result = remote(ssh, target, instance, local, {"action": "inspect", "manifest": manifest})
     observed = result["observation"]
+    if resume_manifest is not None and manifest["runtime_plan"] != observed["runtime_plan"]:
+        raise RuntimeError("Interrupted ordinary package authority changed native closure")
+    manifest["runtime_plan"] = observed["runtime_plan"]
+    pending_runtime = observed.get("runtime_pending")
+    if pending_runtime is not None:
+        saved = pending_runtime["manifest"]
+        if resume_manifest is not None:
+            from ..apply_approval import manifest_identity
+
+            if (
+                manifest_identity(saved) != manifest_identity(manifest)
+                or saved.get("command_approval") != manifest["command_approval"]
+            ):
+                raise RuntimeError("Interrupted ordinary package authority changed")
+        if any(
+            saved[key] != manifest[key]
+            for key in ("wheel_sha256", "config_sha256", "files", "assets")
+        ):
+            raise RuntimeError(
+                "Interrupted apply requires the same approved artifact and configuration"
+            )
+        manifest = saved
     route_plan = ordinary_routes.RouteRetirementPlan.build(
         observed["route_ownership"], manifest["route_projection"]
     )
-    manifest["route_plan"] = route_plan.payload
+    if pending_runtime is None and resume_manifest is None:
+        manifest["route_plan"] = route_plan.payload
     temporary = tempfile.TemporaryDirectory(prefix="vpngw-dependency-plan-")
     try:
-        dependencies = resolve_dependencies(manifest, observed, Path(temporary.name))
-        manifest["dependency_wheels"] = {p.name: sha(p.read_bytes()) for p in dependencies}
-        expected = dict(observed["dependencies"])
-        expected["nebius-vpngw"] = manifest["version"]
-        for path in dependencies:
-            name, version, _build, _tags = parse_wheel_filename(path.name)
-            expected[str(name)] = str(version)
-        manifest["expected_dependencies"] = expected
+        dependencies = []
+        if pending_runtime is None and resume_manifest is None:
+            dependencies = resolve_dependencies(manifest, observed, Path(temporary.name))
+            manifest["dependency_wheels"] = {p.name: sha(p.read_bytes()) for p in dependencies}
+            expected = dict(observed["dependencies"])
+            expected["nebius-vpngw"] = manifest["version"]
+            for path in dependencies:
+                name, version, _build, _tags = parse_wheel_filename(path.name)
+                expected[str(name)] = str(version)
+            manifest["expected_dependencies"] = expected
+        elif pending_runtime is None and any(
+            observed["dependencies"].get(name) != version
+            for name, version in manifest["expected_dependencies"].items()
+        ):
+            dependencies = restore_dependencies(manifest, observed, Path(temporary.name))
         effects = [
             f"remove obsolete static route {item['route']['dst']} via {item['link']['name']}"
             for item in route_plan.payload["deletions"]
         ]
-        for path, asset in manifest["assets"].items():
-            if (
-                "predecessors" in asset
-                and observed["assets"].get(path) not in asset["predecessors"]
-            ):
-                raise RuntimeError(
-                    "Product service override has unknown contents; no gateway changes are admitted"
-                )
+        verify_asset_predecessors(manifest, observed)
         pending = observed.get("operation")
         if pending:
             if not pending.get("recoverable"):
                 raise RuntimeError(
                     "Ordinary operation remains unresolved; no gateway changes are admitted"
                 )
-            effects.append("replace settled interrupted operation after fresh approval")
+            effects.append("resume the settled interrupted operation with its original identity")
+        if not observed["runtime"]["ready"] or pending_runtime:
+            effects.append("install and verify the approved charon-systemd runtime closure")
         if (
             observed["files"] != manifest["files"]
             or observed["package_version"] != manifest["version"]
@@ -512,6 +638,38 @@ def inspect_plan(
         raise
 
 
+def stage_plan(ssh: Any, plan: OrdinaryPlan, local: dict, *, approved: bool) -> dict | None:
+    """Stage one exact closure; callers stage every member before activation."""
+    if plan.noop:
+        return None
+    if not approved:
+        raise RuntimeError("Disruption approval is required before gateway mutation")
+    wheel = plan.wheel.read_bytes()
+    if sha(wheel) != plan.manifest["wheel_sha256"]:
+        raise RuntimeError("Agent artifact changed after planning")
+    result = remote(
+        ssh,
+        plan.target,
+        plan.instance,
+        local,
+        {
+            "action": "stage-package",
+            "manifest": plan.manifest,
+            "wheel": base64.b64encode(wheel).decode(),
+            "dependency_wheels": {
+                p.name: base64.b64encode(p.read_bytes()).decode() for p in plan.dependency_paths
+            },
+        },
+    )
+    expected = {
+        "manifest": digest(plan.manifest),
+        "runtime_plan": digest(plan.manifest["runtime_plan"]),
+    }
+    if result != {"status": "staged", "receipt": expected}:
+        raise RuntimeError("Ordinary durable package staging receipt differs")
+    return expected
+
+
 def execute_plan(
     ssh: Any,
     plan: OrdinaryPlan,
@@ -527,7 +685,9 @@ def execute_plan(
     request: dict[str, Any] = {
         "action": "execute",
         "manifest": plan.manifest,
-        "request_id": os.urandom(16).hex(),
+        "request_id": (plan.observation.get("runtime_pending") or {}).get("operation")
+        or (plan.observation.get("operation") or {}).get("id")
+        or os.urandom(16).hex(),
         "predecessor": digest(plan.observation),
         "plan_digest": plan.digest,
         "approval": plan.digest if approved else None,

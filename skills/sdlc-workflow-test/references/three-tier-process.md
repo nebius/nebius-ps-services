@@ -9,8 +9,20 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    capability-discovery` proves actual headless interaction and screenshot
    capture. Missing capability before an attempt is PARTIAL; an attempted
    required stage failure is FAIL.
-2. For create modes, prepare one owned lifecycle with
-   `scripts/three_tier_lifecycle.py`. Its `prepare` action serializes lifecycle
+   Native three-tier qualification currently supports Codex only. Claude's
+   disposable-home catalog binding and native event adapter remain unqualified;
+   report that capability as PARTIAL before preparing a Claude live trial.
+2. After aggregate cleanup and fresh deterministic preflight, select the native
+   host's installed catalog through the existing host installation convention.
+   Run its absolute `sdlc-workflow-test/scripts/three_tier_lifecycle.py` entrypoint
+   in a fresh Python process for preparation and every later lifecycle action.
+   Use that same catalog for the launcher and aggregate workspace cleanup.
+   Preparation freezes its physical root and runtime closure; source paths with
+   identical bytes still differ from the installed owner's execution basis.
+   Never choose executable paths from a lifecycle receipt, replace cached owner
+   modules, or normalize basis paths. Catalog relocation or drift fails closed.
+   The source verifier uses its configured installed root for a separate read-only
+   `validate-results` process when ingesting the live profile. Its `prepare` action serializes lifecycle
    changes, destroys the previous active environment through the same exact
    ownership-checked cleanup path as standalone destroy, and only then creates
    a fresh verification ID and project. If ownership, project safety, or
@@ -36,7 +48,8 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    settings below. The runtime propagates the same
    validated context to workers; every Git owner rechecks scope and integrity.
    Keep current runtime/hook installation inside the selected disposable native
-   home. Do not overwrite ordinary hooks or substitute manual Git overrides.
+   home. Use the existing installer and normal native hook review during setup,
+   before freezing the trial; never copy trust state or use bypass flags. Do not overwrite ordinary hooks or substitute manual Git overrides.
 3. Render the disposable request with `scripts/render_three_tier_objective.py`
    and invoke `$sdlc-start <rendered fixture objective>` from the owned project.
    Resume another native session with `$sdlc-start continue <project-folder>`.
@@ -54,6 +67,11 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    `record-phase --evidence`. Read the installed subcommand help before calling
    it; immutable attempt archives belong to the recorder alone. Validation
    records use `--validation-command`, not an inferred flag name.
+   For initial `sdlc-start` PASS, the native coordinator supplies its actual
+   session identity as `--coordinator-session` in the outer observation request.
+   The recorder validates that selector against the owned binding and passes it
+   explicitly to the source loader; never overwrite the outer process identity.
+   Later observations use the startup receipt and reject an unused selector.
    Record only phases admitted by the installed recorder. Conditional
    `troubleshoot` returns `diagnosis-v3` to `sdlc-classify-failure`; preserve its
    diagnostic artifacts without inventing a `troubleshoot` phase receipt.
@@ -63,14 +81,18 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    Before dispatching that phase, record the startup phase while its checkpoint
    still names `sdlc-start`, before plans or execution state exist and before
    Git leaves the fixture baseline. The lifecycle observes exact JSON ownership
-   and real hook discovery and retains its digest-bound startup receipt. It
-   rejects later phase PASS and final PASS without this receipt. A late repair
+   and source state-loader discovery and retains its digest-bound startup v3 receipt. It
+   rejects later phase PASS and final PASS without this receipt. After natural
+   native tool/hook events exist, run generation-fenced `record-native-activation`;
+   final PASS additionally requires its independent native correlation receipt. A late repair
    starts a fresh trial and does not rehabilitate earlier evidence.
-   For a classifier PASS, the private adapter obtains the recorded integration
-   HEAD with `execution_target(state, require_clean=False,
-   classifier_observation=True)`. The lifecycle uses the same read-only purpose
-   for identity and receipt validation. Do not use it for runtime commands or
-   acceptance, or substitute the clean primary checkout for unsealed integration.
+   For classifier or TDD PASS, the private adapter obtains the integration HEAD
+   with `execution_target(state, require_clean=False, phase_observation=phase)`
+   where phase is `sdlc-classify-failure` or `sdlc-tdd`. The lifecycle consumes the
+   same purpose for identity and receipt validation. TDD output may remain
+   unsealed at `tests_red` or `tests_ready`; never seal or change phase merely to
+   satisfy observation. Await the receipt before dependent actions. Runtime and
+   acceptance never use this purpose or substitute the clean primary checkout.
 4. Build all three logical layers: browser GUI, Django/Gunicorn web/API server,
    and PostgreSQL. Run exactly two labelled Compose containers, dynamically
    publish only the web port on loopback, and keep PostgreSQL private to the
@@ -154,8 +176,11 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    resource IDs, recorded validation commands, top issues and recommended
    fixes, and cleanup/retention result.
 10. Every stage closes its owned browser. With `--keep`, retain the project,
-    private state/evidence and owned Docker resources. Otherwise destroy the
-    exact owned runtime in a finally-style path. Any cleanup failure is FAIL.
+    private state/evidence and owned Docker resources. Otherwise follow the
+    [terminal cleanup procedure](three-tier-live.md#create-workflow): complete any required
+    native cancellation/reconciliation, verify writer and lease quiescence, and
+    exit the coordinator normally. Then use aggregate workspace destroy for both
+    fixture classes in a finally-style path. Any cleanup failure is FAIL.
 
 ## Native launch settings
 
@@ -170,7 +195,8 @@ ambient service credentials, command-injection variables and parent session
 identities. The selected `CODEX_HOME` or `CLAUDE_CONFIG_DIR` must be the exact
 private home of this lifecycle. It supplies `ZDOTDIR` pointing to that home,
 rejects Zsh startup files there, and sets `BASH_ENV` and `ENV` to `/dev/null`.
-Do not source ordinary shell startup files or copy shell snapshots. Native
+Do not source ordinary shell startup files or copy shell snapshots. The launcher sets a private `077` umask before native execution so new logs and
+receipts are private at creation. Native
 workers inherit the sanitized environment and use their own host identity.
 
 Before a Codex launch, put these settings in its private, owner-only
@@ -264,13 +290,13 @@ Shipping and UAT always require a clean promoted checkout. After completed promo
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
-Read-only classifier observations have a separate explicit target purpose. While
-the bound root coordinator is running `sdlc-classify-failure`, it may observe
-unsealed integration files without committing them or changing phase. Exact
-worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
-This purpose is never used by Compose, runtime inventory, build certification,
-browser acceptance or test execution; explicit clean-target requests still win.
-Worker selectors and dirty promoted checkouts remain rejected.
+Read-only phase observations use a named private purpose. Classification permits
+unsealed integration files during `sdlc-classify-failure`; TDD additionally permits
+its documented `tests_red` and `tests_ready` output checkpoints before sealing.
+Exact worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+These purposes never reach Compose, inventory, build, browser or test execution;
+explicit clean requests still win. Worker selectors and dirty promoted checkouts
+remain rejected. Read the runtime-inventory reference before phase collection.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.

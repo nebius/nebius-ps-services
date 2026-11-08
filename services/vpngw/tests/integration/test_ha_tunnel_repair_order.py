@@ -36,7 +36,12 @@ def composed_runtime(tmp_path, monkeypatch):
     effects.current = Authority("cluster", "node-b", "allocation", "42", 0, "a" * 64)
     vm_effects = []
     overrides = {}
-    snapshots = SimpleNamespace(last_snapshot=None)
+    snapshots = SimpleNamespace(
+        last_snapshot=None,
+        providers=SimpleNamespace(
+            apply_lock_operation_id=lambda: "f" * 64 if overrides.get("apply_locked") else None
+        ),
+    )
 
     def observe():
         episode = read_state(tmp_path / "tunnel-selection.json")["episode"]
@@ -47,7 +52,9 @@ def composed_runtime(tmp_path, monkeypatch):
             peer_received_at=now[0],
             cloud=_owned_cloud(),
             data_plane_mode=DataPlaneMode.ACTIVE,
-            readiness=LocalReadiness(True, tunnels.static_ready(), True, True),
+            readiness=LocalReadiness(
+                True, tunnels.static_ready(), True, True, protection_ready=True
+            ),
             tunnel_recovery_remaining=None if episode is None else episode["deadline"] - now[0],
         )
         snapshot = replace(snapshot, **overrides)
@@ -72,9 +79,6 @@ def composed_runtime(tmp_path, monkeypatch):
         clock=lambda: now[0],
     )
     tunnels.effects = effects
-    # The native timer is covered by the Linux lane; use the controlled tick
-    # clock here so the same ordering is deterministic on every host.
-    monkeypatch.setattr(tunnels, "_watch_episode", lambda: None)
     runtime.tunnel_runtime = tunnels
     runtime.tunnel_step = tunnels.step
     return runtime, tunnels, effects, vm_effects, now, overrides
@@ -89,7 +93,7 @@ def test_static_loss_after_tunnel_check_precedes_generic_owner_repair(tmp_path, 
 
     runtime.tunnel_step = lose_path_after_check
     result = runtime.step()
-    assert result.reasons == ("static-tunnel-recovery-active",)
+    assert result.reasons == ("native-path-recovery",)
     assert vm_effects == []
     assert runtime.controller.checkpoints.load().repair_attempt is None
     state = read_state(tmp_path / "tunnel-selection.json")
@@ -114,10 +118,10 @@ def test_unconfirmed_loss_does_not_create_tunnel_grace(tmp_path, monkeypatch, he
     runtime, _, effects, vm_effects, _, overrides = composed_runtime(tmp_path, monkeypatch)
     effects.health["preferred"] = health
     if health is Health.HEALTHY:
-        overrides["readiness"] = LocalReadiness(False, True, True, True)
+        overrides["readiness"] = LocalReadiness(False, True, True, True, protection_ready=True)
     runtime.step()
     assert read_state(tmp_path / "tunnel-selection.json")["episode"] is None
-    assert vm_effects[-1].kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+    assert vm_effects == []
 
 
 @pytest.mark.parametrize("inhibition", ["writer", "apply", "peer", "allocation"])
@@ -143,12 +147,12 @@ def test_late_loss_cannot_bypass_tunnel_authority(tmp_path, monkeypatch, inhibit
     assert read_state(tmp_path / "tunnel-selection.json")["episode"] is None
     assert effects.calls == []
     if inhibition == "writer":
-        assert vm_effects[-1].kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+        assert vm_effects == []
 
 
 def test_preflight_rechecks_apply_authority_before_vm_effects(tmp_path, monkeypatch):
     runtime, tunnels, effects, vm_effects, _, overrides = composed_runtime(tmp_path, monkeypatch)
-    effects.health["preferred"] = Health.UNKNOWN
+    effects.health["preferred"] = Health.DOWN
     before_repair = tunnels.before_owner_repair
 
     def apply_starts_during_preflight():
@@ -173,9 +177,9 @@ def test_late_loss_exhaustion_never_stacks_generic_repair(tmp_path, monkeypatch)
     runtime.step()
     deadline = read_state(tmp_path / "tunnel-selection.json")["episode"]["deadline"]
     runtime.tunnel_step = tunnels.step
-    now[0] = deadline - 1
+    now[0] = deadline
     runtime.step()
     state = read_state(tmp_path / "tunnel-selection.json")
     assert state["episode"]["exhausted"] and state["episode"]["deadline"] == deadline
-    assert [effect.kind for effect in vm_effects] == [ActionKind.DISABLE_ACTIVE]
+    assert vm_effects == []
     assert runtime.controller.checkpoints.load().repair_attempt is None

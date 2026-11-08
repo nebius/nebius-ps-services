@@ -155,8 +155,10 @@ def environment(project: Path, *, bootstrap: bool = False, env=None) -> dict[str
 
 def _git(root: Path, *arguments: str, allowed: tuple[int, ...] = (0,)) -> str:
     try:
+        # Observations must not refresh an index sealed by cleanup. Explicit
+        # writes still take their required locks with optional locking disabled.
         result = subprocess.run(
-            ["git", "-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
+            ["git", "--no-optional-locks", "-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
              "-c", "core.fsmonitor=false", "-C", str(root), *arguments],
             env=environment(root, bootstrap=True), capture_output=True, text=True, timeout=30,
         )
