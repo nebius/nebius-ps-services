@@ -4915,6 +4915,12 @@ trials interrupt the real package process after native unpack or product-wheel
 installation, independently verify quiescence and inhibition, then retry the
 original frozen request without resolving or staging again. The CI package-history
 job preserves the matrix and per-case evidence, including cleanup results.
+CI retains native service reports and logs on failure as well. Artifact names
+include the workflow attempt so reruns retain earlier evidence.
+Failed package transports also retain bounded staging observations identifying
+the APT update/download, archive verification, or wheel-staging source boundary.
+These fixture diagnostics preserve the original transport result and never
+record command arguments, exception messages, credentials, or artifact contents.
 Every case then repeats package preparation with the same saved request and checks
 identical package payloads, dependencies and assets, retained recovery authority,
 configuration and startup inhibition. Package reinstallation and documented

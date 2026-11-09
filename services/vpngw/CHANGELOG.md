@@ -16,6 +16,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ### Fixed
 
+- Preserve bounded, value-free package-staging diagnostics in historical upgrade
+  test failures without changing the product transport or retrying its effects.
+  Retain native-service CI reports and logs with separate artifacts per attempt.
 - Verify paired HA readiness against the exact installed configuration rendered
   with validated lifecycle and credential bindings. Keep both-member identity,
   ownership and encrypted-route checks mandatory.

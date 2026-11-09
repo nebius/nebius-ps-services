@@ -13,6 +13,7 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
+from package_diagnostics import failure_diagnostic, loader_code
 from package_repeat import verify_repeat
 from packaging.utils import parse_wheel_filename
 
@@ -48,7 +49,7 @@ def clean_environment():
 
 def remote(request):
     result = subprocess.run(
-        ["/usr/bin/python3", "-B", "-c", ordinary_bootstrap.LOADER],
+        ["/usr/bin/python3", "-B", "-c", loader_code(ordinary_bootstrap.LOADER)],
         input=ordinary_bootstrap.source_frame() + json.dumps(request).encode(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -56,7 +57,12 @@ def remote(request):
         timeout=600,
     )
     if result.returncode:
-        raise RuntimeError("Package transport rejected request: " + result.stdout.decode()[-2000:])
+        raise RuntimeError(
+            "Package transport rejected request: "
+            + result.stdout.decode()[-2000:]
+            + "; staging observation: "
+            + failure_diagnostic(result.stderr)
+        )
     return json.loads(result.stdout)
 
 

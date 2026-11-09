@@ -126,7 +126,15 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Verify delegated work in isolated systemd
         working-directory: services/vpngw
-        run: python3 tests/systemd/run.py
+        run: python3 tests/systemd/run.py --report "$RUNNER_TEMP/vpngw-native/result.json"
+      - name: Preserve native qualification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vpngw-native-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vpngw-native/
+          retention-days: 14
+          if-no-files-found: warn
 
   historical-package-upgrades:
     needs: [merge-inputs, lint]
@@ -175,7 +183,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: vpngw-package-history
+          name: vpngw-package-history-${{ github.run_attempt }}
           path: ${{ runner.temp }}/vpngw-history/
           retention-days: 14
           if-no-files-found: warn

@@ -140,6 +140,7 @@ def run_historical(args) -> None:
                 "qualification.py",
                 "package_baseline.py",
                 "package_upgrade_driver.py",
+                "package_diagnostics.py",
                 "install_predecessor.py",
                 "verify_predecessor.py",
                 "package_repeat.py",
@@ -172,6 +173,7 @@ def run_historical(args) -> None:
             for name in (
                 "package_baseline.py",
                 "package_upgrade_driver.py",
+                "package_diagnostics.py",
                 "package_repeat.py",
                 "install_predecessor.py",
                 "verify_predecessor.py",
